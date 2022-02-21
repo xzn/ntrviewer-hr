@@ -139,7 +139,16 @@ static inline void upsampleImage(uint8_t *dst, const uint8_t *ds_src, int w, int
     }
 }
 
-static void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b)
+static inline void differenceImage(uint8_t *dst, const uint8_t *src, const uint8_t *src_prev, int w, int h)
+{
+    uint8_t *dst_end = dst + w * h;
+    while (dst != dst_end)
+    {
+        *dst++ = *src++ + *src_prev++;
+    }
+}
+
+static inline void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b)
 {
     double y_in = y;
     double u_in = u;
@@ -302,6 +311,31 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, in
 
         if (header.flags & RP_DATA_FD)
         {
+            if (!(ctx->flags_pf & RP_HAS_Y))
+            {
+                return 0;
+            }
+            if (header.flags & RP_DATA_DS)
+            {
+                if (ctx->flags_pf & RP_DOWNSAMPLE_Y)
+                {
+                }
+                else
+                {
+                }
+                ctx->flags |= RP_DOWNSAMPLE_Y;
+            }
+            else
+            {
+                if (ctx->flags_pf & RP_DOWNSAMPLE_Y)
+                {
+                }
+                else
+                {
+                    CHECK_DATA_SIZE(ctx->f.y.size);
+                    differenceImage(ctx->f.y.image, data, ctx->f_pf.y.image, ctx->width, ctx->height);
+                }
+            }
         }
         else if (header.flags & RP_DATA_DS)
         {
@@ -317,6 +351,32 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, in
     {
         if (header.flags & RP_DATA_FD)
         {
+            if (!(ctx->flags_pf & RP_HAS_UV))
+            {
+                return 0;
+            }
+            if (header.flags & RP_DATA_DS)
+            {
+                if (ctx->flags_pf & RP_DOWNSAMPLE2_UV)
+                {
+                }
+                else
+                {
+                }
+                ctx->flags |= RP_DOWNSAMPLE2_UV;
+            }
+            else
+            {
+                if (ctx->flags_pf & RP_DOWNSAMPLE2_UV)
+                {
+                }
+                else
+                {
+                    CHECK_DATA_SIZE(ctx->f.ds_u.size + ctx->f.ds_v.size);
+                    differenceImage(ctx->f.ds_u.image, data, ctx->f_pf.ds_u.image, ctx->ds_width, ctx->ds_height);
+                    differenceImage(ctx->f.ds_v.image, data + ctx->f.ds_u.size, ctx->f_pf.ds_v.image, ctx->ds_width, ctx->ds_height);
+                }
+            }
         }
         else if (header.flags & RP_DATA_DS)
         {
@@ -325,10 +385,11 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, in
         {
             CHECK_DATA_SIZE(ctx->f.ds_u.size + ctx->f.ds_v.size);
             predictImage(ctx->f.ds_u.image, data, ctx->ds_width, ctx->ds_height);
-            upsampleImage(ctx->u.image, ctx->f.ds_u.image, ctx->width, ctx->height);
             predictImage(ctx->f.ds_v.image, data + ctx->f.ds_u.size, ctx->ds_width, ctx->ds_height);
-            upsampleImage(ctx->v.image, ctx->f.ds_v.image, ctx->width, ctx->height);
         }
+
+        upsampleImage(ctx->u.image, ctx->f.ds_u.image, ctx->width, ctx->height);
+        upsampleImage(ctx->v.image, ctx->f.ds_v.image, ctx->width, ctx->height);
         ctx->flags |= RP_HAS_UV;
 
         if ((ctx->flags & (RP_HAS_Y | RP_HAS_UV)) == (RP_HAS_Y | RP_HAS_UV))

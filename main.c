@@ -532,7 +532,7 @@ void rpConfigSetDefault(void)
   quality_fac_num = 2;
   quality_fac_denum = 1;
 
-  use_frame_delta = 0;
+  use_frame_delta = 1;
   predict_frame_delta = 0;
   select_prediction = 0;
   use_dynamic_encode = 0;
