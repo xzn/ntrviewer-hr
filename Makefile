@@ -8,7 +8,7 @@ RM := rm
 
 TARGET := ntrviewer-hr.exe
 
-$(TARGET): main.o lib.o ikcp.o huffmandec.o rledec.o
+$(TARGET): main.o lib.o ikcp.o huffmandec.o rledec.o framedec.o
 	$(CC) $^ -o $@ $(CFLAGS) $(LDLIBS) $(LDFLAGS)
 
 %.o: %/c

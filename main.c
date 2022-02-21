@@ -115,6 +115,8 @@ static inline IUINT32 iclock()
 #define MAX(a, b) ((a) < (b) ? (b) : (a))
 #define LEN(a) (sizeof(a) / sizeof(a)[0])
 
+#define FRAME_STAT_EVERY_X_FRAMES 60
+
 /* Platform */
 SDL_Window *win;
 int running = nk_true;
@@ -530,10 +532,10 @@ void rpConfigSetDefault(void)
   quality_fac_num = 2;
   quality_fac_denum = 1;
 
-  use_frame_delta = 1;
+  use_frame_delta = 0;
   predict_frame_delta = 0;
   select_prediction = 0;
-  use_dynamic_encode = 1;
+  use_dynamic_encode = 0;
   use_rle_encode = 1;
   rp_dbg_msg = 0;
 }
@@ -675,6 +677,173 @@ static void guiMain(struct nk_context *ctx)
   nk_window_show(ctx, debug_msg_wnd, show_window);
 }
 
+static GLbyte vShaderStr[] =
+    "attribute vec4 a_position; \n"
+    "attribute vec2 a_texCoord; \n"
+    "varying vec2 v_texCoord; \n"
+    "void main() \n"
+    "{ \n"
+    " gl_Position = a_position; \n"
+    " v_texCoord = a_texCoord; \n"
+    "} \n";
+
+static GLbyte fShaderStr[] =
+    "precision mediump float; \n"
+    "varying vec2 v_texCoord; \n"
+    "uniform sampler2D s_texture; \n"
+    "void main() \n"
+    "{ \n"
+    " gl_FragColor = texture2D(s_texture, v_texCoord); \n"
+    "} \n";
+
+static GLfloat vVertices_pos[4][3] = {
+    -0.5f, 0.5f, 0.0f,  // Position 0
+    -0.5f, -0.5f, 0.0f, // Position 1
+    0.5f, -0.5f, 0.0f,  // Position 2
+    0.5f, 0.5f, 0.0f,   // Position 3
+};
+
+static GLfloat vVertices_tex_coord[4][2] = {
+    0.0f, 1.0f, // TexCoord 0
+    0.0f, 0.0f, // TexCoord 1
+    1.0f, 0.0f, // TexCoord 2
+    1.0f, 1.0f  // TexCoord 3
+};
+static GLushort indices[] =
+    {0, 1, 2, 0, 2, 3};
+
+static GLuint loadShader(GLenum type, const char *shaderSrc)
+{
+  GLuint shader;
+  GLint compiled;
+
+  // Create the shader object
+  shader = glCreateShader(type);
+
+  if (shader == 0)
+    return 0;
+
+  // Load the shader source
+  glShaderSource(shader, 1, &shaderSrc, NULL);
+
+  // Compile the shader
+  glCompileShader(shader);
+
+  // Check the compile status
+  glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+
+  if (!compiled)
+  {
+    GLint infoLen = 0;
+
+    glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &infoLen);
+
+    if (infoLen > 1)
+    {
+      char *infoLog = malloc(sizeof(char) * infoLen);
+
+      glGetShaderInfoLog(shader, infoLen, NULL, infoLog);
+      fprintf(stderr, "Error compiling shader: %s\n", infoLog);
+
+      free(infoLog);
+    }
+
+    glDeleteShader(shader);
+    return 0;
+  }
+
+  return shader;
+}
+
+GLuint LoadProgram(const char *vertShaderSrc, const char *fragShaderSrc)
+{
+  GLuint vertexShader;
+  GLuint fragmentShader;
+  GLuint programObject;
+  GLint linked;
+
+  // Load the vertex/fragment shaders
+  vertexShader = loadShader(GL_VERTEX_SHADER, vertShaderSrc);
+  if (vertexShader == 0)
+    return 0;
+
+  fragmentShader = loadShader(GL_FRAGMENT_SHADER, fragShaderSrc);
+  if (fragmentShader == 0)
+  {
+    glDeleteShader(vertexShader);
+    return 0;
+  }
+
+  // Create the program object
+  programObject = glCreateProgram();
+
+  if (programObject == 0)
+    return 0;
+
+  glAttachShader(programObject, vertexShader);
+  glAttachShader(programObject, fragmentShader);
+
+  // Link the program
+  glLinkProgram(programObject);
+
+  // Check the link status
+  glGetProgramiv(programObject, GL_LINK_STATUS, &linked);
+
+  if (!linked)
+  {
+    GLint infoLen = 0;
+
+    glGetProgramiv(programObject, GL_INFO_LOG_LENGTH, &infoLen);
+
+    if (infoLen > 1)
+    {
+      char *infoLog = malloc(sizeof(char) * infoLen);
+
+      glGetProgramInfoLog(programObject, infoLen, NULL, infoLog);
+      fprintf(stderr, "Error linking program: %s\n", infoLog);
+
+      free(infoLog);
+    }
+
+    glDeleteProgram(programObject);
+    return 0;
+  }
+
+  // Free up no longer needed shader resources
+  glDeleteShader(vertexShader);
+  glDeleteShader(fragmentShader);
+
+  return programObject;
+}
+
+pthread_mutex_t gl_tex_mutex;
+GLuint top_tex_id;
+GLuint bot_tex_id;
+GLuint gl_program;
+GLint gl_position_loc;
+GLint gl_tex_coord_loc;
+GLint gl_sampler_loc;
+
+typedef struct _FrameBufferContext
+{
+  uint8_t *images[3];
+  int updated;
+  int index;
+  int next_index;
+} FrameBufferContext;
+
+FrameBufferContext top_buffer_ctx, bot_buffer_ctx;
+
+int frame_buffer_context_next_free_index(FrameBufferContext *ctx)
+{
+  int next_index = (ctx->next_index + 1) % 3;
+  if (next_index == ctx->index)
+  {
+    next_index = (ctx->next_index + 1) % 3;
+  }
+  return next_index;
+}
+
 static void
 MainLoop(void *loopArg)
 {
@@ -701,6 +870,86 @@ MainLoop(void *loopArg)
     glViewport(0, 0, win_width, win_height);
     glClear(GL_COLOR_BUFFER_BIT);
     glClearColor(bg[0], bg[1], bg[2], bg[3]);
+
+    int top_height = (double)win_height / 2;
+    int top_width;
+    int top_left;
+    int top_top;
+    if ((double)win_width / 400 * 240 > top_height)
+    {
+      top_width = (double)top_height / 240 * 400;
+      top_left = (double)(win_width - top_width) / 2;
+      top_top = 0;
+    }
+    else
+    {
+      top_height = (double)win_width / 400 * 240;
+      top_left = 0;
+      top_width = win_width;
+      top_top = (double)win_height / 2 - top_height;
+    }
+
+    double top_left_f = (double)top_left / win_width * 2 - 1;
+    double top_top_f = 1 - (double)top_top / win_height * 2;
+    double top_right_f = -top_left_f;
+    double top_bot_f = 0;
+    vVertices_pos[0][0] = top_left_f;
+    vVertices_pos[0][1] = top_top_f;
+    vVertices_pos[1][0] = top_left_f;
+    vVertices_pos[1][1] = top_bot_f;
+    vVertices_pos[2][0] = top_right_f;
+    vVertices_pos[2][1] = top_bot_f;
+    vVertices_pos[3][0] = top_right_f;
+    vVertices_pos[3][1] = top_top_f;
+
+    glUseProgram(gl_program);
+    glVertexAttribPointer(gl_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*vVertices_pos), vVertices_pos);
+    glVertexAttribPointer(gl_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*vVertices_tex_coord), vVertices_tex_coord);
+
+    glEnableVertexAttribArray(gl_position_loc);
+    glEnableVertexAttribArray(gl_tex_coord_loc);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, top_tex_id);
+
+    static int frame_counter = 0;
+    static uint64_t frame_count_last_tick = 0;
+
+    pthread_mutex_lock(&gl_tex_mutex);
+    if (top_buffer_ctx.updated)
+    {
+      int next_index = frame_buffer_context_next_free_index(&top_buffer_ctx);
+      glTexImage2D(GL_TEXTURE_2D, 0,
+                   GL_RGB, 400,
+                   240, 0,
+                   GL_RGB, GL_UNSIGNED_BYTE,
+                   top_buffer_ctx.images[top_buffer_ctx.next_index]);
+      top_buffer_ctx.index = top_buffer_ctx.next_index;
+      top_buffer_ctx.next_index = next_index;
+      top_buffer_ctx.updated = 0;
+
+      ++frame_counter;
+      if (frame_counter == FRAME_STAT_EVERY_X_FRAMES)
+      {
+        uint64_t next_tick = iclock64();
+        if (frame_count_last_tick != 0)
+        {
+          fprintf(stderr, "%d ms for %d rendered frames\n", next_tick - frame_count_last_tick, FRAME_STAT_EVERY_X_FRAMES);
+        }
+        frame_count_last_tick = next_tick;
+        frame_counter = 0;
+      }
+    }
+    pthread_mutex_unlock(&gl_tex_mutex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    glUniform1i(gl_sampler_loc, 0);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+
     /* IMPORTANT: `nk_sdl_render` modifies some global OpenGL state
      * with blending, scissor, face culling, depth test and viewport and
      * defaults everything back into a default state.
@@ -711,31 +960,14 @@ MainLoop(void *loopArg)
   }
 }
 
+#include "huffmancodec.h"
+#include "rlecodec.h"
+#include "framecodec.h"
+
 #define BUF_SIZE 2000
 uint8_t buf[BUF_SIZE];
 
-typedef struct _FrameContext
-{
-} FrameContext;
-
-FrameContext top_frame_ctx, bot_frame_ctx;
 int recv_new_frame;
-
-#define RP_DATA_TOP ((uint32_t)1 << 0)
-#define RP_DATA_Y ((uint32_t)1 << 1)
-#define RP_DATA_DS ((uint32_t)1 << 2)
-#define RP_DATA_FD ((uint32_t)1 << 3)
-#define RP_DATA_PFD ((uint32_t)1 << 4)
-#define RP_DATA_SPFD ((uint32_t)1 << 5)
-#define RP_DATA_RLE ((uint32_t)1 << 6)
-
-typedef struct _DataHeader
-{
-  uint32_t flags;
-  uint32_t len;
-  // uint32_t id;
-  // uint32_t uncompressed_id;
-} DataHeader;
 
 #define FRAME_RECV_BUFFER_SIZE (96000 + 256 + sizeof(DataHeader))
 uint8_t frame_recv_buffer[FRAME_RECV_BUFFER_SIZE];
@@ -746,11 +978,32 @@ uint8_t frame_rle_dec_buffer[FRAME_RLE_DEC_SIZE];
 #define FRAME_HUFFMAN_DEC_SIZE (96000)
 uint8_t frame_huffman_dec_buffer[FRAME_HUFFMAN_DEC_SIZE];
 
-#include "huffmancodec.h"
-#include "rlecodec.h"
+void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb)
+{
+  pthread_mutex_lock(&gl_tex_mutex);
+  int next_index = frame_buffer_context_next_free_index(ctx);
+  uint8_t **image = &ctx->images[next_index];
+  free(*image);
+  *image = rgb;
+  ctx->updated = 1;
+  ctx->next_index = next_index;
+  pthread_mutex_unlock(&gl_tex_mutex);
+}
 
 void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size)
 {
+  uint8_t *frame = frame_decode(header, data, data_size);
+  if (frame)
+  {
+    if (header.flags & RP_DATA_TOP)
+    {
+      handle_decode_frame_screen(&top_buffer_ctx, frame);
+    }
+    else
+    {
+      handle_decode_frame_screen(&bot_buffer_ctx, frame);
+    }
+  }
 }
 
 int handle_frame_recv(void)
@@ -835,8 +1088,10 @@ int handle_recv(uint8_t *buf, int size)
 
     static int frame_counter = 0;
     static uint64_t frame_count_last_tick = 0;
-    ++frame_counter;
-#define FRAME_STAT_EVERY_X_FRAMES 60
+    if (!(data_header.flags & RP_DATA_Y))
+    {
+      ++frame_counter;
+    }
     if (frame_counter == FRAME_STAT_EVERY_X_FRAMES)
     {
       uint64_t next_tick = iclock64();
@@ -886,8 +1141,6 @@ IUINT32 kcpLastRecvMs = 0;
 void receive_from_socket(SOCKET s)
 {
   kcpLastRecvMs = iclock();
-  FrameContext frame_ctx_init = {};
-  top_frame_ctx = bot_frame_ctx = frame_ctx_init;
   recv_new_frame = 1;
 
   while (running)
@@ -1022,12 +1275,11 @@ int main(int argc, char *argv[])
   SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "0");
   SDL_SetHint(SDL_HINT_OPENGL_ES_DRIVER, "1");
   SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS);
-  // SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_EGL, 1);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-  SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+  SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
   win = SDL_CreateWindow("NTR Viewer HR",
                          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                          WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
@@ -1077,6 +1329,15 @@ int main(int argc, char *argv[])
 
   sock_startup();
 
+  glGenTextures(1, &top_tex_id);
+  glGenTextures(1, &bot_tex_id);
+  gl_program = LoadProgram(vShaderStr, fShaderStr);
+  gl_position_loc = glGetAttribLocation(gl_program, "a_position");
+  gl_tex_coord_loc = glGetAttribLocation(gl_program, "a_texCoord");
+  gl_sampler_loc = glGetUniformLocation(gl_program, "s_texture");
+  pthread_mutex_init(&gl_tex_mutex, NULL);
+  frame_decode_init();
+
   pthread_t udp_recv_thread;
   if (ret = pthread_create(&udp_recv_thread, NULL, udp_recv_thread_func, NULL))
   {
@@ -1109,6 +1370,13 @@ int main(int argc, char *argv[])
   pthread_join(udp_recv_thread, NULL);
   pthread_join(menu_tcp_thread, NULL);
   pthread_join(nwm_tcp_thread, NULL);
+
+  frame_decode_destroy();
+  pthread_mutex_destroy(&gl_tex_mutex);
+
+  glDeleteProgram(gl_program);
+  glDeleteTextures(1, &top_tex_id);
+  glDeleteTextures(1, &bot_tex_id);
 
   sock_cleanup();
   nk_sdl_shutdown();
