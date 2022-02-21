@@ -100,11 +100,12 @@ static inline IUINT32 iclock()
   return (IUINT32)(iclock64() & 0xfffffffful);
 }
 
+#include <stdatomic.h>
 #include <pthread.h>
 #include "main.h"
 
 #define WINDOW_WIDTH 800
-#define WINDOW_HEIGHT 600
+#define WINDOW_HEIGHT 960
 
 #define MAX_VERTEX_MEMORY 512 * 1024
 #define MAX_ELEMENT_MEMORY 128 * 1024
@@ -114,53 +115,565 @@ static inline IUINT32 iclock()
 #define MAX(a, b) ((a) < (b) ? (b) : (a))
 #define LEN(a) (sizeof(a) / sizeof(a)[0])
 
-/* ===============================================================
- *
- *                          EXAMPLE
- *
- * ===============================================================*/
-/* This are some code examples to provide a small overview of what can be
- * done with this library. To try out an example uncomment the defines */
-/*#define INCLUDE_ALL */
-/*#define INCLUDE_STYLE */
-/*#define INCLUDE_CALCULATOR */
-/*#define INCLUDE_CANVAS */
-/*#define INCLUDE_OVERVIEW */
-/*#define INCLUDE_NODE_EDITOR */
-
-#ifdef INCLUDE_ALL
-#define INCLUDE_STYLE
-#define INCLUDE_CALCULATOR
-#define INCLUDE_CANVAS
-#define INCLUDE_OVERVIEW
-#define INCLUDE_NODE_EDITOR
-#endif
-
-#ifdef INCLUDE_STYLE
-#include "../style.c"
-#endif
-#ifdef INCLUDE_CALCULATOR
-#include "../calculator.c"
-#endif
-#ifdef INCLUDE_CANVAS
-#include "../canvas.c"
-#endif
-#ifdef INCLUDE_OVERVIEW
-#include "../overview.c"
-#endif
-#ifdef INCLUDE_NODE_EDITOR
-#include "../node_editor.c"
-#endif
-
-/* ===============================================================
- *
- *                          DEMO
- *
- * ===============================================================*/
-
 /* Platform */
 SDL_Window *win;
 int running = nk_true;
+int win_width, win_height;
+
+#define RP_USE_FRAME_DELTA ((uint32_t)1 << 0)
+#define RP_PREDICT_FRAME_DELTA ((uint32_t)1 << 1)
+#define RP_SELECT_PREDICTION ((uint32_t)1 << 2)
+#define RP_DYNAMIC_ENCODE ((uint32_t)1 << 3)
+#define RP_RLE_ENCODE ((uint32_t)1 << 4)
+#define RP_DEBUG ((uint32_t)1 << 30)
+#define RP_EXTENDED ((uint32_t)1 << 31)
+
+enum ConnectionState
+{
+  CS_DISCONNECTED,
+  CS_CONNECTING,
+  CS_CONNECTED,
+  CS_DISCONNECTING,
+  CS_MAX,
+} menu_connection,
+    nwm_connection;
+
+atomic_int menu_work_state;
+atomic_int nwm_work_state;
+atomic_bool menu_remote_play;
+
+static char ip_addr_buf[16];
+
+const char *connection_msg[CS_MAX] = {
+    "Connect",
+    "Connecting ...",
+    "Disconnect",
+    "...",
+};
+
+static nk_bool prioritize_top_screen;
+static int priority_factor;
+static int target_bitrate;
+static int quality_fac_num;
+static int quality_fac_denum;
+
+static nk_bool use_frame_delta;
+static nk_bool predict_frame_delta;
+static nk_bool select_prediction;
+static nk_bool use_dynamic_encode;
+static nk_bool use_rle_encode;
+static nk_bool rp_dbg_msg;
+
+static int ip_octets[4];
+
+#define HEART_BEAT_EVERY_MS 250
+#define REST_EVERY_MS 100
+
+#define RP_MAGIC 0xfff54321
+#define TCP_MAGIC 0x12345678
+#define TCP_ARGS_COUNT 16
+typedef struct _TCPPacketHeader
+{
+  uint32_t magic;
+  uint32_t seq;
+  uint32_t type;
+  uint32_t cmd;
+  uint32_t args[TCP_ARGS_COUNT];
+
+  uint32_t data_len;
+} TCPPacketHeader;
+
+int tcp_recv(SOCKET sockfd, char *buf, int size)
+{
+  int ret, pos = 0;
+  int tmpsize = size;
+
+  while (tmpsize)
+  {
+    if ((ret = recv(sockfd, &buf[pos], tmpsize, 0)) <= 0)
+    {
+      if (ret < 0)
+      {
+        if (sock_errno() == WSAEWOULDBLOCK)
+        {
+          if (pos)
+            continue;
+          else
+            return 0;
+        }
+      }
+      return ret;
+    }
+    pos += ret;
+    tmpsize -= ret;
+  }
+
+  return size;
+}
+
+int tcp_send(SOCKET sockfd, char *buf, int size)
+{
+  int ret, pos = 0;
+  int tmpsize = size;
+
+  while (tmpsize)
+  {
+    if ((ret = send(sockfd, &buf[pos], tmpsize, 0)) < 0)
+    {
+      return ret;
+    }
+    pos += ret;
+    tmpsize -= ret;
+  }
+
+  return size;
+}
+
+int tcp_send_packet_header(SOCKET s, uint32_t seq, uint32_t type, uint32_t cmd, uint32_t *argv, int argc, uint32_t data_len)
+{
+  TCPPacketHeader packet;
+  packet.magic = TCP_MAGIC;
+  packet.seq = seq;
+  packet.type = type;
+  packet.cmd = cmd;
+  for (int i = 0; i < TCP_ARGS_COUNT; ++i)
+  {
+    if (i < argc)
+    {
+      packet.args[i] = argv[i];
+    }
+    else
+    {
+      packet.args[i] = 0;
+    }
+  }
+  packet.data_len = data_len;
+
+  int ret;
+  char *buf = (char *)&packet;
+  int size = sizeof(packet);
+  return tcp_send(s, buf, size);
+}
+
+SOCKET tcp_connect(int port)
+{
+  struct sockaddr_in servaddr = {0};
+  SOCKET sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  if (!SOCKET_VALID(sockfd))
+  {
+    fprintf(stderr, "socket creation failed: %d\n", sock_errno());
+    return INVALID_SOCKET;
+  }
+
+  servaddr.sin_family = AF_INET;
+  snprintf(ip_addr_buf, sizeof(ip_addr_buf),
+           "%d.%d.%d.%d",
+           ip_octets[0],
+           ip_octets[1],
+           ip_octets[2],
+           ip_octets[3]);
+  servaddr.sin_addr.s_addr = inet_addr(ip_addr_buf);
+  servaddr.sin_port = htons(port);
+
+  fprintf(stderr, "connecting to %s ...\n", ip_addr_buf);
+  int ret = connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr));
+  if (ret != 0)
+  {
+    fprintf(stderr, "connection failed: %d\n", sock_errno());
+    sock_close(sockfd);
+    return INVALID_SOCKET;
+  }
+  fprintf(stderr, "connected\n");
+
+  u_long mode = 1;
+  ioctlsocket(sockfd, FIONBIO, &mode);
+
+  return sockfd;
+}
+
+#define RESET_SOCKET(ts, ws) \
+  sock_close(sockfd);        \
+  sockfd = INVALID_SOCKET;   \
+  ts = 0;                    \
+  ws = CS_DISCONNECTED;      \
+  fprintf(stderr, "disconnected\n");
+
+void *menu_tcp_thread_func(void *arg)
+{
+  int menu_tcp_status = 0;
+  SOCKET sockfd = INVALID_SOCKET;
+  int packet_seq = 0;
+  while (running)
+  {
+    if (!menu_tcp_status && menu_work_state == CS_CONNECTING)
+    {
+      sockfd = tcp_connect(8000);
+      if (!SOCKET_VALID(sockfd))
+      {
+        menu_work_state = CS_DISCONNECTED;
+        continue;
+      }
+
+      packet_seq = 0;
+      menu_tcp_status = 1;
+      menu_work_state = CS_CONNECTED;
+    }
+    else if (menu_tcp_status && menu_work_state == CS_DISCONNECTING)
+    {
+      RESET_SOCKET(menu_tcp_status, menu_work_state)
+    }
+    else if (menu_tcp_status)
+    {
+      Sleep(HEART_BEAT_EVERY_MS);
+
+      TCPPacketHeader header = {0};
+      char *buf = (char *)&header;
+      int size = sizeof(header);
+      int ret;
+      if ((ret = tcp_recv(sockfd, buf, size)) < 0)
+      {
+        fprintf(stderr, "tcp recv error: %d\n", sock_errno());
+        RESET_SOCKET(menu_tcp_status, menu_work_state)
+        continue;
+      }
+      if (ret)
+      {
+        if (header.magic != TCP_MAGIC)
+        {
+          fprintf(stderr, "broken protocol\n");
+          RESET_SOCKET(menu_tcp_status, menu_work_state)
+          continue;
+        }
+        if (header.cmd == 0)
+        {
+          if (header.data_len)
+          {
+            char *buf = malloc(header.data_len + 1);
+            if ((ret = tcp_recv(sockfd, buf, header.data_len)) < 0)
+            {
+              fprintf(stderr, "heart beat recv error: %d\n", sock_errno());
+              free(buf);
+              RESET_SOCKET(menu_tcp_status, menu_work_state)
+              continue;
+            }
+            if (ret)
+            {
+              buf[header.data_len] = 0;
+              fprintf(stderr, "%s", buf);
+            }
+            free(buf);
+          }
+        }
+        else
+        {
+          char *buf = malloc(header.data_len);
+          if ((ret = tcp_recv(sockfd, buf, header.data_len)) < 0)
+          {
+            fprintf(stderr, "tcp recv error: %d\n", sock_errno());
+            free(buf);
+            RESET_SOCKET(menu_tcp_status, menu_work_state)
+            continue;
+          }
+          free(buf);
+        }
+      }
+
+      ret = tcp_send_packet_header(sockfd, packet_seq, 0, 0, 0, 0, 0);
+      if (ret < 0)
+      {
+        fprintf(stderr, "heart beat send failed: %d\n", sock_errno());
+        RESET_SOCKET(menu_tcp_status, menu_work_state)
+      }
+      ++packet_seq;
+
+      if (menu_remote_play)
+      {
+        menu_remote_play = 0;
+        uint32_t flags = 0;
+        if (use_frame_delta)
+          flags |= RP_USE_FRAME_DELTA;
+        if (predict_frame_delta)
+          flags |= RP_PREDICT_FRAME_DELTA;
+        if (select_prediction)
+          flags |= RP_SELECT_PREDICTION;
+        if (use_dynamic_encode)
+          flags |= RP_DYNAMIC_ENCODE;
+        if (use_rle_encode)
+          flags |= RP_RLE_ENCODE;
+        if (rp_dbg_msg)
+          flags |= RP_DEBUG;
+        uint32_t args[] = {
+            !!prioritize_top_screen << 8 | priority_factor,
+            RP_MAGIC,
+            target_bitrate,
+            flags,
+            quality_fac_denum << 8 | quality_fac_num};
+        ret = tcp_send_packet_header(sockfd, packet_seq, 0, 901,
+                                     args, sizeof(args) / sizeof(*args), 0);
+        if (ret < 0)
+        {
+          fprintf(stderr, "remote play send failed: %d\n", sock_errno());
+          RESET_SOCKET(menu_tcp_status, menu_work_state)
+        }
+        ++packet_seq;
+      }
+    }
+    else
+    {
+      Sleep(REST_EVERY_MS);
+    }
+  }
+  return 0;
+}
+
+void *nwm_tcp_thread_func(void *arg)
+{
+  int nwm_tcp_status = 0;
+  SOCKET sockfd = INVALID_SOCKET;
+  int packet_seq = 0;
+  while (running)
+  {
+    if (!nwm_tcp_status && nwm_work_state == CS_CONNECTING)
+    {
+      sockfd = tcp_connect(5000 + 0x1a);
+      if (!SOCKET_VALID(sockfd))
+      {
+        nwm_work_state = CS_DISCONNECTED;
+        continue;
+      }
+
+      packet_seq = 0;
+      nwm_tcp_status = 1;
+      nwm_work_state = CS_CONNECTED;
+    }
+    else if (nwm_tcp_status && nwm_work_state == CS_DISCONNECTING)
+    {
+      RESET_SOCKET(nwm_tcp_status, nwm_work_state)
+    }
+    else if (nwm_tcp_status)
+    {
+      Sleep(HEART_BEAT_EVERY_MS);
+
+      TCPPacketHeader header = {0};
+      char *buf = (char *)&header;
+      int size = sizeof(header);
+      int ret;
+      if ((ret = tcp_recv(sockfd, buf, size)) < 0)
+      {
+        fprintf(stderr, "tcp recv error: %d\n", sock_errno());
+        RESET_SOCKET(nwm_tcp_status, nwm_work_state)
+        continue;
+      }
+      if (ret)
+      {
+        if (header.magic != TCP_MAGIC)
+        {
+          fprintf(stderr, "broken protocol\n");
+          RESET_SOCKET(nwm_tcp_status, nwm_work_state)
+          continue;
+        }
+        if (header.cmd == 0)
+        {
+          if (header.data_len)
+          {
+            char *buf = malloc(header.data_len + 1);
+            if ((ret = tcp_recv(sockfd, buf, header.data_len)) < 0)
+            {
+              fprintf(stderr, "heart beat recv error: %d\n", sock_errno());
+              free(buf);
+              RESET_SOCKET(nwm_tcp_status, nwm_work_state)
+              continue;
+            }
+            if (ret)
+            {
+              buf[header.data_len] = 0;
+              fprintf(stderr, "%s", buf);
+            }
+            free(buf);
+          }
+        }
+        else
+        {
+          char *buf = malloc(header.data_len);
+          if ((ret = tcp_recv(sockfd, buf, header.data_len)) < 0)
+          {
+            fprintf(stderr, "tcp recv error: %d\n", sock_errno());
+            free(buf);
+            RESET_SOCKET(nwm_tcp_status, nwm_work_state)
+            continue;
+          }
+          free(buf);
+        }
+      }
+
+      ret = tcp_send_packet_header(sockfd, packet_seq, 0, 0, 0, 0, 0);
+      if (ret < 0)
+      {
+        fprintf(stderr, "heart beat send failed: %d\n", sock_errno());
+        RESET_SOCKET(nwm_tcp_status, nwm_work_state)
+      }
+      ++packet_seq;
+    }
+    else
+    {
+      Sleep(REST_EVERY_MS);
+    }
+  }
+  return 0;
+}
+
+void rpConfigSetDefault(void)
+{
+  prioritize_top_screen = 1;
+  priority_factor = 10;
+  target_bitrate = 1024 * 512 * 24;
+  quality_fac_num = 2;
+  quality_fac_denum = 1;
+
+  use_frame_delta = 1;
+  predict_frame_delta = 0;
+  select_prediction = 0;
+  use_dynamic_encode = 1;
+  use_rle_encode = 1;
+  rp_dbg_msg = 0;
+}
+
+static void guiMain(struct nk_context *ctx)
+{
+  static int hide_windows = 0;
+
+  struct nk_style_item fixed_background = ctx->style.window.fixed_background;
+  ctx->style.window.fixed_background = nk_style_item_hide();
+  const char *background_wnd = "Background";
+  if (nk_begin(ctx, background_wnd, nk_rect(0, 0, win_width, win_height),
+               NK_WINDOW_BACKGROUND))
+  {
+    if (nk_window_is_hovered(ctx) && nk_window_is_active(ctx, background_wnd) &&
+        nk_input_has_mouse_click(&ctx->input, NK_BUTTON_LEFT))
+    {
+      hide_windows = !hide_windows;
+    }
+  }
+  nk_end(ctx);
+  ctx->style.window.fixed_background = fixed_background;
+
+  enum nk_show_states show_window = !hide_windows;
+
+  static char msg_buf[250];
+
+  /* GUI */
+  const char *remote_play_wnd = "Remote Play";
+  if (nk_begin(ctx, remote_play_wnd, nk_rect(50, 50, 400, 500),
+               NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE))
+  {
+    nk_layout_row_dynamic(ctx, 30, 5);
+    nk_label(ctx, "IP", NK_TEXT_CENTERED);
+    nk_property_int(ctx, "#", 0, &ip_octets[0], 255, 1, 1);
+    nk_property_int(ctx, "#", 0, &ip_octets[1], 255, 1, 1);
+    nk_property_int(ctx, "#", 0, &ip_octets[2], 255, 1, 1);
+    nk_property_int(ctx, "#", 0, &ip_octets[3], 255, 1, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Prioritize top screen", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &prioritize_top_screen);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "Priority factor %d", priority_factor);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 0, &priority_factor, 15, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "Target bitrate %.1f Mbps", (double)target_bitrate / 1024 / 1024);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 1024 * 512 * 3, &target_bitrate, 1024 * 512 * 36, 1024 * 512);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "Quality factor %d", quality_fac_num);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 1, &quality_fac_num, 4, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "/ %d", quality_fac_denum);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 1, &quality_fac_denum, 4, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Use frame delta", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &use_frame_delta);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Predict frame delta", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &predict_frame_delta);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Select prediction", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &select_prediction);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Dynamic encode", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &use_dynamic_encode);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "RLE encode", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &use_rle_encode);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Debug Message", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &rp_dbg_msg);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    if (nk_button_label(ctx, "Default"))
+    {
+      rpConfigSetDefault();
+    }
+    if (nk_button_label(ctx, "Connect"))
+    {
+      if (menu_work_state == CS_DISCONNECTED)
+      {
+        menu_work_state = CS_CONNECTING;
+      }
+      menu_remote_play = TRUE;
+    }
+  }
+  nk_end(ctx);
+  nk_window_show(ctx, remote_play_wnd, show_window);
+
+  const char *debug_msg_wnd = "Debug Msg";
+  if (nk_begin(ctx, debug_msg_wnd, nk_rect(500, 50, 250, 120),
+               NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE))
+  {
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Menu", NK_TEXT_CENTERED);
+    menu_connection = menu_work_state;
+    if (nk_button_label(ctx, connection_msg[menu_connection]))
+    {
+      if (menu_work_state == CS_DISCONNECTED)
+      {
+        menu_work_state = CS_CONNECTING;
+      }
+      else if (menu_work_state == CS_CONNECTED)
+      {
+        menu_work_state = CS_DISCONNECTING;
+      }
+    }
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "NWM", NK_TEXT_CENTERED);
+    nwm_connection = nwm_work_state;
+    if (nk_button_label(ctx, connection_msg[nwm_connection]))
+    {
+      if (nwm_work_state == CS_DISCONNECTED)
+      {
+        nwm_work_state = CS_CONNECTING;
+      }
+      else if (nwm_work_state == CS_CONNECTED)
+      {
+        nwm_work_state = CS_DISCONNECTING;
+      }
+    }
+  }
+  nk_end(ctx);
+  nk_window_show(ctx, debug_msg_wnd, show_window);
+}
 
 static void
 MainLoop(void *loopArg)
@@ -178,74 +691,11 @@ MainLoop(void *loopArg)
   }
   nk_input_end(ctx);
 
-  /* GUI */
-  if (nk_begin(ctx, "Demo", nk_rect(50, 50, 200, 200),
-               NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE |
-                   NK_WINDOW_CLOSABLE | NK_WINDOW_MINIMIZABLE | NK_WINDOW_TITLE))
-  {
-    nk_menubar_begin(ctx);
-    nk_layout_row_begin(ctx, NK_STATIC, 25, 2);
-    nk_layout_row_push(ctx, 45);
-    if (nk_menu_begin_label(ctx, "FILE", NK_TEXT_LEFT, nk_vec2(120, 200)))
-    {
-      nk_layout_row_dynamic(ctx, 30, 1);
-      nk_menu_item_label(ctx, "OPEN", NK_TEXT_LEFT);
-      nk_menu_item_label(ctx, "CLOSE", NK_TEXT_LEFT);
-      nk_menu_end(ctx);
-    }
-    nk_layout_row_push(ctx, 45);
-    if (nk_menu_begin_label(ctx, "EDIT", NK_TEXT_LEFT, nk_vec2(120, 200)))
-    {
-      nk_layout_row_dynamic(ctx, 30, 1);
-      nk_menu_item_label(ctx, "COPY", NK_TEXT_LEFT);
-      nk_menu_item_label(ctx, "CUT", NK_TEXT_LEFT);
-      nk_menu_item_label(ctx, "PASTE", NK_TEXT_LEFT);
-      nk_menu_end(ctx);
-    }
-    nk_layout_row_end(ctx);
-    nk_menubar_end(ctx);
-
-    {
-      enum
-      {
-        EASY,
-        HARD
-      };
-      static int op = EASY;
-      static int property = 20;
-      nk_layout_row_static(ctx, 30, 80, 1);
-      if (nk_button_label(ctx, "button"))
-        fprintf(stdout, "button pressed\n");
-      nk_layout_row_dynamic(ctx, 30, 2);
-      if (nk_option_label(ctx, "easy", op == EASY))
-        op = EASY;
-      if (nk_option_label(ctx, "hard", op == HARD))
-        op = HARD;
-      nk_layout_row_dynamic(ctx, 25, 1);
-      nk_property_int(ctx, "Compression:", 0, &property, 100, 10, 1);
-    }
-  }
-  nk_end(ctx);
-
-/* -------------- EXAMPLES ---------------- */
-#ifdef INCLUDE_CALCULATOR
-  calculator(ctx);
-#endif
-#ifdef INCLUDE_CANVAS
-  canvas(ctx);
-#endif
-#ifdef INCLUDE_OVERVIEW
-  overview(ctx);
-#endif
-#ifdef INCLUDE_NODE_EDITOR
-  node_editor(ctx);
-#endif
-  /* ----------------------------------------- */
+  guiMain(ctx);
 
   /* Draw */
   {
     float bg[4];
-    int win_width, win_height;
     nk_color_fv(bg, nk_rgb(28, 48, 62));
     SDL_GetWindowSize(win, &win_width, &win_height);
     glViewport(0, 0, win_width, win_height);
@@ -262,7 +712,7 @@ MainLoop(void *loopArg)
 }
 
 #define BUF_SIZE 2000
-unsigned char buf[BUF_SIZE];
+uint8_t buf[BUF_SIZE];
 
 typedef struct _FrameContext
 {
@@ -271,24 +721,105 @@ typedef struct _FrameContext
 FrameContext top_frame_ctx, bot_frame_ctx;
 int recv_new_frame;
 
+#define RP_DATA_TOP ((uint32_t)1 << 0)
+#define RP_DATA_Y ((uint32_t)1 << 1)
+#define RP_DATA_DS ((uint32_t)1 << 2)
+#define RP_DATA_FD ((uint32_t)1 << 3)
+#define RP_DATA_PFD ((uint32_t)1 << 4)
+#define RP_DATA_SPFD ((uint32_t)1 << 5)
+#define RP_DATA_RLE ((uint32_t)1 << 6)
+
 typedef struct _DataHeader
 {
   uint32_t flags;
   uint32_t len;
+  // uint32_t id;
+  // uint32_t uncompressed_id;
 } DataHeader;
 
 #define FRAME_RECV_BUFFER_SIZE (96000 + 256 + sizeof(DataHeader))
-unsigned char frame_recv_buffer[FRAME_RECV_BUFFER_SIZE];
+uint8_t frame_recv_buffer[FRAME_RECV_BUFFER_SIZE];
 
-unsigned char *frame_recv_ptr;
+#define FRAME_RLE_DEC_SIZE (96000 + 256)
+uint8_t frame_rle_dec_buffer[FRAME_RLE_DEC_SIZE];
+
+#define FRAME_HUFFMAN_DEC_SIZE (96000)
+uint8_t frame_huffman_dec_buffer[FRAME_HUFFMAN_DEC_SIZE];
+
+#include "huffmancodec.h"
+#include "rlecodec.h"
+
+void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size)
+{
+}
+
+int handle_frame_recv(void)
+{
+  DataHeader header;
+  memcpy(&header, frame_recv_buffer, sizeof(DataHeader));
+
+  uint8_t *compressed = frame_recv_buffer + sizeof(DataHeader);
+  int ret;
+
+  int expected_size = header.flags & RP_DATA_TOP ? 96000 : 76800;
+  if (!(header.flags & RP_DATA_Y))
+  {
+    expected_size /= 2;
+  }
+  if (header.flags & RP_DATA_DS)
+  {
+    expected_size /= 4;
+  }
+
+  // fprintf(stderr, "frame receive %d %d\n",
+  //         header.flags, header.len + sizeof(DataHeader));
+  // fprintf(stderr, "receive %d %d %d %d %d\n", header.flags, header.len, header.id, header.uncompressed_id, expected_size);
+
+  if (FRAME_HUFFMAN_DEC_SIZE < expected_size)
+  {
+    fprintf(stderr, "FRAME_HUFFMAN_DEC_SIZE too small %d\n", expected_size);
+    return -1;
+  }
+
+  if (header.flags & RP_DATA_RLE)
+  {
+    ret = rle_decode(frame_rle_dec_buffer, FRAME_RLE_DEC_SIZE, compressed, header.len);
+    if (ret < 0)
+    {
+      fprintf(stderr, "rle_decode error: %d\n", ret);
+      return -1;
+    }
+
+    ret = huffman_decode(frame_huffman_dec_buffer, expected_size, frame_rle_dec_buffer, ret);
+    if (ret < 0)
+    {
+      fprintf(stderr, "huffman_decode after rle error: %d\n", ret);
+      return -1;
+    }
+  }
+  else
+  {
+    ret = huffman_decode(frame_huffman_dec_buffer, expected_size, compressed, header.len);
+    if (ret < 0)
+    {
+      fprintf(stderr, "huffman_decode error: %d\n", ret);
+      return -1;
+    }
+  }
+  handle_decoded_frame(header, frame_huffman_dec_buffer, ret);
+  return 0;
+}
+
+uint8_t *frame_recv_ptr;
 int frame_size_remain;
-int handle_recv(unsigned char *buf, int size)
+int handle_recv(uint8_t *buf, int size)
 {
   if (recv_new_frame)
   {
     frame_recv_ptr = frame_recv_buffer;
     recv_new_frame = 0;
   }
+  // fprintf(stderr, "handle_recv %d %d\n", frame_recv_ptr - frame_recv_buffer, size);
   if (frame_recv_ptr + size - frame_recv_buffer > FRAME_RECV_BUFFER_SIZE)
   {
     fprintf(stderr, "handle_recv buffer too small\n");
@@ -300,36 +831,48 @@ int handle_recv(unsigned char *buf, int size)
     DataHeader data_header;
     memcpy(&data_header, frame_recv_ptr, sizeof(DataHeader));
     frame_size_remain = data_header.len + sizeof(DataHeader);
-    // fprintf(stderr, "new frame %d\n", frame_size_remain);
+    // fprintf(stderr, "new frame %d %d\n", data_header.flags, data_header.len + sizeof(DataHeader));
 
     static int frame_counter = 0;
     static uint64_t frame_count_last_tick = 0;
     ++frame_counter;
-    if (frame_counter == 60)
+#define FRAME_STAT_EVERY_X_FRAMES 60
+    if (frame_counter == FRAME_STAT_EVERY_X_FRAMES)
     {
       uint64_t next_tick = iclock64();
       if (frame_count_last_tick != 0)
       {
-        fprintf(stderr, "%d ms for 60 frames\n", next_tick - frame_count_last_tick);
+        fprintf(stderr, "%d ms for %d frames\n", next_tick - frame_count_last_tick, FRAME_STAT_EVERY_X_FRAMES);
       }
       frame_count_last_tick = next_tick;
       frame_counter = 0;
     }
   }
-  frame_recv_ptr += size;
   if (frame_size_remain < size)
   {
     fprintf(stderr, "handle_recv data malformed\n");
     return -2;
+    // recv_new_frame = 1;
+    // if (handle_frame_recv() < 0)
+    // {
+    //   return -2;
+    // }
+    // return handle_recv(buf + frame_size_remain, size - frame_size_remain);
   }
+  frame_recv_ptr += size;
   frame_size_remain -= size;
   if (frame_size_remain == 0)
   {
     recv_new_frame = 1;
+    if (handle_frame_recv() < 0)
+    {
+      return -3;
+    }
   }
   return 0;
 }
 
+ikcpcb *kcp;
 SOCKET s;
 struct sockaddr_in remoteAddr;
 int udp_output(const char *buf, int len, ikcpcb *kcp, void *user)
@@ -338,7 +881,6 @@ int udp_output(const char *buf, int len, ikcpcb *kcp, void *user)
   return sendto(s, buf, len, 0, (struct sockaddr *)&remoteAddr, sizeof(remoteAddr));
 }
 
-ikcpcb *kcp;
 IUINT32 kcpLastRecvMs = 0;
 #define KCP_RECV_TIMEOUT_MS 250
 void receive_from_socket(SOCKET s)
@@ -369,7 +911,7 @@ void receive_from_socket(SOCKET s)
       {
         if (iclock() - kcpLastRecvMs > KCP_RECV_TIMEOUT_MS)
         {
-          fprintf(stderr, "ikcp_recv timeout: %d\n", kcpLastRecvMs);
+          // fprintf(stderr, "ikcp_recv timeout: %d\n", kcpLastRecvMs);
           break;
         }
       }
@@ -464,6 +1006,8 @@ void *udp_recv_thread_func(void *arg)
   return 0;
 }
 
+#include "style.c"
+
 int main(int argc, char *argv[])
 {
   /* GUI */
@@ -484,9 +1028,9 @@ int main(int argc, char *argv[])
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-  win = SDL_CreateWindow("Demo",
+  win = SDL_CreateWindow("NTR Viewer HR",
                          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                         WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI);
+                         WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
   if (!win)
   {
     fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
@@ -526,10 +1070,10 @@ int main(int argc, char *argv[])
   }
 
   /* style.c */
-  /*set_style(ctx, THEME_WHITE);*/
-  /*set_style(ctx, THEME_RED);*/
-  /*set_style(ctx, THEME_BLUE);*/
-  /*set_style(ctx, THEME_DARK);*/
+  // set_style(ctx, THEME_WHITE);
+  // set_style(ctx, THEME_RED);
+  // set_style(ctx, THEME_BLUE);
+  set_style(ctx, THEME_DARK);
 
   sock_startup();
 
@@ -539,6 +1083,20 @@ int main(int argc, char *argv[])
     fprintf(stderr, "pthread_create failed\n");
     return -1;
   }
+  pthread_t menu_tcp_thread;
+  if (ret = pthread_create(&menu_tcp_thread, NULL, menu_tcp_thread_func, NULL))
+  {
+    fprintf(stderr, "pthread_create failed\n");
+    return -1;
+  }
+  pthread_t nwm_tcp_thread;
+  if (ret = pthread_create(&nwm_tcp_thread, NULL, nwm_tcp_thread_func, NULL))
+  {
+    fprintf(stderr, "pthread_create failed\n");
+    return -1;
+  }
+
+  rpConfigSetDefault();
 
 #if defined(__EMSCRIPTEN__)
 #include <emscripten.h>
@@ -547,6 +1105,10 @@ int main(int argc, char *argv[])
   while (running)
     MainLoop((void *)ctx);
 #endif
+
+  pthread_join(udp_recv_thread, NULL);
+  pthread_join(menu_tcp_thread, NULL);
+  pthread_join(nwm_tcp_thread, NULL);
 
   sock_cleanup();
   nk_sdl_shutdown();
