@@ -1,0 +1,5 @@
+*.o
+*.exe
+*.dll
+include
+lib
