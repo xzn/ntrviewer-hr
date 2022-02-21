@@ -824,10 +824,17 @@ GLint gl_position_loc;
 GLint gl_tex_coord_loc;
 GLint gl_sampler_loc;
 
+enum FrameBufferStatus
+{
+  FBS_NOT_AVAIL,
+  FBS_UPDATED,
+  FBS_NOT_UPDATED,
+};
+
 typedef struct _FrameBufferContext
 {
   uint8_t *images[3];
-  int updated;
+  enum FrameBufferStatus updated;
   int index;
   int next_index;
 } FrameBufferContext;
@@ -842,6 +849,107 @@ int frame_buffer_context_next_free_index(FrameBufferContext *ctx)
     next_index = (ctx->next_index + 1) % 3;
   }
   return next_index;
+}
+
+static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int isTop)
+{
+  if (ctx->updated == FBS_NOT_AVAIL)
+  {
+    return;
+  }
+
+  int ctx_height = (double)win_height / 2;
+  int ctx_width;
+  int ctx_left;
+  int ctx_top;
+  if ((double)win_width / width * height > ctx_height)
+  {
+    ctx_width = (double)ctx_height / height * width;
+    ctx_left = (double)(win_width - ctx_width) / 2;
+    ctx_top = 0;
+  }
+  else
+  {
+    ctx_height = (double)win_width / width * height;
+    ctx_left = 0;
+    ctx_width = win_width;
+    ctx_top = (double)win_height / 2 - ctx_height;
+  }
+
+  double ctx_left_f;
+  double ctx_top_f;
+  double ctx_right_f;
+  double ctx_bot_f;
+  if (isTop)
+  {
+    ctx_left_f = (double)ctx_left / win_width * 2 - 1;
+    ctx_top_f = 1 - (double)ctx_top / win_height * 2;
+    ctx_right_f = -ctx_left_f;
+    ctx_bot_f = 0;
+  }
+  else
+  {
+    ctx_left_f = (double)ctx_left / win_width * 2 - 1;
+    ctx_top_f = 0;
+    ctx_right_f = -ctx_left_f;
+    ctx_bot_f = -1 + (double)ctx_top / win_height * 2;
+  }
+  vVertices_pos[0][0] = ctx_left_f;
+  vVertices_pos[0][1] = ctx_top_f;
+  vVertices_pos[1][0] = ctx_left_f;
+  vVertices_pos[1][1] = ctx_bot_f;
+  vVertices_pos[2][0] = ctx_right_f;
+  vVertices_pos[2][1] = ctx_bot_f;
+  vVertices_pos[3][0] = ctx_right_f;
+  vVertices_pos[3][1] = ctx_top_f;
+
+  glUseProgram(gl_program);
+  glVertexAttribPointer(gl_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*vVertices_pos), vVertices_pos);
+  glVertexAttribPointer(gl_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*vVertices_tex_coord), vVertices_tex_coord);
+
+  glEnableVertexAttribArray(gl_position_loc);
+  glEnableVertexAttribArray(gl_tex_coord_loc);
+
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, isTop ? top_tex_id : bot_tex_id);
+
+  static int frame_counter = 0;
+  static uint64_t frame_count_last_tick = 0;
+
+  pthread_mutex_lock(&gl_tex_mutex);
+  if (ctx->updated == FBS_UPDATED)
+  {
+    int next_index = frame_buffer_context_next_free_index(ctx);
+    glTexImage2D(GL_TEXTURE_2D, 0,
+                 GL_RGB, width,
+                 height, 0,
+                 GL_RGB, GL_UNSIGNED_BYTE,
+                 ctx->images[ctx->next_index]);
+    ctx->index = ctx->next_index;
+    ctx->next_index = next_index;
+    ctx->updated = FBS_NOT_UPDATED;
+
+    ++frame_counter;
+    if (frame_counter == FRAME_STAT_EVERY_X_FRAMES)
+    {
+      uint64_t next_tick = iclock64();
+      if (frame_count_last_tick != 0)
+      {
+        fprintf(stderr, "%d ms for %d rendered frames\n", next_tick - frame_count_last_tick, FRAME_STAT_EVERY_X_FRAMES);
+      }
+      frame_count_last_tick = next_tick;
+      frame_counter = 0;
+    }
+  }
+  pthread_mutex_unlock(&gl_tex_mutex);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glGenerateMipmap(GL_TEXTURE_2D);
+
+  glUniform1i(gl_sampler_loc, 0);
+  glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
 }
 
 static void
@@ -871,84 +979,8 @@ MainLoop(void *loopArg)
     glClear(GL_COLOR_BUFFER_BIT);
     glClearColor(bg[0], bg[1], bg[2], bg[3]);
 
-    int top_height = (double)win_height / 2;
-    int top_width;
-    int top_left;
-    int top_top;
-    if ((double)win_width / 400 * 240 > top_height)
-    {
-      top_width = (double)top_height / 240 * 400;
-      top_left = (double)(win_width - top_width) / 2;
-      top_top = 0;
-    }
-    else
-    {
-      top_height = (double)win_width / 400 * 240;
-      top_left = 0;
-      top_width = win_width;
-      top_top = (double)win_height / 2 - top_height;
-    }
-
-    double top_left_f = (double)top_left / win_width * 2 - 1;
-    double top_top_f = 1 - (double)top_top / win_height * 2;
-    double top_right_f = -top_left_f;
-    double top_bot_f = 0;
-    vVertices_pos[0][0] = top_left_f;
-    vVertices_pos[0][1] = top_top_f;
-    vVertices_pos[1][0] = top_left_f;
-    vVertices_pos[1][1] = top_bot_f;
-    vVertices_pos[2][0] = top_right_f;
-    vVertices_pos[2][1] = top_bot_f;
-    vVertices_pos[3][0] = top_right_f;
-    vVertices_pos[3][1] = top_top_f;
-
-    glUseProgram(gl_program);
-    glVertexAttribPointer(gl_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*vVertices_pos), vVertices_pos);
-    glVertexAttribPointer(gl_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*vVertices_tex_coord), vVertices_tex_coord);
-
-    glEnableVertexAttribArray(gl_position_loc);
-    glEnableVertexAttribArray(gl_tex_coord_loc);
-
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, top_tex_id);
-
-    static int frame_counter = 0;
-    static uint64_t frame_count_last_tick = 0;
-
-    pthread_mutex_lock(&gl_tex_mutex);
-    if (top_buffer_ctx.updated)
-    {
-      int next_index = frame_buffer_context_next_free_index(&top_buffer_ctx);
-      glTexImage2D(GL_TEXTURE_2D, 0,
-                   GL_RGB, 400,
-                   240, 0,
-                   GL_RGB, GL_UNSIGNED_BYTE,
-                   top_buffer_ctx.images[top_buffer_ctx.next_index]);
-      top_buffer_ctx.index = top_buffer_ctx.next_index;
-      top_buffer_ctx.next_index = next_index;
-      top_buffer_ctx.updated = 0;
-
-      ++frame_counter;
-      if (frame_counter == FRAME_STAT_EVERY_X_FRAMES)
-      {
-        uint64_t next_tick = iclock64();
-        if (frame_count_last_tick != 0)
-        {
-          fprintf(stderr, "%d ms for %d rendered frames\n", next_tick - frame_count_last_tick, FRAME_STAT_EVERY_X_FRAMES);
-        }
-        frame_count_last_tick = next_tick;
-        frame_counter = 0;
-      }
-    }
-    pthread_mutex_unlock(&gl_tex_mutex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glGenerateMipmap(GL_TEXTURE_2D);
-
-    glUniform1i(gl_sampler_loc, 0);
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+    hr_draw_screen(&top_buffer_ctx, 400, 240, 1);
+    hr_draw_screen(&bot_buffer_ctx, 320, 240, 0);
 
     /* IMPORTANT: `nk_sdl_render` modifies some global OpenGL state
      * with blending, scissor, face culling, depth test and viewport and
@@ -985,7 +1017,7 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb)
   uint8_t **image = &ctx->images[next_index];
   free(*image);
   *image = rgb;
-  ctx->updated = 1;
+  ctx->updated = FBS_UPDATED;
   ctx->next_index = next_index;
   pthread_mutex_unlock(&gl_tex_mutex);
 }

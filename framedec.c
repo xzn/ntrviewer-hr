@@ -297,6 +297,8 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, in
         frame_delta_destroy(&ctx->f_pf);
         ctx->f_pf = ctx->f;
         frame_delta_init(ctx, &ctx->f);
+        ctx->flags_pf = ctx->flags;
+        ctx->flags = 0;
 
         if (header.flags & RP_DATA_FD)
         {
@@ -325,7 +327,7 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, in
             predictImage(ctx->f.ds_u.image, data, ctx->ds_width, ctx->ds_height);
             upsampleImage(ctx->u.image, ctx->f.ds_u.image, ctx->width, ctx->height);
             predictImage(ctx->f.ds_v.image, data + ctx->f.ds_u.size, ctx->ds_width, ctx->ds_height);
-            upsampleImage(ctx->v.image, ctx->f.ds_u.image, ctx->width, ctx->height);
+            upsampleImage(ctx->v.image, ctx->f.ds_v.image, ctx->width, ctx->height);
         }
         ctx->flags |= RP_HAS_UV;
 
