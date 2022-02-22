@@ -62,7 +62,7 @@ static inline void predictImage(uint8_t *dst, const uint8_t *src, int w, int h)
 
 static inline uint8_t accessImage(const uint8_t *image, int x, int y, int w, int h)
 {
-    return accessImageNoCheck(image, HR_MAX(HR_MIN(x, w), 0), HR_MAX(HR_MIN(y, h), 0), w, h);
+    return accessImageNoCheck(image, HR_MAX(HR_MIN(x, w - 1), 0), HR_MAX(HR_MIN(y, h - 1), 0), w, h);
 }
 
 static inline uint16_t accessImageUpsampleUnscaled(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
@@ -405,6 +405,7 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, in
             CHECK_DATA_SIZE(ctx->f.y.size);
             predictImage(ctx->f.y.image, data, ctx->width, ctx->height);
         }
+        // memset(ctx->f.y.image, 128, ctx->f.y.size);
         ctx->flags |= RP_HAS_Y;
     }
     else
@@ -465,6 +466,8 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, in
 
         upsampleImage(ctx->u.image, ctx->f.ds_u.image, ctx->width, ctx->height);
         upsampleImage(ctx->v.image, ctx->f.ds_v.image, ctx->width, ctx->height);
+        // memset(ctx->u.image, 128, ctx->u.size);
+        // memset(ctx->v.image, 128, ctx->v.size);
         ctx->flags |= RP_HAS_UV;
 
         if ((ctx->flags & (RP_HAS_Y | RP_HAS_UV)) == (RP_HAS_Y | RP_HAS_UV))

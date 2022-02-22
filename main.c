@@ -935,7 +935,7 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int i
       uint64_t next_tick = iclock64();
       if (frame_count_last_tick != 0)
       {
-        fprintf(stderr, "%d ms for %d rendered frames\n", next_tick - frame_count_last_tick, FRAME_STAT_EVERY_X_FRAMES);
+        // fprintf(stderr, "%d ms for %d rendered frames\n", next_tick - frame_count_last_tick, FRAME_STAT_EVERY_X_FRAMES);
       }
       frame_count_last_tick = next_tick;
       frame_counter = 0;
@@ -998,16 +998,17 @@ MainLoop(void *loopArg)
 
 #define BUF_SIZE 2000
 uint8_t buf[BUF_SIZE];
+ikcpcb *kcp;
 
 int recv_new_frame;
 
-#define FRAME_RECV_BUFFER_SIZE (96000 + 256 + sizeof(DataHeader))
+#define FRAME_RECV_BUFFER_SIZE (96000 * 3 / 2 + sizeof(DataHeader))
 uint8_t frame_recv_buffer[FRAME_RECV_BUFFER_SIZE];
 
-#define FRAME_RLE_DEC_SIZE (96000 + 256)
+#define FRAME_RLE_DEC_SIZE (96000 * 3 / 2)
 uint8_t frame_rle_dec_buffer[FRAME_RLE_DEC_SIZE];
 
-#define FRAME_HUFFMAN_DEC_SIZE (96000)
+#define FRAME_HUFFMAN_DEC_SIZE (96000 * 3 / 2)
 uint8_t frame_huffman_dec_buffer[FRAME_HUFFMAN_DEC_SIZE];
 
 void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb)
@@ -1022,6 +1023,9 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb)
   pthread_mutex_unlock(&gl_tex_mutex);
 }
 
+#define RP_CONTROL_TOP_KEY (1 << 0)
+#define RP_CONTROL_BOT_KEY (1 << 0)
+
 void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size)
 {
   uint8_t *frame = frame_decode(header, data, data_size);
@@ -1035,6 +1039,19 @@ void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size)
     {
       handle_decode_frame_screen(&bot_buffer_ctx, frame);
     }
+  }
+  else if (!(header.flags & RP_DATA_Y))
+  {
+    uint8_t flags;
+    if (header.flags & RP_DATA_TOP)
+    {
+      flags |= RP_CONTROL_TOP_KEY;
+    }
+    else
+    {
+      flags |= RP_CONTROL_BOT_KEY;
+    }
+    ikcp_send(kcp, &flags, sizeof(flags));
   }
 }
 
@@ -1118,7 +1135,7 @@ int handle_recv(uint8_t *buf, int size)
     memcpy(&packet_header, buf, sizeof(PacketHeader));
     if (packet_header.id != ++rpPacketId)
     {
-      fprintf(stderr, "Packet id mismatch %d (expected %d)\n", packet_header.id, rpPacketId);
+      // fprintf(stderr, "Packet id mismatch %d (expected %d)\n", packet_header.id, rpPacketId);
       rpPacketId = packet_header.id;
     }
     if (packet_header.len != size - sizeof(PacketHeader))
@@ -1152,7 +1169,7 @@ int handle_recv(uint8_t *buf, int size)
     frame_size_remain = data_header.len + sizeof(DataHeader);
     if (data_header.id != ++rpFrameId)
     {
-      fprintf(stderr, "Frame id mismatch %d (expected %d)\n", data_header.id, rpFrameId);
+      // fprintf(stderr, "Frame id mismatch %d (expected %d)\n", data_header.id, rpFrameId);
       rpFrameId = data_header.id;
     }
     // fprintf(stderr, "new frame %d %d\n", data_header.flags, data_header.len + sizeof(DataHeader));
@@ -1168,7 +1185,7 @@ int handle_recv(uint8_t *buf, int size)
       uint64_t next_tick = iclock64();
       if (frame_count_last_tick != 0)
       {
-        fprintf(stderr, "%d ms for %d frames\n", next_tick - frame_count_last_tick, FRAME_STAT_EVERY_X_FRAMES);
+        // fprintf(stderr, "%d ms for %d frames\n", next_tick - frame_count_last_tick, FRAME_STAT_EVERY_X_FRAMES);
       }
       frame_count_last_tick = next_tick;
       frame_counter = 0;
@@ -1198,7 +1215,6 @@ int handle_recv(uint8_t *buf, int size)
   return 0;
 }
 
-ikcpcb *kcp;
 SOCKET s;
 struct sockaddr_in remoteAddr;
 int udp_output(const char *buf, int len, ikcpcb *kcp, void *user)
@@ -1272,7 +1288,7 @@ void *udp_recv_thread_func(void *arg)
     // ikcp_setmtu(kcp, 1400);
     ikcp_nodelay(kcp, 1, 10, 2, 1);
     ikcp_wndsize(kcp, 128, 256);
-    fprintf(stderr, "new connection\n");
+    // fprintf(stderr, "new connection\n");
     frame_decode_destroy();
     frame_decode_init();
     top_buffer_ctx.updated = FBS_NOT_AVAIL;
@@ -1332,6 +1348,8 @@ void *udp_recv_thread_func(void *arg)
     sock_close(s);
 
     ikcp_release(kcp);
+
+    Sleep(1000);
   }
 
   return 0;
