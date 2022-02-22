@@ -166,7 +166,7 @@ static nk_bool use_dynamic_encode;
 static nk_bool use_rle_encode;
 static nk_bool rp_dbg_msg;
 
-static int ip_octets[4];
+static atomic_uint_fast8_t ip_octets[4];
 
 #define HEART_BEAT_EVERY_MS 250
 #define REST_EVERY_MS 100
@@ -270,10 +270,10 @@ SOCKET tcp_connect(int port)
   servaddr.sin_family = AF_INET;
   snprintf(ip_addr_buf, sizeof(ip_addr_buf),
            "%d.%d.%d.%d",
-           ip_octets[0],
-           ip_octets[1],
-           ip_octets[2],
-           ip_octets[3]);
+           (int)ip_octets[0],
+           (int)ip_octets[1],
+           (int)ip_octets[2],
+           (int)ip_octets[3]);
   servaddr.sin_addr.s_addr = inet_addr(ip_addr_buf);
   servaddr.sin_port = htons(port);
 
@@ -570,10 +570,13 @@ static void guiMain(struct nk_context *ctx)
   {
     nk_layout_row_dynamic(ctx, 30, 5);
     nk_label(ctx, "IP", NK_TEXT_CENTERED);
-    nk_property_int(ctx, "#", 0, &ip_octets[0], 255, 1, 1);
-    nk_property_int(ctx, "#", 0, &ip_octets[1], 255, 1, 1);
-    nk_property_int(ctx, "#", 0, &ip_octets[2], 255, 1, 1);
-    nk_property_int(ctx, "#", 0, &ip_octets[3], 255, 1, 1);
+
+    for (int i = 0; i < 4; ++i)
+    {
+      int ip_octet = ip_octets[i];
+      nk_property_int(ctx, "#", 0, &ip_octet, 255, 1, 1);
+      ip_octets[i] = ip_octet;
+    }
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Prioritize top screen", NK_TEXT_CENTERED);
@@ -1094,6 +1097,7 @@ int handle_frame_recv(void)
   if (expected_size != header.uncompressed_len)
   {
     fprintf(stderr, "frame data error\n");
+    return -1;
   }
   // fprintf(stderr, "frame receive %d %d\n",
   //         header.flags, header.len + sizeof(DataHeader));
@@ -1155,10 +1159,15 @@ int handle_recv_2(uint8_t *buf, int size)
   {
     frame_recv_ptr_2 = frame_recv_buffer_2;
     recv_new_frame = 0;
+    if (size < sizeof(Data2Header))
+    {
+      fprintf(stderr, "handle_rect frame2 packet too small\n");
+    }
     // fprintf(stderr, "handle_recv %d %d\n", frame_recv_ptr_2 - frame_recv_buffer_2, size);
 
     Data2Header data2_header;
     memcpy(&data2_header, buf, sizeof(Data2Header));
+    fprintf(stderr, "new frame2 %d %d %d %d\n", data2_header.flags, data2_header.len + sizeof(Data2Header), data2_header.id, data2_header.uncompressed_len);
     frame_size_remain = data2_header.len + sizeof(Data2Header);
     if (frame_size_remain < 1 || frame_size_remain > FRAME_RECV_BUFFER_SIZE_2)
     {
@@ -1170,7 +1179,6 @@ int handle_recv_2(uint8_t *buf, int size)
       // fprintf(stderr, "Frame2 id mismatch %d (expected %d)\n", data2_header.id, rpFrame2Id);
       rpFrame2Id = data2_header.id;
     }
-    fprintf(stderr, "new frame2 %d %d %d %d\n", data2_header.flags, data2_header.len + sizeof(Data2Header), data2_header.id, data2_header.uncompressed_len);
   }
   if (frame_size_remain < size)
   {
@@ -1194,6 +1202,7 @@ int handle_recv_2(uint8_t *buf, int size)
       return -3;
     }
   }
+  return 0;
 }
 
 int handle_recv(uint8_t *buf, int size)
@@ -1229,12 +1238,17 @@ int handle_recv(uint8_t *buf, int size)
   {
     frame_recv_ptr = frame_recv_buffer;
     recv_new_frame = 0;
+    if (size < sizeof(DataHeader))
+    {
+      fprintf(stderr, "handle_rect frame packet too small\n");
+    }
     // fprintf(stderr, "handle_recv %d %d\n", frame_recv_ptr - frame_recv_buffer, size);
 
     DataHeader data_header;
     memcpy(&data_header, buf, sizeof(DataHeader));
+    fprintf(stderr, "new frame %d %d %d %d\n", data_header.flags, data_header.len + sizeof(DataHeader), data_header.id, data_header.uncompressed_len);
     frame_size_remain = data_header.len + sizeof(DataHeader);
-    if (frame_size_remain < 256 || frame_size_remain > FRAME_RECV_BUFFER_SIZE)
+    if (frame_size_remain < 2 || frame_size_remain > FRAME_RECV_BUFFER_SIZE)
     {
       fprintf(stderr, "invalid frame header\n");
       return -5;
@@ -1244,7 +1258,6 @@ int handle_recv(uint8_t *buf, int size)
       // fprintf(stderr, "Frame id mismatch %d (expected %d)\n", data_header.id, rpFrameId);
       rpFrameId = data_header.id;
     }
-    fprintf(stderr, "new frame %d %d %d %d\n", data_header.flags, data_header.len + sizeof(DataHeader), data_header.id, data_header.uncompressed_len);
     frame_has_data2 = (data_header.flags & RP_DATA_SPFD);
     frame_in_data2 = 0;
 
@@ -1276,7 +1289,7 @@ int handle_recv(uint8_t *buf, int size)
       size -= frame_size_remain;
       frame_recv_ptr += frame_size_remain;
       frame_size_remain = 0;
-      // fprintf(stderr, "frame 2 current packet\n");
+      fprintf(stderr, "frame 2 current packet\n");
       return handle_recv_2(buf, size);
     }
 
@@ -1301,7 +1314,7 @@ int handle_recv(uint8_t *buf, int size)
   {
     if (frame_has_data2)
     {
-      // fprintf(stderr, "frame 2 new packet\n");
+      fprintf(stderr, "frame 2 new packet\n");
       frame_in_data2 = 1;
       recv_new_frame = 1;
       return 0;
@@ -1320,6 +1333,16 @@ struct sockaddr_in remoteAddr;
 int udp_output(const char *buf, int len, ikcpcb *kcp, void *user)
 {
   remoteAddr.sin_port = htons(8001);
+  if (ip_octets[0] == 0 &&
+      ip_octets[1] == 0 &&
+      ip_octets[2] == 0 &&
+      ip_octets[3] == 0)
+  {
+    ip_octets[0] = remoteAddr.sin_addr.S_un.S_un_b.s_b1;
+    ip_octets[1] = remoteAddr.sin_addr.S_un.S_un_b.s_b2;
+    ip_octets[2] = remoteAddr.sin_addr.S_un.S_un_b.s_b3;
+    ip_octets[3] = remoteAddr.sin_addr.S_un.S_un_b.s_b4;
+  }
   return sendto(s, buf, len, 0, (struct sockaddr *)&remoteAddr, sizeof(remoteAddr));
 }
 
