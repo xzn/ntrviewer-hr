@@ -331,14 +331,14 @@ void frame_decode_context_destroy(FrameDecodeContext *ctx)
 
 static FrameDecodeContext top_ctx, bot_ctx;
 
-#define CHECK_DATA_SIZE(s)                                                                  \
-    do                                                                                      \
-    {                                                                                       \
-        if (data_size != (s))                                                               \
-        {                                                                                   \
+#define CHECK_DATA_SIZE(s)                                                                    \
+    do                                                                                        \
+    {                                                                                         \
+        if (data_size != (s))                                                                 \
+        {                                                                                     \
             fprintf(stderr, "frame_decode data missize: %d (expected %d)\n", data_size, (s)); \
-            return 0;                                                                       \
-        }                                                                                   \
+            return 0;                                                                         \
+        }                                                                                     \
     } while (0)
 
 uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, int is_top)
@@ -369,6 +369,11 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, in
             if (header.flags & RP_DATA_DS)
             {
                 CHECK_DATA_SIZE(ctx->f.ds_y.size);
+                if (header.flags & RP_DATA_PFD)
+                {
+                    predictImage(ctx->f.ds_y.image, data, ctx->ds_width, ctx->ds_height);
+                    data = ctx->f.ds_y.image;
+                }
                 if (ctx->flags_pf & RP_DOWNSAMPLE_Y)
                 {
                     differenceImage(ctx->f.ds_y.image, data, ctx->f_pf.ds_y.image, ctx->ds_width, ctx->ds_height);
@@ -383,6 +388,11 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, in
             else
             {
                 CHECK_DATA_SIZE(ctx->f.y.size);
+                if (header.flags & RP_DATA_PFD)
+                {
+                    predictImage(ctx->f.y.image, data, ctx->width, ctx->height);
+                    data = ctx->f.y.image;
+                }
                 if (ctx->flags_pf & RP_DOWNSAMPLE_Y)
                 {
                     differenceFromDownsampled(ctx->f.y.image, data, ctx->f_pf.ds_y.image, ctx->width, ctx->height);
@@ -419,15 +429,23 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, in
             if (header.flags & RP_DATA_DS)
             {
                 CHECK_DATA_SIZE(ctx->f.ds_ds_u.size + ctx->f.ds_ds_v.size);
+                uint8_t *data_u = data, *data_v = data + ctx->f.ds_ds_u.size;
+                if (header.flags & RP_DATA_PFD)
+                {
+                    predictImage(ctx->f.ds_ds_u.image, data_u, ctx->ds_ds_width, ctx->ds_ds_height);
+                    predictImage(ctx->f.ds_ds_v.image, data_v, ctx->ds_ds_width, ctx->ds_ds_height);
+                    data_u = ctx->f.ds_ds_u.image;
+                    data_v = ctx->f.ds_ds_v.image;
+                }
                 if (ctx->flags_pf & RP_DOWNSAMPLE2_UV)
                 {
-                    differenceImage(ctx->f.ds_ds_u.image, data, ctx->f_pf.ds_ds_u.image, ctx->ds_ds_width, ctx->ds_ds_height);
-                    differenceImage(ctx->f.ds_ds_v.image, data + ctx->f.ds_ds_u.size, ctx->f_pf.ds_ds_v.image, ctx->ds_ds_width, ctx->ds_ds_height);
+                    differenceImage(ctx->f.ds_ds_u.image, data_u, ctx->f_pf.ds_ds_u.image, ctx->ds_ds_width, ctx->ds_ds_height);
+                    differenceImage(ctx->f.ds_ds_v.image, data_v, ctx->f_pf.ds_ds_v.image, ctx->ds_ds_width, ctx->ds_ds_height);
                 }
                 else
                 {
-                    downsampledDifference(ctx->f.ds_ds_u.image, data, ctx->f_pf.ds_u.image, ctx->ds_width, ctx->ds_height);
-                    downsampledDifference(ctx->f.ds_ds_v.image, data + ctx->f.ds_ds_u.size, ctx->f_pf.ds_v.image, ctx->ds_width, ctx->ds_height);
+                    downsampledDifference(ctx->f.ds_ds_u.image, data_u, ctx->f_pf.ds_u.image, ctx->ds_width, ctx->ds_height);
+                    downsampledDifference(ctx->f.ds_ds_v.image, data_v, ctx->f_pf.ds_v.image, ctx->ds_width, ctx->ds_height);
                 }
                 ctx->flags |= RP_DOWNSAMPLE2_UV;
                 upsampleImage(ctx->f.ds_u.image, ctx->f.ds_ds_u.image, ctx->ds_width, ctx->ds_height);
@@ -436,15 +454,23 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, in
             else
             {
                 CHECK_DATA_SIZE(ctx->f.ds_u.size + ctx->f.ds_v.size);
+                uint8_t *data_u = data, *data_v = data + ctx->f.ds_u.size;
+                if (header.flags & RP_DATA_PFD)
+                {
+                    predictImage(ctx->f.ds_u.image, data_u, ctx->ds_width, ctx->ds_height);
+                    predictImage(ctx->f.ds_v.image, data_v, ctx->ds_width, ctx->ds_height);
+                    data_u = ctx->f.ds_u.image;
+                    data_v = ctx->f.ds_v.image;
+                }
                 if (ctx->flags_pf & RP_DOWNSAMPLE2_UV)
                 {
-                    differenceFromDownsampled(ctx->f.ds_u.image, data, ctx->f_pf.ds_ds_u.image, ctx->ds_width, ctx->ds_height);
-                    differenceFromDownsampled(ctx->f.ds_v.image, data + ctx->f.ds_u.size, ctx->f_pf.ds_ds_v.image, ctx->ds_width, ctx->ds_height);
+                    differenceFromDownsampled(ctx->f.ds_u.image, data_u, ctx->f_pf.ds_ds_u.image, ctx->ds_width, ctx->ds_height);
+                    differenceFromDownsampled(ctx->f.ds_v.image, data_v, ctx->f_pf.ds_ds_v.image, ctx->ds_width, ctx->ds_height);
                 }
                 else
                 {
-                    differenceImage(ctx->f.ds_u.image, data, ctx->f_pf.ds_u.image, ctx->ds_width, ctx->ds_height);
-                    differenceImage(ctx->f.ds_v.image, data + ctx->f.ds_u.size, ctx->f_pf.ds_v.image, ctx->ds_width, ctx->ds_height);
+                    differenceImage(ctx->f.ds_u.image, data_u, ctx->f_pf.ds_u.image, ctx->ds_width, ctx->ds_height);
+                    differenceImage(ctx->f.ds_v.image, data_v, ctx->f_pf.ds_v.image, ctx->ds_width, ctx->ds_height);
                 }
             }
         }
