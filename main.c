@@ -615,7 +615,7 @@ static void guiMain(struct nk_context *ctx)
     nk_checkbox_label(ctx, "", &select_prediction);
 
     nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "Dynamic encode", NK_TEXT_CENTERED);
+    nk_label(ctx, "Dynamic downsample", NK_TEXT_CENTERED);
     nk_checkbox_label(ctx, "", &use_dynamic_encode);
 
     nk_layout_row_dynamic(ctx, 30, 2);

@@ -5,13 +5,6 @@
 #include <stdlib.h>
 #include <memory.h>
 
-#define BITS_PER_BYTE 8
-#define ENCODE_SELECT_MASK_X_SCALE 1
-#define ENCODE_SELECT_MASK_Y_SCALE 8
-#define ENCODE_SELECT_MASK_SIZE(w, h)                                                                       \
-    (h + (ENCODE_SELECT_MASK_Y_SCALE * BITS_PER_BYTE) - 1) / (ENCODE_SELECT_MASK_Y_SCALE * BITS_PER_BYTE) * \
-        (w + ENCODE_SELECT_MASK_X_SCALE - 1) / ENCODE_SELECT_MASK_X_SCALE
-
 #define HR_MAX(a, b) ((a) > (b) ? (a) : (b))
 #define HR_MIN(a, b) ((a) < (b) ? (a) : (b))
 
@@ -206,8 +199,36 @@ static inline void downsampledDifference(uint8_t *ds_dst, const uint8_t *fd_ds_s
     }
 }
 
+uint8_t selectHandlePredict(
+    const uint8_t *s_src, const uint8_t *src, const uint8_t *src_pf, const uint8_t *ds_src_pf,
+    int i, int j, int w, int h)
+{
+    return predictPixel(src, i, j, w, h) + accessImageNoCheck(s_src, i, j, w, h);
+}
+
+uint8_t selectHandleDifference(
+    const uint8_t *s_src, const uint8_t *src, const uint8_t *src_pf, const uint8_t *ds_src_pf,
+    int i, int j, int w, int h)
+{
+    return accessImageNoCheck(s_src, i, j, w, h) + accessImageNoCheck(src_pf, i, j, w, h);
+}
+
+uint8_t selectHandleDifferenceFromDownsampled(
+    const uint8_t *s_src, const uint8_t *src, const uint8_t *src_pf, const uint8_t *ds_src_pf,
+    int i, int j, int w, int h)
+{
+    return accessImageNoCheck(s_src, i, j, w, h) + accessImageUpsample(ds_src_pf, i, j, w, h);
+}
+
+uint8_t selectHandleDownsampledDifference(
+    const uint8_t *s_src, const uint8_t *src, const uint8_t *src_pf, const uint8_t *us_src_pf,
+    int i, int j, int w, int h)
+{
+    return accessImageNoCheck(s_src, i, j, w, h) + accessImageDownsample(us_src_pf, i * 2, j * 2, w * 2, h * 2);
+}
+
 typedef uint8_t (*selectHandleFunc)(
-    const uint8_t *src, const uint8_t *src_pf, const uint8_t *ds_src_pf,
+    const uint8_t *s_src, const uint8_t *src, const uint8_t *src_pf, const uint8_t *ds_src_pf,
     int i, int j, int w, int h);
 
 static inline void selectImage(
@@ -215,6 +236,38 @@ static inline void selectImage(
     const uint8_t *s_src, const uint8_t *m_src, const uint8_t *src,
     const uint8_t *src_pf, const uint8_t *ds_src_pf, int w, int h)
 {
+    int x = 0, y, i, j, n;
+    uint8_t mask;
+    while (1)
+    {
+        n = y = 0;
+        while (1)
+        {
+            if (n % BITS_PER_BYTE == 0)
+            {
+                n = 0;
+                mask = *m_src++;
+            }
+            uint8_t mask_bit = mask & 1;
+            ++n;
+            mask >>= 1;
+            for (i = x; i < HR_MIN(x + ENCODE_SELECT_MASK_X_SCALE, w); ++i)
+                for (j = y; j < HR_MIN(y + ENCODE_SELECT_MASK_Y_SCALE, h); ++j)
+                {
+                    dst[i * h + j] = (mask_bit
+                                          ? handle_select_fd
+                                          : handle_select)(s_src, src, src_pf, ds_src_pf, i, j, w, h);
+                }
+
+            y += ENCODE_SELECT_MASK_Y_SCALE;
+            if (y >= h)
+                break;
+        }
+
+        x += ENCODE_SELECT_MASK_X_SCALE;
+        if (x >= w)
+            break;
+    }
 }
 
 static inline void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b)
@@ -359,6 +412,16 @@ static FrameDecodeContext top_ctx, bot_ctx;
         }                                                                                     \
     } while (0)
 
+#define CHECK_DATA2_SIZE(s)                                                                     \
+    do                                                                                          \
+    {                                                                                           \
+        if (data2_size != (s))                                                                  \
+        {                                                                                       \
+            fprintf(stderr, "frame_decode data2 missize: %d (expected %d)\n", data2_size, (s)); \
+            return 0;                                                                           \
+        }                                                                                       \
+    } while (0)
+
 static int handle_image(uint32_t header_flags, int pf_has, int pf_ds, int *ds,
                         FrameImage *im, FrameImage *ds_im,
                         uint8_t *data, int data_size, uint8_t *data2, int data2_size,
@@ -380,17 +443,40 @@ static int handle_image(uint32_t header_flags, int pf_has, int pf_ds, int *ds,
 
             if (header_flags & RP_DATA_DS)
             {
-            }
-            else
-            {
+                CHECK_DATA_SIZE(width * height / 4);
+                CHECK_DATA2_SIZE(ENCODE_SELECT_MASK_SIZE(width / 2, height / 2));
                 if (header_flags & RP_DATA_PFD)
                 {
                 }
                 else if (pf_ds)
                 {
+                    selectImage(ds_im->image, selectHandlePredict, selectHandleDifference,
+                                data, data2, ds_im->image, ds_im_pf->image, 0, width / 2, height / 2);
                 }
                 else
                 {
+                    selectImage(ds_im->image, selectHandlePredict, selectHandleDownsampledDifference,
+                                data, data2, ds_im->image, 0, im_pf->image, width / 2, height / 2);
+                }
+                *ds = 1;
+                upsampleImage(im->image, ds_im->image, width, height);
+            }
+            else
+            {
+                CHECK_DATA_SIZE(width * height);
+                CHECK_DATA2_SIZE(ENCODE_SELECT_MASK_SIZE(width, height));
+                if (header_flags & RP_DATA_PFD)
+                {
+                }
+                else if (pf_ds)
+                {
+                    selectImage(im->image, selectHandlePredict, selectHandleDifferenceFromDownsampled,
+                                data, data2, im->image, 0, ds_im_pf->image, width, height);
+                }
+                else
+                {
+                    selectImage(im->image, selectHandlePredict, selectHandleDifference,
+                                data, data2, im->image, im_pf->image, 0, width, height);
                 }
             }
         }

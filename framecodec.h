@@ -8,6 +8,13 @@
 #define RP_DATA_SPFD ((uint32_t)1 << 5)
 #define RP_DATA_RLE ((uint32_t)1 << 6)
 
+#define BITS_PER_BYTE 8
+#define ENCODE_SELECT_MASK_X_SCALE 1
+#define ENCODE_SELECT_MASK_Y_SCALE 8
+#define ENCODE_SELECT_MASK_SIZE(w, h)                                                                       \
+    (h + (ENCODE_SELECT_MASK_Y_SCALE * BITS_PER_BYTE) - 1) / (ENCODE_SELECT_MASK_Y_SCALE * BITS_PER_BYTE) * \
+        (w + ENCODE_SELECT_MASK_X_SCALE - 1) / ENCODE_SELECT_MASK_X_SCALE
+
 typedef struct _DataHeader
 {
     uint32_t flags;
