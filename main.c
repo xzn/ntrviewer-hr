@@ -1005,6 +1005,8 @@ ikcpcb *kcp;
 
 int recv_new_frame;
 
+#define RP_DATA2_HUFFMAN ((uint32_t)1 << 0)
+#define RP_DATA2_RLE ((uint32_t)1 << 1)
 typedef struct _Data2Header
 {
   uint32_t flags;
@@ -1079,13 +1081,6 @@ void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size, uint8
   }
 }
 
-#define BITS_PER_BYTE 8
-#define ENCODE_SELECT_MASK_X_SCALE 1
-#define ENCODE_SELECT_MASK_Y_SCALE 8
-#define ENCODE_SELECT_MASK_SIZE(w, h)                                                                     \
-  (h + (ENCODE_SELECT_MASK_Y_SCALE * BITS_PER_BYTE) - 1) / (ENCODE_SELECT_MASK_Y_SCALE * BITS_PER_BYTE) * \
-      (w + ENCODE_SELECT_MASK_X_SCALE - 1) / ENCODE_SELECT_MASK_X_SCALE
-
 int handle_frame_recv_2(uint8_t **pdata, int *psize)
 {
   DataHeader header;
@@ -1125,6 +1120,59 @@ int handle_frame_recv_2(uint8_t **pdata, int *psize)
     fprintf(stderr, "frame data2 input error\n");
     return -1;
   }
+
+  if (FRAME_HUFFMAN_DEC_SIZE_2 < expected_size)
+  {
+    fprintf(stderr, "FRAME_HUFFMAN_DEC_SIZE_2 too small %d\n", expected_size);
+    return -1;
+  }
+
+  if (header2.flags & RP_DATA2_RLE)
+  {
+    ret = rle_decode(frame_rle_dec_buffer_2, FRAME_RLE_DEC_SIZE_2, compressed_2, header2.len);
+    if (ret < 0)
+    {
+      fprintf(stderr, "rle_decode 2 error: %d\n", ret);
+      return -1;
+    }
+
+    if (header2.flags & RP_DATA2_HUFFMAN)
+    {
+      ret = huffman_decode(frame_huffman_dec_buffer_2, expected_size, frame_rle_dec_buffer_2, ret);
+      if (ret < 0)
+      {
+        fprintf(stderr, "huffman_decode after rle 2 error: %d\n", ret);
+        return -1;
+      }
+      *pdata = frame_huffman_dec_buffer_2;
+      *psize = ret;
+    }
+    else
+    {
+      *pdata = frame_rle_dec_buffer_2;
+      *psize = ret;
+    }
+  }
+  else
+  {
+    if (header2.flags & RP_DATA2_HUFFMAN)
+    {
+      ret = huffman_decode(frame_huffman_dec_buffer_2, expected_size, compressed_2, header2.len);
+      if (ret < 0)
+      {
+        fprintf(stderr, "huffman_decode 2 error: %d\n", ret);
+        return -1;
+      }
+      *pdata = frame_huffman_dec_buffer_2;
+      *psize = ret;
+    }
+    else
+    {
+      *pdata = compressed_2;
+      *psize = header2.len;
+    }
+  }
+
   return 0;
 }
 

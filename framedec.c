@@ -5,6 +5,13 @@
 #include <stdlib.h>
 #include <memory.h>
 
+#define BITS_PER_BYTE 8
+#define ENCODE_SELECT_MASK_X_SCALE 1
+#define ENCODE_SELECT_MASK_Y_SCALE 8
+#define ENCODE_SELECT_MASK_SIZE(w, h)                                                                       \
+    (h + (ENCODE_SELECT_MASK_Y_SCALE * BITS_PER_BYTE) - 1) / (ENCODE_SELECT_MASK_Y_SCALE * BITS_PER_BYTE) * \
+        (w + ENCODE_SELECT_MASK_X_SCALE - 1) / ENCODE_SELECT_MASK_X_SCALE
+
 #define HR_MAX(a, b) ((a) > (b) ? (a) : (b))
 #define HR_MIN(a, b) ((a) < (b) ? (a) : (b))
 
@@ -199,6 +206,17 @@ static inline void downsampledDifference(uint8_t *ds_dst, const uint8_t *fd_ds_s
     }
 }
 
+typedef uint8_t (*selectHandleFunc)(
+    const uint8_t *src, const uint8_t *src_pf, const uint8_t *ds_src_pf,
+    int i, int j, int w, int h);
+
+static inline void selectImage(
+    uint8_t *dst, selectHandleFunc handle_select, selectHandleFunc handle_select_fd,
+    const uint8_t *s_src, const uint8_t *m_src, const uint8_t *src,
+    const uint8_t *src_pf, const uint8_t *ds_src_pf, int w, int h)
+{
+}
+
 static inline void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b)
 {
     double y_in = y;
@@ -238,11 +256,11 @@ typedef struct _FrameImage
 {
     int size;
     uint8_t *image;
-} Frameimage;
+} FrameImage;
 
 typedef struct _FrameDelta
 {
-    Frameimage y, ds_y, ds_u, ds_v, ds_ds_u, ds_ds_v;
+    FrameImage y, ds_y, ds_u, ds_v, ds_ds_u, ds_ds_v;
 } FrameDelta;
 
 #define RP_HAS_Y (1 << 2)
@@ -259,24 +277,24 @@ typedef struct _FrameDecodeContext
     int ds_ds_width, ds_ds_height;
 
     FrameDelta f, f_pf;
-    Frameimage u, v;
-    Frameimage rgb;
+    FrameImage u, v;
+    FrameImage rgb;
 
     uint8_t flags, flags_pf;
 } FrameDecodeContext;
 
-void frame_image_init_comp(Frameimage *im, int width, int height, int ncomp)
+void frame_image_init_comp(FrameImage *im, int width, int height, int ncomp)
 {
     im->size = width * height * ncomp;
     im->image = malloc(im->size);
 }
 
-void frame_image_init(Frameimage *im, int width, int height)
+void frame_image_init(FrameImage *im, int width, int height)
 {
     frame_image_init_comp(im, width, height, 1);
 }
 
-void frame_image_destroy(Frameimage *im)
+void frame_image_destroy(FrameImage *im)
 {
     free(im->image);
 }
@@ -341,6 +359,93 @@ static FrameDecodeContext top_ctx, bot_ctx;
         }                                                                                     \
     } while (0)
 
+static int handle_image(uint32_t header_flags, int pf_has, int pf_ds, int *ds,
+                        FrameImage *im, FrameImage *ds_im,
+                        uint8_t *data, int data_size, uint8_t *data2, int data2_size,
+                        FrameImage *im_pf, FrameImage *ds_im_pf,
+                        int width, int height)
+{
+    if (header_flags & RP_DATA_FD)
+    {
+        if (!pf_has)
+        {
+            return -1;
+        }
+        if (header_flags & RP_DATA_SPFD)
+        {
+            if (!data2 || !data2_size)
+            {
+                return -1;
+            }
+
+            if (header_flags & RP_DATA_DS)
+            {
+            }
+            else
+            {
+                if (header_flags & RP_DATA_PFD)
+                {
+                }
+                else if (pf_ds)
+                {
+                }
+                else
+                {
+                }
+            }
+        }
+        else if (header_flags & RP_DATA_DS)
+        {
+            CHECK_DATA_SIZE(width * height / 4);
+            if (header_flags & RP_DATA_PFD)
+            {
+                predictImage(ds_im->image, data, width / 2, height / 2);
+                data = ds_im->image;
+            }
+            if (pf_ds)
+            {
+                differenceImage(ds_im->image, data, ds_im_pf->image, width / 2, height / 2);
+            }
+            else
+            {
+                downsampledDifference(ds_im->image, data, im_pf->image, width, height);
+            }
+            *ds = 1;
+            upsampleImage(im->image, ds_im->image, width, height);
+        }
+        else
+        {
+            CHECK_DATA_SIZE(width * height);
+            if (header_flags & RP_DATA_PFD)
+            {
+                predictImage(im->image, data, width, height);
+                data = im->image;
+            }
+            if (pf_ds)
+            {
+                differenceFromDownsampled(im->image, data, ds_im_pf->image, width, height);
+            }
+            else
+            {
+                differenceImage(im->image, data, im_pf->image, width, height);
+            }
+        }
+    }
+    else if (header_flags & RP_DATA_DS)
+    {
+        CHECK_DATA_SIZE(width * height / 4);
+        predictImage(ds_im->image, data, width / 2, height / 2);
+        upsampleImage(im->image, ds_im->image, width, height);
+        *ds = 1;
+    }
+    else
+    {
+        CHECK_DATA_SIZE(width * height);
+        predictImage(im->image, data, width, height);
+    }
+    return 0;
+}
+
 uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size, int is_top)
 {
     FrameDecodeContext *ctx;
@@ -360,134 +465,36 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, ui
         ctx->flags_pf = ctx->flags;
         ctx->flags = 0;
 
-        if (header.flags & RP_DATA_FD)
-        {
-            if (!(ctx->flags_pf & RP_HAS_Y))
-            {
-                return 0;
-            }
-            if (header.flags & RP_DATA_DS)
-            {
-                CHECK_DATA_SIZE(ctx->f.ds_y.size);
-                if (header.flags & RP_DATA_PFD)
-                {
-                    predictImage(ctx->f.ds_y.image, data, ctx->ds_width, ctx->ds_height);
-                    data = ctx->f.ds_y.image;
-                }
-                if (ctx->flags_pf & RP_DOWNSAMPLE_Y)
-                {
-                    differenceImage(ctx->f.ds_y.image, data, ctx->f_pf.ds_y.image, ctx->ds_width, ctx->ds_height);
-                }
-                else
-                {
-                    downsampledDifference(ctx->f.ds_y.image, data, ctx->f_pf.y.image, ctx->width, ctx->height);
-                }
-                ctx->flags |= RP_DOWNSAMPLE_Y;
-                upsampleImage(ctx->f.y.image, ctx->f.ds_y.image, ctx->width, ctx->height);
-            }
-            else
-            {
-                CHECK_DATA_SIZE(ctx->f.y.size);
-                if (header.flags & RP_DATA_PFD)
-                {
-                    predictImage(ctx->f.y.image, data, ctx->width, ctx->height);
-                    data = ctx->f.y.image;
-                }
-                if (ctx->flags_pf & RP_DOWNSAMPLE_Y)
-                {
-                    differenceFromDownsampled(ctx->f.y.image, data, ctx->f_pf.ds_y.image, ctx->width, ctx->height);
-                }
-                else
-                {
-                    differenceImage(ctx->f.y.image, data, ctx->f_pf.y.image, ctx->width, ctx->height);
-                }
-            }
-        }
-        else if (header.flags & RP_DATA_DS)
-        {
-            CHECK_DATA_SIZE(ctx->f.ds_y.size);
-            predictImage(ctx->f.ds_y.image, data, ctx->ds_width, ctx->ds_height);
-            upsampleImage(ctx->f.y.image, ctx->f.ds_y.image, ctx->width, ctx->height);
-            ctx->flags |= RP_DOWNSAMPLE_Y;
-        }
-        else
-        {
-            CHECK_DATA_SIZE(ctx->f.y.size);
-            predictImage(ctx->f.y.image, data, ctx->width, ctx->height);
-        }
+        int ds = 0;
+        if (handle_image(header.flags, ctx->flags_pf & RP_HAS_Y, ctx->flags_pf & RP_DOWNSAMPLE_Y, &ds,
+                         &ctx->f.y, &ctx->f.ds_y,
+                         data, data_size, data2, data2_size,
+                         &ctx->f_pf.y, &ctx->f_pf.ds_y,
+                         ctx->width, ctx->height) < 0)
+            return 0;
         // memset(ctx->f.y.image, 128, ctx->f.y.size);
         ctx->flags |= RP_HAS_Y;
+        if (ds)
+            ctx->flags |= RP_DOWNSAMPLE_Y;
     }
     else
     {
-        if (header.flags & RP_DATA_FD)
+        int ds_u = 0, ds_v = 0;
+        if (handle_image(header.flags, ctx->flags_pf & RP_HAS_UV, ctx->flags_pf & RP_DOWNSAMPLE2_UV, &ds_u,
+                         &ctx->f.ds_u, &ctx->f.ds_ds_u,
+                         data, data_size / 2, data2, data2_size / 2,
+                         &ctx->f_pf.ds_u, &ctx->f_pf.ds_ds_u,
+                         ctx->ds_width, ctx->ds_height) < 0)
+            return 0;
+        if (handle_image(header.flags, ctx->flags_pf & RP_HAS_UV, ctx->flags_pf & RP_DOWNSAMPLE2_UV, &ds_v,
+                         &ctx->f.ds_v, &ctx->f.ds_ds_v,
+                         data + data_size / 2, data_size / 2, data2 + data2_size / 2, data2_size / 2,
+                         &ctx->f_pf.ds_v, &ctx->f_pf.ds_ds_v,
+                         ctx->ds_width, ctx->ds_height) < 0)
+            return 0;
+        if (ds_u != ds_v)
         {
-            if (!(ctx->flags_pf & RP_HAS_UV))
-            {
-                return 0;
-            }
-            if (header.flags & RP_DATA_DS)
-            {
-                CHECK_DATA_SIZE(ctx->f.ds_ds_u.size + ctx->f.ds_ds_v.size);
-                uint8_t *data_u = data, *data_v = data + ctx->f.ds_ds_u.size;
-                if (header.flags & RP_DATA_PFD)
-                {
-                    predictImage(ctx->f.ds_ds_u.image, data_u, ctx->ds_ds_width, ctx->ds_ds_height);
-                    predictImage(ctx->f.ds_ds_v.image, data_v, ctx->ds_ds_width, ctx->ds_ds_height);
-                    data_u = ctx->f.ds_ds_u.image;
-                    data_v = ctx->f.ds_ds_v.image;
-                }
-                if (ctx->flags_pf & RP_DOWNSAMPLE2_UV)
-                {
-                    differenceImage(ctx->f.ds_ds_u.image, data_u, ctx->f_pf.ds_ds_u.image, ctx->ds_ds_width, ctx->ds_ds_height);
-                    differenceImage(ctx->f.ds_ds_v.image, data_v, ctx->f_pf.ds_ds_v.image, ctx->ds_ds_width, ctx->ds_ds_height);
-                }
-                else
-                {
-                    downsampledDifference(ctx->f.ds_ds_u.image, data_u, ctx->f_pf.ds_u.image, ctx->ds_width, ctx->ds_height);
-                    downsampledDifference(ctx->f.ds_ds_v.image, data_v, ctx->f_pf.ds_v.image, ctx->ds_width, ctx->ds_height);
-                }
-                ctx->flags |= RP_DOWNSAMPLE2_UV;
-                upsampleImage(ctx->f.ds_u.image, ctx->f.ds_ds_u.image, ctx->ds_width, ctx->ds_height);
-                upsampleImage(ctx->f.ds_v.image, ctx->f.ds_ds_v.image, ctx->ds_width, ctx->ds_height);
-            }
-            else
-            {
-                CHECK_DATA_SIZE(ctx->f.ds_u.size + ctx->f.ds_v.size);
-                uint8_t *data_u = data, *data_v = data + ctx->f.ds_u.size;
-                if (header.flags & RP_DATA_PFD)
-                {
-                    predictImage(ctx->f.ds_u.image, data_u, ctx->ds_width, ctx->ds_height);
-                    predictImage(ctx->f.ds_v.image, data_v, ctx->ds_width, ctx->ds_height);
-                    data_u = ctx->f.ds_u.image;
-                    data_v = ctx->f.ds_v.image;
-                }
-                if (ctx->flags_pf & RP_DOWNSAMPLE2_UV)
-                {
-                    differenceFromDownsampled(ctx->f.ds_u.image, data_u, ctx->f_pf.ds_ds_u.image, ctx->ds_width, ctx->ds_height);
-                    differenceFromDownsampled(ctx->f.ds_v.image, data_v, ctx->f_pf.ds_ds_v.image, ctx->ds_width, ctx->ds_height);
-                }
-                else
-                {
-                    differenceImage(ctx->f.ds_u.image, data_u, ctx->f_pf.ds_u.image, ctx->ds_width, ctx->ds_height);
-                    differenceImage(ctx->f.ds_v.image, data_v, ctx->f_pf.ds_v.image, ctx->ds_width, ctx->ds_height);
-                }
-            }
-        }
-        else if (header.flags & RP_DATA_DS)
-        {
-            CHECK_DATA_SIZE(ctx->f.ds_ds_u.size + ctx->f.ds_ds_v.size);
-            predictImage(ctx->f.ds_ds_u.image, data, ctx->ds_ds_width, ctx->ds_ds_height);
-            predictImage(ctx->f.ds_ds_v.image, data + ctx->f.ds_ds_u.size, ctx->ds_ds_width, ctx->ds_ds_height);
-            upsampleImage(ctx->f.ds_u.image, ctx->f.ds_ds_u.image, ctx->ds_width, ctx->ds_height);
-            upsampleImage(ctx->f.ds_v.image, ctx->f.ds_ds_v.image, ctx->ds_width, ctx->ds_height);
-            ctx->flags |= RP_DOWNSAMPLE2_UV;
-        }
-        else
-        {
-            CHECK_DATA_SIZE(ctx->f.ds_u.size + ctx->f.ds_v.size);
-            predictImage(ctx->f.ds_u.image, data, ctx->ds_width, ctx->ds_height);
-            predictImage(ctx->f.ds_v.image, data + ctx->f.ds_u.size, ctx->ds_width, ctx->ds_height);
+            return 0;
         }
 
         upsampleImage(ctx->u.image, ctx->f.ds_u.image, ctx->width, ctx->height);
@@ -495,6 +502,8 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, ui
         // memset(ctx->u.image, 128, ctx->u.size);
         // memset(ctx->v.image, 128, ctx->v.size);
         ctx->flags |= RP_HAS_UV;
+        if (ds_u)
+            ctx->flags |= RP_DOWNSAMPLE2_UV;
 
         if ((ctx->flags & (RP_HAS_Y | RP_HAS_UV)) == (RP_HAS_Y | RP_HAS_UV))
         {
