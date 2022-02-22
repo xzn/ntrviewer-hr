@@ -366,7 +366,7 @@ void *menu_tcp_thread_func(void *arg)
             free(buf);
           }
         }
-        else
+        else if (header.data_len)
         {
           char *buf = malloc(header.data_len);
           if ((ret = tcp_recv(sockfd, buf, header.data_len)) < 0)
@@ -494,7 +494,7 @@ void *nwm_tcp_thread_func(void *arg)
             free(buf);
           }
         }
-        else
+        else if (header.data_len)
         {
           char *buf = malloc(header.data_len);
           if ((ret = tcp_recv(sockfd, buf, header.data_len)) < 0)
@@ -533,8 +533,8 @@ void rpConfigSetDefault(void)
   quality_fac_denum = 1;
 
   use_frame_delta = 1;
-  predict_frame_delta = 0;
-  select_prediction = 0;
+  predict_frame_delta = 1;
+  select_prediction = 1;
   use_dynamic_encode = 1;
   use_rle_encode = 1;
   rp_dbg_msg = 0;
@@ -1002,6 +1002,14 @@ ikcpcb *kcp;
 
 int recv_new_frame;
 
+typedef struct _Data2Header
+{
+  uint32_t flags;
+  uint32_t len;
+  uint32_t id;
+  uint32_t uncompressed_len;
+} Data2Header;
+
 #define FRAME_RECV_BUFFER_SIZE (96000 * 3 / 2 + sizeof(DataHeader))
 uint8_t frame_recv_buffer[FRAME_RECV_BUFFER_SIZE];
 
@@ -1010,6 +1018,15 @@ uint8_t frame_rle_dec_buffer[FRAME_RLE_DEC_SIZE];
 
 #define FRAME_HUFFMAN_DEC_SIZE (96000 * 3 / 2)
 uint8_t frame_huffman_dec_buffer[FRAME_HUFFMAN_DEC_SIZE];
+
+#define FRAME_RECV_BUFFER_SIZE_2 (96000 + sizeof(Data2Header))
+uint8_t frame_recv_buffer_2[FRAME_RECV_BUFFER_SIZE_2];
+
+#define FRAME_RLE_DEC_SIZE_2 (96000)
+uint8_t frame_rle_dec_buffer_2[FRAME_RLE_DEC_SIZE_2];
+
+#define FRAME_HUFFMAN_DEC_SIZE_2 (96000)
+uint8_t frame_huffman_dec_buffer_2[FRAME_HUFFMAN_DEC_SIZE_2];
 
 void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb)
 {
@@ -1042,6 +1059,7 @@ void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size)
   }
   else if (!(header.flags & RP_DATA_Y))
   {
+    // fprintf(stderr, "requesting key frame\n");
     uint8_t flags;
     if (header.flags & RP_DATA_TOP)
     {
@@ -1117,6 +1135,7 @@ int handle_frame_recv(void)
 }
 
 static uint32_t rpFrameId = 0;
+static uint32_t rpFrame2Id = 0;
 static uint32_t rpPacketId = 0;
 typedef struct _PacketHeader
 {
@@ -1125,10 +1144,60 @@ typedef struct _PacketHeader
 } PacketHeader;
 
 uint8_t *frame_recv_ptr;
+uint8_t *frame_recv_ptr_2;
+int frame_has_data2;
+int frame_in_data2;
 int frame_size_remain;
+
+int handle_recv_2(uint8_t *buf, int size)
+{
+  if (recv_new_frame)
+  {
+    frame_recv_ptr_2 = frame_recv_buffer_2;
+    recv_new_frame = 0;
+    // fprintf(stderr, "handle_recv %d %d\n", frame_recv_ptr_2 - frame_recv_buffer_2, size);
+
+    Data2Header data2_header;
+    memcpy(&data2_header, buf, sizeof(Data2Header));
+    frame_size_remain = data2_header.len + sizeof(Data2Header);
+    if (frame_size_remain < 1 || frame_size_remain > FRAME_RECV_BUFFER_SIZE_2)
+    {
+      fprintf(stderr, "invalid frame2 header\n");
+      return -5;
+    }
+    if (data2_header.id != ++rpFrame2Id)
+    {
+      // fprintf(stderr, "Frame2 id mismatch %d (expected %d)\n", data2_header.id, rpFrame2Id);
+      rpFrame2Id = data2_header.id;
+    }
+    fprintf(stderr, "new frame2 %d %d %d %d\n", data2_header.flags, data2_header.len + sizeof(Data2Header), data2_header.id, data2_header.uncompressed_len);
+  }
+  if (frame_size_remain < size)
+  {
+    fprintf(stderr, "handle_recv data2 malformed\n");
+    return -2;
+  }
+  if (frame_recv_ptr_2 + size - frame_recv_buffer_2 > FRAME_RECV_BUFFER_SIZE_2)
+  {
+    fprintf(stderr, "handle_recv buffer2 too small\n");
+    return -1;
+  }
+  memcpy(frame_recv_ptr_2, buf, size);
+  frame_recv_ptr_2 += size;
+  frame_size_remain -= size;
+  if (frame_size_remain == 0)
+  {
+    recv_new_frame = 1;
+    frame_in_data2 = 0;
+    if (handle_frame_recv() < 0)
+    {
+      return -3;
+    }
+  }
+}
+
 int handle_recv(uint8_t *buf, int size)
 {
-
   if (size >= sizeof(PacketHeader))
   {
     PacketHeader packet_header;
@@ -1150,29 +1219,34 @@ int handle_recv(uint8_t *buf, int size)
   }
   buf += sizeof(PacketHeader);
   size -= sizeof(PacketHeader);
+
+  if (frame_in_data2)
+  {
+    return handle_recv_2(buf, size);
+  }
+
   if (recv_new_frame)
   {
     frame_recv_ptr = frame_recv_buffer;
     recv_new_frame = 0;
-  }
-  // fprintf(stderr, "handle_recv %d %d\n", frame_recv_ptr - frame_recv_buffer, size);
-  if (frame_recv_ptr + size - frame_recv_buffer > FRAME_RECV_BUFFER_SIZE)
-  {
-    fprintf(stderr, "handle_recv buffer too small\n");
-    return -1;
-  }
-  memcpy(frame_recv_ptr, buf, size);
-  if (frame_recv_ptr == frame_recv_buffer)
-  {
+    // fprintf(stderr, "handle_recv %d %d\n", frame_recv_ptr - frame_recv_buffer, size);
+
     DataHeader data_header;
-    memcpy(&data_header, frame_recv_ptr, sizeof(DataHeader));
+    memcpy(&data_header, buf, sizeof(DataHeader));
     frame_size_remain = data_header.len + sizeof(DataHeader);
+    if (frame_size_remain < 256 || frame_size_remain > FRAME_RECV_BUFFER_SIZE)
+    {
+      fprintf(stderr, "invalid frame header\n");
+      return -5;
+    }
     if (data_header.id != ++rpFrameId)
     {
       // fprintf(stderr, "Frame id mismatch %d (expected %d)\n", data_header.id, rpFrameId);
       rpFrameId = data_header.id;
     }
-    // fprintf(stderr, "new frame %d %d\n", data_header.flags, data_header.len + sizeof(DataHeader));
+    fprintf(stderr, "new frame %d %d %d %d\n", data_header.flags, data_header.len + sizeof(DataHeader), data_header.id, data_header.uncompressed_len);
+    frame_has_data2 = (data_header.flags & RP_DATA_SPFD);
+    frame_in_data2 = 0;
 
     static int frame_counter = 0;
     static uint64_t frame_count_last_tick = 0;
@@ -1193,6 +1267,19 @@ int handle_recv(uint8_t *buf, int size)
   }
   if (frame_size_remain < size)
   {
+    if (frame_has_data2)
+    {
+      frame_in_data2 = 1;
+      recv_new_frame = 1;
+      memcpy(frame_recv_ptr, buf, frame_size_remain);
+      buf += frame_size_remain;
+      size -= frame_size_remain;
+      frame_recv_ptr += frame_size_remain;
+      frame_size_remain = 0;
+      // fprintf(stderr, "frame 2 current packet\n");
+      return handle_recv_2(buf, size);
+    }
+
     fprintf(stderr, "handle_recv data malformed\n");
     return -2;
     // recv_new_frame = 1;
@@ -1202,10 +1289,23 @@ int handle_recv(uint8_t *buf, int size)
     // }
     // return handle_recv(buf + frame_size_remain, size - frame_size_remain);
   }
+  if (frame_recv_ptr + size - frame_recv_buffer > FRAME_RECV_BUFFER_SIZE)
+  {
+    fprintf(stderr, "handle_recv buffer too small\n");
+    return -1;
+  }
+  memcpy(frame_recv_ptr, buf, size);
   frame_recv_ptr += size;
   frame_size_remain -= size;
   if (frame_size_remain == 0)
   {
+    if (frame_has_data2)
+    {
+      // fprintf(stderr, "frame 2 new packet\n");
+      frame_in_data2 = 1;
+      recv_new_frame = 1;
+      return 0;
+    }
     recv_new_frame = 1;
     if (handle_frame_recv() < 0)
     {
@@ -1285,6 +1385,8 @@ void *udp_recv_thread_func(void *arg)
     kcp->output = udp_output;
     rpFrameId = 0;
     rpPacketId = 0;
+    rpFrame2Id = 0;
+    frame_in_data2 = 0;
     // ikcp_setmtu(kcp, 1400);
     ikcp_nodelay(kcp, 1, 10, 2, 1);
     ikcp_wndsize(kcp, 128, 256);
