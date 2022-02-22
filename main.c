@@ -1031,6 +1031,9 @@ uint8_t frame_rle_dec_buffer_2[FRAME_RLE_DEC_SIZE_2];
 #define FRAME_HUFFMAN_DEC_SIZE_2 (96000)
 uint8_t frame_huffman_dec_buffer_2[FRAME_HUFFMAN_DEC_SIZE_2];
 
+uint8_t *frame_recv_ptr;
+uint8_t *frame_recv_ptr_2;
+
 void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb)
 {
   pthread_mutex_lock(&gl_tex_mutex);
@@ -1046,9 +1049,9 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb)
 #define RP_CONTROL_TOP_KEY (1 << 0)
 #define RP_CONTROL_BOT_KEY (1 << 0)
 
-void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size)
+void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size)
 {
-  uint8_t *frame = frame_decode(header, data, data_size);
+  uint8_t *frame = frame_decode(header, data, data_size, data2, data2_size);
   if (frame)
   {
     if (header.flags & RP_DATA_TOP)
@@ -1076,6 +1079,55 @@ void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size)
   }
 }
 
+#define BITS_PER_BYTE 8
+#define ENCODE_SELECT_MASK_X_SCALE 1
+#define ENCODE_SELECT_MASK_Y_SCALE 8
+#define ENCODE_SELECT_MASK_SIZE(w, h)                                                                     \
+  (h + (ENCODE_SELECT_MASK_Y_SCALE * BITS_PER_BYTE) - 1) / (ENCODE_SELECT_MASK_Y_SCALE * BITS_PER_BYTE) * \
+      (w + ENCODE_SELECT_MASK_X_SCALE - 1) / ENCODE_SELECT_MASK_X_SCALE
+
+int handle_frame_recv_2(uint8_t **pdata, int *psize)
+{
+  DataHeader header;
+  memcpy(&header, frame_recv_buffer, sizeof(DataHeader));
+
+  Data2Header header2;
+  memcpy(&header2, frame_recv_buffer_2, sizeof(Data2Header));
+
+  uint8_t *compressed_2 = frame_recv_buffer_2 + sizeof(Data2Header);
+  int ret;
+
+  int width = header.flags & RP_DATA_TOP ? 400 : 320;
+  int height = 240;
+  if (!(header.flags & RP_DATA_Y))
+  {
+    width /= 2;
+    height /= 2;
+  }
+  if (header.flags & RP_DATA_DS)
+  {
+    width /= 2;
+    height /= 2;
+  }
+  int expected_size = ENCODE_SELECT_MASK_SIZE(width, height);
+  if (!(header.flags & RP_DATA_Y))
+  {
+    expected_size *= 2;
+  }
+
+  if (expected_size != header2.uncompressed_len)
+  {
+    fprintf(stderr, "frame data2 error %d (expected %d)\n", header2.uncompressed_len, expected_size);
+    return -1;
+  }
+  if (header2.len + sizeof(Data2Header) != frame_recv_ptr_2 - frame_recv_buffer_2)
+  {
+    fprintf(stderr, "frame data2 input error\n");
+    return -1;
+  }
+  return 0;
+}
+
 int handle_frame_recv(void)
 {
   DataHeader header;
@@ -1097,6 +1149,11 @@ int handle_frame_recv(void)
   if (expected_size != header.uncompressed_len)
   {
     fprintf(stderr, "frame data error\n");
+    return -1;
+  }
+  if (header.len + sizeof(DataHeader) != frame_recv_ptr - frame_recv_buffer)
+  {
+    fprintf(stderr, "frame data input error\n");
     return -1;
   }
   // fprintf(stderr, "frame receive %d %d\n",
@@ -1134,7 +1191,18 @@ int handle_frame_recv(void)
       return -1;
     }
   }
-  handle_decoded_frame(header, frame_huffman_dec_buffer, ret);
+
+  uint8_t *data2 = 0;
+  int data2_size = 0;
+  if (header.flags & RP_DATA_SPFD)
+  {
+    if (handle_frame_recv_2(&data2, &data2_size) < 0)
+    {
+      return -2;
+    }
+  }
+
+  handle_decoded_frame(header, frame_huffman_dec_buffer, ret, data2, data2_size);
   return 0;
 }
 
@@ -1147,8 +1215,6 @@ typedef struct _PacketHeader
   uint32_t len;
 } PacketHeader;
 
-uint8_t *frame_recv_ptr;
-uint8_t *frame_recv_ptr_2;
 int frame_has_data2;
 int frame_in_data2;
 int frame_size_remain;
@@ -1167,7 +1233,7 @@ int handle_recv_2(uint8_t *buf, int size)
 
     Data2Header data2_header;
     memcpy(&data2_header, buf, sizeof(Data2Header));
-    fprintf(stderr, "new frame2 %d %d %d %d\n", data2_header.flags, data2_header.len + sizeof(Data2Header), data2_header.id, data2_header.uncompressed_len);
+    // fprintf(stderr, "new frame2 %d %d %d %d\n", data2_header.flags, data2_header.len + sizeof(Data2Header), data2_header.id, data2_header.uncompressed_len);
     frame_size_remain = data2_header.len + sizeof(Data2Header);
     if (frame_size_remain < 1 || frame_size_remain > FRAME_RECV_BUFFER_SIZE_2)
     {
@@ -1246,7 +1312,7 @@ int handle_recv(uint8_t *buf, int size)
 
     DataHeader data_header;
     memcpy(&data_header, buf, sizeof(DataHeader));
-    fprintf(stderr, "new frame %d %d %d %d\n", data_header.flags, data_header.len + sizeof(DataHeader), data_header.id, data_header.uncompressed_len);
+    // fprintf(stderr, "new frame %d %d %d %d\n", data_header.flags, data_header.len + sizeof(DataHeader), data_header.id, data_header.uncompressed_len);
     frame_size_remain = data_header.len + sizeof(DataHeader);
     if (frame_size_remain < 2 || frame_size_remain > FRAME_RECV_BUFFER_SIZE)
     {
@@ -1289,7 +1355,7 @@ int handle_recv(uint8_t *buf, int size)
       size -= frame_size_remain;
       frame_recv_ptr += frame_size_remain;
       frame_size_remain = 0;
-      fprintf(stderr, "frame 2 current packet\n");
+      // fprintf(stderr, "frame 2 current packet\n");
       return handle_recv_2(buf, size);
     }
 
@@ -1314,7 +1380,7 @@ int handle_recv(uint8_t *buf, int size)
   {
     if (frame_has_data2)
     {
-      fprintf(stderr, "frame 2 new packet\n");
+      // fprintf(stderr, "frame 2 new packet\n");
       frame_in_data2 = 1;
       recv_new_frame = 1;
       return 0;

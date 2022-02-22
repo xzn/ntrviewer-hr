@@ -341,7 +341,7 @@ static FrameDecodeContext top_ctx, bot_ctx;
         }                                                                                     \
     } while (0)
 
-uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, int is_top)
+uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size, int is_top)
 {
     FrameDecodeContext *ctx;
     if (is_top)
@@ -524,9 +524,9 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, in
     return 0;
 }
 
-uint8_t *frame_decode(DataHeader header, uint8_t *data, int data_size)
+uint8_t *frame_decode(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size)
 {
-    return frame_decode_screen(header, data, data_size, header.flags & RP_DATA_TOP);
+    return frame_decode_screen(header, data, data_size, data2, data2_size, header.flags & RP_DATA_TOP);
 }
 
 void frame_decode_init()

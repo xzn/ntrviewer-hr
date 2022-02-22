@@ -16,6 +16,6 @@ typedef struct _DataHeader
     uint32_t uncompressed_len;
 } DataHeader;
 
-uint8_t *frame_decode(DataHeader header, uint8_t *data, int data_size);
+uint8_t *frame_decode(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size);
 void frame_decode_init();
 void frame_decode_destroy();
