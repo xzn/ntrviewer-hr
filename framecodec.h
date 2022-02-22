@@ -12,8 +12,8 @@ typedef struct _DataHeader
 {
     uint32_t flags;
     uint32_t len;
-    // uint32_t id;
-    // uint32_t uncompressed_id;
+    uint32_t id;
+    uint32_t uncompressed_len;
 } DataHeader;
 
 uint8_t *frame_decode(DataHeader header, uint8_t *data, int data_size);

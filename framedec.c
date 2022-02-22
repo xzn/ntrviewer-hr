@@ -336,7 +336,7 @@ static FrameDecodeContext top_ctx, bot_ctx;
     {                                                                                       \
         if (data_size != (s))                                                               \
         {                                                                                   \
-            fprintf(stderr, "frame_decode data missize: %d %d\n", header.flags, data_size); \
+            fprintf(stderr, "frame_decode data missize: %d (expected %d)\n", data_size, (s)); \
             return 0;                                                                       \
         }                                                                                   \
     } while (0)

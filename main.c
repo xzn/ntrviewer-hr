@@ -1056,9 +1056,13 @@ int handle_frame_recv(void)
     expected_size /= 4;
   }
 
+  if (expected_size != header.uncompressed_len)
+  {
+    fprintf(stderr, "frame data error\n");
+  }
   // fprintf(stderr, "frame receive %d %d\n",
   //         header.flags, header.len + sizeof(DataHeader));
-  // fprintf(stderr, "receive %d %d %d %d %d\n", header.flags, header.len, header.id, header.uncompressed_id, expected_size);
+  // fprintf(stderr, "receive %d %d %d %d %d\n", header.flags, header.len, header.id, header.uncompressed_len, expected_size);
 
   if (FRAME_HUFFMAN_DEC_SIZE < expected_size)
   {
@@ -1095,10 +1099,40 @@ int handle_frame_recv(void)
   return 0;
 }
 
+static uint32_t rpFrameId = 0;
+static uint32_t rpPacketId = 0;
+typedef struct _PacketHeader
+{
+  uint32_t id;
+  uint32_t len;
+} PacketHeader;
+
 uint8_t *frame_recv_ptr;
 int frame_size_remain;
 int handle_recv(uint8_t *buf, int size)
 {
+
+  if (size >= sizeof(PacketHeader))
+  {
+    PacketHeader packet_header;
+    memcpy(&packet_header, buf, sizeof(PacketHeader));
+    if (packet_header.id != ++rpPacketId)
+    {
+      fprintf(stderr, "Packet id mismatch %d (expected %d)\n", packet_header.id, rpPacketId);
+      rpPacketId = packet_header.id;
+    }
+    if (packet_header.len != size - sizeof(PacketHeader))
+    {
+      fprintf(stderr, "Packet size mismatch %d (expected %d)\n", size - sizeof(PacketHeader), packet_header.len);
+    }
+  }
+  else
+  {
+    fprintf(stderr, "Packet too small\n");
+    return -1;
+  }
+  buf += sizeof(PacketHeader);
+  size -= sizeof(PacketHeader);
   if (recv_new_frame)
   {
     frame_recv_ptr = frame_recv_buffer;
@@ -1116,6 +1150,11 @@ int handle_recv(uint8_t *buf, int size)
     DataHeader data_header;
     memcpy(&data_header, frame_recv_ptr, sizeof(DataHeader));
     frame_size_remain = data_header.len + sizeof(DataHeader);
+    if (data_header.id != ++rpFrameId)
+    {
+      fprintf(stderr, "Frame id mismatch %d (expected %d)\n", data_header.id, rpFrameId);
+      rpFrameId = data_header.id;
+    }
     // fprintf(stderr, "new frame %d %d\n", data_header.flags, data_header.len + sizeof(DataHeader));
 
     static int frame_counter = 0;
@@ -1228,9 +1267,16 @@ void *udp_recv_thread_func(void *arg)
   {
     kcp = ikcp_create(HR_KCP_MAGIC, 0);
     kcp->output = udp_output;
+    rpFrameId = 0;
+    rpPacketId = 0;
     // ikcp_setmtu(kcp, 1400);
     ikcp_nodelay(kcp, 1, 10, 2, 1);
     ikcp_wndsize(kcp, 128, 256);
+    fprintf(stderr, "new connection\n");
+    frame_decode_destroy();
+    frame_decode_init();
+    top_buffer_ctx.updated = FBS_NOT_AVAIL;
+    bot_buffer_ctx.updated = FBS_NOT_AVAIL;
 
     s = 0;
     int ret;
