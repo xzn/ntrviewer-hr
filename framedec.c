@@ -48,6 +48,35 @@ static inline uint8_t predictPixel(const uint8_t *image, int x, int y, int w, in
     return medianOf3_uint8_t(t, l, t + l - tl);
 }
 
+static inline uint8_t accessDelta(const uint8_t *im, const uint8_t *im_pf, int x, int y, int w, int h)
+{
+    return accessImageNoCheck(im, x, y, w, h) - accessImageNoCheck(im_pf, x, y, w, h);
+}
+
+static inline uint8_t predictPixelDelta(const uint8_t *im, const uint8_t *im_pf, int x, int y, int w, int h)
+{
+    if (x == 0 && y == 0)
+    {
+        return 0;
+    }
+
+    if (x == 0)
+    {
+        return accessDelta(im, im_pf, x, y - 1, w, h);
+    }
+
+    if (y == 0)
+    {
+        return accessDelta(im, im_pf, x - 1, y, w, h);
+    }
+
+    uint8_t t = accessDelta(im, im_pf, x, y - 1, w, h);
+    uint8_t l = accessDelta(im, im_pf, x - 1, y, w, h);
+    uint8_t tl = accessDelta(im, im_pf, x - 1, y - 1, w, h);
+
+    return medianOf3_uint8_t(t, l, t + l - tl);
+}
+
 static inline void predictImage(uint8_t *dst, const uint8_t *src, int w, int h)
 {
     const uint8_t *dst_begin = dst;
@@ -164,6 +193,19 @@ static inline uint8_t accessImageDownsample(const uint8_t *image, int x, int y, 
     return (accessImageDownsampleUnscaled(image, x, y, w, h) + 2) / 4;
 }
 
+static inline void downsampleImage(uint8_t *ds_dst, const uint8_t *src, int wOrig, int hOrig)
+{
+    int i = 0, j = 0;
+    for (; i < wOrig; i += 2)
+    {
+        j = 0;
+        for (; j < hOrig; j += 2)
+        {
+            *ds_dst++ = accessImageDownsample(src, i, j, wOrig, hOrig);
+        }
+    }
+}
+
 static inline void differenceImage(uint8_t *dst, const uint8_t *fd_src, const uint8_t *src_prev, int w, int h)
 {
     uint8_t *dst_end = dst + w * h;
@@ -204,6 +246,22 @@ uint8_t selectHandlePredict(
     int i, int j, int w, int h)
 {
     return predictPixel(src, i, j, w, h) + accessImageNoCheck(s_src, i, j, w, h);
+}
+
+uint8_t selectHandlePredictDelta(
+    const uint8_t *s_src, const uint8_t *src, const uint8_t *src_pf, const uint8_t *ds_src_pf,
+    int i, int j, int w, int h)
+{
+    return predictPixelDelta(src, src_pf, i, j, w, h) +
+           accessImageNoCheck(s_src, i, j, w, h) + accessImageNoCheck(src_pf, i, j, w, h);
+}
+
+uint8_t selectHandlePredictDeltaFromDownsampled(
+    const uint8_t *s_src, const uint8_t *src, const uint8_t *src_pf, const uint8_t *ds_src_pf,
+    int i, int j, int w, int h)
+{
+    return predictPixelDelta(src, src_pf, i, j, w, h) +
+           accessImageNoCheck(s_src, i, j, w, h) + accessImageUpsample(ds_src_pf, i, j, w, h);
 }
 
 uint8_t selectHandleDifference(
@@ -447,6 +505,12 @@ static int handle_image(uint32_t header_flags, int pf_has, int pf_ds, int *ds,
                 CHECK_DATA2_SIZE(ENCODE_SELECT_MASK_SIZE(width / 2, height / 2));
                 if (header_flags & RP_DATA_PFD)
                 {
+                    if (!pf_ds)
+                    {
+                        downsampleImage(ds_im_pf->image, im_pf->image, width, height);
+                    }
+                    selectImage(ds_im->image, selectHandlePredict, selectHandlePredictDelta,
+                                data, data2, ds_im->image, ds_im_pf->image, 0, width / 2, height / 2);
                 }
                 else if (pf_ds)
                 {
@@ -467,6 +531,16 @@ static int handle_image(uint32_t header_flags, int pf_has, int pf_ds, int *ds,
                 CHECK_DATA2_SIZE(ENCODE_SELECT_MASK_SIZE(width, height));
                 if (header_flags & RP_DATA_PFD)
                 {
+                    if (pf_ds)
+                    {
+                        selectImage(im->image, selectHandlePredict, selectHandlePredictDeltaFromDownsampled,
+                                    data, data2, im->image, im_pf->image, ds_im_pf->image, width, height);
+                    }
+                    else
+                    {
+                        selectImage(im->image, selectHandlePredict, selectHandlePredictDelta,
+                                    data, data2, im->image, im_pf->image, 0, width, height);
+                    }
                 }
                 else if (pf_ds)
                 {
