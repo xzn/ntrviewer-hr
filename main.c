@@ -535,7 +535,7 @@ void rpConfigSetDefault(void)
   use_frame_delta = 1;
   predict_frame_delta = 0;
   select_prediction = 0;
-  use_dynamic_encode = 0;
+  use_dynamic_encode = 1;
   use_rle_encode = 1;
   rp_dbg_msg = 0;
 }
