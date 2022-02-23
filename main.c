@@ -837,7 +837,8 @@ enum FrameBufferStatus
 
 typedef struct _FrameBufferContext
 {
-  GLuint gl_tex_ids[3];
+  uint8_t *images[3];
+  GLuint gl_tex_id;
   enum FrameBufferStatus updated;
   int index;
   int next_index;
@@ -919,6 +920,8 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int i
   static int frame_counter = 0;
   static uint64_t frame_count_last_tick = 0;
 
+  glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id);
+
   pthread_mutex_lock(&gl_tex_mutex);
   int index = ctx->index;
   if (ctx->updated == FBS_UPDATED)
@@ -927,7 +930,19 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int i
     index = ctx->index = ctx->next_index;
     ctx->next_index = next_index;
     ctx->updated = FBS_NOT_UPDATED;
+
     pthread_mutex_unlock(&gl_tex_mutex);
+
+    glTexImage2D(GL_TEXTURE_2D, 0,
+                 GL_RGB, width,
+                 height, 0,
+                 GL_RGB, GL_UNSIGNED_BYTE,
+                 ctx->images[index]);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenerateMipmap(GL_TEXTURE_2D);
 
     ++frame_counter;
     if (frame_counter == FRAME_STAT_EVERY_X_FRAMES)
@@ -948,7 +963,6 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int i
   {
     pthread_mutex_unlock(&gl_tex_mutex);
   }
-  glBindTexture(GL_TEXTURE_2D, isTop ? top_buffer_ctx.gl_tex_ids[index] : bot_buffer_ctx.gl_tex_ids[index]);
 
   glUniform1i(gl_sampler_loc, 0);
   glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
@@ -1039,25 +1053,13 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int width
 {
   pthread_mutex_lock(&gl_tex_mutex);
   int next_index = frame_buffer_context_next_free_index(ctx->next_index, ctx->index);
-  GLuint gl_tex_id = ctx->gl_tex_ids[next_index];
-  pthread_mutex_unlock(&gl_tex_mutex);
-
-  glBindTexture(GL_TEXTURE_2D, gl_tex_id);
-  glTexImage2D(GL_TEXTURE_2D, 0,
-               GL_RGB, width,
-               height, 0,
-               GL_RGB, GL_UNSIGNED_BYTE,
-               rgb);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  glGenerateMipmap(GL_TEXTURE_2D);
-
-  pthread_mutex_lock(&gl_tex_mutex);
+  uint8_t **pimage = &ctx->images[next_index];
+  uint8_t *image = *pimage;
+  *pimage = rgb;
   ctx->updated = FBS_UPDATED;
   ctx->next_index = next_index;
   pthread_mutex_unlock(&gl_tex_mutex);
+  free(image);
 }
 
 #define RP_CONTROL_TOP_KEY (1 << 0)
@@ -1688,8 +1690,8 @@ int main(int argc, char *argv[])
 
   sock_startup();
 
-  glGenTextures(3, top_buffer_ctx.gl_tex_ids);
-  glGenTextures(3, bot_buffer_ctx.gl_tex_ids);
+  glGenTextures(1, &top_buffer_ctx.gl_tex_id);
+  glGenTextures(1, &bot_buffer_ctx.gl_tex_id);
   gl_program = LoadProgram(vShaderStr, fShaderStr);
   gl_position_loc = glGetAttribLocation(gl_program, "a_position");
   gl_tex_coord_loc = glGetAttribLocation(gl_program, "a_texCoord");
@@ -1718,6 +1720,8 @@ int main(int argc, char *argv[])
 
   rpConfigSetDefault();
 
+  SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED | ES_DISPLAY_REQUIRED);
+
 #if defined(__EMSCRIPTEN__)
 #include <emscripten.h>
   emscripten_set_main_loop_arg(MainLoop, (void *)ctx, 0, nk_true);
@@ -1725,6 +1729,8 @@ int main(int argc, char *argv[])
   while (running)
     MainLoop((void *)ctx);
 #endif
+
+  SetThreadExecutionState(ES_CONTINUOUS);
 
   pthread_join(udp_recv_thread, NULL);
   pthread_join(menu_tcp_thread, NULL);
@@ -1734,8 +1740,8 @@ int main(int argc, char *argv[])
   pthread_mutex_destroy(&gl_tex_mutex);
 
   glDeleteProgram(gl_program);
-  glDeleteTextures(3, top_buffer_ctx.gl_tex_ids);
-  glDeleteTextures(3, bot_buffer_ctx.gl_tex_ids);
+  glDeleteTextures(1, &top_buffer_ctx.gl_tex_id);
+  glDeleteTextures(1, &bot_buffer_ctx.gl_tex_id);
 
   sock_cleanup();
   nk_sdl_shutdown();
