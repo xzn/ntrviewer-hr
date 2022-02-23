@@ -115,7 +115,9 @@ static inline IUINT32 iclock()
 #define MAX(a, b) ((a) < (b) ? (b) : (a))
 #define LEN(a) (sizeof(a) / sizeof(a)[0])
 
-#define FRAME_STAT_EVERY_X_FRAMES 60
+#define FRAME_STAT_EVERY_X_FRAMES 10
+int frame_rate_displayed;
+char window_title_with_fps[50];
 
 /* Platform */
 SDL_Window *win;
@@ -533,9 +535,9 @@ void rpConfigSetDefault(void)
   quality_fac_denum = 1;
 
   use_frame_delta = 1;
-  predict_frame_delta = 1;
+  predict_frame_delta = 0;
   select_prediction = 1;
-  use_dynamic_encode = 1;
+  use_dynamic_encode = 0;
   use_rle_encode = 1;
   rp_dbg_msg = 0;
 }
@@ -939,6 +941,9 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int i
       if (frame_count_last_tick != 0)
       {
         // fprintf(stderr, "%d ms for %d rendered frames\n", next_tick - frame_count_last_tick, FRAME_STAT_EVERY_X_FRAMES);
+        frame_rate_displayed = FRAME_STAT_EVERY_X_FRAMES * 1000 / (next_tick - frame_count_last_tick);
+        snprintf(window_title_with_fps, sizeof(window_title_with_fps), "NTR Viewer HR (%d FPS)", frame_rate_displayed);
+        SDL_SetWindowTitle(win, window_title_with_fps);
       }
       frame_count_last_tick = next_tick;
       frame_counter = 0;
