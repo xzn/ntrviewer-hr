@@ -667,7 +667,7 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, ui
 
         if ((ctx->flags & (RP_HAS_Y | RP_HAS_UV)) == (RP_HAS_Y | RP_HAS_UV))
         {
-            // frame_image_destroy(&ctx->rgb);
+            frame_image_destroy(&ctx->rgb);
             frame_image_init_comp(&ctx->rgb, ctx->width, ctx->height, BYTES_PER_RGB);
             for (int i = 0; i < ctx->width; ++i)
             {

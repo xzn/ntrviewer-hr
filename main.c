@@ -121,6 +121,7 @@ char window_title_with_fps[50];
 
 /* Platform */
 SDL_Window *win;
+SDL_GLContext glThreadContext;
 int running = nk_true;
 int win_width, win_height;
 
@@ -822,8 +823,6 @@ GLuint LoadProgram(const char *vertShaderSrc, const char *fragShaderSrc)
 }
 
 pthread_mutex_t gl_tex_mutex;
-GLuint top_tex_id;
-GLuint bot_tex_id;
 GLuint gl_program;
 GLint gl_position_loc;
 GLint gl_tex_coord_loc;
@@ -838,7 +837,7 @@ enum FrameBufferStatus
 
 typedef struct _FrameBufferContext
 {
-  uint8_t *images[3];
+  GLuint gl_tex_ids[3];
   enum FrameBufferStatus updated;
   int index;
   int next_index;
@@ -846,12 +845,12 @@ typedef struct _FrameBufferContext
 
 FrameBufferContext top_buffer_ctx, bot_buffer_ctx;
 
-int frame_buffer_context_next_free_index(FrameBufferContext *ctx)
+int frame_buffer_context_next_free_index(int index, int skip_index)
 {
-  int next_index = (ctx->next_index + 1) % 3;
-  if (next_index == ctx->index)
+  int next_index = (index + 1) % 3;
+  if (next_index == skip_index)
   {
-    next_index = (ctx->next_index + 1) % 3;
+    next_index = (index + 1) % 3;
   }
   return next_index;
 }
@@ -916,23 +915,19 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int i
   glEnableVertexAttribArray(gl_tex_coord_loc);
 
   glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, isTop ? top_tex_id : bot_tex_id);
 
   static int frame_counter = 0;
   static uint64_t frame_count_last_tick = 0;
 
   pthread_mutex_lock(&gl_tex_mutex);
+  int index = ctx->index;
   if (ctx->updated == FBS_UPDATED)
   {
-    int next_index = frame_buffer_context_next_free_index(ctx);
-    glTexImage2D(GL_TEXTURE_2D, 0,
-                 GL_RGB, width,
-                 height, 0,
-                 GL_RGB, GL_UNSIGNED_BYTE,
-                 ctx->images[ctx->next_index]);
-    ctx->index = ctx->next_index;
+    int next_index = frame_buffer_context_next_free_index(ctx->index, ctx->next_index);
+    index = ctx->index = ctx->next_index;
     ctx->next_index = next_index;
     ctx->updated = FBS_NOT_UPDATED;
+    pthread_mutex_unlock(&gl_tex_mutex);
 
     ++frame_counter;
     if (frame_counter == FRAME_STAT_EVERY_X_FRAMES)
@@ -949,12 +944,11 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int i
       frame_counter = 0;
     }
   }
-  pthread_mutex_unlock(&gl_tex_mutex);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  glGenerateMipmap(GL_TEXTURE_2D);
+  else
+  {
+    pthread_mutex_unlock(&gl_tex_mutex);
+  }
+  glBindTexture(GL_TEXTURE_2D, isTop ? top_buffer_ctx.gl_tex_ids[index] : bot_buffer_ctx.gl_tex_ids[index]);
 
   glUniform1i(gl_sampler_loc, 0);
   glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
@@ -1041,13 +1035,26 @@ uint8_t frame_huffman_dec_buffer_2[FRAME_HUFFMAN_DEC_SIZE_2];
 uint8_t *frame_recv_ptr;
 uint8_t *frame_recv_ptr_2;
 
-void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb)
+void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int width, int height)
 {
   pthread_mutex_lock(&gl_tex_mutex);
-  int next_index = frame_buffer_context_next_free_index(ctx);
-  uint8_t **image = &ctx->images[next_index];
-  free(*image);
-  *image = rgb;
+  int next_index = frame_buffer_context_next_free_index(ctx->next_index, ctx->index);
+  GLuint gl_tex_id = ctx->gl_tex_ids[next_index];
+  pthread_mutex_unlock(&gl_tex_mutex);
+
+  glBindTexture(GL_TEXTURE_2D, gl_tex_id);
+  glTexImage2D(GL_TEXTURE_2D, 0,
+               GL_RGB, width,
+               height, 0,
+               GL_RGB, GL_UNSIGNED_BYTE,
+               rgb);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glGenerateMipmap(GL_TEXTURE_2D);
+
+  pthread_mutex_lock(&gl_tex_mutex);
   ctx->updated = FBS_UPDATED;
   ctx->next_index = next_index;
   pthread_mutex_unlock(&gl_tex_mutex);
@@ -1063,11 +1070,11 @@ void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size, uint8
   {
     if (header.flags & RP_DATA_TOP)
     {
-      handle_decode_frame_screen(&top_buffer_ctx, frame);
+      handle_decode_frame_screen(&top_buffer_ctx, frame, 400, 240);
     }
     else
     {
-      handle_decode_frame_screen(&bot_buffer_ctx, frame);
+      handle_decode_frame_screen(&bot_buffer_ctx, frame, 320, 240);
     }
   }
   else if (!(header.flags & RP_DATA_Y))
@@ -1521,6 +1528,7 @@ void receive_from_socket(SOCKET s)
 #define KCP_SOCKET_TIMEOUT 10
 void *udp_recv_thread_func(void *arg)
 {
+  SDL_GL_MakeCurrent(win, glThreadContext);
   while (running)
   {
     kcp = ikcp_create(HR_KCP_MAGIC, 0);
@@ -1595,6 +1603,7 @@ void *udp_recv_thread_func(void *arg)
 
     Sleep(1000);
   }
+  SDL_GL_MakeCurrent(win, NULL);
 
   return 0;
 }
@@ -1641,6 +1650,16 @@ int main(int argc, char *argv[])
     return -1;
   }
 
+  SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
+  glThreadContext = SDL_GL_CreateContext(win);
+  if (!glThreadContext)
+  {
+    fprintf(stderr, "SDL_GL_CreateContext (2): %s\n", SDL_GetError());
+    return -1;
+  }
+
+  SDL_GL_MakeCurrent(win, glContext);
+
   /* OpenGL setup */
   glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
 
@@ -1669,8 +1688,8 @@ int main(int argc, char *argv[])
 
   sock_startup();
 
-  glGenTextures(1, &top_tex_id);
-  glGenTextures(1, &bot_tex_id);
+  glGenTextures(3, top_buffer_ctx.gl_tex_ids);
+  glGenTextures(3, bot_buffer_ctx.gl_tex_ids);
   gl_program = LoadProgram(vShaderStr, fShaderStr);
   gl_position_loc = glGetAttribLocation(gl_program, "a_position");
   gl_tex_coord_loc = glGetAttribLocation(gl_program, "a_texCoord");
@@ -1715,11 +1734,12 @@ int main(int argc, char *argv[])
   pthread_mutex_destroy(&gl_tex_mutex);
 
   glDeleteProgram(gl_program);
-  glDeleteTextures(1, &top_tex_id);
-  glDeleteTextures(1, &bot_tex_id);
+  glDeleteTextures(3, top_buffer_ctx.gl_tex_ids);
+  glDeleteTextures(3, bot_buffer_ctx.gl_tex_ids);
 
   sock_cleanup();
   nk_sdl_shutdown();
+  SDL_GL_DeleteContext(glThreadContext);
   SDL_GL_DeleteContext(glContext);
   SDL_DestroyWindow(win);
   SDL_Quit();
