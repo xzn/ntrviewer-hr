@@ -132,6 +132,7 @@ int win_width, win_height;
 #define RP_RLE_ENCODE ((uint32_t)1 << 4)
 #define RP_YUV_LQ ((uint32_t)1 << 5)
 #define RP_INTERLACED ((uint32_t)1 << 6)
+#define RP_DYNAMIC_PRIORITY ((uint32_t)1 << 7)
 #define RP_DEBUG ((uint32_t)1 << 30)
 #define RP_EXTENDED ((uint32_t)1 << 31)
 
@@ -170,6 +171,7 @@ static nk_bool select_prediction;
 static nk_bool use_dynamic_encode;
 static nk_bool use_rle_encode;
 static nk_bool use_lq_yuv;
+static nk_bool dynamic_priority;
 static nk_bool rp_dbg_msg;
 
 static atomic_uint_fast8_t ip_octets[4];
@@ -410,6 +412,8 @@ void *menu_tcp_thread_func(void *arg)
           flags |= RP_RLE_ENCODE;
         if (use_lq_yuv)
           flags |= RP_YUV_LQ;
+        if (dynamic_priority)
+          flags |= RP_DYNAMIC_PRIORITY;
         if (rp_dbg_msg)
           flags |= RP_DEBUG;
         uint32_t args[] = {
@@ -545,7 +549,8 @@ void rpConfigSetDefault(void)
   select_prediction = 1;
   use_dynamic_encode = 0;
   use_rle_encode = 1;
-  use_lq_yuv = 0;
+  use_lq_yuv = 1;
+  dynamic_priority = 1;
   rp_dbg_msg = 0;
 }
 
@@ -574,7 +579,7 @@ static void guiMain(struct nk_context *ctx)
 
   /* GUI */
   const char *remote_play_wnd = "Remote Play";
-  if (nk_begin(ctx, remote_play_wnd, nk_rect(50, 50, 400, 550),
+  if (nk_begin(ctx, remote_play_wnd, nk_rect(50, 50, 400, 600),
                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE))
   {
     nk_layout_row_dynamic(ctx, 30, 5);
@@ -597,19 +602,13 @@ static void guiMain(struct nk_context *ctx)
     nk_slider_int(ctx, 0, &priority_factor, 15, 1);
 
     nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Dynamic priority", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &dynamic_priority);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
     snprintf(msg_buf, sizeof(msg_buf), "Target bitrate %.1f Mbps", (double)target_bitrate / 1024 / 1024);
     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
     nk_slider_int(ctx, 1024 * 512 * 3, &target_bitrate, 1024 * 512 * 36, 1024 * 512);
-
-    nk_layout_row_dynamic(ctx, 30, 2);
-    snprintf(msg_buf, sizeof(msg_buf), "Quality factor %d", quality_fac_num);
-    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, 1, &quality_fac_num, 4, 1);
-
-    nk_layout_row_dynamic(ctx, 30, 2);
-    snprintf(msg_buf, sizeof(msg_buf), "/ %d", quality_fac_denum);
-    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, 1, &quality_fac_denum, 4, 1);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Use frame delta", NK_TEXT_CENTERED);
@@ -628,6 +627,16 @@ static void guiMain(struct nk_context *ctx)
     nk_checkbox_label(ctx, "", &use_dynamic_encode);
 
     nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "Downsample threshold %d", quality_fac_num);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 1, &quality_fac_num, 4, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "/ %d", quality_fac_denum);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 1, &quality_fac_denum, 4, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "RLE encode", NK_TEXT_CENTERED);
     nk_checkbox_label(ctx, "", &use_rle_encode);
 
@@ -636,7 +645,7 @@ static void guiMain(struct nk_context *ctx)
     nk_checkbox_label(ctx, "", &use_lq_yuv);
 
     nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "Debug Message", NK_TEXT_CENTERED);
+    nk_label(ctx, "Debug message", NK_TEXT_CENTERED);
     nk_checkbox_label(ctx, "", &rp_dbg_msg);
 
     nk_layout_row_dynamic(ctx, 30, 2);
