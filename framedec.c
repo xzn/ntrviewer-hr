@@ -328,11 +328,18 @@ static inline void selectImage(
     }
 }
 
-static inline void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b)
+static inline void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b, int lq)
 {
     double y_in = y;
     double u_in = u;
     double v_in = v;
+
+    if (lq) {
+        y_in *= 4;
+        u_in *= 8;
+        v_in *= 8;
+    }
+
     y_in /= 255;
     u_in -= 128;
     v_in -= 128;
@@ -676,7 +683,7 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, ui
                     uint8_t y = accessImageNoCheck(ctx->f.y.image, i, j, ctx->width, ctx->height);
                     uint8_t u = accessImageNoCheck(ctx->u.image, i, j, ctx->width, ctx->height);
                     uint8_t v = accessImageNoCheck(ctx->v.image, i, j, ctx->width, ctx->height);
-                    convert_to_rgb(y, u, v, &y, &u, &v);
+                    convert_to_rgb(y, u, v, &y, &u, &v, header.flags & RP_DATA_LQ);
                     uint8_t *rgb_pixel = ctx->rgb.image + (j * ctx->width + i) * BYTES_PER_RGB;
                     rgb_pixel[0] = y;
                     rgb_pixel[1] = u;
