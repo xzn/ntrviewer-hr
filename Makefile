@@ -1,6 +1,6 @@
 CC := gcc
 CPPFLAGS :=
-CFLAGS := -Ofast -g
+CFLAGS := -Ofast -g -s
 LDLIBS := -lmingw32 -lSDL2main -lSDL2 -Wl,-Bstatic -lws2_32
 LDFLAGS :=
 

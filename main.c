@@ -1526,6 +1526,8 @@ void receive_from_socket(SOCKET s)
   }
 }
 
+#define PACKET_SIZE 1448
+#define KCP_SND_WND_SIZE 64
 #define HR_KCP_MAGIC 0x12345fff
 #define KCP_SOCKET_TIMEOUT 10
 void *udp_recv_thread_func(void *arg)
@@ -1539,9 +1541,10 @@ void *udp_recv_thread_func(void *arg)
     rpPacketId = 0;
     rpFrame2Id = 0;
     frame_in_data2 = 0;
-    // ikcp_setmtu(kcp, 1400);
-    ikcp_nodelay(kcp, 1, 10, 2, 1);
-    ikcp_wndsize(kcp, 128, 256);
+    ikcp_setmtu(kcp, PACKET_SIZE);
+    ikcp_nodelay(kcp, 1, 10, 1, 0);
+    ikcp_wndsize(kcp, KCP_SND_WND_SIZE, 0);
+    // kcp->rx_minrto = 10;
     // fprintf(stderr, "new connection\n");
     frame_decode_destroy();
     frame_decode_init();
