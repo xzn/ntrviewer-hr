@@ -408,7 +408,7 @@ void frame_image_init_comp(FrameImage *im, int width, int height, int ncomp)
 {
     im->size = width * height * ncomp;
     im->image = malloc(im->size);
-    memset(im->image, 0, im->size);
+    // memset(im->image, 0, im->size);
 }
 
 void frame_image_init(FrameImage *im, int width, int height)
@@ -725,7 +725,14 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, ui
                         uint8_t il_y = accessImageNoCheck(il_ctx->f.y.image, i, j, il_ctx->width, il_ctx->height);
                         uint8_t il_u = accessImageNoCheck(il_ctx->u.image, i, j, il_ctx->width, il_ctx->height);
                         uint8_t il_v = accessImageNoCheck(il_ctx->v.image, i, j, il_ctx->width, il_ctx->height);
-                        convert_to_rgb(il_y, il_u, il_v, &il_y, &il_u, &il_v, header.flags & RP_DATA_LQ);
+                        if ((il_ctx->flags & (RP_HAS_Y | RP_HAS_UV)) == (RP_HAS_Y | RP_HAS_UV))
+                        {
+                            convert_to_rgb(il_y, il_u, il_v, &il_y, &il_u, &il_v, header.flags & RP_DATA_LQ);
+                        }
+                        else
+                        {
+                            il_y = il_u = il_v = 0;
+                        }
                         uint8_t *il_rgb_pixel = ctx->rgb.image + ((j * 2 + 1) * ctx->width + i) * BYTES_PER_RGB;
 
                         if (header.flags & RP_DATA_ILO)
