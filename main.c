@@ -172,6 +172,7 @@ static nk_bool use_dynamic_encode;
 static nk_bool use_rle_encode;
 static nk_bool use_lq_yuv;
 static nk_bool dynamic_priority;
+static nk_bool use_interlace;
 static nk_bool rp_dbg_msg;
 
 static atomic_uint_fast8_t ip_octets[4];
@@ -414,6 +415,8 @@ void *menu_tcp_thread_func(void *arg)
           flags |= RP_YUV_LQ;
         if (dynamic_priority)
           flags |= RP_DYNAMIC_PRIORITY;
+        if (use_interlace)
+          flags |= RP_INTERLACED;
         if (rp_dbg_msg)
           flags |= RP_DEBUG;
         uint32_t args[] = {
@@ -551,6 +554,7 @@ void rpConfigSetDefault(void)
   use_rle_encode = 1;
   use_lq_yuv = 1;
   dynamic_priority = 1;
+  use_interlace = 1;
   rp_dbg_msg = 0;
 }
 
@@ -625,6 +629,10 @@ static void guiMain(struct nk_context *ctx)
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Dynamic downsample", NK_TEXT_CENTERED);
     nk_checkbox_label(ctx, "", &use_dynamic_encode);
+    if (use_dynamic_encode)
+    {
+      use_interlace = 0;
+    }
 
     nk_layout_row_dynamic(ctx, 30, 2);
     snprintf(msg_buf, sizeof(msg_buf), "Downsample threshold %d", quality_fac_num);
@@ -641,8 +649,16 @@ static void guiMain(struct nk_context *ctx)
     nk_checkbox_label(ctx, "", &use_rle_encode);
 
     nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "Low quality image", NK_TEXT_CENTERED);
+    nk_label(ctx, "Low quality colors", NK_TEXT_CENTERED);
     nk_checkbox_label(ctx, "", &use_lq_yuv);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Interlaced video", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &use_interlace);
+    if (use_interlace)
+    {
+      use_dynamic_encode = 0;
+    }
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Debug message", NK_TEXT_CENTERED);
@@ -1084,8 +1100,28 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int width
 #define RP_CONTROL_TOP_KEY (1 << 0)
 #define RP_CONTROL_BOT_KEY (1 << 0)
 
+static int rpInterlaced = 0;
+
 void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size)
 {
+  if (header.flags & RP_DATA_IL)
+  {
+    if (!rpInterlaced)
+    {
+      rpInterlaced = 1;
+      frame_decode_destroy();
+      frame_decode_init(1);
+    }
+  }
+  else
+  {
+    if (rpInterlaced)
+    {
+      rpInterlaced = 0;
+      frame_decode_destroy();
+      frame_decode_init(0);
+    }
+  }
   uint8_t *frame = frame_decode(header, data, data_size, data2, data2_size);
   if (frame)
   {
@@ -1126,7 +1162,7 @@ int handle_frame_recv_2(uint8_t **pdata, int *psize)
   int ret;
 
   int width = header.flags & RP_DATA_TOP ? 400 : 320;
-  int height = 240;
+  int height = header.flags & RP_DATA_IL ? 120 : 240;
   if (!(header.flags & RP_DATA_Y))
   {
     width /= 2;
@@ -1218,6 +1254,10 @@ int handle_frame_recv(void)
   int ret;
 
   int expected_size = header.flags & RP_DATA_TOP ? 96000 : 76800;
+  if (header.flags & RP_DATA_IL)
+  {
+    expected_size /= 2;
+  }
   if (!(header.flags & RP_DATA_Y))
   {
     expected_size /= 2;
@@ -1566,7 +1606,8 @@ void *udp_recv_thread_func(void *arg)
     // kcp->rx_minrto = 10;
     // fprintf(stderr, "new connection\n");
     frame_decode_destroy();
-    frame_decode_init();
+    frame_decode_init(use_interlace);
+    rpInterlaced = use_interlace;
     top_buffer_ctx.updated = FBS_NOT_AVAIL;
     bot_buffer_ctx.updated = FBS_NOT_AVAIL;
 
@@ -1719,7 +1760,9 @@ int main(int argc, char *argv[])
   gl_tex_coord_loc = glGetAttribLocation(gl_program, "a_texCoord");
   gl_sampler_loc = glGetUniformLocation(gl_program, "s_texture");
   pthread_mutex_init(&gl_tex_mutex, NULL);
-  frame_decode_init();
+
+  rpConfigSetDefault();
+  frame_decode_init(use_interlace);
 
   pthread_t udp_recv_thread;
   if (ret = pthread_create(&udp_recv_thread, NULL, udp_recv_thread_func, NULL))
@@ -1739,8 +1782,6 @@ int main(int argc, char *argv[])
     fprintf(stderr, "pthread_create failed\n");
     return -1;
   }
-
-  rpConfigSetDefault();
 
   SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED | ES_DISPLAY_REQUIRED);
 

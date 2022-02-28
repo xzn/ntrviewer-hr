@@ -8,6 +8,8 @@
 #define HR_MAX(a, b) ((a) > (b) ? (a) : (b))
 #define HR_MIN(a, b) ((a) < (b) ? (a) : (b))
 
+static int frame_decode_interlaced;
+
 static uint8_t accessImageNoCheck(const uint8_t *image, int x, int y, int w, int h)
 {
     return image[x * h + y];
@@ -334,7 +336,8 @@ static inline void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, u
     double u_in = u;
     double v_in = v;
 
-    if (lq) {
+    if (lq)
+    {
         y_in *= 4;
         u_in *= 8;
         v_in *= 8;
@@ -405,6 +408,7 @@ void frame_image_init_comp(FrameImage *im, int width, int height, int ncomp)
 {
     im->size = width * height * ncomp;
     im->image = malloc(im->size);
+    memset(im->image, 0, im->size);
 }
 
 void frame_image_init(FrameImage *im, int width, int height)
@@ -465,7 +469,7 @@ void frame_decode_context_destroy(FrameDecodeContext *ctx)
     frame_image_destroy(&ctx->rgb);
 }
 
-static FrameDecodeContext top_ctx, bot_ctx;
+static FrameDecodeContext top_ctx, bot_ctx, il_top_ctx, il_bot_ctx;
 
 #define CHECK_DATA_SIZE(s)                                                                    \
     do                                                                                        \
@@ -615,7 +619,7 @@ static int handle_image(uint32_t header_flags, int pf_has, int pf_ds, int *ds,
 
 uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size, int is_top)
 {
-    FrameDecodeContext *ctx;
+    FrameDecodeContext *ctx, *il_ctx;
     if (is_top)
     {
         ctx = &top_ctx;
@@ -623,6 +627,36 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, ui
     else
     {
         ctx = &bot_ctx;
+    }
+    if (header.flags & RP_DATA_IL)
+    {
+        if (!frame_decode_interlaced)
+        {
+            return 0;
+        }
+        if (header.flags & RP_DATA_ILO)
+        {
+            il_ctx = ctx;
+            if (is_top)
+            {
+                ctx = &il_top_ctx;
+            }
+            else
+            {
+                ctx = &il_bot_ctx;
+            }
+        }
+        else
+        {
+            if (is_top)
+            {
+                il_ctx = &il_top_ctx;
+            }
+            else
+            {
+                il_ctx = &il_bot_ctx;
+            }
+        }
     }
     if (header.flags & RP_DATA_Y)
     {
@@ -675,25 +709,70 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, ui
         if ((ctx->flags & (RP_HAS_Y | RP_HAS_UV)) == (RP_HAS_Y | RP_HAS_UV))
         {
             frame_image_destroy(&ctx->rgb);
-            frame_image_init_comp(&ctx->rgb, ctx->width, ctx->height, BYTES_PER_RGB);
-            for (int i = 0; i < ctx->width; ++i)
+            if (header.flags & RP_DATA_IL)
             {
-                for (int j = 0; j < ctx->height; ++j)
+                frame_image_init_comp(&ctx->rgb, ctx->width, ctx->height * 2, BYTES_PER_RGB);
+                for (int i = 0; i < ctx->width; ++i)
                 {
-                    uint8_t y = accessImageNoCheck(ctx->f.y.image, i, j, ctx->width, ctx->height);
-                    uint8_t u = accessImageNoCheck(ctx->u.image, i, j, ctx->width, ctx->height);
-                    uint8_t v = accessImageNoCheck(ctx->v.image, i, j, ctx->width, ctx->height);
-                    convert_to_rgb(y, u, v, &y, &u, &v, header.flags & RP_DATA_LQ);
-                    uint8_t *rgb_pixel = ctx->rgb.image + (j * ctx->width + i) * BYTES_PER_RGB;
-                    rgb_pixel[0] = y;
-                    rgb_pixel[1] = u;
-                    rgb_pixel[2] = v;
-                    // rgb_pixel[3] = 0;
+                    for (int j = 0; j < ctx->height; ++j)
+                    {
+                        uint8_t y = accessImageNoCheck(ctx->f.y.image, i, j, ctx->width, ctx->height);
+                        uint8_t u = accessImageNoCheck(ctx->u.image, i, j, ctx->width, ctx->height);
+                        uint8_t v = accessImageNoCheck(ctx->v.image, i, j, ctx->width, ctx->height);
+                        convert_to_rgb(y, u, v, &y, &u, &v, header.flags & RP_DATA_LQ);
+                        uint8_t *rgb_pixel = ctx->rgb.image + (j * 2 * ctx->width + i) * BYTES_PER_RGB;
+
+                        uint8_t il_y = accessImageNoCheck(il_ctx->f.y.image, i, j, il_ctx->width, il_ctx->height);
+                        uint8_t il_u = accessImageNoCheck(il_ctx->u.image, i, j, il_ctx->width, il_ctx->height);
+                        uint8_t il_v = accessImageNoCheck(il_ctx->v.image, i, j, il_ctx->width, il_ctx->height);
+                        convert_to_rgb(il_y, il_u, il_v, &il_y, &il_u, &il_v, header.flags & RP_DATA_LQ);
+                        uint8_t *il_rgb_pixel = ctx->rgb.image + ((j * 2 + 1) * ctx->width + i) * BYTES_PER_RGB;
+
+                        if (header.flags & RP_DATA_ILO)
+                        {
+                            rgb_pixel[0] = il_y;
+                            rgb_pixel[1] = il_u;
+                            rgb_pixel[2] = il_v;
+                            il_rgb_pixel[0] = y;
+                            il_rgb_pixel[1] = u;
+                            il_rgb_pixel[2] = v;
+                        }
+                        else
+                        {
+                            rgb_pixel[0] = y;
+                            rgb_pixel[1] = u;
+                            rgb_pixel[2] = v;
+                            il_rgb_pixel[0] = il_y;
+                            il_rgb_pixel[1] = il_u;
+                            il_rgb_pixel[2] = il_v;
+                        }
+
+                        // rgb_pixel[3] = 0;
+                    }
+                }
+            }
+            else
+            {
+                frame_image_init_comp(&ctx->rgb, ctx->width, ctx->height, BYTES_PER_RGB);
+                for (int i = 0; i < ctx->width; ++i)
+                {
+                    for (int j = 0; j < ctx->height; ++j)
+                    {
+                        uint8_t y = accessImageNoCheck(ctx->f.y.image, i, j, ctx->width, ctx->height);
+                        uint8_t u = accessImageNoCheck(ctx->u.image, i, j, ctx->width, ctx->height);
+                        uint8_t v = accessImageNoCheck(ctx->v.image, i, j, ctx->width, ctx->height);
+                        convert_to_rgb(y, u, v, &y, &u, &v, header.flags & RP_DATA_LQ);
+                        uint8_t *rgb_pixel = ctx->rgb.image + (j * ctx->width + i) * BYTES_PER_RGB;
+                        rgb_pixel[0] = y;
+                        rgb_pixel[1] = u;
+                        rgb_pixel[2] = v;
+                        // rgb_pixel[3] = 0;
+                    }
                 }
             }
             uint8_t *ret = ctx->rgb.image;
-            ctx->rgb.image = NULL;
-            return ret;
+            ctx->rgb.image = NULL; // release ownership
+            return ret;            // and transfer, freed by caller
         }
     }
 
@@ -705,14 +784,25 @@ uint8_t *frame_decode(DataHeader header, uint8_t *data, int data_size, uint8_t *
     return frame_decode_screen(header, data, data_size, data2, data2_size, header.flags & RP_DATA_TOP);
 }
 
-void frame_decode_init()
+void frame_decode_init(int interlaced)
 {
-    frame_decode_context_init(&top_ctx, 400, 240);
-    frame_decode_context_init(&bot_ctx, 320, 240);
+    frame_decode_context_init(&top_ctx, 400, interlaced ? 120 : 240);
+    frame_decode_context_init(&bot_ctx, 320, interlaced ? 120 : 240);
+    if (interlaced)
+    {
+        frame_decode_context_init(&il_top_ctx, 400, interlaced ? 120 : 240);
+        frame_decode_context_init(&il_bot_ctx, 320, interlaced ? 120 : 240);
+    }
+    frame_decode_interlaced = interlaced;
 }
 
 void frame_decode_destroy()
 {
     frame_decode_context_destroy(&top_ctx);
     frame_decode_context_destroy(&bot_ctx);
+    if (frame_decode_interlaced)
+    {
+        frame_decode_context_destroy(&il_top_ctx);
+        frame_decode_context_destroy(&il_bot_ctx);
+    }
 }

@@ -9,6 +9,7 @@
 #define RP_DATA_RLE ((uint32_t)1 << 6)
 #define RP_DATA_LQ ((uint32_t)1 << 7)
 #define RP_DATA_IL ((uint32_t)1 << 8)
+#define RP_DATA_ILO ((uint32_t)1 << 9)
 
 #define BITS_PER_BYTE 8
 #define ENCODE_SELECT_MASK_X_SCALE 1
