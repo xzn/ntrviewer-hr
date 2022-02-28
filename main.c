@@ -133,6 +133,8 @@ int win_width, win_height;
 #define RP_YUV_LQ ((uint32_t)1 << 5)
 #define RP_INTERLACED ((uint32_t)1 << 6)
 #define RP_DYNAMIC_PRIORITY ((uint32_t)1 << 7)
+#define RP_MULTICORE_NETWORK ((uint32_t)1 << 8)
+#define RP_MULTICORE_ENCODE ((uint32_t)1 << 9)
 #define RP_DEBUG ((uint32_t)1 << 30)
 #define RP_EXTENDED ((uint32_t)1 << 31)
 
@@ -173,6 +175,8 @@ static nk_bool use_rle_encode;
 static nk_bool use_lq_yuv;
 static nk_bool dynamic_priority;
 static nk_bool use_interlace;
+static nk_bool multicore_network;
+static nk_bool multicore_encode;
 static nk_bool rp_dbg_msg;
 
 static atomic_uint_fast8_t ip_octets[4];
@@ -417,6 +421,10 @@ void *menu_tcp_thread_func(void *arg)
           flags |= RP_DYNAMIC_PRIORITY;
         if (use_interlace)
           flags |= RP_INTERLACED;
+        if (multicore_network)
+          flags |= RP_MULTICORE_NETWORK;
+        if (multicore_encode)
+          flags |= RP_MULTICORE_ENCODE;
         if (rp_dbg_msg)
           flags |= RP_DEBUG;
         uint32_t args[] = {
@@ -555,6 +563,8 @@ void rpConfigSetDefault(void)
   use_lq_yuv = 1;
   dynamic_priority = 1;
   use_interlace = 1;
+  multicore_network = 1;
+  multicore_encode = 1;
   rp_dbg_msg = 0;
 }
 
@@ -583,7 +593,7 @@ static void guiMain(struct nk_context *ctx)
 
   /* GUI */
   const char *remote_play_wnd = "Remote Play";
-  if (nk_begin(ctx, remote_play_wnd, nk_rect(50, 50, 400, 600),
+  if (nk_begin(ctx, remote_play_wnd, nk_rect(50, 50, 400, 700),
                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE))
   {
     nk_layout_row_dynamic(ctx, 30, 5);
@@ -610,6 +620,22 @@ static void guiMain(struct nk_context *ctx)
     nk_checkbox_label(ctx, "", &dynamic_priority);
 
     nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Multicore network", NK_TEXT_CENTERED);
+    if (nk_checkbox_label(ctx, "", &multicore_network))
+      if (!multicore_network)
+      {
+        multicore_encode = 0;
+      }
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Multicore encode", NK_TEXT_CENTERED);
+    if (nk_checkbox_label(ctx, "", &multicore_encode))
+      if (multicore_encode)
+      {
+        multicore_network = 1;
+      }
+
+    nk_layout_row_dynamic(ctx, 30, 2);
     snprintf(msg_buf, sizeof(msg_buf), "Target bitrate %.1f Mbps", (double)target_bitrate / 1024 / 1024);
     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
     nk_slider_int(ctx, 1024 * 512 * 3, &target_bitrate, 1024 * 512 * 36, 1024 * 512);
@@ -627,12 +653,28 @@ static void guiMain(struct nk_context *ctx)
     nk_checkbox_label(ctx, "", &select_prediction);
 
     nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "RLE encode", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &use_rle_encode);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Low quality colors", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &use_lq_yuv);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Interlaced video", NK_TEXT_CENTERED);
+    if (nk_checkbox_label(ctx, "", &use_interlace))
+      if (use_interlace)
+      {
+        use_dynamic_encode = 0;
+      }
+
+    nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Dynamic downsample", NK_TEXT_CENTERED);
-    nk_checkbox_label(ctx, "", &use_dynamic_encode);
-    if (use_dynamic_encode)
-    {
-      use_interlace = 0;
-    }
+    if (nk_checkbox_label(ctx, "", &use_dynamic_encode))
+      if (use_dynamic_encode)
+      {
+        use_interlace = 0;
+      }
 
     nk_layout_row_dynamic(ctx, 30, 2);
     snprintf(msg_buf, sizeof(msg_buf), "Downsample threshold %d", quality_fac_num);
@@ -643,22 +685,6 @@ static void guiMain(struct nk_context *ctx)
     snprintf(msg_buf, sizeof(msg_buf), "/ %d", quality_fac_denum);
     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
     nk_slider_int(ctx, 1, &quality_fac_denum, 4, 1);
-
-    nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "RLE encode", NK_TEXT_CENTERED);
-    nk_checkbox_label(ctx, "", &use_rle_encode);
-
-    nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "Low quality colors", NK_TEXT_CENTERED);
-    nk_checkbox_label(ctx, "", &use_lq_yuv);
-
-    nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "Interlaced video", NK_TEXT_CENTERED);
-    nk_checkbox_label(ctx, "", &use_interlace);
-    if (use_interlace)
-    {
-      use_dynamic_encode = 0;
-    }
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Debug message", NK_TEXT_CENTERED);
