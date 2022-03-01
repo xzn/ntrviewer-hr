@@ -883,7 +883,6 @@ GLuint LoadProgram(const char *vertShaderSrc, const char *fragShaderSrc)
   return programObject;
 }
 
-pthread_mutex_t gl_tex_mutex;
 GLuint gl_program;
 GLint gl_position_loc;
 GLint gl_tex_coord_loc;
@@ -898,6 +897,7 @@ enum FrameBufferStatus
 
 typedef struct _FrameBufferContext
 {
+  pthread_mutex_t gl_tex_mutex;
   uint8_t *images[3];
   GLuint gl_tex_id;
   enum FrameBufferStatus updated;
@@ -983,7 +983,7 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int i
 
   glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id);
 
-  pthread_mutex_lock(&gl_tex_mutex);
+  pthread_mutex_lock(&ctx->gl_tex_mutex);
   int index = ctx->index;
   if (ctx->updated == FBS_UPDATED)
   {
@@ -992,7 +992,7 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int i
     ctx->next_index = next_index;
     ctx->updated = FBS_NOT_UPDATED;
 
-    pthread_mutex_unlock(&gl_tex_mutex);
+    pthread_mutex_unlock(&ctx->gl_tex_mutex);
 
     glTexImage2D(GL_TEXTURE_2D, 0,
                  GL_RGB, width,
@@ -1022,7 +1022,7 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int i
   }
   else
   {
-    pthread_mutex_unlock(&gl_tex_mutex);
+    pthread_mutex_unlock(&ctx->gl_tex_mutex);
   }
 
   glUniform1i(gl_sampler_loc, 0);
@@ -1112,14 +1112,14 @@ uint8_t *frame_recv_ptr_2;
 
 void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int width, int height)
 {
-  pthread_mutex_lock(&gl_tex_mutex);
+  pthread_mutex_lock(&ctx->gl_tex_mutex);
   int next_index = frame_buffer_context_next_free_index(ctx->next_index, ctx->index);
   uint8_t **pimage = &ctx->images[next_index];
   uint8_t *image = *pimage;
   *pimage = rgb;
   ctx->updated = FBS_UPDATED;
   ctx->next_index = next_index;
-  pthread_mutex_unlock(&gl_tex_mutex);
+  pthread_mutex_unlock(&ctx->gl_tex_mutex);
   free(image);
 }
 
@@ -1785,7 +1785,8 @@ int main(int argc, char *argv[])
   gl_position_loc = glGetAttribLocation(gl_program, "a_position");
   gl_tex_coord_loc = glGetAttribLocation(gl_program, "a_texCoord");
   gl_sampler_loc = glGetUniformLocation(gl_program, "s_texture");
-  pthread_mutex_init(&gl_tex_mutex, NULL);
+  pthread_mutex_init(&top_buffer_ctx.gl_tex_mutex, NULL);
+  pthread_mutex_init(&bot_buffer_ctx.gl_tex_mutex, NULL);
 
   rpConfigSetDefault();
   frame_decode_init(use_interlace);
@@ -1826,7 +1827,8 @@ int main(int argc, char *argv[])
   pthread_join(nwm_tcp_thread, NULL);
 
   frame_decode_destroy();
-  pthread_mutex_destroy(&gl_tex_mutex);
+  pthread_mutex_destroy(&bot_buffer_ctx.gl_tex_mutex);
+  pthread_mutex_destroy(&top_buffer_ctx.gl_tex_mutex);
 
   glDeleteProgram(gl_program);
   glDeleteTextures(1, &top_buffer_ctx.gl_tex_id);
