@@ -550,7 +550,7 @@ void *nwm_tcp_thread_func(void *arg)
 void rpConfigSetDefault(void)
 {
   prioritize_top_screen = 1;
-  priority_factor = 10;
+  priority_factor = 2;
   target_bitrate = 1024 * 512 * 24;
   quality_fac_num = 2;
   quality_fac_denum = 1;
@@ -562,7 +562,7 @@ void rpConfigSetDefault(void)
   use_rle_encode = 1;
   use_lq_yuv = 1;
   dynamic_priority = 1;
-  use_interlace = 1;
+  use_interlace = 0;
   multicore_network = 1;
   multicore_encode = 1;
   rp_dbg_msg = 0;
