@@ -125,18 +125,17 @@ SDL_GLContext glThreadContext;
 int running = nk_true;
 int win_width, win_height;
 
-#define RP_USE_FRAME_DELTA ((uint32_t)1 << 0)
-#define RP_PREDICT_FRAME_DELTA ((uint32_t)1 << 1)
+#define RP_FRAME_DELTA ((uint32_t)1 << 0)
+#define RP_TRIPLE_BUFFER_ENCODE ((uint32_t)1 << 1)
 #define RP_SELECT_PREDICTION ((uint32_t)1 << 2)
-#define RP_DYNAMIC_ENCODE ((uint32_t)1 << 3)
+#define RP_DYNAMIC_DOWNSAMPLE ((uint32_t)1 << 3)
 #define RP_RLE_ENCODE ((uint32_t)1 << 4)
 #define RP_YUV_LQ ((uint32_t)1 << 5)
-#define RP_INTERLACED ((uint32_t)1 << 6)
+#define RP_INTERLACE ((uint32_t)1 << 6)
 #define RP_DYNAMIC_PRIORITY ((uint32_t)1 << 7)
 #define RP_MULTICORE_NETWORK ((uint32_t)1 << 8)
 #define RP_MULTICORE_ENCODE ((uint32_t)1 << 9)
 #define RP_DEBUG ((uint32_t)1 << 30)
-#define RP_EXTENDED ((uint32_t)1 << 31)
 
 enum ConnectionState
 {
@@ -168,7 +167,6 @@ static int quality_fac_num;
 static int quality_fac_denum;
 
 static nk_bool use_frame_delta;
-static nk_bool predict_frame_delta;
 static nk_bool select_prediction;
 static nk_bool use_dynamic_encode;
 static nk_bool use_rle_encode;
@@ -406,13 +404,11 @@ void *menu_tcp_thread_func(void *arg)
         menu_remote_play = 0;
         uint32_t flags = 0;
         if (use_frame_delta)
-          flags |= RP_USE_FRAME_DELTA;
-        if (predict_frame_delta)
-          flags |= RP_PREDICT_FRAME_DELTA;
+          flags |= RP_FRAME_DELTA;
         if (select_prediction)
           flags |= RP_SELECT_PREDICTION;
         if (use_dynamic_encode)
-          flags |= RP_DYNAMIC_ENCODE;
+          flags |= RP_DYNAMIC_DOWNSAMPLE;
         if (use_rle_encode)
           flags |= RP_RLE_ENCODE;
         if (use_lq_yuv)
@@ -420,7 +416,7 @@ void *menu_tcp_thread_func(void *arg)
         if (dynamic_priority)
           flags |= RP_DYNAMIC_PRIORITY;
         if (use_interlace)
-          flags |= RP_INTERLACED;
+          flags |= RP_INTERLACE;
         if (multicore_network)
           flags |= RP_MULTICORE_NETWORK;
         if (multicore_encode)
@@ -428,7 +424,7 @@ void *menu_tcp_thread_func(void *arg)
         if (rp_dbg_msg)
           flags |= RP_DEBUG;
         uint32_t args[] = {
-            !!prioritize_top_screen << 8 | priority_factor,
+            !prioritize_top_screen << 8 | priority_factor,
             RP_MAGIC,
             target_bitrate,
             flags,
@@ -556,7 +552,6 @@ void rpConfigSetDefault(void)
   quality_fac_denum = 1;
 
   use_frame_delta = 1;
-  predict_frame_delta = 0;
   select_prediction = 1;
   use_dynamic_encode = 0;
   use_rle_encode = 1;
@@ -643,10 +638,6 @@ static void guiMain(struct nk_context *ctx)
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Use frame delta", NK_TEXT_CENTERED);
     nk_checkbox_label(ctx, "", &use_frame_delta);
-
-    nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "Predict frame delta", NK_TEXT_CENTERED);
-    nk_checkbox_label(ctx, "", &predict_frame_delta);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Select prediction", NK_TEXT_CENTERED);
@@ -1124,13 +1115,13 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int width
 }
 
 #define RP_CONTROL_TOP_KEY (1 << 0)
-#define RP_CONTROL_BOT_KEY (1 << 0)
+#define RP_CONTROL_BOT_KEY (1 << 1)
 
 static int rpInterlaced = 0;
 
 void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size)
 {
-  if (header.flags & RP_DATA_IL)
+  if (header.flags & RP_DATA_INTERLACE)
   {
     if (!rpInterlaced)
     {
@@ -1151,7 +1142,7 @@ void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size, uint8
   uint8_t *frame = frame_decode(header, data, data_size, data2, data2_size);
   if (frame)
   {
-    if (header.flags & RP_DATA_TOP)
+    if (!(header.flags & RP_DATA_TOP_BOT))
     {
       handle_decode_frame_screen(&top_buffer_ctx, frame, 400, 240);
     }
@@ -1160,11 +1151,11 @@ void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size, uint8
       handle_decode_frame_screen(&bot_buffer_ctx, frame, 320, 240);
     }
   }
-  else if (!(header.flags & RP_DATA_Y))
+  else if (header.flags & RP_DATA_Y_UV)
   {
     // fprintf(stderr, "requesting key frame\n");
     uint8_t flags;
-    if (header.flags & RP_DATA_TOP)
+    if (!(header.flags & RP_DATA_TOP_BOT))
     {
       flags |= RP_CONTROL_TOP_KEY;
     }
@@ -1187,20 +1178,15 @@ int handle_frame_recv_2(uint8_t **pdata, int *psize)
   uint8_t *compressed_2 = frame_recv_buffer_2 + sizeof(Data2Header);
   int ret;
 
-  int width = header.flags & RP_DATA_TOP ? 400 : 320;
-  int height = header.flags & RP_DATA_IL ? 120 : 240;
-  if (!(header.flags & RP_DATA_Y))
-  {
-    width /= 2;
-    height /= 2;
-  }
-  if (header.flags & RP_DATA_DS)
+  int width = !(header.flags & RP_DATA_TOP_BOT) ? 400 : 320;
+  int height = header.flags & RP_DATA_INTERLACE ? 120 : 240;
+  if (header.flags & RP_DATA_Y_UV)
   {
     width /= 2;
     height /= 2;
   }
   int expected_size = ENCODE_SELECT_MASK_SIZE(width, height);
-  if (!(header.flags & RP_DATA_Y))
+  if (header.flags & RP_DATA_Y_UV)
   {
     expected_size *= 2;
   }
@@ -1279,18 +1265,14 @@ int handle_frame_recv(void)
   uint8_t *compressed = frame_recv_buffer + sizeof(DataHeader);
   int ret;
 
-  int expected_size = header.flags & RP_DATA_TOP ? 96000 : 76800;
-  if (header.flags & RP_DATA_IL)
+  int expected_size = !(header.flags & RP_DATA_TOP_BOT) ? 96000 : 76800;
+  if (header.flags & RP_DATA_INTERLACE)
   {
     expected_size /= 2;
   }
-  if (!(header.flags & RP_DATA_Y))
+  if (header.flags & RP_DATA_Y_UV)
   {
     expected_size /= 2;
-  }
-  if (header.flags & RP_DATA_DS)
-  {
-    expected_size /= 4;
   }
 
   if (expected_size != header.uncompressed_len)
@@ -1322,14 +1304,17 @@ int handle_frame_recv(void)
       return -1;
     }
 
-    ret = huffman_decode(frame_huffman_dec_buffer, expected_size, frame_rle_dec_buffer, ret);
-    if (ret < 0)
+    if (header.flags & RP_DATA_HUFFMAN)
     {
-      fprintf(stderr, "huffman_decode after rle error: %d\n", ret);
-      return -1;
+      ret = huffman_decode(frame_huffman_dec_buffer, expected_size, frame_rle_dec_buffer, ret);
+      if (ret < 0)
+      {
+        fprintf(stderr, "huffman_decode after rle error: %d\n", ret);
+        return -1;
+      }
     }
   }
-  else
+  else if (header.flags & RP_DATA_HUFFMAN)
   {
     ret = huffman_decode(frame_huffman_dec_buffer, expected_size, compressed, header.len);
     if (ret < 0)
@@ -1339,9 +1324,27 @@ int handle_frame_recv(void)
     }
   }
 
+  uint8_t *data;
+  int data_size;
+  if (header.flags & RP_DATA_HUFFMAN)
+  {
+    data = frame_huffman_dec_buffer;
+    data_size = ret;
+  }
+  else if (header.flags & RP_DATA_RLE)
+  {
+    data = frame_rle_dec_buffer;
+    data_size = ret;
+  }
+  else
+  {
+    data = compressed;
+    data_size = header.len;
+  }
+
   uint8_t *data2 = 0;
   int data2_size = 0;
-  if (header.flags & RP_DATA_SPFD)
+  if (header.flags & RP_DATA_SELECT_FRAME_DELTA)
   {
     if (handle_frame_recv_2(&data2, &data2_size) < 0)
     {
@@ -1349,12 +1352,14 @@ int handle_frame_recv(void)
     }
   }
 
-  handle_decoded_frame(header, frame_huffman_dec_buffer, ret, data2, data2_size);
+  handle_decoded_frame(header, data, data_size, data2, data2_size);
   return 0;
 }
 
-static uint32_t rpFrameId = 0;
-static uint32_t rpFrame2Id = 0;
+static uint32_t rpTopFrameId = 0;
+static uint32_t rpBotFrameId = 0;
+static uint32_t rpTopFrame2Id = 0;
+static uint32_t rpBotFrame2Id = 0;
 static uint32_t rpPacketId = 0;
 typedef struct _PacketHeader
 {
@@ -1365,6 +1370,8 @@ typedef struct _PacketHeader
 int frame_has_data2;
 int frame_in_data2;
 int frame_size_remain;
+
+int frame_y_uv;
 
 int handle_recv_2(uint8_t *buf, int size)
 {
@@ -1387,10 +1394,11 @@ int handle_recv_2(uint8_t *buf, int size)
       fprintf(stderr, "invalid frame2 header\n");
       return -5;
     }
-    if (data2_header.id != ++rpFrame2Id)
+    uint32_t *rpFrame2Id = !frame_y_uv ? &rpTopFrame2Id : &rpBotFrame2Id;
+    if (data2_header.id != (*rpFrame2Id)++)
     {
-      // fprintf(stderr, "Frame2 id mismatch %d (expected %d)\n", data2_header.id, rpFrame2Id);
-      rpFrame2Id = data2_header.id;
+      // fprintf(stderr, "Frame2 id mismatch %d (expected %d)\n", data2_header.id, *rpFrame2Id);
+      *rpFrame2Id = data2_header.id;
     }
   }
   if (frame_size_remain < size)
@@ -1409,6 +1417,7 @@ int handle_recv_2(uint8_t *buf, int size)
   if (frame_size_remain == 0)
   {
     recv_new_frame = 1;
+    rpPacketId = 0;
     frame_in_data2 = 0;
     if (handle_frame_recv() < 0)
     {
@@ -1424,7 +1433,7 @@ int handle_recv(uint8_t *buf, int size)
   {
     PacketHeader packet_header;
     memcpy(&packet_header, buf, sizeof(PacketHeader));
-    if (packet_header.id != ++rpPacketId)
+    if (packet_header.id != rpPacketId++)
     {
       // fprintf(stderr, "Packet id mismatch %d (expected %d)\n", packet_header.id, rpPacketId);
       rpPacketId = packet_header.id;
@@ -1466,17 +1475,19 @@ int handle_recv(uint8_t *buf, int size)
       fprintf(stderr, "invalid frame header\n");
       return -5;
     }
-    if (data_header.id != ++rpFrameId)
+    frame_y_uv = !!(data_header.flags & RP_DATA_Y_UV);
+    uint32_t *rpFrameId = !frame_y_uv ? &rpTopFrameId : &rpBotFrameId;
+    if (data_header.id != (*rpFrameId)++)
     {
-      // fprintf(stderr, "Frame id mismatch %d (expected %d)\n", data_header.id, rpFrameId);
-      rpFrameId = data_header.id;
+      // fprintf(stderr, "Frame id mismatch %d (expected %d)\n", data_header.id, *rpFrameId);
+      *rpFrameId = data_header.id;
     }
-    frame_has_data2 = (data_header.flags & RP_DATA_SPFD);
+    frame_has_data2 = (data_header.flags & RP_DATA_SELECT_FRAME_DELTA);
     frame_in_data2 = 0;
 
     static int frame_counter = 0;
     static uint64_t frame_count_last_tick = 0;
-    if (!(data_header.flags & RP_DATA_Y))
+    if (data_header.flags & RP_DATA_Y_UV)
     {
       ++frame_counter;
     }
@@ -1533,6 +1544,7 @@ int handle_recv(uint8_t *buf, int size)
       return 0;
     }
     recv_new_frame = 1;
+    rpPacketId = 0;
     if (handle_frame_recv() < 0)
     {
       return -3;
@@ -1622,9 +1634,11 @@ void *udp_recv_thread_func(void *arg)
   {
     kcp = ikcp_create(HR_KCP_MAGIC, 0);
     kcp->output = udp_output;
-    rpFrameId = 0;
+    rpTopFrameId = 0;
+    rpBotFrameId = 0;
+    rpTopFrame2Id = 0;
+    rpBotFrame2Id = 0;
     rpPacketId = 0;
-    rpFrame2Id = 0;
     frame_in_data2 = 0;
     ikcp_setmtu(kcp, PACKET_SIZE);
     ikcp_nodelay(kcp, 1, 10, 1, 1);

@@ -1,15 +1,17 @@
 #include <stdint.h>
 
-#define RP_DATA_TOP ((uint32_t)1 << 0)
-#define RP_DATA_Y ((uint32_t)1 << 1)
-#define RP_DATA_DS ((uint32_t)1 << 2)
-#define RP_DATA_FD ((uint32_t)1 << 3)
-#define RP_DATA_PFD ((uint32_t)1 << 4)
-#define RP_DATA_SPFD ((uint32_t)1 << 5)
+#define RP_DATA_TOP_BOT ((uint32_t)1 << 0)
+#define RP_DATA_Y_UV ((uint32_t)1 << 1)
+#define RP_DATA_FRAME_DELTA ((uint32_t)1 << 2)
+#define RP_DATA_PREVIOUS_FRAME_DELTA ((uint32_t)1 << 3)
+#define RP_DATA_SELECT_FRAME_DELTA ((uint32_t)1 << 4)
+#define RP_DATA_HUFFMAN ((uint32_t)1 << 5)
 #define RP_DATA_RLE ((uint32_t)1 << 6)
-#define RP_DATA_LQ ((uint32_t)1 << 7)
-#define RP_DATA_IL ((uint32_t)1 << 8)
-#define RP_DATA_ILO ((uint32_t)1 << 9)
+#define RP_DATA_YUV_LQ ((uint32_t)1 << 7)
+#define RP_DATA_INTERLACE ((uint32_t)1 << 8)
+#define RP_DATA_INTERLACE_EVEN_ODD ((uint32_t)1 << 9)
+#define RP_DATA_DOWNSAMPLE ((uint32_t)1 << 10)
+#define RP_DATA_DOWNSAMPLE2 ((uint32_t)1 << 11)
 
 #define BITS_PER_BYTE 8
 #define ENCODE_SELECT_MASK_X_SCALE 1

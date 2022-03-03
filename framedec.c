@@ -384,10 +384,12 @@ typedef struct _FrameDelta
     FrameImage y, ds_y, ds_u, ds_v, ds_ds_u, ds_ds_v;
 } FrameDelta;
 
-#define RP_HAS_Y (1 << 2)
-#define RP_HAS_UV (1 << 3)
-#define RP_DOWNSAMPLE_Y (1 << 0)
-#define RP_DOWNSAMPLE2_UV (1 << 1)
+#define RP_ENC_HAVE_Y (1 << 0)
+#define RP_ENC_HAVE_UV (1 << 1)
+#define RP_ENC_DS_Y (1 << 2)
+#define RP_ENC_DS2_Y (1 << 3)
+#define RP_ENC_DS_DS2_UV (1 << 4)
+#define RP_ENC_DS2_DS2_UV (1 << 5)
 
 #define BYTES_PER_RGB 3
 
@@ -491,123 +493,36 @@ static FrameDecodeContext top_ctx, bot_ctx, il_top_ctx, il_bot_ctx;
         }                                                                                       \
     } while (0)
 
-static int handle_image(uint32_t header_flags, int pf_has, int pf_ds, int *ds,
+static int handle_image(uint32_t header_flags, int pf_has,
                         FrameImage *im, FrameImage *ds_im,
                         uint8_t *data, int data_size, uint8_t *data2, int data2_size,
                         FrameImage *im_pf, FrameImage *ds_im_pf,
                         int width, int height)
 {
-    if (header_flags & RP_DATA_FD)
+    if (header_flags & RP_DATA_FRAME_DELTA)
     {
         if (!pf_has)
         {
             return -1;
         }
-        if (header_flags & RP_DATA_SPFD)
+        if (header_flags & RP_DATA_SELECT_FRAME_DELTA)
         {
             if (!data2 || !data2_size)
             {
                 return -1;
             }
 
-            if (header_flags & RP_DATA_DS)
-            {
-                CHECK_DATA_SIZE(width * height / 4);
-                CHECK_DATA2_SIZE(ENCODE_SELECT_MASK_SIZE(width / 2, height / 2));
-                if (header_flags & RP_DATA_PFD)
-                {
-                    if (!pf_ds)
-                    {
-                        downsampleImage(ds_im_pf->image, im_pf->image, width, height);
-                    }
-                    selectImage(ds_im->image, selectHandlePredict, selectHandlePredictDelta,
-                                data, data2, ds_im->image, ds_im_pf->image, 0, width / 2, height / 2);
-                }
-                else if (pf_ds)
-                {
-                    selectImage(ds_im->image, selectHandlePredict, selectHandleDifference,
-                                data, data2, ds_im->image, ds_im_pf->image, 0, width / 2, height / 2);
-                }
-                else
-                {
-                    selectImage(ds_im->image, selectHandlePredict, selectHandleDownsampledDifference,
-                                data, data2, ds_im->image, 0, im_pf->image, width / 2, height / 2);
-                }
-                *ds = 1;
-                upsampleImage(im->image, ds_im->image, width, height);
-            }
-            else
-            {
-                CHECK_DATA_SIZE(width * height);
-                CHECK_DATA2_SIZE(ENCODE_SELECT_MASK_SIZE(width, height));
-                if (header_flags & RP_DATA_PFD)
-                {
-                    if (pf_ds)
-                    {
-                        selectImage(im->image, selectHandlePredict, selectHandlePredictDeltaFromDownsampled,
-                                    data, data2, im->image, im_pf->image, ds_im_pf->image, width, height);
-                    }
-                    else
-                    {
-                        selectImage(im->image, selectHandlePredict, selectHandlePredictDelta,
-                                    data, data2, im->image, im_pf->image, 0, width, height);
-                    }
-                }
-                else if (pf_ds)
-                {
-                    selectImage(im->image, selectHandlePredict, selectHandleDifferenceFromDownsampled,
-                                data, data2, im->image, 0, ds_im_pf->image, width, height);
-                }
-                else
-                {
-                    selectImage(im->image, selectHandlePredict, selectHandleDifference,
-                                data, data2, im->image, im_pf->image, 0, width, height);
-                }
-            }
-        }
-        else if (header_flags & RP_DATA_DS)
-        {
-            CHECK_DATA_SIZE(width * height / 4);
-            if (header_flags & RP_DATA_PFD)
-            {
-                predictImage(ds_im->image, data, width / 2, height / 2);
-                data = ds_im->image;
-            }
-            if (pf_ds)
-            {
-                differenceImage(ds_im->image, data, ds_im_pf->image, width / 2, height / 2);
-            }
-            else
-            {
-                downsampledDifference(ds_im->image, data, im_pf->image, width, height);
-            }
-            *ds = 1;
-            upsampleImage(im->image, ds_im->image, width, height);
+            CHECK_DATA_SIZE(width * height);
+            CHECK_DATA2_SIZE(ENCODE_SELECT_MASK_SIZE(width, height));
+
+            selectImage(im->image, selectHandlePredict, selectHandleDifference,
+                        data, data2, im->image, im_pf->image, 0, width, height);
         }
         else
         {
             CHECK_DATA_SIZE(width * height);
-            if (header_flags & RP_DATA_PFD)
-            {
-                predictImage(im->image, data, width, height);
-                data = im->image;
-            }
-            if (pf_ds)
-            {
-                differenceFromDownsampled(im->image, data, ds_im_pf->image, width, height);
-            }
-            else
-            {
-                differenceImage(im->image, data, im_pf->image, width, height);
-            }
+            differenceImage(im->image, data, im_pf->image, width, height);
         }
-    }
-    else if (header_flags & RP_DATA_DS)
-    {
-        CHECK_DATA_SIZE(width * height / 4);
-        predictImage(ds_im->image, data, width / 2, height / 2);
-        upsampleImage(im->image, ds_im->image, width, height);
-        *ds = 1;
     }
     else
     {
@@ -628,13 +543,13 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, ui
     {
         ctx = &bot_ctx;
     }
-    if (header.flags & RP_DATA_IL)
+    if (header.flags & RP_DATA_INTERLACE)
     {
         if (!frame_decode_interlaced)
         {
             return 0;
         }
-        if (header.flags & RP_DATA_ILO)
+        if (!(header.flags & RP_DATA_INTERLACE_EVEN_ODD))
         {
             il_ctx = ctx;
             if (is_top)
@@ -658,7 +573,7 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, ui
             }
         }
     }
-    if (header.flags & RP_DATA_Y)
+    if (!(header.flags & RP_DATA_Y_UV))
     {
         frame_delta_destroy(&ctx->f_pf);
         ctx->f_pf = ctx->f;
@@ -666,50 +581,40 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, ui
         ctx->flags_pf = ctx->flags;
         ctx->flags = 0;
 
-        int ds = 0;
-        if (handle_image(header.flags, ctx->flags_pf & RP_HAS_Y, ctx->flags_pf & RP_DOWNSAMPLE_Y, &ds,
+        if (handle_image(header.flags, ctx->flags_pf & RP_ENC_HAVE_Y,
                          &ctx->f.y, &ctx->f.ds_y,
                          data, data_size, data2, data2_size,
                          &ctx->f_pf.y, &ctx->f_pf.ds_y,
                          ctx->width, ctx->height) < 0)
             return 0;
         // memset(ctx->f.y.image, 128, ctx->f.y.size);
-        ctx->flags |= RP_HAS_Y;
-        if (ds)
-            ctx->flags |= RP_DOWNSAMPLE_Y;
+        ctx->flags |= RP_ENC_HAVE_Y;
     }
     else
     {
-        int ds_u = 0, ds_v = 0;
-        if (handle_image(header.flags, ctx->flags_pf & RP_HAS_UV, ctx->flags_pf & RP_DOWNSAMPLE2_UV, &ds_u,
+        if (handle_image(header.flags, ctx->flags_pf & RP_ENC_HAVE_UV,
                          &ctx->f.ds_u, &ctx->f.ds_ds_u,
                          data, data_size / 2, data2, data2_size / 2,
                          &ctx->f_pf.ds_u, &ctx->f_pf.ds_ds_u,
                          ctx->ds_width, ctx->ds_height) < 0)
             return 0;
-        if (handle_image(header.flags, ctx->flags_pf & RP_HAS_UV, ctx->flags_pf & RP_DOWNSAMPLE2_UV, &ds_v,
+        if (handle_image(header.flags, ctx->flags_pf & RP_ENC_HAVE_UV,
                          &ctx->f.ds_v, &ctx->f.ds_ds_v,
                          data + data_size / 2, data_size / 2, data2 + data2_size / 2, data2_size / 2,
                          &ctx->f_pf.ds_v, &ctx->f_pf.ds_ds_v,
                          ctx->ds_width, ctx->ds_height) < 0)
             return 0;
-        if (ds_u != ds_v)
-        {
-            return 0;
-        }
 
         upsampleImage(ctx->u.image, ctx->f.ds_u.image, ctx->width, ctx->height);
         upsampleImage(ctx->v.image, ctx->f.ds_v.image, ctx->width, ctx->height);
         // memset(ctx->u.image, 128, ctx->u.size);
         // memset(ctx->v.image, 128, ctx->v.size);
-        ctx->flags |= RP_HAS_UV;
-        if (ds_u)
-            ctx->flags |= RP_DOWNSAMPLE2_UV;
+        ctx->flags |= RP_ENC_HAVE_UV;
 
-        if ((ctx->flags & (RP_HAS_Y | RP_HAS_UV)) == (RP_HAS_Y | RP_HAS_UV))
+        if ((ctx->flags & (RP_ENC_HAVE_Y | RP_ENC_HAVE_UV)) == (RP_ENC_HAVE_Y | RP_ENC_HAVE_UV))
         {
             frame_image_destroy(&ctx->rgb);
-            if (header.flags & RP_DATA_IL)
+            if (header.flags & RP_DATA_INTERLACE)
             {
                 frame_image_init_comp(&ctx->rgb, ctx->width, ctx->height * 2, BYTES_PER_RGB);
                 for (int i = 0; i < ctx->width; ++i)
@@ -719,23 +624,22 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, ui
                         uint8_t y = accessImageNoCheck(ctx->f.y.image, i, j, ctx->width, ctx->height);
                         uint8_t u = accessImageNoCheck(ctx->u.image, i, j, ctx->width, ctx->height);
                         uint8_t v = accessImageNoCheck(ctx->v.image, i, j, ctx->width, ctx->height);
-                        convert_to_rgb(y, u, v, &y, &u, &v, header.flags & RP_DATA_LQ);
+                        convert_to_rgb(y, u, v, &y, &u, &v, header.flags & RP_DATA_YUV_LQ);
                         uint8_t *rgb_pixel = ctx->rgb.image + (j * 2 * ctx->width + i) * BYTES_PER_RGB;
 
-                        uint8_t il_y = accessImageNoCheck(il_ctx->f.y.image, i, j, il_ctx->width, il_ctx->height);
-                        uint8_t il_u = accessImageNoCheck(il_ctx->u.image, i, j, il_ctx->width, il_ctx->height);
-                        uint8_t il_v = accessImageNoCheck(il_ctx->v.image, i, j, il_ctx->width, il_ctx->height);
-                        if ((il_ctx->flags & (RP_HAS_Y | RP_HAS_UV)) == (RP_HAS_Y | RP_HAS_UV))
+                        uint8_t il_y = 0;
+                        uint8_t il_u = 0;
+                        uint8_t il_v = 0;
+                        if ((il_ctx->flags & (RP_ENC_HAVE_Y | RP_ENC_HAVE_UV)) == (RP_ENC_HAVE_Y | RP_ENC_HAVE_UV))
                         {
-                            convert_to_rgb(il_y, il_u, il_v, &il_y, &il_u, &il_v, header.flags & RP_DATA_LQ);
-                        }
-                        else
-                        {
-                            il_y = il_u = il_v = 0;
+                            il_y = accessImageNoCheck(il_ctx->f.y.image, i, j, il_ctx->width, il_ctx->height);
+                            il_u = accessImageNoCheck(il_ctx->u.image, i, j, il_ctx->width, il_ctx->height);
+                            il_v = accessImageNoCheck(il_ctx->v.image, i, j, il_ctx->width, il_ctx->height);
+                            convert_to_rgb(il_y, il_u, il_v, &il_y, &il_u, &il_v, header.flags & RP_DATA_YUV_LQ);
                         }
                         uint8_t *il_rgb_pixel = ctx->rgb.image + ((j * 2 + 1) * ctx->width + i) * BYTES_PER_RGB;
 
-                        if (header.flags & RP_DATA_ILO)
+                        if (!(header.flags & RP_DATA_INTERLACE_EVEN_ODD))
                         {
                             rgb_pixel[0] = il_y;
                             rgb_pixel[1] = il_u;
@@ -768,7 +672,7 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, ui
                         uint8_t y = accessImageNoCheck(ctx->f.y.image, i, j, ctx->width, ctx->height);
                         uint8_t u = accessImageNoCheck(ctx->u.image, i, j, ctx->width, ctx->height);
                         uint8_t v = accessImageNoCheck(ctx->v.image, i, j, ctx->width, ctx->height);
-                        convert_to_rgb(y, u, v, &y, &u, &v, header.flags & RP_DATA_LQ);
+                        convert_to_rgb(y, u, v, &y, &u, &v, header.flags & RP_DATA_YUV_LQ);
                         uint8_t *rgb_pixel = ctx->rgb.image + (j * ctx->width + i) * BYTES_PER_RGB;
                         rgb_pixel[0] = y;
                         rgb_pixel[1] = u;
@@ -788,7 +692,7 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, ui
 
 uint8_t *frame_decode(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size)
 {
-    return frame_decode_screen(header, data, data_size, data2, data2_size, header.flags & RP_DATA_TOP);
+    return frame_decode_screen(header, data, data_size, data2, data2_size, !(header.flags & RP_DATA_TOP_BOT));
 }
 
 void frame_decode_init(int interlaced)
