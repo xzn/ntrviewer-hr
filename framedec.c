@@ -152,9 +152,13 @@ static inline uint16_t accessImageUpsampleUnscaled(const uint8_t *ds_image, int 
     return a;
 }
 
-static inline uint16_t accessImageUpsample(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
+// #define rshift_to_even(n, s) ({ typeof(n) n_ = n >> (s - 1); uint8_t b_ = n_ & 1; n_ >>= 1; uint8_t c_ = n_ & 1; n_ + (b_ & c_); })
+#define rshift_to_even(n, s) ((n + (1 << (s - 1))) >> s)
+
+static inline uint8_t accessImageUpsample(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
 {
-    return (accessImageUpsampleUnscaled(ds_image, xOrig, yOrig, wOrig, hOrig) + 8) / 16;
+    uint16_t p = accessImageUpsampleUnscaled(ds_image, xOrig, yOrig, wOrig, hOrig);
+    return rshift_to_even(p, 4);
 }
 
 static inline void upsampleImage(uint8_t *dst, const uint8_t *ds_src, int w, int h)
@@ -192,7 +196,8 @@ static inline uint16_t accessImageDownsampleUnscaled(const uint8_t *image, int x
 // x and y are % 2 == 0, see accessImageDownsampleUnscaled
 static inline uint8_t accessImageDownsample(const uint8_t *image, int x, int y, int w, int h)
 {
-    return (accessImageDownsampleUnscaled(image, x, y, w, h) + 2) / 4;
+    uint16_t p = accessImageDownsampleUnscaled(image, x, y, w, h);
+    return rshift_to_even(p, 2);
 }
 
 static inline void downsampleImage(uint8_t *ds_dst, const uint8_t *src, int wOrig, int hOrig)
