@@ -406,24 +406,26 @@ typedef struct _FrameDecodeContext
     uint8_t flags, flags_pf;
 } FrameDecodeContext;
 
-void frame_image_init_comp(FrameImage *im, int width, int height, int ncomp)
+static void frame_image_init_comp(FrameImage *im, int width, int height, int ncomp)
 {
     im->size = width * height * ncomp;
     im->image = malloc(im->size);
     // memset(im->image, 0, im->size);
 }
 
-void frame_image_init(FrameImage *im, int width, int height)
+static void frame_image_init(FrameImage *im, int width, int height)
 {
     frame_image_init_comp(im, width, height, 1);
 }
 
-void frame_image_destroy(FrameImage *im)
+static void frame_image_destroy(FrameImage *im)
 {
     free(im->image);
+    im->image = 0;
+    im->size = 0;
 }
 
-void frame_delta_init(FrameDecodeContext *ctx, FrameDelta *dt)
+static void frame_delta_init(FrameDecodeContext *ctx, FrameDelta *dt)
 {
     frame_image_init(&dt->y, ctx->width, ctx->height);
     frame_image_init(&dt->ds_y, ctx->ds_width, ctx->ds_height);
@@ -433,7 +435,7 @@ void frame_delta_init(FrameDecodeContext *ctx, FrameDelta *dt)
     frame_image_init(&dt->ds_ds_v, ctx->ds_ds_width, ctx->ds_ds_height);
 }
 
-void frame_delta_destroy(FrameDelta *dt)
+static void frame_delta_destroy(FrameDelta *dt)
 {
     frame_image_destroy(&dt->y);
     frame_image_destroy(&dt->ds_y);
@@ -443,7 +445,7 @@ void frame_delta_destroy(FrameDelta *dt)
     frame_image_destroy(&dt->ds_ds_v);
 }
 
-void frame_decode_context_init(FrameDecodeContext *ctx, int width, int height)
+static void frame_decode_context_init(FrameDecodeContext *ctx, int width, int height)
 {
     ctx->width = width;
     ctx->height = height;
@@ -461,7 +463,7 @@ void frame_decode_context_init(FrameDecodeContext *ctx, int width, int height)
     ctx->flags_pf = ctx->flags = 0;
 }
 
-void frame_decode_context_destroy(FrameDecodeContext *ctx)
+static void frame_decode_context_destroy(FrameDecodeContext *ctx)
 {
     frame_delta_destroy(&ctx->f);
     frame_delta_destroy(&ctx->f_pf);
@@ -532,7 +534,130 @@ static int handle_image(uint32_t header_flags, int pf_has,
     return 0;
 }
 
-uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size, int is_top)
+#include "yadif.h"
+
+typedef struct _YadifFrames
+{
+    FrameImage prev, cur, next;
+} YadifFrames;
+
+typedef struct _YadifScreen
+{
+    YadifFrames y, u, v;
+} YadifScreen;
+
+YadifScreen yadif_top, yadif_bot;
+const FrameImage fi_zero;
+
+static int is_fi_zero(FrameImage fi)
+{
+    return !fi.image || !fi.size;
+}
+
+static void yadif_destroy_frame(YadifFrames *yadif)
+{
+    frame_image_destroy(&yadif->prev);
+    frame_image_destroy(&yadif->cur);
+    frame_image_destroy(&yadif->next);
+}
+
+static void yadif_destroy_screen(YadifScreen *yadif)
+{
+    yadif_destroy_frame(&yadif->y);
+    yadif_destroy_frame(&yadif->u);
+    yadif_destroy_frame(&yadif->v);
+}
+
+static void yadif_add_image(YadifFrames *yadif, FrameImage image)
+{
+    frame_image_destroy(&yadif->prev);
+    if (image.size != yadif->next.size)
+    {
+        frame_image_destroy(&yadif->cur);
+        frame_image_destroy(&yadif->next);
+    }
+    yadif->prev = yadif->cur;
+    yadif->cur = yadif->next;
+    yadif->next = image;
+}
+
+static void yadif_add_frame(YadifScreen *yadif, FrameImage y, FrameImage u, FrameImage v)
+{
+    yadif_add_image(&yadif->y, y);
+    yadif_add_image(&yadif->u, u);
+    yadif_add_image(&yadif->v, v);
+}
+
+static FrameImage yadif_process_image(YadifFrames yadif, int w, int h, int parity)
+{
+    FrameImage dst;
+    frame_image_init(&dst, w, h);
+
+    yadif_filter(dst.image, yadif.prev.image, yadif.cur.image, yadif.next.image, w, h, parity);
+    return dst;
+}
+
+static FrameImage yadif_process(YadifScreen yadif, int w, int h, int parity, int lq)
+{
+    FrameImage y = yadif_process_image(yadif.y, w, h, parity);
+    FrameImage u = yadif_process_image(yadif.u, w, h, parity);
+    FrameImage v = yadif_process_image(yadif.v, w, h, parity);
+
+    FrameImage rgb;
+    frame_image_init_comp(&rgb, w, h, BYTES_PER_RGB);
+    for (int j = 0; j < h; ++j)
+    {
+        for (int i = 0; i < w; ++i)
+        {
+            uint8_t y_in = y.image[j * w + i];
+            uint8_t u_in = u.image[j * w + i];
+            uint8_t v_in = v.image[j * w + i];
+            convert_to_rgb(y_in, u_in, v_in, &y_in, &u_in, &v_in, lq);
+            uint8_t *rgb_pixel = rgb.image + (j * w + i) * BYTES_PER_RGB;
+            rgb_pixel[0] = y_in;
+            rgb_pixel[1] = u_in;
+            rgb_pixel[2] = v_in;
+        }
+    }
+
+    frame_image_destroy(&y);
+    frame_image_destroy(&u);
+    frame_image_destroy(&v);
+    return rgb;
+}
+
+static uint8_t *yadif_try_process(YadifScreen yadif, int w, int h, int parity, int lq)
+{
+    if (is_fi_zero(yadif.y.prev) || is_fi_zero(yadif.u.prev) || is_fi_zero(yadif.v.prev))
+    {
+        return 0;
+    }
+    return yadif_process(yadif, w, h, parity, lq).image;
+}
+
+static FrameImage il_convert_yuv_row_major(FrameImage im_even, FrameImage im_odd, int width, int height)
+{
+    FrameImage im_out;
+    frame_image_init(&im_out, width, height * 2);
+
+    for (int i = 0; i < width; ++i)
+    {
+        for (int j = 0; j < height; ++j)
+        {
+            uint8_t c = accessImageNoCheck(im_even.image, i, j, width, height);
+            uint8_t il_c = accessImageNoCheck(im_odd.image, i, j, width, height);
+
+            uint8_t *pixel = im_out.image + j * 2 * width + i;
+            uint8_t *il_pixel = im_out.image + (j * 2 + 1) * width + i;
+
+            *pixel = c;
+            *il_pixel = il_c;
+        }
+    }
+    return im_out;
+}
+
+static uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size, int is_top)
 {
     FrameDecodeContext *ctx, *il_ctx;
     if (is_top)
@@ -549,7 +674,7 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, ui
         {
             return 0;
         }
-        if (!(header.flags & RP_DATA_INTERLACE_EVEN_ODD))
+        if (header.flags & RP_DATA_INTERLACE_EVEN_ODD)
         {
             il_ctx = ctx;
             if (is_top)
@@ -616,51 +741,18 @@ uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, ui
             frame_image_destroy(&ctx->rgb);
             if (header.flags & RP_DATA_INTERLACE)
             {
-                frame_image_init_comp(&ctx->rgb, ctx->width, ctx->height * 2, BYTES_PER_RGB);
-                for (int i = 0; i < ctx->width; ++i)
+                YadifScreen *yadif = is_top ? &yadif_top : &yadif_bot;
+                int even_odd = !!(header.flags & RP_DATA_INTERLACE_EVEN_ODD);
+                int lq = !!(header.flags & RP_DATA_YUV_LQ);
+                if (even_odd)
                 {
-                    for (int j = 0; j < ctx->height; ++j)
-                    {
-                        uint8_t y = accessImageNoCheck(ctx->f.y.image, i, j, ctx->width, ctx->height);
-                        uint8_t u = accessImageNoCheck(ctx->u.image, i, j, ctx->width, ctx->height);
-                        uint8_t v = accessImageNoCheck(ctx->v.image, i, j, ctx->width, ctx->height);
-                        convert_to_rgb(y, u, v, &y, &u, &v, header.flags & RP_DATA_YUV_LQ);
-                        uint8_t *rgb_pixel = ctx->rgb.image + (j * 2 * ctx->width + i) * BYTES_PER_RGB;
-
-                        uint8_t il_y = 0;
-                        uint8_t il_u = 0;
-                        uint8_t il_v = 0;
-                        if ((il_ctx->flags & (RP_ENC_HAVE_Y | RP_ENC_HAVE_UV)) == (RP_ENC_HAVE_Y | RP_ENC_HAVE_UV))
-                        {
-                            il_y = accessImageNoCheck(il_ctx->f.y.image, i, j, il_ctx->width, il_ctx->height);
-                            il_u = accessImageNoCheck(il_ctx->u.image, i, j, il_ctx->width, il_ctx->height);
-                            il_v = accessImageNoCheck(il_ctx->v.image, i, j, il_ctx->width, il_ctx->height);
-                            convert_to_rgb(il_y, il_u, il_v, &il_y, &il_u, &il_v, header.flags & RP_DATA_YUV_LQ);
-                        }
-                        uint8_t *il_rgb_pixel = ctx->rgb.image + ((j * 2 + 1) * ctx->width + i) * BYTES_PER_RGB;
-
-                        if (!(header.flags & RP_DATA_INTERLACE_EVEN_ODD))
-                        {
-                            rgb_pixel[0] = il_y;
-                            rgb_pixel[1] = il_u;
-                            rgb_pixel[2] = il_v;
-                            il_rgb_pixel[0] = y;
-                            il_rgb_pixel[1] = u;
-                            il_rgb_pixel[2] = v;
-                        }
-                        else
-                        {
-                            rgb_pixel[0] = y;
-                            rgb_pixel[1] = u;
-                            rgb_pixel[2] = v;
-                            il_rgb_pixel[0] = il_y;
-                            il_rgb_pixel[1] = il_u;
-                            il_rgb_pixel[2] = il_v;
-                        }
-
-                        // rgb_pixel[3] = 0;
-                    }
+                    FrameImage y = il_convert_yuv_row_major(ctx->f.y, il_ctx->f.y, ctx->width, ctx->height);
+                    FrameImage u = il_convert_yuv_row_major(ctx->u, il_ctx->u, ctx->width, ctx->height);
+                    FrameImage v = il_convert_yuv_row_major(ctx->v, il_ctx->v, ctx->width, ctx->height);
+                    yadif_add_frame(yadif, y, u, v);
                 }
+                uint8_t *rgb = yadif_try_process(*yadif, ctx->width, ctx->height * 2, even_odd, lq);
+                return rgb;
             }
             else
             {
@@ -715,5 +807,7 @@ void frame_decode_destroy()
     {
         frame_decode_context_destroy(&il_top_ctx);
         frame_decode_context_destroy(&il_bot_ctx);
+        yadif_destroy_screen(&yadif_top);
+        yadif_destroy_screen(&yadif_bot);
     }
 }

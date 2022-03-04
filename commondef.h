@@ -13,8 +13,13 @@
 #define av_assert2(...)
 #define ff_dlog(...)
 
-#define FFMIN(a, b) ((a) > (b) ? (b) : (a))
-#define FFMAX(a, b) ((a) > (b) ? (a) : (b))
+#define FFMAX(a,b) ((a) > (b) ? (a) : (b))
+#define FFMAX3(a,b,c) FFMAX(FFMAX(a,b),c)
+#define FFMIN(a,b) ((a) > (b) ? (b) : (a))
+#define FFMIN3(a,b,c) FFMIN(FFMIN(a,b),c)
+
+#define FFABS(a) ((a) >= 0 ? (a) : (-(a)))
+#define FFSIGN(a) ((a) > 0 ? 1 : -1)
 
 #define FFSWAP(type, a, b) \
     do                     \

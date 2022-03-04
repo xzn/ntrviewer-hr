@@ -1117,7 +1117,9 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int width
 #define RP_CONTROL_TOP_KEY (1 << 0)
 #define RP_CONTROL_BOT_KEY (1 << 1)
 
-static int rpInterlaced = 0;
+#define KEY_REQ_INTERVAL 20
+
+static int rpInterlaced = 0, key_req_count = 0;
 
 void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size)
 {
@@ -1142,6 +1144,7 @@ void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size, uint8
   uint8_t *frame = frame_decode(header, data, data_size, data2, data2_size);
   if (frame)
   {
+    key_req_count = 0;
     if (!(header.flags & RP_DATA_TOP_BOT))
     {
       handle_decode_frame_screen(&top_buffer_ctx, frame, 400, 240);
@@ -1153,16 +1156,13 @@ void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size, uint8
   }
   else if (header.flags & RP_DATA_Y_UV)
   {
-    // fprintf(stderr, "requesting key frame\n");
-    uint8_t flags;
-    if (!(header.flags & RP_DATA_TOP_BOT))
+    ++key_req_count;
+    if (key_req_count % KEY_REQ_INTERVAL != 0)
     {
-      flags |= RP_CONTROL_TOP_KEY;
+      return;
     }
-    else
-    {
-      flags |= RP_CONTROL_BOT_KEY;
-    }
+    fprintf(stderr, "requesting key frame\n");
+    uint8_t flags = RP_CONTROL_TOP_KEY | RP_CONTROL_BOT_KEY;
     ikcp_send(kcp, &flags, sizeof(flags));
   }
 }
