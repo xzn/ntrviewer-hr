@@ -175,6 +175,7 @@ static nk_bool dynamic_priority;
 static nk_bool use_interlace;
 static nk_bool multicore_network;
 static nk_bool multicore_encode;
+static nk_bool triple_buffer_encode;
 static nk_bool rp_dbg_msg;
 
 static atomic_uint_fast8_t ip_octets[4];
@@ -421,6 +422,8 @@ void *menu_tcp_thread_func(void *arg)
           flags |= RP_MULTICORE_NETWORK;
         if (multicore_encode)
           flags |= RP_MULTICORE_ENCODE;
+        if (triple_buffer_encode)
+          flags |= RP_TRIPLE_BUFFER_ENCODE;
         if (rp_dbg_msg)
           flags |= RP_DEBUG;
         uint32_t args[] = {
@@ -560,6 +563,7 @@ void rpConfigSetDefault(void)
   use_interlace = 0;
   multicore_network = 1;
   multicore_encode = 1;
+  triple_buffer_encode = 1;
   rp_dbg_msg = 0;
 }
 
@@ -620,6 +624,7 @@ static void guiMain(struct nk_context *ctx)
       if (!multicore_network)
       {
         multicore_encode = 0;
+        triple_buffer_encode = 0;
       }
 
     nk_layout_row_dynamic(ctx, 30, 2);
@@ -627,6 +632,19 @@ static void guiMain(struct nk_context *ctx)
     if (nk_checkbox_label(ctx, "", &multicore_encode))
       if (multicore_encode)
       {
+        multicore_network = 1;
+      }
+      else
+      {
+        triple_buffer_encode = 0;
+      }
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Triple buffer encode", NK_TEXT_CENTERED);
+    if (nk_checkbox_label(ctx, "", &triple_buffer_encode))
+      if (triple_buffer_encode)
+      {
+        multicore_encode = 1;
         multicore_network = 1;
       }
 
@@ -637,11 +655,19 @@ static void guiMain(struct nk_context *ctx)
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Use frame delta", NK_TEXT_CENTERED);
-    nk_checkbox_label(ctx, "", &use_frame_delta);
+    if (nk_checkbox_label(ctx, "", &use_frame_delta))
+      if (!use_frame_delta)
+      {
+        select_prediction = 0;
+      }
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Select prediction", NK_TEXT_CENTERED);
-    nk_checkbox_label(ctx, "", &select_prediction);
+    if (nk_checkbox_label(ctx, "", &select_prediction))
+      if (select_prediction)
+      {
+        use_frame_delta = 1;
+      }
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "RLE encode", NK_TEXT_CENTERED);
@@ -653,19 +679,11 @@ static void guiMain(struct nk_context *ctx)
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Interlaced video", NK_TEXT_CENTERED);
-    if (nk_checkbox_label(ctx, "", &use_interlace))
-      if (use_interlace)
-      {
-        use_dynamic_encode = 0;
-      }
+    nk_checkbox_label(ctx, "", &use_interlace);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Dynamic downsample", NK_TEXT_CENTERED);
-    if (nk_checkbox_label(ctx, "", &use_dynamic_encode))
-      if (use_dynamic_encode)
-      {
-        use_interlace = 0;
-      }
+    nk_checkbox_label(ctx, "", &use_dynamic_encode);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     snprintf(msg_buf, sizeof(msg_buf), "Downsample threshold %d", quality_fac_num);
