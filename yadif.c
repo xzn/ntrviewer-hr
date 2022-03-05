@@ -21,11 +21,12 @@
     for (x = start; x < end; x++)                                                                                                   \
     {                                                                                                                               \
         int c = cur[mrefs];                                                                                                         \
-        int d = cur[0];                                                                                                             \
+        int d = (prev[0] + cur[0] * 2 + next[0] + 2) >> 2;                                                                          \
         int e = cur[prefs];                                                                                                         \
+        int temporal_diff0 = FFMAX(FFABS(prev[0] - cur[0]), FFABS(cur[0] - next[0]));                                               \
         int temporal_diff1 = (FFABS(prev[mrefs] - c) + FFABS(prev[prefs] - e)) >> 1;                                                \
         int temporal_diff2 = (FFABS(next[mrefs] - c) + FFABS(next[prefs] - e)) >> 1;                                                \
-        int diff = FFMAX(temporal_diff1, temporal_diff2);                                                                           \
+        int diff = FFMAX3(temporal_diff0 >> 1, temporal_diff1, temporal_diff2);                                                     \
         int spatial_pred = (c + e) >> 1;                                                                                            \
                                                                                                                                     \
         if (is_not_edge)                                                                                                            \

@@ -16,9 +16,12 @@
 #define BITS_PER_BYTE 8
 #define ENCODE_SELECT_MASK_X_SCALE 1
 #define ENCODE_SELECT_MASK_Y_SCALE 8
-#define ENCODE_SELECT_MASK_SIZE(w, h)                                                                       \
-    (h + (ENCODE_SELECT_MASK_Y_SCALE * BITS_PER_BYTE) - 1) / (ENCODE_SELECT_MASK_Y_SCALE * BITS_PER_BYTE) * \
-        (w + ENCODE_SELECT_MASK_X_SCALE - 1) / ENCODE_SELECT_MASK_X_SCALE
+#define ENCODE_SELECT_MASK_STRIDE(h) \
+    (((h) + (ENCODE_SELECT_MASK_Y_SCALE * BITS_PER_BYTE) - 1) / (ENCODE_SELECT_MASK_Y_SCALE * BITS_PER_BYTE))
+#define ENCODE_SELECT_MASK_SIZE(w, h) \
+    (ENCODE_SELECT_MASK_STRIDE(h) * (((w) + ENCODE_SELECT_MASK_X_SCALE - 1) / ENCODE_SELECT_MASK_X_SCALE))
+
+#define ENCODE_UPSAMPLE_CARRY_SIZE(w, h) (((h) + BITS_PER_BYTE - 1) / BITS_PER_BYTE * (w))
 
 typedef struct _DataHeader
 {
@@ -28,6 +31,8 @@ typedef struct _DataHeader
     uint32_t uncompressed_len;
 } DataHeader;
 
-uint8_t *frame_decode(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size);
-void frame_decode_init();
-void frame_decode_destroy();
+uint8_t *frame_decode(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size, int adata);
+void frame_decode_init(int interlaced);
+void frame_decode_destroy(void);
+void yadif_start(void);
+void yadif_stop(void);

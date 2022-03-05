@@ -163,8 +163,7 @@ const char *connection_msg[CS_MAX] = {
 static nk_bool prioritize_top_screen;
 static int priority_factor;
 static int target_bitrate;
-static int quality_fac_num;
-static int quality_fac_denum;
+static int target_frame_rate;
 
 static nk_bool use_frame_delta;
 static nk_bool select_prediction;
@@ -177,6 +176,8 @@ static nk_bool multicore_network;
 static nk_bool multicore_encode;
 static nk_bool triple_buffer_encode;
 static nk_bool rp_dbg_msg;
+
+static nk_bool yadif_deinterlace;
 
 static atomic_uint_fast8_t ip_octets[4];
 
@@ -431,7 +432,7 @@ void *menu_tcp_thread_func(void *arg)
             RP_MAGIC,
             target_bitrate,
             flags,
-            quality_fac_denum << 8 | quality_fac_num};
+            target_frame_rate};
         ret = tcp_send_packet_header(sockfd, packet_seq, 0, 901,
                                      args, sizeof(args) / sizeof(*args), 0);
         if (ret < 0)
@@ -551,8 +552,7 @@ void rpConfigSetDefault(void)
   prioritize_top_screen = 1;
   priority_factor = 2;
   target_bitrate = 1024 * 512 * 24;
-  quality_fac_num = 2;
-  quality_fac_denum = 1;
+  target_frame_rate = 45;
 
   use_frame_delta = 1;
   select_prediction = 1;
@@ -686,14 +686,9 @@ static void guiMain(struct nk_context *ctx)
     nk_checkbox_label(ctx, "", &use_dynamic_encode);
 
     nk_layout_row_dynamic(ctx, 30, 2);
-    snprintf(msg_buf, sizeof(msg_buf), "Downsample threshold %d", quality_fac_num);
+    snprintf(msg_buf, sizeof(msg_buf), "Target frame rate %d", target_frame_rate);
     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, 1, &quality_fac_num, 4, 1);
-
-    nk_layout_row_dynamic(ctx, 30, 2);
-    snprintf(msg_buf, sizeof(msg_buf), "/ %d", quality_fac_denum);
-    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, 1, &quality_fac_denum, 4, 1);
+    nk_slider_int(ctx, 15, &target_frame_rate, 120, 5);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Debug message", NK_TEXT_CENTERED);
@@ -751,6 +746,17 @@ static void guiMain(struct nk_context *ctx)
   }
   nk_end(ctx);
   nk_window_show(ctx, debug_msg_wnd, show_window);
+
+  const char *enhancement_wnd = "Enhancement";
+  if (nk_begin(ctx, enhancement_wnd, nk_rect(50, 800, 400, 120),
+               NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE))
+  {
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Yadif deinterlace", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &yadif_deinterlace);
+  }
+  nk_end(ctx);
+  nk_window_show(ctx, enhancement_wnd, show_window);
 }
 
 static GLbyte vShaderStr[] =
@@ -1135,9 +1141,36 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int width
 #define RP_CONTROL_TOP_KEY (1 << 0)
 #define RP_CONTROL_BOT_KEY (1 << 1)
 
+// should be at least 10 or something since frame_decode doesn't always return a frame even under normal circumstance
+// TODO add proper checks
 #define KEY_REQ_INTERVAL 20
 
-static int rpInterlaced = 0, key_req_count = 0;
+static int rpInterlaced = 0, key_req_count = 0, yadif_enabled = 0;
+
+static struct RP_DECODED_FRAME
+{
+  uint8_t *frame;
+  int decoded;
+  int y_uv;
+  int adata;
+} decoded_top, decoded_bot;
+
+void ready_decoded_frame(int top_bot)
+{
+  key_req_count = 0;
+  if (!top_bot)
+  {
+    handle_decode_frame_screen(&top_buffer_ctx, decoded_top.frame, 400, 240);
+    decoded_top.frame = 0;
+    decoded_top.decoded = 0;
+  }
+  else
+  {
+    handle_decode_frame_screen(&bot_buffer_ctx, decoded_bot.frame, 320, 240);
+    decoded_bot.frame = 0;
+    decoded_bot.decoded = 0;
+  }
+}
 
 void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size)
 {
@@ -1149,6 +1182,17 @@ void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size, uint8
       frame_decode_destroy();
       frame_decode_init(1);
     }
+
+    if (yadif_deinterlace && !yadif_enabled)
+    {
+      yadif_start();
+      yadif_enabled = 1;
+    }
+    else if (!yadif_deinterlace && yadif_enabled)
+    {
+      yadif_stop();
+      yadif_enabled = 0;
+    }
   }
   else
   {
@@ -1159,29 +1203,27 @@ void handle_decoded_frame(DataHeader header, uint8_t *data, int data_size, uint8
       frame_decode_init(0);
     }
   }
-  uint8_t *frame = frame_decode(header, data, data_size, data2, data2_size);
-  if (frame)
+  int top_bot = !!(header.flags & RP_DATA_TOP_BOT);
+  struct RP_DECODED_FRAME *decoded = top_bot == 0 ? &decoded_top : &decoded_bot;
+  uint8_t *frame = frame_decode(header, data, data_size, data2, data2_size,
+                                decoded->adata);
+  decoded->frame = frame;
+  decoded->decoded = 1;
+  decoded->y_uv = !!(header.flags & RP_DATA_Y_UV);
+  // fprintf(stderr, "handle_decoded_frame top_bot %d, y_uv %d\n", top_bot, decoded->y_uv);
+  if (!decoded->frame)
   {
-    key_req_count = 0;
-    if (!(header.flags & RP_DATA_TOP_BOT))
+    if (decoded->y_uv)
     {
-      handle_decode_frame_screen(&top_buffer_ctx, frame, 400, 240);
+      ++key_req_count;
+      if (key_req_count % KEY_REQ_INTERVAL != 0)
+      {
+        return;
+      }
+      fprintf(stderr, "requesting key frame\n");
+      uint8_t flags = RP_CONTROL_TOP_KEY | RP_CONTROL_BOT_KEY;
+      ikcp_send(kcp, &flags, sizeof(flags));
     }
-    else
-    {
-      handle_decode_frame_screen(&bot_buffer_ctx, frame, 320, 240);
-    }
-  }
-  else if (header.flags & RP_DATA_Y_UV)
-  {
-    ++key_req_count;
-    if (key_req_count % KEY_REQ_INTERVAL != 0)
-    {
-      return;
-    }
-    fprintf(stderr, "requesting key frame\n");
-    uint8_t flags = RP_CONTROL_TOP_KEY | RP_CONTROL_BOT_KEY;
-    ikcp_send(kcp, &flags, sizeof(flags));
   }
 }
 
@@ -1196,14 +1238,23 @@ int handle_frame_recv_2(uint8_t **pdata, int *psize)
   uint8_t *compressed_2 = frame_recv_buffer_2 + sizeof(Data2Header);
   int ret;
 
-  int width = !(header.flags & RP_DATA_TOP_BOT) ? 400 : 320;
+  int top_bot = !!(header.flags & RP_DATA_TOP_BOT);
+  int width = top_bot == 0 ? 400 : 320;
   int height = header.flags & RP_DATA_INTERLACE ? 120 : 240;
   if (header.flags & RP_DATA_Y_UV)
   {
     width /= 2;
     height /= 2;
   }
-  int expected_size = ENCODE_SELECT_MASK_SIZE(width, height);
+  int expected_size = (top_bot == 0
+                           ? decoded_top.adata
+                           : decoded_bot.adata)
+                          ? ENCODE_UPSAMPLE_CARRY_SIZE(
+                                width / (header.flags & RP_DATA_DOWNSAMPLE ? 2 : 1),
+                                height / 2)
+                          : ENCODE_SELECT_MASK_SIZE(
+                                width / (header.flags & RP_DATA_DOWNSAMPLE2 ? 2 : 1),
+                                height / (header.flags & (RP_DATA_DOWNSAMPLE2 | RP_DATA_DOWNSAMPLE) ? 2 : 1));
   if (header.flags & RP_DATA_Y_UV)
   {
     expected_size *= 2;
@@ -1282,8 +1333,16 @@ int handle_frame_recv(void)
 
   uint8_t *compressed = frame_recv_buffer + sizeof(DataHeader);
   int ret;
+  int top_bot = !!(header.flags & RP_DATA_TOP_BOT);
+  int adata = top_bot == 0
+                  ? decoded_top.adata
+                  : decoded_bot.adata;
 
-  int expected_size = !(header.flags & RP_DATA_TOP_BOT) ? 96000 : 76800;
+  int expected_size = top_bot == 0 ? 96000 : 76800;
+  if (adata)
+  {
+    expected_size /= 2;
+  }
   if (header.flags & RP_DATA_INTERLACE)
   {
     expected_size /= 2;
@@ -1292,10 +1351,20 @@ int handle_frame_recv(void)
   {
     expected_size /= 2;
   }
+  if (header.flags & RP_DATA_DOWNSAMPLE2)
+  {
+    // fprintf(stderr, "RP_DATA_DOWNSAMPLE2\n");
+    expected_size /= 4;
+  }
+  else if (header.flags & RP_DATA_DOWNSAMPLE)
+  {
+    // fprintf(stderr, "RP_DATA_DOWNSAMPLE\n");
+    expected_size /= 2;
+  }
 
   if (expected_size != header.uncompressed_len)
   {
-    fprintf(stderr, "frame data error\n");
+    fprintf(stderr, "frame data error %d %d (%d expected)\n", header.flags, header.uncompressed_len, expected_size);
     return -1;
   }
   if (header.len + sizeof(DataHeader) != frame_recv_ptr - frame_recv_buffer)
@@ -1362,7 +1431,7 @@ int handle_frame_recv(void)
 
   uint8_t *data2 = 0;
   int data2_size = 0;
-  if (header.flags & RP_DATA_SELECT_FRAME_DELTA)
+  if ((header.flags & RP_DATA_SELECT_FRAME_DELTA) || adata)
   {
     if (handle_frame_recv_2(&data2, &data2_size) < 0)
     {
@@ -1502,6 +1571,26 @@ int handle_recv(uint8_t *buf, int size)
     }
     frame_has_data2 = (data_header.flags & RP_DATA_SELECT_FRAME_DELTA);
     frame_in_data2 = 0;
+
+    int top_bot = !!(data_header.flags & RP_DATA_TOP_BOT);
+    struct RP_DECODED_FRAME *decoded = top_bot == 0 ? &decoded_top : &decoded_bot;
+    decoded->adata = 0;
+    int y_uv = !!(data_header.flags & RP_DATA_Y_UV);
+    // fprintf(stderr, "handle_recv top_bot %d, y_uv %d\n", top_bot, y_uv);
+    if (decoded->decoded && y_uv == decoded->y_uv)
+    {
+      free(decoded->frame);
+      decoded->frame = 0;
+      decoded->decoded = 0;
+      frame_has_data2 = 1;
+      decoded->adata = 1;
+      // fprintf(stderr, "adata\n");
+    }
+    else if (decoded->frame)
+    {
+      // fprintf(stderr, "ready_decoded_frame\n");
+      ready_decoded_frame(top_bot);
+    }
 
     static int frame_counter = 0;
     static uint64_t frame_count_last_tick = 0;
@@ -1668,6 +1757,8 @@ void *udp_recv_thread_func(void *arg)
     rpInterlaced = use_interlace;
     top_buffer_ctx.updated = FBS_NOT_AVAIL;
     bot_buffer_ctx.updated = FBS_NOT_AVAIL;
+    memset(&decoded_top, 0, sizeof(decoded_top));
+    memset(&decoded_bot, 0, sizeof(decoded_bot));
 
     s = 0;
     int ret;

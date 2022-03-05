@@ -9,6 +9,7 @@
 #define HR_MIN(a, b) ((a) < (b) ? (a) : (b))
 
 static int frame_decode_interlaced;
+static int frame_decode_yadif;
 
 static uint8_t accessImageNoCheck(const uint8_t *image, int x, int y, int w, int h)
 {
@@ -153,7 +154,8 @@ static inline uint16_t accessImageUpsampleUnscaled(const uint8_t *ds_image, int 
 }
 
 // #define rshift_to_even(n, s) ({ typeof(n) n_ = n >> (s - 1); uint8_t b_ = n_ & 1; n_ >>= 1; uint8_t c_ = n_ & 1; n_ + (b_ & c_); })
-#define rshift_to_even(n, s) ((n + (1 << (s - 1))) >> s)
+#define rshift_to_even(n, s) ((n + (s > 1 ? (1 << (s - 1)) : 0)) >> s)
+// #define rshift_to_even(n, s) ((n + (1 << (s - 1))) >> s)
 
 static inline uint8_t accessImageUpsample(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
 {
@@ -213,6 +215,64 @@ static inline void downsampleImage(uint8_t *ds_dst, const uint8_t *src, int wOri
     }
 }
 
+// x % 2 == 0
+static uint8_t accessImageDownsampleH(const uint8_t *image, int x, int y, int w, int h)
+{
+    int x0 = x; // / 2 * 2;
+    int x1 = x0 + 1;
+
+    // x1 = x1 >= w ? w - 1 : x1;
+    // y1 = y1 >= h ? h - 1 : y1;
+
+    uint8_t a = accessImageNoCheck(image, x0, y, w, h);
+    uint8_t b = accessImageNoCheck(image, x1, y, w, h);
+
+    uint16_t c = a + b;
+    return rshift_to_even(c, 1);
+}
+
+// y % 2 == 0
+static uint8_t accessImageDownsampleV(const uint8_t *image, int x, int y, int w, int h)
+{
+    int y0 = y; // / 2 * 2;
+    int y1 = y0 + 1;
+
+    // x1 = x1 >= w ? w - 1 : x1;
+    // y1 = y1 >= h ? h - 1 : y1;
+
+    uint8_t a = accessImageNoCheck(image, x, y0, w, h);
+    uint8_t b = accessImageNoCheck(image, x, y1, w, h);
+
+    uint16_t c = a + b;
+    return rshift_to_even(c, 1);
+}
+
+static void downsampleImageH(uint8_t *ds_dst, const uint8_t *src, int wOrig, int hOrig)
+{
+    int i = 0, j = 0;
+    for (; i < wOrig; i += 2)
+    {
+        j = 0;
+        for (; j < hOrig; ++j)
+        {
+            *ds_dst++ = accessImageDownsampleH(src, i, j, wOrig, hOrig);
+        }
+    }
+}
+
+static void downsampleImageV(uint8_t *ds_dst, const uint8_t *src, int wOrig, int hOrig)
+{
+    int i = 0, j = 0;
+    for (; i < wOrig; ++i)
+    {
+        j = 0;
+        for (; j < hOrig; j += 2)
+        {
+            *ds_dst++ = accessImageDownsampleV(src, i, j, wOrig, hOrig);
+        }
+    }
+}
+
 static inline void differenceImage(uint8_t *dst, const uint8_t *fd_src, const uint8_t *src_prev, int w, int h)
 {
     uint8_t *dst_end = dst + w * h;
@@ -244,6 +304,213 @@ static inline void downsampledDifference(uint8_t *ds_dst, const uint8_t *fd_ds_s
         for (; j < h; j += 2)
         {
             *ds_dst++ = *fd_ds_src++ + accessImageDownsample(src_prev, i, j, w, h);
+        }
+    }
+}
+
+static uint8_t accessImageUpsampleH(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
+{
+    int ds_w = wOrig / 2;
+
+    int ds_x0 = xOrig / 2;
+    int ds_x1 = ds_x0;
+
+    if (xOrig > ds_x0 * 2)
+    { // xOrig is odd -> ds_x0 * 2 + 1 = xOrig = ds_x1 * 2 - 1
+        ++ds_x1;
+    }
+    else
+    { // xOrig is even -> ds_x0 * 2 + 2 = xOrig = ds_x1 * 2
+        --ds_x0;
+    }
+
+    uint16_t a = accessImage(ds_image, ds_x0, yOrig, ds_w, hOrig);
+    uint16_t b = accessImage(ds_image, ds_x1, yOrig, ds_w, hOrig);
+
+    if (xOrig < ds_x1 * 2)
+    {
+        a = (a * 3 + b);
+    }
+    else
+    {
+        a = (a + b * 3);
+    }
+
+    return rshift_to_even(a, 2);
+}
+
+static uint8_t accessImageUpsampleV(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
+{
+    int ds_h = hOrig / 2;
+
+    int ds_y0 = yOrig / 2;
+    int ds_y1 = ds_y0;
+
+    if (yOrig > ds_y0 * 2)
+    {
+        ++ds_y1;
+    }
+    else
+    {
+        --ds_y0;
+    }
+
+    uint16_t a = accessImage(ds_image, xOrig, ds_y0, wOrig, ds_h);
+    uint16_t b = accessImage(ds_image, xOrig, ds_y1, wOrig, ds_h);
+
+    if (yOrig < ds_y1 * 2)
+    {
+        a = (a * 3 + b);
+    }
+    else
+    {
+        a = (a + b * 3);
+    }
+
+    return rshift_to_even(a, 2);
+}
+
+static void upsampleImageH(uint8_t *dst, const uint8_t *ds_src, int w, int h)
+{
+    int i = 0, j = 0;
+    for (; i < w; ++i)
+    {
+        j = 0;
+        for (; j < h; ++j)
+        {
+            *dst++ = accessImageUpsampleH(ds_src, i, j, w, h);
+        }
+    }
+}
+
+static void upsampleImageV(uint8_t *dst, const uint8_t *ds_src, int w, int h)
+{
+    int i = 0, j = 0;
+    for (; i < w; ++i)
+    {
+        j = 0;
+        for (; j < h; ++j)
+        {
+            *dst++ = accessImageUpsampleV(ds_src, i, j, w, h);
+        }
+    }
+}
+
+static void upsampleImageDS(uint8_t *dst, const uint8_t *ds_fd_src, const uint8_t *src_pf, int w, int h)
+{
+    for (int i = 0; i < w; ++i)
+    {
+        for (int j = 0; j < h; ++j)
+        {
+            if (accessImageNoCheck(ds_fd_src, i, j / 2, w, h / 2) == 0)
+            {
+                dst[i * h + j] = src_pf[i * h + j];
+            }
+        }
+    }
+}
+
+static void upsampleImageDS2(uint8_t *dst, const uint8_t *ds2_fd_src, const uint8_t *src_pf, int w, int h)
+{
+    for (int i = 0; i < w; ++i)
+    {
+        for (int j = 0; j < h; ++j)
+        {
+            if (accessImageNoCheck(ds2_fd_src, i / 2, j / 2, w / 2, h / 2) == 0)
+            {
+                dst[i * h + j] = src_pf[i * h + j];
+            }
+        }
+    }
+}
+
+static uint8_t accessSelectFD(const uint8_t *s_src, const uint8_t *m_src, int x, int y, int w, int h)
+{
+    uint8_t mask = m_src[x * ENCODE_SELECT_MASK_STRIDE(h) + y / (ENCODE_SELECT_MASK_Y_SCALE * BITS_PER_BYTE)];
+    uint8_t n = y / ENCODE_SELECT_MASK_Y_SCALE % BITS_PER_BYTE;
+    uint8_t mask_bit = (mask >> n) & 1;
+    return mask_bit
+               ? accessImageNoCheck(s_src, x, y, w, h)
+               : -1;
+}
+
+static void upsampleImageSelectDS(uint8_t *dst, const uint8_t *ds_s_src, const uint8_t *ds_m_src, const uint8_t *src_pf, int w, int h)
+{
+    for (int i = 0; i < w; ++i)
+    {
+        for (int j = 0; j < h; ++j)
+        {
+            if (accessSelectFD(ds_s_src, ds_m_src, i, j / 2, w, h / 2) == 0)
+            {
+                dst[i * h + j] = src_pf[i * h + j];
+            }
+        }
+    }
+}
+
+static void upsampleImageSelectDS2(uint8_t *dst, const uint8_t *ds2_s_src, const uint8_t *ds2_m_src, const uint8_t *src_pf, int w, int h)
+{
+    for (int i = 0; i < w; ++i)
+    {
+        for (int j = 0; j < h; ++j)
+        {
+            if (accessSelectFD(ds2_s_src, ds2_m_src, i / 2, j / 2, w / 2, h / 2) == 0)
+            {
+                dst[i * h + j] = src_pf[i * h + j];
+            }
+        }
+    }
+}
+
+static void upsampleFDCImageH(uint8_t *dst, const uint8_t *ds_src_a, const uint8_t *ds_c_src, const uint8_t *ds_src, int w, int h)
+{
+    int ds_w = w / 2, ds_x = 0, mask = 0;
+    uint8_t *dst_b = dst + h;
+    int j, n;
+    for (; ds_x < ds_w; dst += h, dst_b += h, ++ds_x)
+    {
+        n = j = 0;
+        for (; j < h; ++j)
+        {
+            uint8_t d = accessImageNoCheck(ds_src_a, ds_x, j, ds_w, h);
+            uint8_t p = accessImageNoCheck(ds_src, ds_x, j, ds_w, h);
+
+            if (n % BITS_PER_BYTE == 0)
+            {
+                mask = *ds_c_src++;
+            }
+            uint8_t c = mask & 1;
+            mask >>= 1;
+            ++n;
+
+            *dst++ = p + d;
+            *dst_b++ = p - d + c;
+        }
+    }
+}
+
+static void upsampleFDCImageV(uint8_t *dst, const uint8_t *ds_src_a, const uint8_t *ds_c_src, const uint8_t *ds_src, int w, int h)
+{
+    int i = 0, mask = 0, ds_h = h / 2;
+    int ds_y, n;
+    for (; i < w; ++i)
+    {
+        n = ds_y = 0;
+        for (; ds_y < ds_h; ++ds_y)
+        {
+            uint8_t d = accessImageNoCheck(ds_src_a, i, ds_y, w, ds_h);
+            uint8_t p = accessImageNoCheck(ds_src, i, ds_y, w, ds_h);
+
+            if (n % BITS_PER_BYTE == 0)
+            {
+                mask = *ds_c_src++;
+            }
+            uint8_t c = mask & 1;
+            mask >>= 1;
+            ++n;
+
+            *dst++ = p + d;
+            *dst++ = p - d + c;
         }
     }
 }
@@ -386,7 +653,7 @@ typedef struct _FrameImage
 
 typedef struct _FrameDelta
 {
-    FrameImage y, ds_y, ds_u, ds_v, ds_ds_u, ds_ds_v;
+    FrameImage y, ds2_y, ds_y, ds2_u, ds2_v, ds_ds2_u, ds_ds2_v, ds2_ds2_u, ds2_ds2_v;
 } FrameDelta;
 
 #define RP_ENC_HAVE_Y (1 << 0)
@@ -406,9 +673,8 @@ typedef struct _FrameDecodeContext
 
     FrameDelta f, f_pf;
     FrameImage u, v;
-    FrameImage rgb;
 
-    uint8_t flags, flags_pf;
+    uint32_t flags, flags_pf;
 } FrameDecodeContext;
 
 static void frame_image_init_comp(FrameImage *im, int width, int height, int ncomp)
@@ -433,21 +699,27 @@ static void frame_image_destroy(FrameImage *im)
 static void frame_delta_init(FrameDecodeContext *ctx, FrameDelta *dt)
 {
     frame_image_init(&dt->y, ctx->width, ctx->height);
-    frame_image_init(&dt->ds_y, ctx->ds_width, ctx->ds_height);
-    frame_image_init(&dt->ds_u, ctx->ds_width, ctx->ds_height);
-    frame_image_init(&dt->ds_v, ctx->ds_width, ctx->ds_height);
-    frame_image_init(&dt->ds_ds_u, ctx->ds_ds_width, ctx->ds_ds_height);
-    frame_image_init(&dt->ds_ds_v, ctx->ds_ds_width, ctx->ds_ds_height);
+    frame_image_init(&dt->ds_y, ctx->width, ctx->ds_height);
+    frame_image_init(&dt->ds2_y, ctx->ds_width, ctx->ds_height);
+    frame_image_init(&dt->ds2_u, ctx->ds_width, ctx->ds_height);
+    frame_image_init(&dt->ds2_v, ctx->ds_width, ctx->ds_height);
+    frame_image_init(&dt->ds_ds2_u, ctx->ds_width, ctx->ds_ds_height);
+    frame_image_init(&dt->ds_ds2_v, ctx->ds_width, ctx->ds_ds_height);
+    frame_image_init(&dt->ds2_ds2_u, ctx->ds_ds_width, ctx->ds_ds_height);
+    frame_image_init(&dt->ds2_ds2_v, ctx->ds_ds_width, ctx->ds_ds_height);
 }
 
 static void frame_delta_destroy(FrameDelta *dt)
 {
     frame_image_destroy(&dt->y);
     frame_image_destroy(&dt->ds_y);
-    frame_image_destroy(&dt->ds_u);
-    frame_image_destroy(&dt->ds_v);
-    frame_image_destroy(&dt->ds_ds_u);
-    frame_image_destroy(&dt->ds_ds_v);
+    frame_image_destroy(&dt->ds2_y);
+    frame_image_destroy(&dt->ds2_u);
+    frame_image_destroy(&dt->ds2_v);
+    frame_image_destroy(&dt->ds_ds2_u);
+    frame_image_destroy(&dt->ds_ds2_v);
+    frame_image_destroy(&dt->ds2_ds2_u);
+    frame_image_destroy(&dt->ds2_ds2_v);
 }
 
 static void frame_decode_context_init(FrameDecodeContext *ctx, int width, int height)
@@ -475,7 +747,6 @@ static void frame_decode_context_destroy(FrameDecodeContext *ctx)
 
     frame_image_destroy(&ctx->u);
     frame_image_destroy(&ctx->v);
-    frame_image_destroy(&ctx->rgb);
 }
 
 static FrameDecodeContext top_ctx, bot_ctx, il_top_ctx, il_bot_ctx;
@@ -500,13 +771,60 @@ static FrameDecodeContext top_ctx, bot_ctx, il_top_ctx, il_bot_ctx;
         }                                                                                       \
     } while (0)
 
-static int handle_image(uint32_t header_flags, int pf_has,
-                        FrameImage *im, FrameImage *ds_im,
+static int handle_image(uint32_t header_flags, int has, int pf_has,
+                        int has_ds2, int has_ds, int pf_has_ds2, int pf_has_ds,
+                        FrameImage *im, FrameImage *ds_im, FrameImage *ds2_im,
                         uint8_t *data, int data_size, uint8_t *data2, int data2_size,
-                        FrameImage *im_pf, FrameImage *ds_im_pf,
-                        int width, int height)
+                        FrameImage *im_pf, FrameImage *ds_im_pf, FrameImage *ds2_im_pf,
+                        int width, int height, int adata, int *out_ds2, int *out_ds)
 {
-    if (header_flags & RP_DATA_FRAME_DELTA)
+    if (adata)
+    {
+        if (!has)
+        {
+            return -1;
+        }
+        if (!(header_flags & RP_DATA_FRAME_DELTA))
+        {
+            return -1;
+        }
+
+        if (header_flags & RP_DATA_DOWNSAMPLE2)
+        {
+            return -1;
+        }
+        else if (header_flags & RP_DATA_DOWNSAMPLE)
+        {
+            if (!has_ds2)
+            {
+                if (!has_ds)
+                {
+                    downsampleImageV(ds_im->image, im->image, width, height);
+                }
+                downsampleImageH(ds2_im->image, ds_im->image, width, height / 2);
+            }
+
+            CHECK_DATA_SIZE(width * height / 4);
+            CHECK_DATA2_SIZE(ENCODE_UPSAMPLE_CARRY_SIZE(width / 2, height / 2));
+
+            upsampleFDCImageH(ds_im->image, data, data2, ds2_im->image, width, height / 2);
+            upsampleImageV(im->image, ds_im->image, width, height);
+            *out_ds = 1;
+        }
+        else
+        {
+            if (!has_ds)
+            {
+                downsampleImageV(ds_im->image, im->image, width, height);
+            }
+
+            CHECK_DATA_SIZE(width * height / 2);
+            CHECK_DATA2_SIZE(ENCODE_UPSAMPLE_CARRY_SIZE(width, height / 2));
+
+            upsampleFDCImageV(im->image, data, data2, ds_im->image, width, height);
+        }
+    }
+    else if (header_flags & RP_DATA_FRAME_DELTA)
     {
         if (!pf_has)
         {
@@ -519,22 +837,104 @@ static int handle_image(uint32_t header_flags, int pf_has,
                 return -1;
             }
 
-            CHECK_DATA_SIZE(width * height);
-            CHECK_DATA2_SIZE(ENCODE_SELECT_MASK_SIZE(width, height));
-
-            selectImage(im->image, selectHandlePredict, selectHandleDifference,
-                        data, data2, im->image, im_pf->image, 0, width, height);
+            if (header_flags & RP_DATA_DOWNSAMPLE2)
+            {
+                if (!pf_has_ds2)
+                {
+                    if (!pf_has_ds)
+                    {
+                        downsampleImageV(ds_im_pf->image, im_pf->image, width, height);
+                    }
+                    downsampleImageH(ds2_im_pf->image, ds_im_pf->image, width, height / 2);
+                }
+                CHECK_DATA_SIZE(width * height / 4);
+                CHECK_DATA2_SIZE(ENCODE_SELECT_MASK_SIZE(width / 2, height / 2));
+                selectImage(ds2_im->image, selectHandlePredict, selectHandleDifference,
+                            data, data2, ds2_im->image, ds2_im_pf->image, 0, width / 2, height / 2);
+                upsampleImage(im->image, ds2_im->image, width, height);
+                upsampleImageSelectDS2(im->image, data, data2, im_pf->image, width, height);
+                *out_ds2 = 1;
+            }
+            else if (header_flags & RP_DATA_DOWNSAMPLE)
+            {
+                if (!pf_has_ds)
+                {
+                    downsampleImageV(ds_im_pf->image, im_pf->image, width, height);
+                }
+                CHECK_DATA_SIZE(width * height / 2);
+                CHECK_DATA2_SIZE(ENCODE_SELECT_MASK_SIZE(width, height / 2));
+                selectImage(ds_im->image, selectHandlePredict, selectHandleDifference,
+                            data, data2, ds_im->image, ds_im_pf->image, 0, width, height / 2);
+                upsampleImageV(im->image, ds_im->image, width, height);
+                upsampleImageSelectDS(im->image, data, data2, im_pf->image, width, height);
+                *out_ds = 1;
+            }
+            else
+            {
+                CHECK_DATA_SIZE(width * height);
+                CHECK_DATA2_SIZE(ENCODE_SELECT_MASK_SIZE(width, height));
+                selectImage(im->image, selectHandlePredict, selectHandleDifference,
+                            data, data2, im->image, im_pf->image, 0, width, height);
+            }
         }
         else
         {
-            CHECK_DATA_SIZE(width * height);
-            differenceImage(im->image, data, im_pf->image, width, height);
+            if (header_flags & RP_DATA_DOWNSAMPLE2)
+            {
+                if (!pf_has_ds2)
+                {
+                    if (!pf_has_ds)
+                    {
+                        downsampleImageV(ds_im_pf->image, im_pf->image, width, height);
+                    }
+                    downsampleImageH(ds2_im_pf->image, ds_im_pf->image, width, height / 2);
+                }
+                CHECK_DATA_SIZE(width * height / 4);
+                differenceImage(ds2_im->image, data, ds2_im_pf->image, width / 2, height / 2);
+                upsampleImage(im->image, ds2_im->image, width, height);
+                upsampleImageDS2(im->image, data, im_pf->image, width, height);
+                *out_ds2 = 1;
+            }
+            else if (header_flags & RP_DATA_DOWNSAMPLE)
+            {
+                if (!pf_has_ds)
+                {
+                    downsampleImageV(ds_im_pf->image, im_pf->image, width, height);
+                }
+                CHECK_DATA_SIZE(width * height / 2);
+                differenceImage(ds_im->image, data, ds_im_pf->image, width, height / 2);
+                upsampleImageV(im->image, ds_im->image, width, height);
+                upsampleImageDS(im->image, data, im_pf->image, width, height);
+                *out_ds = 1;
+            }
+            else
+            {
+                CHECK_DATA_SIZE(width * height);
+                differenceImage(im->image, data, im_pf->image, width, height);
+            }
         }
     }
     else
     {
-        CHECK_DATA_SIZE(width * height);
-        predictImage(im->image, data, width, height);
+        if (header_flags & RP_DATA_DOWNSAMPLE2)
+        {
+            CHECK_DATA_SIZE(width * height / 4);
+            predictImage(ds2_im->image, data, width / 2, height / 2);
+            upsampleImage(im->image, ds2_im->image, width, height);
+            *out_ds2 = 1;
+        }
+        else if (header_flags & RP_DATA_DOWNSAMPLE)
+        {
+            CHECK_DATA_SIZE(width * height / 2);
+            predictImage(ds_im->image, data, width, height / 2);
+            upsampleImageV(im->image, ds_im->image, width, height);
+            *out_ds = 1;
+        }
+        else
+        {
+            CHECK_DATA_SIZE(width * height);
+            predictImage(im->image, data, width, height);
+        }
     }
     return 0;
 }
@@ -662,7 +1062,7 @@ static FrameImage il_convert_yuv_row_major(FrameImage im_even, FrameImage im_odd
     return im_out;
 }
 
-static uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size, int is_top)
+static uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size, int is_top, int adata)
 {
     FrameDecodeContext *ctx, *il_ctx;
     if (is_top)
@@ -705,63 +1105,119 @@ static uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_s
     }
     if (!(header.flags & RP_DATA_Y_UV))
     {
-        frame_delta_destroy(&ctx->f_pf);
-        ctx->f_pf = ctx->f;
-        frame_delta_init(ctx, &ctx->f);
-        ctx->flags_pf = ctx->flags;
-        ctx->flags = 0;
+        if (!adata)
+        {
+            frame_delta_destroy(&ctx->f_pf);
+            ctx->f_pf = ctx->f;
+            frame_delta_init(ctx, &ctx->f);
+            ctx->flags_pf = ctx->flags;
+            ctx->flags = 0;
+        }
 
-        if (handle_image(header.flags, ctx->flags_pf & RP_ENC_HAVE_Y,
-                         &ctx->f.y, &ctx->f.ds_y,
+        int out_ds2 = 0, out_ds = 0;
+        if (handle_image(header.flags, ctx->flags & RP_ENC_HAVE_Y, ctx->flags_pf & RP_ENC_HAVE_Y,
+                         ctx->flags & RP_ENC_DS2_Y, ctx->flags & RP_ENC_DS_Y,
+                         ctx->flags_pf & RP_ENC_DS2_Y, ctx->flags_pf & RP_ENC_DS_Y,
+                         &ctx->f.y, &ctx->f.ds_y, &ctx->f.ds2_y,
                          data, data_size, data2, data2_size,
-                         &ctx->f_pf.y, &ctx->f_pf.ds_y,
-                         ctx->width, ctx->height) < 0)
+                         &ctx->f_pf.y, &ctx->f_pf.ds_y, &ctx->f_pf.ds2_y,
+                         ctx->width, ctx->height, adata, &out_ds2, &out_ds) < 0)
             return 0;
         // memset(ctx->f.y.image, 128, ctx->f.y.size);
-        ctx->flags |= RP_ENC_HAVE_Y;
+        ctx->flags |= RP_ENC_HAVE_Y | (out_ds2 ? RP_ENC_DS2_Y : 0) | (out_ds ? RP_ENC_DS_Y : 0);
     }
     else
     {
-        if (handle_image(header.flags, ctx->flags_pf & RP_ENC_HAVE_UV,
-                         &ctx->f.ds_u, &ctx->f.ds_ds_u,
+        int out_ds2_u = 0, out_ds_u = 0, out_ds2_v = 0, out_ds_v = 0;
+        if (handle_image(header.flags, ctx->flags & RP_ENC_HAVE_UV, ctx->flags_pf & RP_ENC_HAVE_UV,
+                         ctx->flags & RP_ENC_DS2_DS2_UV, ctx->flags & RP_ENC_DS_DS2_UV,
+                         ctx->flags_pf & RP_ENC_DS2_DS2_UV, ctx->flags_pf & RP_ENC_DS_DS2_UV,
+                         &ctx->f.ds2_u, &ctx->f.ds_ds2_u, &ctx->f.ds2_ds2_u,
                          data, data_size / 2, data2, data2_size / 2,
-                         &ctx->f_pf.ds_u, &ctx->f_pf.ds_ds_u,
-                         ctx->ds_width, ctx->ds_height) < 0)
+                         &ctx->f_pf.ds2_u, &ctx->f_pf.ds_ds2_u, &ctx->f_pf.ds2_ds2_u,
+                         ctx->ds_width, ctx->ds_height, adata, &out_ds2_u, &out_ds_u) < 0)
             return 0;
-        if (handle_image(header.flags, ctx->flags_pf & RP_ENC_HAVE_UV,
-                         &ctx->f.ds_v, &ctx->f.ds_ds_v,
+        if (handle_image(header.flags, ctx->flags & RP_ENC_HAVE_UV, ctx->flags_pf & RP_ENC_HAVE_UV,
+                         ctx->flags & RP_ENC_DS2_DS2_UV, ctx->flags & RP_ENC_DS_DS2_UV,
+                         ctx->flags_pf & RP_ENC_DS2_DS2_UV, ctx->flags_pf & RP_ENC_DS_DS2_UV,
+                         &ctx->f.ds2_v, &ctx->f.ds_ds2_v, &ctx->f.ds2_ds2_v,
                          data + data_size / 2, data_size / 2, data2 + data2_size / 2, data2_size / 2,
-                         &ctx->f_pf.ds_v, &ctx->f_pf.ds_ds_v,
-                         ctx->ds_width, ctx->ds_height) < 0)
+                         &ctx->f_pf.ds2_v, &ctx->f_pf.ds_ds2_v, &ctx->f_pf.ds2_ds2_v,
+                         ctx->ds_width, ctx->ds_height, adata, &out_ds2_v, &out_ds_v) < 0)
             return 0;
 
-        upsampleImage(ctx->u.image, ctx->f.ds_u.image, ctx->width, ctx->height);
-        upsampleImage(ctx->v.image, ctx->f.ds_v.image, ctx->width, ctx->height);
+        if (out_ds2_u != out_ds2_v || out_ds_u != out_ds_v)
+        {
+            return 0;
+        }
+
+        upsampleImage(ctx->u.image, ctx->f.ds2_u.image, ctx->width, ctx->height);
+        upsampleImage(ctx->v.image, ctx->f.ds2_v.image, ctx->width, ctx->height);
         // memset(ctx->u.image, 128, ctx->u.size);
         // memset(ctx->v.image, 128, ctx->v.size);
-        ctx->flags |= RP_ENC_HAVE_UV;
+        ctx->flags |= RP_ENC_HAVE_UV | (out_ds2_u ? RP_ENC_DS2_DS2_UV : 0) | (out_ds_u ? RP_ENC_DS_DS2_UV : 0);
 
         if ((ctx->flags & (RP_ENC_HAVE_Y | RP_ENC_HAVE_UV)) == (RP_ENC_HAVE_Y | RP_ENC_HAVE_UV))
         {
-            frame_image_destroy(&ctx->rgb);
             if (header.flags & RP_DATA_INTERLACE)
             {
-                YadifScreen *yadif = is_top ? &yadif_top : &yadif_bot;
                 int even_odd = !!(header.flags & RP_DATA_INTERLACE_EVEN_ODD);
                 int lq = !!(header.flags & RP_DATA_YUV_LQ);
-                if (even_odd)
+
+                if (frame_decode_yadif)
                 {
-                    FrameImage y = il_convert_yuv_row_major(ctx->f.y, il_ctx->f.y, ctx->width, ctx->height);
-                    FrameImage u = il_convert_yuv_row_major(ctx->u, il_ctx->u, ctx->width, ctx->height);
-                    FrameImage v = il_convert_yuv_row_major(ctx->v, il_ctx->v, ctx->width, ctx->height);
-                    yadif_add_frame(yadif, y, u, v);
+                    YadifScreen *yadif = is_top ? &yadif_top : &yadif_bot;
+                    if (even_odd)
+                    {
+                        FrameImage y = il_convert_yuv_row_major(ctx->f.y, il_ctx->f.y, ctx->width, ctx->height);
+                        FrameImage u = il_convert_yuv_row_major(ctx->u, il_ctx->u, ctx->width, ctx->height);
+                        FrameImage v = il_convert_yuv_row_major(ctx->v, il_ctx->v, ctx->width, ctx->height);
+                        yadif_add_frame(yadif, y, u, v);
+                    }
+                    uint8_t *rgb = yadif_try_process(*yadif, ctx->width, ctx->height * 2, even_odd, lq);
+                    return rgb;
                 }
-                uint8_t *rgb = yadif_try_process(*yadif, ctx->width, ctx->height * 2, even_odd, lq);
-                return rgb;
+                else
+                {
+                    FrameImage y;
+                    FrameImage u;
+                    FrameImage v;
+                    if (even_odd == 0)
+                    {
+                        y = il_convert_yuv_row_major(il_ctx->f.y, ctx->f.y, ctx->width, ctx->height);
+                        u = il_convert_yuv_row_major(il_ctx->u, ctx->u, ctx->width, ctx->height);
+                        v = il_convert_yuv_row_major(il_ctx->v, ctx->v, ctx->width, ctx->height);
+                    }
+                    else
+                    {
+                        y = il_convert_yuv_row_major(ctx->f.y, il_ctx->f.y, ctx->width, ctx->height);
+                        u = il_convert_yuv_row_major(ctx->u, il_ctx->u, ctx->width, ctx->height);
+                        v = il_convert_yuv_row_major(ctx->v, il_ctx->v, ctx->width, ctx->height);
+                    }
+
+                    FrameImage rgb;
+                    frame_image_init_comp(&rgb, ctx->width, ctx->height * 2, BYTES_PER_RGB);
+                    for (int j = 0; j < ctx->height * 2; ++j)
+                    {
+                        for (int i = 0; i < ctx->width; ++i)
+                        {
+                            uint8_t y_in = y.image[j * ctx->width + i];
+                            uint8_t u_in = u.image[j * ctx->width + i];
+                            uint8_t v_in = v.image[j * ctx->width + i];
+                            convert_to_rgb(y_in, u_in, v_in, &y_in, &u_in, &v_in, lq);
+                            uint8_t *rgb_pixel = rgb.image + (j * ctx->width + i) * BYTES_PER_RGB;
+                            rgb_pixel[0] = y_in;
+                            rgb_pixel[1] = u_in;
+                            rgb_pixel[2] = v_in;
+                        }
+                    }
+                    return rgb.image;
+                }
             }
             else
             {
-                frame_image_init_comp(&ctx->rgb, ctx->width, ctx->height, BYTES_PER_RGB);
+                FrameImage rgb;
+                frame_image_init_comp(&rgb, ctx->width, ctx->height, BYTES_PER_RGB);
                 for (int i = 0; i < ctx->width; ++i)
                 {
                     for (int j = 0; j < ctx->height; ++j)
@@ -770,26 +1226,24 @@ static uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_s
                         uint8_t u = accessImageNoCheck(ctx->u.image, i, j, ctx->width, ctx->height);
                         uint8_t v = accessImageNoCheck(ctx->v.image, i, j, ctx->width, ctx->height);
                         convert_to_rgb(y, u, v, &y, &u, &v, header.flags & RP_DATA_YUV_LQ);
-                        uint8_t *rgb_pixel = ctx->rgb.image + (j * ctx->width + i) * BYTES_PER_RGB;
+                        uint8_t *rgb_pixel = rgb.image + (j * ctx->width + i) * BYTES_PER_RGB;
                         rgb_pixel[0] = y;
                         rgb_pixel[1] = u;
                         rgb_pixel[2] = v;
                         // rgb_pixel[3] = 0;
                     }
                 }
+                return rgb.image;
             }
-            uint8_t *ret = ctx->rgb.image;
-            ctx->rgb.image = NULL; // release ownership
-            return ret;            // and transfer, freed by caller
         }
     }
 
     return 0;
 }
 
-uint8_t *frame_decode(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size)
+uint8_t *frame_decode(DataHeader header, uint8_t *data, int data_size, uint8_t *data2, int data2_size, int adata)
 {
-    return frame_decode_screen(header, data, data_size, data2, data2_size, !(header.flags & RP_DATA_TOP_BOT));
+    return frame_decode_screen(header, data, data_size, data2, data2_size, !(header.flags & RP_DATA_TOP_BOT), adata);
 }
 
 void frame_decode_init(int interlaced)
@@ -804,7 +1258,7 @@ void frame_decode_init(int interlaced)
     frame_decode_interlaced = interlaced;
 }
 
-void frame_decode_destroy()
+void frame_decode_destroy(void)
 {
     frame_decode_context_destroy(&top_ctx);
     frame_decode_context_destroy(&bot_ctx);
@@ -815,4 +1269,16 @@ void frame_decode_destroy()
         yadif_destroy_screen(&yadif_top);
         yadif_destroy_screen(&yadif_bot);
     }
+}
+
+void yadif_start(void)
+{
+    frame_decode_yadif = 1;
+}
+
+void yadif_stop(void)
+{
+    frame_decode_yadif = 0;
+    yadif_destroy_screen(&yadif_top);
+    yadif_destroy_screen(&yadif_bot);
 }
