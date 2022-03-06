@@ -1169,12 +1169,12 @@ static uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_s
                     YadifScreen *yadif = is_top ? &yadif_top : &yadif_bot;
                     if (even_odd)
                     {
-                        FrameImage y = il_convert_yuv_row_major(ctx->f.y, il_ctx->f.y, ctx->width, ctx->height);
-                        FrameImage u = il_convert_yuv_row_major(ctx->u, il_ctx->u, ctx->width, ctx->height);
-                        FrameImage v = il_convert_yuv_row_major(ctx->v, il_ctx->v, ctx->width, ctx->height);
+                        FrameImage y = il_convert_yuv_row_major(il_ctx->f.y, ctx->f.y, ctx->width, ctx->height);
+                        FrameImage u = il_convert_yuv_row_major(il_ctx->u, ctx->u, ctx->width, ctx->height);
+                        FrameImage v = il_convert_yuv_row_major(il_ctx->v, ctx->v, ctx->width, ctx->height);
                         yadif_add_frame(yadif, y, u, v);
                     }
-                    uint8_t *rgb = yadif_try_process(*yadif, ctx->width, ctx->height * 2, even_odd, lq);
+                    uint8_t *rgb = yadif_try_process(*yadif, ctx->width, ctx->height * 2, !even_odd, lq);
                     return rgb;
                 }
                 else
@@ -1184,15 +1184,15 @@ static uint8_t *frame_decode_screen(DataHeader header, uint8_t *data, int data_s
                     FrameImage v;
                     if (even_odd == 0)
                     {
-                        y = il_convert_yuv_row_major(il_ctx->f.y, ctx->f.y, ctx->width, ctx->height);
-                        u = il_convert_yuv_row_major(il_ctx->u, ctx->u, ctx->width, ctx->height);
-                        v = il_convert_yuv_row_major(il_ctx->v, ctx->v, ctx->width, ctx->height);
-                    }
-                    else
-                    {
                         y = il_convert_yuv_row_major(ctx->f.y, il_ctx->f.y, ctx->width, ctx->height);
                         u = il_convert_yuv_row_major(ctx->u, il_ctx->u, ctx->width, ctx->height);
                         v = il_convert_yuv_row_major(ctx->v, il_ctx->v, ctx->width, ctx->height);
+                    }
+                    else
+                    {
+                        y = il_convert_yuv_row_major(il_ctx->f.y, ctx->f.y, ctx->width, ctx->height);
+                        u = il_convert_yuv_row_major(il_ctx->u, ctx->u, ctx->width, ctx->height);
+                        v = il_convert_yuv_row_major(il_ctx->v, ctx->v, ctx->width, ctx->height);
                     }
 
                     FrameImage rgb;
