@@ -610,16 +610,20 @@ static inline void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, u
 
     if (lq)
     {
-        y_in *= 4;
-        u_in *= 8;
-        v_in *= 8;
+        y_in /= 63;
+        u_in -= 16;
+        v_in -= 16;
+        u_in /= 15;
+        v_in /= 15;
     }
-
-    y_in /= 255;
-    u_in -= 128;
-    v_in -= 128;
-    u_in /= 127;
-    v_in /= 127;
+    else
+    {
+        y_in /= 255;
+        u_in -= 128;
+        v_in -= 128;
+        u_in /= 127;
+        v_in /= 127;
+    }
     u_in *= .436;
     v_in *= .615;
 
