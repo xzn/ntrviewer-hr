@@ -592,7 +592,7 @@ static void guiMain(struct nk_context *ctx)
 
   /* GUI */
   const char *remote_play_wnd = "Remote Play";
-  if (nk_begin(ctx, remote_play_wnd, nk_rect(50, 50, 400, 700),
+  if (nk_begin(ctx, remote_play_wnd, nk_rect(50, 50, 400, 600),
                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE))
   {
     nk_layout_row_dynamic(ctx, 30, 5);
@@ -687,6 +687,7 @@ static void guiMain(struct nk_context *ctx)
       }
     }
 
+#if 0
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Dynamic downsample", NK_TEXT_CENTERED);
     if (nk_checkbox_label(ctx, "", &use_dynamic_encode))
@@ -696,6 +697,7 @@ static void guiMain(struct nk_context *ctx)
         use_interlace = 0;
       }
     }
+#endif
 
     nk_layout_row_dynamic(ctx, 30, 2);
     snprintf(msg_buf, sizeof(msg_buf), "Target frame rate %d", target_frame_rate);
@@ -760,7 +762,7 @@ static void guiMain(struct nk_context *ctx)
   nk_window_show(ctx, debug_msg_wnd, show_window);
 
   const char *enhancement_wnd = "Enhancement";
-  if (nk_begin(ctx, enhancement_wnd, nk_rect(50, 800, 400, 120),
+  if (nk_begin(ctx, enhancement_wnd, nk_rect(50, 700, 400, 120),
                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE))
   {
     nk_layout_row_dynamic(ctx, 30, 2);

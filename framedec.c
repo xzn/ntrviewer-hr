@@ -852,7 +852,10 @@ static int handle_image(uint32_t header_flags, int has, int pf_has,
                 selectImage(ds2_im->image, selectHandlePredict, selectHandleDifference,
                             data, data2, ds2_im->image, ds2_im_pf->image, 0, width / 2, height / 2);
                 upsampleImage(im->image, ds2_im->image, width, height);
-                upsampleImageSelectDS2(im->image, data, data2, im_pf->image, width, height);
+                if (!pf_has_ds2 && !pf_has_ds)
+                {
+                    upsampleImageSelectDS2(im->image, data, data2, im_pf->image, width, height);
+                }
                 *out_ds2 = 1;
             }
             else if (header_flags & RP_DATA_DOWNSAMPLE)
@@ -866,7 +869,10 @@ static int handle_image(uint32_t header_flags, int has, int pf_has,
                 selectImage(ds_im->image, selectHandlePredict, selectHandleDifference,
                             data, data2, ds_im->image, ds_im_pf->image, 0, width, height / 2);
                 upsampleImageV(im->image, ds_im->image, width, height);
-                upsampleImageSelectDS(im->image, data, data2, im_pf->image, width, height);
+                if (!pf_has_ds)
+                {
+                    upsampleImageSelectDS(im->image, data, data2, im_pf->image, width, height);
+                }
                 *out_ds = 1;
             }
             else
@@ -892,7 +898,10 @@ static int handle_image(uint32_t header_flags, int has, int pf_has,
                 CHECK_DATA_SIZE(width * height / 4);
                 differenceImage(ds2_im->image, data, ds2_im_pf->image, width / 2, height / 2);
                 upsampleImage(im->image, ds2_im->image, width, height);
-                upsampleImageDS2(im->image, data, im_pf->image, width, height);
+                if (!pf_has_ds2 && !pf_has_ds)
+                {
+                    upsampleImageDS2(im->image, data, im_pf->image, width, height);
+                }
                 *out_ds2 = 1;
             }
             else if (header_flags & RP_DATA_DOWNSAMPLE)
@@ -904,7 +913,10 @@ static int handle_image(uint32_t header_flags, int has, int pf_has,
                 CHECK_DATA_SIZE(width * height / 2);
                 differenceImage(ds_im->image, data, ds_im_pf->image, width, height / 2);
                 upsampleImageV(im->image, ds_im->image, width, height);
-                upsampleImageDS(im->image, data, im_pf->image, width, height);
+                if (!pf_has_ds)
+                {
+                    upsampleImageDS(im->image, data, im_pf->image, width, height);
+                }
                 *out_ds = 1;
             }
             else
