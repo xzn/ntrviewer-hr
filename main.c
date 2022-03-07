@@ -679,11 +679,23 @@ static void guiMain(struct nk_context *ctx)
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Interlaced video", NK_TEXT_CENTERED);
-    nk_checkbox_label(ctx, "", &use_interlace);
+    if (nk_checkbox_label(ctx, "", &use_interlace))
+    {
+      if (use_interlace)
+      {
+        use_dynamic_encode = 0;
+      }
+    }
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Dynamic downsample", NK_TEXT_CENTERED);
-    nk_checkbox_label(ctx, "", &use_dynamic_encode);
+    if (nk_checkbox_label(ctx, "", &use_dynamic_encode))
+    {
+      if (use_dynamic_encode)
+      {
+        use_interlace = 0;
+      }
+    }
 
     nk_layout_row_dynamic(ctx, 30, 2);
     snprintf(msg_buf, sizeof(msg_buf), "Target frame rate %d", target_frame_rate);
