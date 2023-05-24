@@ -556,7 +556,7 @@ static void guiMain(struct nk_context *ctx)
 
   /* GUI */
   const char *remote_play_wnd = "Remote Play";
-  if (nk_begin(ctx, remote_play_wnd, nk_rect(50, 50, 400, 600),
+  if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 50, 600, 600),
                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE))
   {
     nk_layout_row_dynamic(ctx, 30, 5);
@@ -649,7 +649,7 @@ static void guiMain(struct nk_context *ctx)
   nk_window_show(ctx, remote_play_wnd, show_window);
 
   const char *debug_msg_wnd = "Debug Msg";
-  if (nk_begin(ctx, debug_msg_wnd, nk_rect(500, 50, 250, 120),
+  if (nk_begin(ctx, debug_msg_wnd, nk_rect(625, 50, 150, 120),
                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE))
   {
     nk_layout_row_dynamic(ctx, 30, 2);
