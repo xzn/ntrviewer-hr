@@ -152,14 +152,24 @@ const char *connection_msg[CS_MAX] = {
     "...",
 };
 
+static int yuv_option;
+static int color_transform_hp;
+static int encoder_which;
+static nk_bool downscale_uv;
+static int target_frame_rate;
+static int target_mbit_rate;
+static nk_bool dynamic_priority;
+static int top_priority;
+static int bot_priority;
+
 static atomic_uint_fast8_t ip_octets[4];
 
 #define HEART_BEAT_EVERY_MS 250
 #define REST_EVERY_MS 100
 
-#define RP_MAGIC 0xfff54321
 #define TCP_MAGIC 0x12345678
 #define TCP_ARGS_COUNT 16
+#define KCP_MAGIC_DEF 0x87654321
 typedef struct _TCPPacketHeader
 {
   uint32_t magic;
@@ -379,7 +389,19 @@ void *menu_tcp_thread_func(void *arg)
       if (menu_remote_play)
       {
         menu_remote_play = 0;
-        uint32_t args[] = { 0 };
+        uint32_t args[] = { KCP_MAGIC_DEF, 0, 0 };
+
+        args[1] |= yuv_option & 0x3;
+        args[1] |= (color_transform_hp & 0x3) << 2;
+        args[1] |= (downscale_uv & 1) << 4;
+        args[1] |= (encoder_which & 1) << 5;
+
+        args[2] |= top_priority & 0xf;
+        args[2] |= (bot_priority & 0xf) << 4;
+        args[2] |= (target_mbit_rate & 0x1f) << 8;
+        args[2] |= (dynamic_priority & 1) << 15;
+        args[2] |= (target_frame_rate & 0xff) << 16;
+
         ret = tcp_send_packet_header(sockfd, packet_seq, 0, 901,
                                      args, sizeof(args) / sizeof(*args), 0);
         if (ret < 0)
@@ -498,6 +520,15 @@ void *nwm_tcp_thread_func(void *arg)
 
 void rpConfigSetDefault(void)
 {
+  yuv_option = 2;
+  color_transform_hp = 3;
+  encoder_which = 1;
+  downscale_uv = 1;
+  target_frame_rate = 30;
+  target_mbit_rate = 15;
+  dynamic_priority = 1;
+  top_priority = 1;
+  bot_priority = 5;
 }
 
 static void guiMain(struct nk_context *ctx)
@@ -537,6 +568,68 @@ static void guiMain(struct nk_context *ctx)
       nk_property_int(ctx, "#", 0, &ip_octet, 255, 1, 1);
       ip_octets[i] = ip_octet;
     }
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "YUV option", NK_TEXT_CENTERED);
+    const char *yuv_options_text[] = {
+      "None (RGB)",
+      "Color Transform",
+      "Full Swing",
+      "Studio Swing",
+    };
+    nk_combobox(ctx, yuv_options_text, sizeof(yuv_options_text) / sizeof(*yuv_options_text),
+      &yuv_option, 30, nk_vec2(150, 9999)
+    );
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Color Transform", NK_TEXT_CENTERED);
+    const char *color_transform_text[] = {
+      "None (RGB)",
+      "HP1",
+      "HP2",
+      "HP3",
+    };
+    nk_combobox(ctx, color_transform_text, sizeof(color_transform_text) / sizeof(*color_transform_text),
+      &color_transform_hp, 30, nk_vec2(150, 9999)
+    );
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Encoder", NK_TEXT_CENTERED);
+    const char *encoder_which_text[] = {
+      "FFmpeg JPEG-LS",
+      "HP JPEG-LS",
+    };
+    nk_combobox(ctx, encoder_which_text, sizeof(encoder_which_text) / sizeof(*encoder_which_text),
+      &encoder_which, 30, nk_vec2(150, 9999)
+    );
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Downscale UV", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &downscale_uv);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "Target Frame Rate %d", target_frame_rate);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 0, &target_frame_rate, 255, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "Target MBit Rate %d", target_mbit_rate);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 0, &target_mbit_rate, 31, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Dynamic Priority", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &dynamic_priority);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "Top Priority %d", top_priority);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 0, &top_priority, 15, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "Bot Priority %d", bot_priority);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 0, &bot_priority, 15, 1);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     if (nk_button_label(ctx, "Default"))
@@ -917,6 +1010,22 @@ MainLoop(void *loopArg)
   }
 }
 
+void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int width, int height)
+{
+  pthread_mutex_lock(&ctx->gl_tex_mutex);
+  int next_index = frame_buffer_context_next_free_index(ctx->next_index, ctx->index);
+  uint8_t **pimage = &ctx->images[next_index];
+  uint8_t *image = *pimage;
+  *pimage = rgb;
+  ctx->updated = FBS_UPDATED;
+  ctx->next_index = next_index;
+  pthread_mutex_unlock(&ctx->gl_tex_mutex);
+  // free(image);
+}
+
+uint8_t top_decoded[400 * 240 * 3];
+uint8_t bot_decoded[320 * 240 * 3];
+
 #define BUF_SIZE 2000
 uint8_t buf[BUF_SIZE];
 ikcpcb *kcp;
@@ -980,6 +1089,9 @@ int handle_recv(uint8_t *buf, int size)
 
   if (recv_data_remain <= size) {
     // fprintf(stderr, "Done\n");
+    handle_decode_frame_screen(&top_buffer_ctx, top_decoded, 400, 240);
+    handle_decode_frame_screen(&bot_buffer_ctx, bot_decoded, 320, 240);
+
     buf += recv_data_remain;
     size -= recv_data_remain;
     recv_data_remain = 0;
@@ -1080,14 +1192,13 @@ void receive_from_socket(SOCKET s)
 
 #define PACKET_SIZE 1448
 #define KCP_SND_WND_SIZE 40
-#define HR_KCP_MAGIC 0x12345fff
 #define KCP_SOCKET_TIMEOUT 10
 void *udp_recv_thread_func(void *arg)
 {
   SDL_GL_MakeCurrent(win, glThreadContext);
   while (running)
   {
-    kcp = ikcp_create(HR_KCP_MAGIC, 0);
+    kcp = ikcp_create(KCP_MAGIC_DEF, 0);
     kcp->output = udp_output;
     ikcp_nodelay(kcp, 1, 10, 1, 1);
     ikcp_setmtu(kcp, PACKET_SIZE);
