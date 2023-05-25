@@ -253,6 +253,7 @@ int tcp_send_packet_header(SOCKET s, uint32_t seq, uint32_t type, uint32_t cmd, 
   return tcp_send(s, buf, size);
 }
 
+#define TCP_SOCKET_TIMEOUT 2000
 SOCKET tcp_connect(int port)
 {
   struct sockaddr_in servaddr = {0};
@@ -260,6 +261,12 @@ SOCKET tcp_connect(int port)
   if (!SOCKET_VALID(sockfd))
   {
     fprintf(stderr, "socket creation failed: %d\n", sock_errno());
+    return INVALID_SOCKET;
+  }
+
+  u_long opt = 1;
+  if (ioctlsocket(sockfd, FIONBIO, &opt)) {
+    fprintf(stderr, "ioctlsocket FIONBIO failed: %d\n", sock_errno());
     return INVALID_SOCKET;
   }
 
@@ -275,18 +282,37 @@ SOCKET tcp_connect(int port)
 
   fprintf(stderr, "connecting to %s:%d ...\n", ip_addr_buf, port);
   int ret = connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr));
-  if (ret != 0)
+  if (ret != 0 && sock_errno() != WSAEWOULDBLOCK)
   {
     fprintf(stderr, "connection failed: %d\n", sock_errno());
     sock_close(sockfd);
     return INVALID_SOCKET;
   }
-  fprintf(stderr, "connected\n");
 
-  u_long mode = 1;
-  ioctlsocket(sockfd, FIONBIO, &mode);
+  fd_set fdset;
+  struct timeval tv;
+  FD_ZERO(&fdset);
+  FD_SET(sockfd, &fdset);
+  tv.tv_sec = 2;
+  tv.tv_usec = 0;
 
-  return sockfd;
+  if (select(sockfd + 1, NULL, &fdset, NULL, &tv) == 1)
+  {
+    int so_error;
+    socklen_t len = sizeof so_error;
+
+    getsockopt(sockfd, SOL_SOCKET, SO_ERROR, (char *)&so_error, &len);
+
+    if (so_error == 0) {
+      fprintf(stderr, "connected\n");
+      return sockfd;
+    }
+    fprintf(stderr, "connection failed: %d\n", so_error);
+  }
+
+  closesocket(sockfd);
+  fprintf(stderr, "connection timeout\n");
+  return INVALID_SOCKET;
 }
 
 #define RESET_SOCKET(ts, ws) \
