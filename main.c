@@ -1060,6 +1060,8 @@ struct rp_send_header {
   uint32_t size;
   uint8_t frame_n;
   uint8_t top_bot;
+	uint8_t bpp;
+	uint8_t format;
 } send_header;
 
 enum {
@@ -1102,12 +1104,20 @@ int handle_recv(uint8_t *buf, int size)
     recv_data_remain = send_header.size;
     leftover_size = 0;
 
-    fprintf(stderr, "Receiving frame: %s, %s, frame %d, size %u\n",
-      send_header.top_bot == 0 ? "top" : "bot",
-      state_string[send_header.top_bot == 0 ? top_state[send_header.frame_n] : bot_state[send_header.frame_n]],
-      (int)send_header.frame_n,
-      send_header.size
-    );
+    // fprintf(stderr, "Receiving frame: %s, %s, frame %d, size %u, bpp %d, format %d\n",
+    //   send_header.top_bot == 0 ? "top" : "bot",
+    //   state_string[send_header.top_bot == 0 ? top_state[send_header.frame_n] : bot_state[send_header.frame_n]],
+    //   (int)send_header.frame_n,
+    //   send_header.size,
+    //   send_header.bpp,
+    //   send_header.format
+    // );
+
+    if (send_header.size == 0) {
+      fprintf(stderr, "empty header received\n");
+      recv_state = RECV_STATE_HEADER;
+      return 0;
+    }
   }
 
   if (recv_data_remain > 400 * 240)
@@ -1164,7 +1174,7 @@ int udp_output(const char *buf, int len, ikcpcb *kcp, void *user)
 }
 
 IUINT32 kcpLastRecvMs = 0;
-#define KCP_RECV_TIMEOUT_MS 1000
+#define KCP_RECV_TIMEOUT_MS 2000
 void receive_from_socket(SOCKET s)
 {
   kcpLastRecvMs = iclock();
