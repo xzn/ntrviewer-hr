@@ -146,10 +146,10 @@ atomic_bool menu_remote_play;
 static char ip_addr_buf[16];
 
 const char *connection_msg[CS_MAX] = {
-    "Connect",
-    "Connecting ...",
-    "Disconnect",
+    "+",
     "...",
+    "-",
+    ".",
 };
 
 static int yuv_option;
