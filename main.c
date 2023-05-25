@@ -122,6 +122,9 @@ static inline IUINT32 iclock()
 #define FRAME_STAT_EVERY_X_FRAMES 10
 int frame_rate_displayed;
 char window_title_with_fps[50];
+int frame_counter = 0;
+uint64_t frame_count_last_tick = 0;
+
 
 /* Platform */
 SDL_Window *win;
@@ -949,9 +952,6 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int i
 
   glActiveTexture(GL_TEXTURE0);
 
-  static int frame_counter = 0;
-  static uint64_t frame_count_last_tick = 0;
-
   glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id);
 
   pthread_mutex_lock(&ctx->gl_tex_mutex);
@@ -976,19 +976,27 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int i
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glGenerateMipmap(GL_TEXTURE_2D);
 
-    ++frame_counter;
-    if (frame_counter == FRAME_STAT_EVERY_X_FRAMES)
+    int frame_counter_current;
+    if ((frame_counter_current = __atomic_load_n(&frame_counter, __ATOMIC_RELAXED)) >=
+      FRAME_STAT_EVERY_X_FRAMES
+    )
     {
       uint64_t next_tick = iclock64();
       if (frame_count_last_tick != 0)
       {
         // fprintf(stderr, "%d ms for %d rendered frames\n", next_tick - frame_count_last_tick, FRAME_STAT_EVERY_X_FRAMES);
-        frame_rate_displayed = FRAME_STAT_EVERY_X_FRAMES * 1000 / (next_tick - frame_count_last_tick);
+        frame_rate_displayed = frame_counter_current * 1000 / (next_tick - frame_count_last_tick);
         snprintf(window_title_with_fps, sizeof(window_title_with_fps), "NTR Viewer HR (%d FPS)", frame_rate_displayed);
         SDL_SetWindowTitle(win, window_title_with_fps);
       }
       frame_count_last_tick = next_tick;
-      frame_counter = 0;
+
+      int frame_counter_next = 0, frame_counter_prev = frame_counter_current;
+      while (!__atomic_compare_exchange_n(&frame_counter,
+        &frame_counter_current, frame_counter_next, 1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+          frame_counter_current = __atomic_load_n(&frame_counter, __ATOMIC_RELAXED);
+          int frame_counter_next = frame_counter_current - frame_counter_prev;
+      }
     }
   }
   else
@@ -1050,6 +1058,7 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int width
   ctx->updated = FBS_UPDATED;
   ctx->next_index = next_index;
   pthread_mutex_unlock(&ctx->gl_tex_mutex);
+  __atomic_add_fetch(&frame_counter, 1, __ATOMIC_RELAXED);
   // free(image);
 }
 
@@ -1135,14 +1144,16 @@ int handle_recv(uint8_t *buf, int size)
     recv_state = RECV_STATE_HEADER;
     if (send_header.top_bot == 0) {
       ++top_state[send_header.frame_n];
-      if (top_state[send_header.frame_n] > V_DATA)
+      if (top_state[send_header.frame_n] > V_DATA) {
         top_state[send_header.frame_n] = Y_DATA;
-      handle_decode_frame_screen(&top_buffer_ctx, top_decoded, 400, 240);
+        handle_decode_frame_screen(&top_buffer_ctx, top_decoded, 400, 240);
+      }
     } else {
       ++bot_state[send_header.frame_n];
-      if (bot_state[send_header.frame_n] > V_DATA)
+      if (bot_state[send_header.frame_n] > V_DATA) {
         bot_state[send_header.frame_n] = Y_DATA;
-      handle_decode_frame_screen(&bot_buffer_ctx, bot_decoded, 320, 240);
+        handle_decode_frame_screen(&bot_buffer_ctx, bot_decoded, 320, 240);
+      }
     }
 
     if (size) {
