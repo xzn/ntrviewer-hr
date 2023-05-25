@@ -169,7 +169,7 @@ static atomic_uint_fast8_t ip_octets[4];
 
 #define TCP_MAGIC 0x12345678
 #define TCP_ARGS_COUNT 16
-#define KCP_MAGIC_DEF 0x87654320
+#define KCP_MAGIC_DEF 0x87654321
 static int kcp_magic = KCP_MAGIC_DEF;
 static int restart_kcp = 0;
 typedef struct _TCPPacketHeader
@@ -417,7 +417,7 @@ void *menu_tcp_thread_func(void *arg)
       if (menu_remote_play)
       {
         menu_remote_play = 0;
-        uint32_t args[] = { ++kcp_magic, 0, 0 };
+        uint32_t args[] = { kcp_magic, 0, 0 };
 
         args[1] |= yuv_option & 0x3;
         args[1] |= (color_transform_hp & 0x3) << 2;
