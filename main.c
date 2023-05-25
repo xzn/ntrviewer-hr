@@ -1089,9 +1089,6 @@ int handle_recv(uint8_t *buf, int size)
 
   if (recv_data_remain <= size) {
     // fprintf(stderr, "Done\n");
-    handle_decode_frame_screen(&top_buffer_ctx, top_decoded, 400, 240);
-    handle_decode_frame_screen(&bot_buffer_ctx, bot_decoded, 320, 240);
-
     buf += recv_data_remain;
     size -= recv_data_remain;
     recv_data_remain = 0;
@@ -1100,10 +1097,12 @@ int handle_recv(uint8_t *buf, int size)
       ++top_state[send_header.frame_n];
       if (top_state[send_header.frame_n] > V_DATA)
         top_state[send_header.frame_n] = Y_DATA;
+      handle_decode_frame_screen(&top_buffer_ctx, top_decoded, 400, 240);
     } else {
       ++bot_state[send_header.frame_n];
       if (bot_state[send_header.frame_n] > V_DATA)
         bot_state[send_header.frame_n] = Y_DATA;
+      handle_decode_frame_screen(&bot_buffer_ctx, bot_decoded, 320, 240);
     }
 
     if (size) {
