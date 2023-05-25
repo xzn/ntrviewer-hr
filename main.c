@@ -162,6 +162,7 @@ static nk_bool downscale_uv;
 static int target_frame_rate;
 static int target_mbit_rate;
 static nk_bool dynamic_priority;
+static nk_bool multicore_encode;
 static int top_priority;
 static int bot_priority;
 
@@ -430,6 +431,7 @@ void *menu_tcp_thread_func(void *arg)
         args[2] |= top_priority & 0xf;
         args[2] |= (bot_priority & 0xf) << 4;
         args[2] |= (target_mbit_rate & 0x1f) << 8;
+        args[2] |= (multicore_encode & 1) << 14;
         args[2] |= (dynamic_priority & 1) << 15;
         args[2] |= (target_frame_rate & 0xff) << 16;
 
@@ -560,6 +562,7 @@ void rpConfigSetDefault(void)
   target_frame_rate = 30;
   target_mbit_rate = 15;
   dynamic_priority = 1;
+  multicore_encode = 1;
   top_priority = 1;
   bot_priority = 5;
 }
@@ -649,6 +652,10 @@ static void guiMain(struct nk_context *ctx)
     snprintf(msg_buf, sizeof(msg_buf), "Target MBit Rate %d", target_mbit_rate);
     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
     nk_slider_int(ctx, 0, &target_mbit_rate, 31, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Multicore Encode", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &multicore_encode);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Dynamic Priority", NK_TEXT_CENTERED);
