@@ -169,7 +169,9 @@ static atomic_uint_fast8_t ip_octets[4];
 
 #define TCP_MAGIC 0x12345678
 #define TCP_ARGS_COUNT 16
-#define KCP_MAGIC_DEF 0x87654321
+#define KCP_MAGIC_DEF 0x87654320
+static int kcp_magic = KCP_MAGIC_DEF;
+static int restart_kcp = 0;
 typedef struct _TCPPacketHeader
 {
   uint32_t magic;
@@ -415,7 +417,7 @@ void *menu_tcp_thread_func(void *arg)
       if (menu_remote_play)
       {
         menu_remote_play = 0;
-        uint32_t args[] = { KCP_MAGIC_DEF, 0, 0 };
+        uint32_t args[] = { ++kcp_magic, 0, 0 };
 
         args[1] |= yuv_option & 0x3;
         args[1] |= (color_transform_hp & 0x3) << 2;
@@ -430,6 +432,8 @@ void *menu_tcp_thread_func(void *arg)
 
         ret = tcp_send_packet_header(sockfd, packet_seq, 0, 901,
                                      args, sizeof(args) / sizeof(*args), 0);
+
+        restart_kcp = 1;
         if (ret < 0)
         {
           fprintf(stderr, "remote play send failed: %d\n", sock_errno());
@@ -1179,7 +1183,7 @@ void receive_from_socket(SOCKET s)
 {
   kcpLastRecvMs = iclock();
 
-  while (running)
+  while (running && !restart_kcp)
   {
     socklen_t nAddrLen = sizeof(remoteAddr);
 
@@ -1233,12 +1237,14 @@ void *udp_recv_thread_func(void *arg)
   SDL_GL_MakeCurrent(win, glThreadContext);
   while (running)
   {
-    kcp = ikcp_create(KCP_MAGIC_DEF, 0);
+    restart_kcp = 0;
+
+    kcp = ikcp_create(kcp_magic, 0);
     kcp->output = udp_output;
-    ikcp_nodelay(kcp, 1, 10, 1, 1);
+    ikcp_nodelay(kcp, 2, 10, 2, 1);
     ikcp_setmtu(kcp, PACKET_SIZE);
     ikcp_wndsize(kcp, KCP_SND_WND_SIZE, 0);
-    kcp->rx_minrto = 10;
+    // kcp->rx_minrto = 10;
     kcp->stream = 1;
     // fprintf(stderr, "new connection\n");
     top_buffer_ctx.updated = FBS_NOT_AVAIL;
