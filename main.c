@@ -1181,6 +1181,7 @@ int decode_image(uint8_t *dst, int dst_size, const uint8_t *src, int src_size, i
   return w * h;
 }
 
+int receiving;
 int handle_recv(uint8_t *buf, int size)
 {
   // return 0;
@@ -1205,6 +1206,7 @@ int handle_recv(uint8_t *buf, int size)
 
     if (send_header.size == 0) {
       fprintf(stderr, "empty header received\n");
+      receiving = 1;
       recv_state = RECV_STATE_HEADER;
       return 0;
     }
@@ -1222,6 +1224,11 @@ int handle_recv(uint8_t *buf, int size)
     recv_data_remain = 0;
     recv_state = RECV_STATE_HEADER;
 
+    if (receiving) {
+
+      int pos = -1;
+      int comp;
+
 #define FINI(plane, index, index_pos) \
   for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) { \
     if (index[i] == send_header.frame_n) { \
@@ -1236,34 +1243,35 @@ int handle_recv(uint8_t *buf, int size)
     comp = plane[pos] = Y_DATA; \
     index[pos] = send_header.frame_n; \
   }
-
-    int pos = -1;
-    int comp;
-
-    if (send_header.top_bot == 0) {
-      FINI(top_plane, top_plane_index, top_plane_index_pos);
-    } else {
-      FINI(bot_plane, bot_plane_index, bot_plane_index_pos);
-    }
-#undef FINI
-    int w = send_header.top_bot == 0 ? 400 : 320;
-    int h = 240;
-    if (ntr_downscale_uv && (comp == U_DATA || comp == V_DATA)) {
-      w /= 2; h /= 2;
-    }
-    if (ffmpeg_jls_decode(send_header.top_bot == 0 ? top_buf[pos][comp] : bot_buf[pos][comp],
-      h, w, h, recv_buf, recv_buf_head - recv_buf, send_header.bpp) == w * h
-    ) {
-      fprintf(stderr, "success %d %d comp %d\n", send_header.top_bot, send_header.frame_n, comp);
       if (send_header.top_bot == 0) {
-        if (comp == V_DATA)
-          handle_decode_frame_screen(&top_buffer_ctx, top_decoded, w, h);
+        FINI(top_plane, top_plane_index, top_plane_index_pos);
       } else {
-        if (comp == V_DATA)
-          handle_decode_frame_screen(&bot_buffer_ctx, bot_decoded, w, h);
+        FINI(bot_plane, bot_plane_index, bot_plane_index_pos);
       }
-    } else {
-      fprintf(stderr, "fail %d %d comp %d\n", send_header.top_bot, send_header.frame_n, comp);
+#undef FINI
+
+      int w = send_header.top_bot == 0 ? 400 : 320;
+      int h = 240;
+      if (ntr_downscale_uv && (comp == U_DATA || comp == V_DATA)) {
+        w /= 2; h /= 2;
+      }
+      if (ffmpeg_jls_decode(send_header.top_bot == 0 ? top_buf[pos][comp] : bot_buf[pos][comp],
+        h, w, h, recv_buf, recv_buf_head - recv_buf, send_header.bpp) == w * h
+      ) {
+        // fprintf(stderr, "success %d %d comp %d\n", send_header.top_bot, send_header.frame_n, comp);
+        if (send_header.top_bot == 0) {
+          if (comp == V_DATA)
+            handle_decode_frame_screen(&top_buffer_ctx, top_decoded, w, h);
+        } else {
+          if (comp == V_DATA)
+            handle_decode_frame_screen(&bot_buffer_ctx, bot_decoded, w, h);
+        }
+      } else {
+        fprintf(stderr, "fail %d %d comp %d\n", send_header.top_bot, send_header.frame_n, comp);
+        // char i = 0;
+        // ikcp_send(kcp, &i, sizeof(i));
+        // receiving = 0;
+      }
     }
 
     if (size) {
@@ -1379,6 +1387,7 @@ void *udp_recv_thread_func(void *arg)
     }
     recv_state = RECV_STATE_HEADER;
     leftover_size = 0;
+    receiving = 0;
 
     s = 0;
     int ret;
