@@ -166,6 +166,10 @@ static nk_bool multicore_encode;
 static int top_priority;
 static int bot_priority;
 
+static int ntr_yuv_option;
+static int ntr_color_transform_hp;
+static nk_bool ntr_downscale_uv;
+
 static atomic_uint_fast8_t ip_octets[4];
 
 #define HEART_BEAT_EVERY_MS 250
@@ -439,6 +443,11 @@ void *menu_tcp_thread_func(void *arg)
                                      args, sizeof(args) / sizeof(*args), 0);
 
         restart_kcp = 1;
+
+        ntr_downscale_uv = downscale_uv;
+        ntr_yuv_option = yuv_option;
+        ntr_color_transform_hp = color_transform_hp;
+
         if (ret < 0)
         {
           fprintf(stderr, "remote play send failed: %d\n", sock_errno());
@@ -1085,16 +1094,6 @@ struct rp_send_header {
 } send_header;
 
 enum {
-  Y_DATA,
-  U_DATA,
-  V_DATA,
-} top_state[256], bot_state[256];
-
-char *state_string[3] = {
-  "Y", "U", "V"
-};
-
-enum {
   RECV_STATE_HEADER,
   RECV_STATE_DATA,
 } recv_state;
@@ -1102,6 +1101,85 @@ enum {
 uint32_t recv_data_remain;
 uint8_t buf_leftover[BUF_SIZE];
 int leftover_size;
+
+#define ENCODE_BUFFER_COUNT 3
+
+enum {
+  Y_DATA,
+  U_DATA,
+  V_DATA,
+} top_plane[ENCODE_BUFFER_COUNT], bot_plane[ENCODE_BUFFER_COUNT];
+
+int16_t top_plane_index[ENCODE_BUFFER_COUNT], bot_plane_index[ENCODE_BUFFER_COUNT];
+uint8_t top_plane_index_pos, bot_plane_index_pos;
+
+enum {
+  Y_COMP,
+  U_COMP,
+  V_COMP,
+  R_COMP = Y_COMP,
+  G_COMP,
+  B_COMP,
+  COMP_COUNT
+};
+
+char *state_string[COMP_COUNT] = {
+  "Y", "U", "V"
+};
+
+uint8_t top_buf[ENCODE_BUFFER_COUNT][COMP_COUNT][400 * 240];
+uint8_t bot_buf[ENCODE_BUFFER_COUNT][COMP_COUNT][320 * 240];
+
+#define RECV_BUF_SIZE (400 * 240)
+uint8_t recv_buf[RECV_BUF_SIZE];
+uint8_t *recv_buf_head;
+
+#include "ffmpeg_opt/libavcodec/ffmpeg_jls.h"
+#include "ffmpeg_opt/libavcodec/jpegls.h"
+
+int decode_image(uint8_t *dst, int dst_size, const uint8_t *src, int src_size, int w, int h, int bpp) {
+  JLSState state = { 0 };
+  state.bpp = bpp;
+  ff_jpegls_reset_coding_parameters(&state, 0);
+  ff_jpegls_init_state(&state);
+
+  int ret, t;
+
+  GetBitContext s;
+  ret = init_get_bits8(&s, src, src_size);
+  if (ret < 0)
+  {
+      return ret;
+  }
+
+  uint8_t *zero, *last, *cur;
+  zero = calloc(h, 1);
+  if (!zero)
+  {
+      return -1;
+  }
+  last = zero;
+  cur = dst;
+
+  int i;
+  t = 0;
+  for (i = 0; i < w; ++i) {
+      ret = ls_decode_line(&state, &s, last, cur, t, h, 1, 0, 8);
+      if (ret < 0)
+      {
+          fprintf(stderr, "ls_decode_line error at col %d\n", i);
+          free(zero);
+          return ret;
+      }
+      t = last[0];
+      last = cur;
+      cur += h;
+  }
+
+  free(zero);
+
+  return w * h;
+}
 
 int handle_recv(uint8_t *buf, int size)
 {
@@ -1123,15 +1201,7 @@ int handle_recv(uint8_t *buf, int size)
     recv_state = RECV_STATE_DATA;
     recv_data_remain = send_header.size;
     leftover_size = 0;
-
-    // fprintf(stderr, "Receiving frame: %s, %s, frame %d, size %u, bpp %d, format %d\n",
-    //   send_header.top_bot == 0 ? "top" : "bot",
-    //   state_string[send_header.top_bot == 0 ? top_state[send_header.frame_n] : bot_state[send_header.frame_n]],
-    //   (int)send_header.frame_n,
-    //   send_header.size,
-    //   send_header.bpp,
-    //   send_header.format
-    // );
+    recv_buf_head = recv_buf;
 
     if (send_header.size == 0) {
       fprintf(stderr, "empty header received\n");
@@ -1140,27 +1210,48 @@ int handle_recv(uint8_t *buf, int size)
     }
   }
 
-  if (recv_data_remain > 400 * 240)
+  if (recv_data_remain > RECV_BUF_SIZE)
     return -1;
 
   if (recv_data_remain <= size) {
+    memcpy(recv_buf_head, buf, recv_data_remain);
+    recv_buf_head += recv_data_remain;
     // fprintf(stderr, "Done\n");
     buf += recv_data_remain;
     size -= recv_data_remain;
     recv_data_remain = 0;
     recv_state = RECV_STATE_HEADER;
     if (send_header.top_bot == 0) {
-      ++top_state[send_header.frame_n];
-      if (top_state[send_header.frame_n] > V_DATA) {
-        top_state[send_header.frame_n] = Y_DATA;
-        handle_decode_frame_screen(&top_buffer_ctx, top_decoded, 400, 240);
+      int pos = -1;
+      int comp;
+      for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
+        if (top_plane_index[i] == send_header.frame_n) {
+          pos = i;
+          comp = ++top_plane[i];
+          break;
+        }
       }
+      if (pos < 0) {
+        pos = top_plane_index_pos++;
+        top_plane_index_pos %= ENCODE_BUFFER_COUNT;
+        comp = top_plane[pos] = Y_DATA;
+        top_plane_index[pos] = send_header.frame_n;
+      }
+
+      int w = 400;
+      int h = 240;
+      if (ntr_downscale_uv && (comp == U_DATA || comp == V_DATA)) {
+        w /= 2; h /= 2;
+      }
+      // if (decode_image(top_buf[pos][comp], 400 * 240, recv_buf, recv_buf_head - recv_buf, w, h, send_header.bpp) == w * h) {
+      //   fprintf(stderr, "Decode %d %d comp %d success\n", send_header.top_bot, send_header.frame_n, comp);
+      // }
+      // if (ffmpeg_jls_decode(top_buf[pos][comp], h, w, h, recv_buf, recv_buf_head - recv_buf, send_header.bpp) == w * h) {
+      //   fprintf(stderr, "Decode %d %d comp %d success\n", send_header.top_bot, send_header.frame_n, comp);
+      // } else {
+      //   fprintf(stderr, "Decode %d %d comp %d failed\n", send_header.top_bot, send_header.frame_n, comp);
+      // }
     } else {
-      ++bot_state[send_header.frame_n];
-      if (bot_state[send_header.frame_n] > V_DATA) {
-        bot_state[send_header.frame_n] = Y_DATA;
-        handle_decode_frame_screen(&bot_buffer_ctx, bot_decoded, 320, 240);
-      }
     }
 
     if (size) {
@@ -1170,6 +1261,8 @@ int handle_recv(uint8_t *buf, int size)
   }
 
   // buf += size;
+  memcpy(recv_buf_head, buf, size);
+  recv_buf_head += size;
   recv_data_remain -= size;
   // size = 0;
 
@@ -1267,8 +1360,11 @@ void *udp_recv_thread_func(void *arg)
     // fprintf(stderr, "new connection\n");
     top_buffer_ctx.updated = FBS_NOT_AVAIL;
     bot_buffer_ctx.updated = FBS_NOT_AVAIL;
-    memset(top_state, 0, sizeof(top_state));
-    memset(bot_state, 0, sizeof(bot_state));
+    for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
+      top_plane[i] = bot_plane[i] = Y_DATA;
+      top_plane_index[i] = bot_plane_index[i] = -1;
+      top_plane_index_pos = bot_plane_index_pos = 0;
+    }
     recv_state = RECV_STATE_HEADER;
     leftover_size = 0;
 
