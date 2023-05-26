@@ -1164,7 +1164,7 @@ int decode_image(uint8_t *dst, int dst_size, const uint8_t *src, int src_size, i
   int i;
   t = 0;
   for (i = 0; i < w; ++i) {
-      ret = ls_decode_line(&state, &s, last, cur, t, h, 1, 0, 8);
+      ret = ls_decode_line(&state, &s, last, cur, t, h);
       if (ret < 0)
       {
           fprintf(stderr, "ls_decode_line error at col %d\n", i);
@@ -1221,37 +1221,49 @@ int handle_recv(uint8_t *buf, int size)
     size -= recv_data_remain;
     recv_data_remain = 0;
     recv_state = RECV_STATE_HEADER;
-    if (send_header.top_bot == 0) {
-      int pos = -1;
-      int comp;
-      for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
-        if (top_plane_index[i] == send_header.frame_n) {
-          pos = i;
-          comp = ++top_plane[i];
-          break;
-        }
-      }
-      if (pos < 0) {
-        pos = top_plane_index_pos++;
-        top_plane_index_pos %= ENCODE_BUFFER_COUNT;
-        comp = top_plane[pos] = Y_DATA;
-        top_plane_index[pos] = send_header.frame_n;
-      }
 
-      int w = 400;
-      int h = 240;
-      if (ntr_downscale_uv && (comp == U_DATA || comp == V_DATA)) {
-        w /= 2; h /= 2;
-      }
-      // if (decode_image(top_buf[pos][comp], 400 * 240, recv_buf, recv_buf_head - recv_buf, w, h, send_header.bpp) == w * h) {
-      //   fprintf(stderr, "Decode %d %d comp %d success\n", send_header.top_bot, send_header.frame_n, comp);
-      // }
-      // if (ffmpeg_jls_decode(top_buf[pos][comp], h, w, h, recv_buf, recv_buf_head - recv_buf, send_header.bpp) == w * h) {
-      //   fprintf(stderr, "Decode %d %d comp %d success\n", send_header.top_bot, send_header.frame_n, comp);
-      // } else {
-      //   fprintf(stderr, "Decode %d %d comp %d failed\n", send_header.top_bot, send_header.frame_n, comp);
-      // }
+#define FINI(plane, index, index_pos) \
+  for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) { \
+    if (index[i] == send_header.frame_n) { \
+      pos = i; \
+      comp = ++plane[i]; \
+      break; \
+    } \
+  } \
+  if (pos < 0) { \
+    pos = index_pos++; \
+    index_pos %= ENCODE_BUFFER_COUNT; \
+    comp = plane[pos] = Y_DATA; \
+    index[pos] = send_header.frame_n; \
+  }
+
+    int pos = -1;
+    int comp;
+
+    if (send_header.top_bot == 0) {
+      FINI(top_plane, top_plane_index, top_plane_index_pos);
     } else {
+      FINI(bot_plane, bot_plane_index, bot_plane_index_pos);
+    }
+#undef FINI
+    int w = send_header.top_bot == 0 ? 400 : 320;
+    int h = 240;
+    if (ntr_downscale_uv && (comp == U_DATA || comp == V_DATA)) {
+      w /= 2; h /= 2;
+    }
+    if (ffmpeg_jls_decode(send_header.top_bot == 0 ? top_buf[pos][comp] : bot_buf[pos][comp],
+      h, w, h, recv_buf, recv_buf_head - recv_buf, send_header.bpp) == w * h
+    ) {
+      fprintf(stderr, "success %d %d comp %d\n", send_header.top_bot, send_header.frame_n, comp);
+      if (send_header.top_bot == 0) {
+        if (comp == V_DATA)
+          handle_decode_frame_screen(&top_buffer_ctx, top_decoded, w, h);
+      } else {
+        if (comp == V_DATA)
+          handle_decode_frame_screen(&bot_buffer_ctx, bot_decoded, w, h);
+      }
+    } else {
+      fprintf(stderr, "fail %d %d comp %d\n", send_header.top_bot, send_header.frame_n, comp);
     }
 
     if (size) {
@@ -1423,7 +1435,7 @@ void *udp_recv_thread_func(void *arg)
 
     ikcp_release(kcp);
 
-    Sleep(1000);
+    Sleep(250);
   }
   SDL_GL_MakeCurrent(win, NULL);
 

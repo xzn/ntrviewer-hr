@@ -229,8 +229,7 @@ static inline int ls_get_code_runterm(GetBitContext *gb, JLSState *state,
  * Decode one line of image
  */
 int ls_decode_line(JLSState *state, GetBitContext *gb,
-                   void *last, void *dst, int last2, int w,
-                   int stride, int comp, int bits)
+                   const uint8_t *last, uint8_t *dst, int last2, int w)
 {
     int i, x = 0;
     int Ra, Rb, Rc, Rd;
@@ -243,17 +242,17 @@ int ls_decode_line(JLSState *state, GetBitContext *gb,
             return AVERROR_INVALIDDATA;
 
         /* compute gradients */
-        Ra = x ? ((uint8_t *)dst)[x - stride] : ((uint8_t *)last)[x];
-        Rb = ((uint8_t *)last)[x];
-        Rc = x ? ((uint8_t *)last)[x - stride] : last2;
-        Rd = (x >= w - stride) ? ((uint8_t *)last)[x] : ((uint8_t *)last)[x + stride];
+        Ra = x ? dst[x - 1] : last[x];
+        Rb = last[x];
+        Rc = x ? last[x - 1] : last2;
+        Rd = (x >= w - 1) ? last[x] : last[x + 1];
         D0 = Rd - Rb;
         D1 = Rb - Rc;
         D2 = Rc - Ra;
         /* run mode */
-        if (D0 == 0 &&
-            D1 == 0 &&
-            D2 == 0) {
+        if ((D0 == 0) &&
+            (D1 == 0) &&
+            (D2 == 0)) {
             int r;
             int RItype;
 
@@ -261,30 +260,30 @@ int ls_decode_line(JLSState *state, GetBitContext *gb,
             while (get_bits1(gb)) {
                 int r;
                 r = 1 << ff_log2_run[state->run_index];
-                if (x + r * stride > w)
-                    r = (w - x) / stride;
+                if (x + r * 1 > w)
+                    r = (w - x) / 1;
                 for (i = 0; i < r; i++) {
-                    ((uint8_t *)dst)[x] = Ra;
-                    x += stride;
+                    dst[x] = Ra;
+                    x += 1;
                 }
                 /* if EOL reached, we stop decoding */
                 if (r != 1 << ff_log2_run[state->run_index])
                     return 0;
                 if (state->run_index < 31)
                     state->run_index++;
-                if (x + stride > w)
+                if (x + 1 > w)
                     return 0;
             }
             /* decode aborted run */
             r = ff_log2_run[state->run_index];
             if (r)
                 r = get_bits(gb, r);
-            if (x + r * stride > w) {
-                r = (w - x) / stride;
+            if (x + r * 1 > w) {
+                r = (w - x) / 1;
             }
             for (i = 0; i < r; i++) {
-                ((uint8_t *)dst)[x] = Ra;
-                x += stride;
+                dst[x] = Ra;
+                x += 1;
             }
 
             if (x >= w) {
@@ -294,14 +293,13 @@ int ls_decode_line(JLSState *state, GetBitContext *gb,
             }
 
             /* decode run termination value */
-            Rb     = ((uint8_t *)last)[x];
+            Rb     = last[x];
             RItype = (Ra - Rb == 0) ? 1 : 0;
             err    = ls_get_code_runterm(gb, state, RItype,
                                          ff_log2_run[state->run_index]);
             if (state->run_index)
                 state->run_index--;
 
-        
             if (Rb < Ra)
                 pred = Rb - err;
             else
@@ -334,8 +332,8 @@ int ls_decode_line(JLSState *state, GetBitContext *gb,
         }
 
         pred &= state->maxval;
-        ((uint8_t *)dst)[x] = pred;
-        x += stride;
+        dst[x] = pred;
+        x += 1;
     }
 
     return 0;

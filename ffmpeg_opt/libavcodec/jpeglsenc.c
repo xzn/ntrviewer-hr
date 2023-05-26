@@ -120,25 +120,25 @@ void ls_encode_line(JLSState *state, PutBitContext *pb,
 {
     int x = 0;
     int Ra = in[-1], Rb = last[0], Rc = last[-1], Rd = last[1];
-    int context;
+    int cont;
 
     while (1) {
         int err, pred, sign;
 
         /* compute gradients */
-        context =  vLUT[Rd - Rb + state->range][0] +
+        cont =  vLUT[Rd - Rb + state->range][0] +
                 vLUT[Rb - Rc + state->range][1] +
                 vLUT[Rc - Ra + state->range][2];
 
         /* run mode */
-        if (context == 0) {
+        if (cont == 0) {
             int RUNval, RItype, run;
 
             run    = 0;
             RUNval = Ra;
             while (x < w && (in[x] - RUNval == 0)) {
                 run++;
-                x += 1;
+                x++;
             }
             ls_encode_run(state, pb, run, x < w);
             if (x >= w)
@@ -164,7 +164,7 @@ void ls_encode_line(JLSState *state, PutBitContext *pb,
             if (state->run_index > 0)
                 state->run_index--;
 
-            x += 1;
+            x++;
             if (x >= w)
                 break;
 
@@ -172,25 +172,25 @@ void ls_encode_line(JLSState *state, PutBitContext *pb,
             Rb = last[x];
             Rd = last[x + 1];
         } else { /* regular mode */
-            context = classmap[context];
+            cont = classmap[cont];
             pred    = mid_pred(Ra, Ra + Rb - Rc, Rb);
 
-            if (context < 0) {
-                context = -context;
+            if (cont < 0) {
+                cont = -cont;
                 sign    = 1;
-                pred    = av_clip(pred - state->C[context], 0, state->maxval);
+                pred    = av_clip(pred - state->C[cont], 0, state->maxval);
                 err     = pred - in[x];
             } else {
                 sign = 0;
-                pred = av_clip(pred + state->C[context], 0, state->maxval);
+                pred = av_clip(pred + state->C[cont], 0, state->maxval);
                 err  = in[x] - pred;
             }
 
             Ra = in[x];
 
-            ls_encode_regular(state, pb, context, err);
+            ls_encode_regular(state, pb, cont, err);
 
-            x += 1;
+            x++;
             if (x >= w)
                 break;
 

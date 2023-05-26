@@ -1,6 +1,5 @@
 #include "ffmpeg_jls.h"
 #include "jpegls.h"
-#include "get_bits.h"
 
 int ffmpeg_jls_decode(uint8_t *dst, int dst_x, int dst_y, int dst_line, const uint8_t *src, int src_size, int bpp) {
     JLSState state = { 0 };
@@ -83,7 +82,7 @@ int ffmpeg_jls_decode(uint8_t *dst, int dst_x, int dst_y, int dst_line, const ui
     int i;
     t = 0;
     for (i = 0; i < dst_y; ++i) {
-        ret = ls_decode_line(&state, &s, last, cur, t, dst_x, 1, 0, 8);
+        ret = ls_decode_line(&state, &s, last, cur, t, dst_x);
         if (ret < 0)
         {
             av_log(NULL, AV_LOG_ERROR, "At line %d\n", i);
