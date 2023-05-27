@@ -1,5 +1,8 @@
 #include "ikcp.h"
 
+#define HR_MAX(a, b) ((a) > (b) ? (a) : (b))
+#define HR_MIN(a, b) ((a) < (b) ? (a) : (b))
+
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -567,7 +570,7 @@ void *nwm_tcp_thread_func(void *arg)
 void rpConfigSetDefault(void)
 {
   yuv_option = 3;
-  color_transform_hp = 3;
+  color_transform_hp = 0;
   encoder_which = 1;
   downscale_uv = 1;
   target_frame_rate = 30;
@@ -628,6 +631,17 @@ static void guiMain(struct nk_context *ctx)
     nk_combobox(ctx, yuv_options_text, sizeof(yuv_options_text) / sizeof(*yuv_options_text),
       &yuv_option, 30, nk_vec2(150, 9999)
     );
+    if (yuv_option != 1) {
+      color_transform_hp = 0;
+    }
+    if (yuv_option < 2) {
+      downscale_uv = 0;
+      if (yuv_option == 1) {
+        if (color_transform_hp == 0) {
+          color_transform_hp = 3;
+        }
+      }
+    }
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Color Transform", NK_TEXT_CENTERED);
@@ -640,6 +654,12 @@ static void guiMain(struct nk_context *ctx)
     nk_combobox(ctx, color_transform_text, sizeof(color_transform_text) / sizeof(*color_transform_text),
       &color_transform_hp, 30, nk_vec2(150, 9999)
     );
+    if (color_transform_hp > 0) {
+      yuv_option = 1;
+      downscale_uv = 0;
+    } else if (yuv_option == 1) {
+      yuv_option = 0;
+    }
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Encoder", NK_TEXT_CENTERED);
@@ -654,6 +674,12 @@ static void guiMain(struct nk_context *ctx)
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Downscale UV", NK_TEXT_CENTERED);
     nk_checkbox_label(ctx, "", &downscale_uv);
+    if (downscale_uv) {
+      color_transform_hp = 0;
+      if (yuv_option < 2) {
+        yuv_option = 3;
+      }
+    }
 
     nk_layout_row_dynamic(ctx, 30, 2);
     snprintf(msg_buf, sizeof(msg_buf), "Target Frame Rate %d", target_frame_rate);
@@ -1071,7 +1097,7 @@ MainLoop(void *loopArg)
   }
 }
 
-void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int width, int height)
+void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb)
 {
   pthread_mutex_lock(&ctx->gl_tex_mutex);
   int next_index = frame_buffer_context_next_free_index(ctx->next_index, ctx->index);
@@ -1094,8 +1120,201 @@ void render_greyscale_to_comp3(uint8_t *dst, const uint8_t *src, int w, int h) {
   }
 }
 
+void convert_to_rgb_hp(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b
+) {
+  if (ntr_color_transform_hp == 1) {
+    *r = y + u - 128;
+    *g = y;
+    *b = y + v - 128;
+  } else if (ntr_color_transform_hp == 2) {
+    *r = y + u - 128;
+    *g = y;
+    *b = v + (((uint16_t)*r + y) >> 1) - 128;
+  } else if (ntr_color_transform_hp == 3) {
+    *g = y - (((uint16_t)u + v) >> 2) + 64;
+    *r = u + *g - 128;
+    *b = v + *g - 128;
+  } else {
+    *r = u;
+    *g = y;
+    *b = v;
+    return;
+  }
+}
+
+void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b,
+  int y_bpp, int u_bpp, int v_bpp
+)
+{
+  y <<= (8 - y_bpp);
+  u <<= (8 - u_bpp);
+  v <<= (8 - v_bpp);
+
+  double y_in = y;
+  double u_in = u;
+  double v_in = v;
+
+  if (ntr_yuv_option == 2)
+  {
+    y_in /= 255;
+    u_in -= 128;
+    v_in -= 128;
+    u_in /= 127;
+    v_in /= 127;
+  } else if (ntr_yuv_option == 3) {
+    y_in -= 16;
+    y_in /= 219;
+    u_in -= 128;
+    v_in -= 128;
+    u_in /= 112;
+    v_in /= 112;
+  } else if (ntr_yuv_option == 1) {
+    convert_to_rgb_hp(y, u, v, r, g, b);
+    return;
+  } else {
+    *r = u;
+    *g = y;
+    *b = v;
+    return;
+  }
+
+  u_in *= .436;
+  v_in *= .615;
+
+  double r_out;
+  double g_out;
+  double b_out;
+
+  r_out = y_in + 1.13983 * v_in;
+  g_out = y_in + -0.39465 * u_in + -0.58060 * v_in;
+  b_out = y_in + 2.03211 * u_in;
+
+  if (r_out < 0)
+    r_out = 0;
+  else if (r_out > 1)
+    r_out = 1;
+  if (g_out < 0)
+    g_out = 0;
+  else if (g_out > 1)
+    g_out = 1;
+  if (b_out < 0)
+    b_out = 0;
+  else if (b_out > 1)
+    b_out = 1;
+
+  *r = round(r_out * 255);
+  *g = round(g_out * 255);
+  *b = round(b_out * 255);
+}
+
+void render_yuv_to_rgb(uint8_t *dst,
+  const uint8_t *y_image, const uint8_t *u_image, const uint8_t *v_image,
+  int w, int h, int y_bpp, int u_bpp, int v_bpp
+) {
+  for (int j = 0; j < w; ++j) {
+    for (int i = 0; i < h; ++i) {
+      convert_to_rgb(*y_image++, *u_image++, *v_image++, dst, dst + 1, dst + 2,
+        y_bpp, u_bpp, v_bpp
+      );
+      dst += 3;
+    }
+  }
+}
+
 uint8_t top_decoded[400 * 240 * 3];
 uint8_t bot_decoded[320 * 240 * 3];
+
+uint8_t upscaled_u_image[400 * 240];
+uint8_t upscaled_v_image[400 * 240];
+
+static uint8_t accessImageNoCheck(const uint8_t *image, int x, int y, int w, int h)
+{
+    return image[x * h + y];
+}
+
+static inline uint8_t accessImage(const uint8_t *image, int x, int y, int w, int h)
+{
+    return accessImageNoCheck(image, HR_MAX(HR_MIN(x, w - 1), 0), HR_MAX(HR_MIN(y, h - 1), 0), w, h);
+}
+
+static inline uint16_t accessImageUpsampleUnscaled(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
+{
+    int ds_w = wOrig / 2;
+    int ds_h = hOrig / 2;
+
+    int ds_x0 = xOrig / 2;
+    int ds_x1 = ds_x0;
+    int ds_y0 = yOrig / 2;
+    int ds_y1 = ds_y0;
+
+    if (xOrig > ds_x0 * 2)
+    { // xOrig is odd -> ds_x0 * 2 + 1 = xOrig = ds_x1 * 2 - 1
+        ++ds_x1;
+    }
+    else
+    { // xOrig is even -> ds_x0 * 2 + 2 = xOrig = ds_x1 * 2
+        --ds_x0;
+    }
+
+    if (yOrig > ds_y0 * 2)
+    {
+        ++ds_y1;
+    }
+    else
+    {
+        --ds_y0;
+    }
+
+    uint16_t a = accessImage(ds_image, ds_x0, ds_y0, ds_w, ds_h);
+    uint16_t b = accessImage(ds_image, ds_x1, ds_y0, ds_w, ds_h);
+    uint16_t c = accessImage(ds_image, ds_x0, ds_y1, ds_w, ds_h);
+    uint16_t d = accessImage(ds_image, ds_x1, ds_y1, ds_w, ds_h);
+
+    if (xOrig < ds_x1 * 2)
+    {
+        a = (a * 3 + b);
+        c = (c * 3 + d);
+    }
+    else
+    {
+        a = (a + b * 3);
+        c = (c + d * 3);
+    }
+
+    if (yOrig < ds_y1 * 2)
+    {
+        a = (a * 3 + c);
+    }
+    else
+    {
+        a = (a + c * 3);
+    }
+
+    return a;
+}
+
+// #define rshift_to_even(n, s) ({ typeof(n) n_ = n >> (s - 1); uint8_t b_ = n_ & 1; n_ >>= 1; uint8_t c_ = n_ & 1; n_ + (b_ & c_); })
+#define rshift_to_even(n, s) ((n + (s > 1 ? (1 << (s - 1)) : 0)) >> s)
+// #define rshift_to_even(n, s) ((n + (1 << (s - 1))) >> s)
+
+static inline uint8_t accessImageUpsample(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
+{
+    uint16_t p = accessImageUpsampleUnscaled(ds_image, xOrig, yOrig, wOrig, hOrig);
+    return rshift_to_even(p, 4);
+}
+
+static inline void upsampleImage(uint8_t *dst, const uint8_t *ds_src, int w, int h)
+{
+    int i = 0, j = 0;
+    for (; i < w; ++i)
+    {
+        j = 0;
+        for (; j < h; ++j)
+        {
+            *dst++ = accessImageUpsample(ds_src, i, j, w, h);
+        }
+    }
+}
 
 #define BUF_SIZE 2000
 uint8_t buf[BUF_SIZE];
@@ -1105,8 +1324,8 @@ struct rp_send_header {
   uint32_t size;
   uint8_t frame_n;
   uint8_t top_bot;
-	uint8_t bpp;
-	uint8_t format;
+  uint8_t bpp;
+  uint8_t format;
 } send_header;
 
 enum {
@@ -1143,8 +1362,12 @@ char *state_string[COMP_COUNT] = {
   "Y", "U", "V"
 };
 
+uint8_t top_buf_valid[ENCODE_BUFFER_COUNT];
+uint8_t bot_buf_valid[ENCODE_BUFFER_COUNT];
 uint8_t top_buf[ENCODE_BUFFER_COUNT][COMP_COUNT][400 * 240];
 uint8_t bot_buf[ENCODE_BUFFER_COUNT][COMP_COUNT][320 * 240];
+uint8_t top_bpp[ENCODE_BUFFER_COUNT][COMP_COUNT];
+uint8_t bot_bpp[ENCODE_BUFFER_COUNT][COMP_COUNT];
 
 #define RECV_BUF_SIZE (400 * 240)
 uint8_t recv_buf[RECV_BUF_SIZE];
@@ -1271,22 +1494,66 @@ int handle_recv(uint8_t *buf, int size)
       if (ntr_downscale_uv && (comp == U_DATA || comp == V_DATA)) {
         w /= 2; h /= 2;
       }
+      if (comp == Y_DATA) {
+        if (send_header.top_bot == 0)
+          top_buf_valid[pos] = 1;
+        else
+          bot_buf_valid[pos] = 1;
+      }
       if (ffmpeg_jls_decode(send_header.top_bot == 0 ? top_buf[pos][comp] : bot_buf[pos][comp],
         h, w, h, recv_buf, recv_buf_head - recv_buf, send_header.bpp) == w * h
       ) {
         // fprintf(stderr, "success %d %d comp %d\n", send_header.top_bot, send_header.frame_n, comp);
         if (send_header.top_bot == 0) {
-          if (comp == Y_DATA)
-            render_greyscale_to_comp3(top_decoded, top_buf[pos][comp], w, h);
-          if (comp == V_DATA)
-            handle_decode_frame_screen(&top_buffer_ctx, top_decoded, w, h);
+          top_bpp[pos][comp] = send_header.bpp;
+
+          if (comp == Y_DATA) {
+            // render_greyscale_to_comp3(top_decoded, top_buf[pos][comp], w, h);
+          }
+          if (comp == V_DATA && top_buf_valid[pos]) {
+            if (ntr_downscale_uv) {
+              int w_orig = w * 2;
+              int h_orig = h * 2;
+              upsampleImage(upscaled_u_image, top_buf[pos][U_COMP], w_orig, h_orig);
+              upsampleImage(upscaled_v_image, top_buf[pos][V_COMP], w_orig, h_orig);
+              render_yuv_to_rgb(top_decoded, top_buf[pos][Y_COMP], upscaled_u_image, upscaled_v_image,
+                w_orig, h_orig, top_bpp[pos][Y_COMP], top_bpp[pos][U_COMP], top_bpp[pos][V_COMP]
+              );
+            } else {
+              render_yuv_to_rgb(top_decoded, top_buf[pos][Y_COMP], top_buf[pos][U_COMP], top_buf[pos][V_COMP],
+                w, h, top_bpp[pos][Y_COMP], top_bpp[pos][U_COMP], top_bpp[pos][V_COMP]
+              );
+            }
+            handle_decode_frame_screen(&top_buffer_ctx, top_decoded);
+          }
         } else {
-          if (comp == Y_DATA)
-            render_greyscale_to_comp3(bot_decoded, bot_buf[pos][comp], w, h);
-          if (comp == V_DATA)
-            handle_decode_frame_screen(&bot_buffer_ctx, bot_decoded, w, h);
+          bot_bpp[pos][comp] = send_header.bpp;
+
+          if (comp == Y_DATA) {
+            // render_greyscale_to_comp3(bot_decoded, bot_buf[pos][comp], w, h);
+          }
+          if (comp == V_DATA && bot_buf_valid[pos]) {
+            if (ntr_downscale_uv) {
+              int w_orig = w * 2;
+              int h_orig = h * 2;
+              upsampleImage(upscaled_u_image, bot_buf[pos][U_COMP], w_orig, h_orig);
+              upsampleImage(upscaled_v_image, bot_buf[pos][V_COMP], w_orig, h_orig);
+              render_yuv_to_rgb(bot_decoded, bot_buf[pos][Y_COMP], upscaled_u_image, upscaled_v_image,
+                w_orig, h_orig, bot_bpp[pos][Y_COMP], bot_bpp[pos][U_COMP], bot_bpp[pos][V_COMP]
+              );
+            } else {
+              render_yuv_to_rgb(bot_decoded, bot_buf[pos][Y_COMP], bot_buf[pos][U_COMP], bot_buf[pos][V_COMP],
+                w, h, bot_bpp[pos][Y_COMP], bot_bpp[pos][U_COMP], bot_bpp[pos][V_COMP]
+              );
+            }
+            handle_decode_frame_screen(&bot_buffer_ctx, bot_decoded);
+          }
         }
       } else {
+        if (send_header.top_bot == 0)
+          top_buf_valid[pos] = 0;
+        else
+          bot_buf_valid[pos] = 0;
         fprintf(stderr, "fail %d %d comp %d\n", send_header.top_bot, send_header.frame_n, comp);
         // char i = 0;
         // ikcp_send(kcp, &i, sizeof(i));
