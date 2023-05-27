@@ -768,10 +768,10 @@ static GLfloat vVertices_pos[4][3] = {
 };
 
 static GLfloat vVertices_tex_coord[4][2] = {
-    0.0f, 1.0f, // TexCoord 0
-    0.0f, 0.0f, // TexCoord 1
     1.0f, 0.0f, // TexCoord 2
-    1.0f, 1.0f  // TexCoord 3
+    0.0f, 0.0f, // TexCoord 1
+    0.0f, 1.0f, // TexCoord 0
+    1.0f, 1.0f, // TexCoord 3
 };
 static GLushort indices[] =
     {0, 1, 2, 0, 2, 3};
@@ -989,8 +989,8 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int i
     pthread_mutex_unlock(&ctx->gl_tex_mutex);
 
     glTexImage2D(GL_TEXTURE_2D, 0,
-                 GL_RGB, width,
-                 height, 0,
+                 GL_RGB, height,
+                 width, 0,
                  GL_RGB, GL_UNSIGNED_BYTE,
                  ctx->images[index]);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
@@ -1083,6 +1083,15 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int width
   pthread_mutex_unlock(&ctx->gl_tex_mutex);
   __atomic_add_fetch(&frame_counter, 1, __ATOMIC_RELAXED);
   // free(image);
+}
+
+void render_greyscale_to_comp3(uint8_t *dst, const uint8_t *src, int w, int h) {
+  for (int j = 0; j < w; ++j) {
+    for (int i = 0; i < h; ++i) {
+      dst[2] = dst[1] = dst[0] = *src++;
+      dst += 3;
+    }
+  }
 }
 
 uint8_t top_decoded[400 * 240 * 3];
@@ -1267,9 +1276,13 @@ int handle_recv(uint8_t *buf, int size)
       ) {
         // fprintf(stderr, "success %d %d comp %d\n", send_header.top_bot, send_header.frame_n, comp);
         if (send_header.top_bot == 0) {
+          if (comp == Y_DATA)
+            render_greyscale_to_comp3(top_decoded, top_buf[pos][comp], w, h);
           if (comp == V_DATA)
             handle_decode_frame_screen(&top_buffer_ctx, top_decoded, w, h);
         } else {
+          if (comp == Y_DATA)
+            render_greyscale_to_comp3(bot_decoded, bot_buf[pos][comp], w, h);
           if (comp == V_DATA)
             handle_decode_frame_screen(&bot_buffer_ctx, bot_decoded, w, h);
         }
