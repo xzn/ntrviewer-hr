@@ -163,6 +163,7 @@ static int target_frame_rate;
 static int target_mbit_rate;
 static nk_bool dynamic_priority;
 static nk_bool multicore_encode;
+static nk_bool low_latency;
 static int top_priority;
 static int bot_priority;
 
@@ -436,6 +437,7 @@ void *menu_tcp_thread_func(void *arg)
         args[2] |= (bot_priority & 0xf) << 4;
         args[2] |= (target_mbit_rate & 0x1f) << 8;
         args[2] |= (multicore_encode & 1) << 14;
+        args[2] |= (low_latency & 1) << 13;
         args[2] |= (dynamic_priority & 1) << 15;
         args[2] |= (target_frame_rate & 0xff) << 16;
 
@@ -564,7 +566,7 @@ void *nwm_tcp_thread_func(void *arg)
 
 void rpConfigSetDefault(void)
 {
-  yuv_option = 2;
+  yuv_option = 3;
   color_transform_hp = 3;
   encoder_which = 1;
   downscale_uv = 1;
@@ -572,6 +574,7 @@ void rpConfigSetDefault(void)
   target_mbit_rate = 15;
   dynamic_priority = 1;
   multicore_encode = 1;
+  low_latency = 0;
   top_priority = 1;
   bot_priority = 5;
 }
@@ -661,6 +664,10 @@ static void guiMain(struct nk_context *ctx)
     snprintf(msg_buf, sizeof(msg_buf), "Target MBit Rate %d", target_mbit_rate);
     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
     nk_slider_int(ctx, 0, &target_mbit_rate, 31, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Low Latency", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &low_latency);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Multicore Encode", NK_TEXT_CENTERED);
