@@ -1738,7 +1738,7 @@ void *udp_recv_thread_func(void *arg)
   return 0;
 }
 
-#include "style.c"
+#include "style.h"
 
 int main(int argc, char *argv[])
 {

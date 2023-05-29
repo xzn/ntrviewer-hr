@@ -16,7 +16,7 @@
 #define NK_SDL_GLES2_H_
 
 #include <SDL2/SDL.h>
-// #include <SDL2/SDL_opengles2.h>
+#include <SDL2/SDL_opengles2.h>
 
 
 NK_API struct nk_context*   nk_sdl_init(SDL_Window *win);
@@ -43,7 +43,7 @@ NK_API void                 nk_sdl_device_create(void);
 
 struct nk_sdl_device {
     struct nk_buffer cmds;
-    struct nk_draw_null_texture null;
+    struct nk_draw_null_texture tex_null;
     GLuint vbo, ebo;
     GLuint prog;
     GLuint vert_shdr;
@@ -103,7 +103,7 @@ nk_sdl_device_create(void)
         "}\n";
 
     struct nk_sdl_device *dev = &sdl.ogl;
-    
+
     nk_buffer_init_default(&dev->cmds);
     dev->prog = glCreateProgram();
     dev->vert_shdr = glCreateShader(GL_VERTEX_SHADER);
@@ -133,7 +133,7 @@ nk_sdl_device_create(void)
         dev->vp = offsetof(struct nk_sdl_vertex, position);
         dev->vt = offsetof(struct nk_sdl_vertex, uv);
         dev->vc = offsetof(struct nk_sdl_vertex, col);
-        
+
         /* Allocate buffers */
         glGenBuffers(1, &dev->vbo);
         glGenBuffers(1, &dev->ebo);
@@ -214,7 +214,7 @@ nk_sdl_render(enum nk_anti_aliasing AA, int max_vertex_buffer, int max_element_b
         /* Bind buffers */
         glBindBuffer(GL_ARRAY_BUFFER, dev->vbo);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, dev->ebo);
-        
+
         {
             /* buffer setup */
             glEnableVertexAttribArray((GLuint)dev->attrib_pos);
@@ -245,7 +245,7 @@ nk_sdl_render(enum nk_anti_aliasing AA, int max_vertex_buffer, int max_element_b
             config.vertex_layout = vertex_layout;
             config.vertex_size = sizeof(struct nk_sdl_vertex);
             config.vertex_alignment = NK_ALIGNOF(struct nk_sdl_vertex);
-            config.null = dev->null;
+            config.tex_null = dev->tex_null;
             config.circle_segment_count = 22;
             config.curve_segment_count = 22;
             config.arc_segment_count = 22;
@@ -335,7 +335,7 @@ nk_sdl_font_stash_end(void)
     const void *image; int w, h;
     image = nk_font_atlas_bake(&sdl.atlas, &w, &h, NK_FONT_ATLAS_RGBA32);
     nk_sdl_device_upload_atlas(image, w, h);
-    nk_font_atlas_end(&sdl.atlas, nk_handle_id((int)sdl.ogl.font_tex), &sdl.ogl.null);
+    nk_font_atlas_end(&sdl.atlas, nk_handle_id((int)sdl.ogl.font_tex), &sdl.ogl.tex_null);
     if (sdl.atlas.default_font)
         nk_style_set_font(&sdl.ctx, &sdl.atlas.default_font->handle);
 
@@ -345,6 +345,17 @@ NK_API int
 nk_sdl_handle_event(SDL_Event *evt)
 {
     struct nk_context *ctx = &sdl.ctx;
+
+    /* optional grabbing behavior */
+    if (ctx->input.mouse.grab) {
+        SDL_SetRelativeMouseMode(SDL_TRUE);
+        ctx->input.mouse.grab = 0;
+    } else if (ctx->input.mouse.ungrab) {
+        int x = (int)ctx->input.mouse.prev.x, y = (int)ctx->input.mouse.prev.y;
+        SDL_SetRelativeMouseMode(SDL_FALSE);
+        SDL_WarpMouseInWindow(sdl.win, x, y);
+        ctx->input.mouse.ungrab = 0;
+    }
 
     switch(evt->type)
     {
@@ -408,7 +419,11 @@ nk_sdl_handle_event(SDL_Event *evt)
             return 1;
 
         case SDL_MOUSEMOTION:
-            nk_input_motion(ctx, evt->motion.x, evt->motion.y);
+            if (ctx->input.mouse.grabbed) {
+                int x = (int)ctx->input.mouse.prev.x, y = (int)ctx->input.mouse.prev.y;
+                nk_input_motion(ctx, x + evt->motion.xrel, y + evt->motion.yrel);
+            }
+            else nk_input_motion(ctx, evt->motion.x, evt->motion.y);
             return 1;
 
         case SDL_TEXTINPUT:

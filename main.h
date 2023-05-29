@@ -11,6 +11,13 @@
 
 #include "glad/gles2.h"
 
+#if defined(_WIN32) && !defined(_WIN32_WCE) && !defined(__SCITECH_SNAP__)
+    /* Win32 but not WinCE */
+#   define KHRONOS_APIENTRY __stdcall
+#else
+#   define KHRONOS_APIENTRY
+#endif
+
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
 #define NK_INCLUDE_STANDARD_VARARGS
