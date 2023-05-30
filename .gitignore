@@ -1,5 +1,6 @@
 *.o
 *.exe
 *.dll
+*.zip
 include
 lib
