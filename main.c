@@ -191,6 +191,7 @@ static int me_method;
 static int me_block_size;
 static int me_search_param;
 static nk_bool me_downscale;
+static nk_bool me_interpolate;
 static int target_frame_rate;
 static int target_mbit_rate;
 static nk_bool dynamic_priority;
@@ -205,6 +206,7 @@ static nk_bool ntr_downscale_uv;
 static int ntr_me_block_size;
 static int ntr_me_search_param;
 static nk_bool ntr_me_downscale;
+static nk_bool ntr_me_interpolate;
 
 static atomic_uint_fast8_t ip_octets[4];
 
@@ -472,6 +474,7 @@ void *menu_tcp_thread_func(void *arg)
         args[1] |= (me_block_size == RP_ME_MIN_BLOCK_SIZE ? 0 : 1) << 9;
         args[1] |= ((me_search_param - RP_ME_MIN_SEARCH_PARAM) & 0x1f) << 10;
         args[1] |= (me_downscale & 1) << 15;
+        // args[1] |= (me_interpolate & 1) << 16;
 
         args[2] |= top_priority & 0xf;
         args[2] |= (bot_priority & 0xf) << 4;
@@ -492,6 +495,7 @@ void *menu_tcp_thread_func(void *arg)
         ntr_me_block_size = me_block_size;
         ntr_me_search_param = me_search_param;
         ntr_me_downscale = me_downscale;
+        ntr_me_interpolate = me_interpolate;
 
         if (ret < 0)
         {
@@ -617,6 +621,7 @@ void rpConfigSetDefault(void)
   me_block_size = 16;
   me_search_param = 7;
   me_downscale = 1;
+  me_interpolate = 1;
   target_frame_rate = 30;
   target_mbit_rate = 15;
   dynamic_priority = 1;
@@ -688,6 +693,24 @@ static void guiMain(struct nk_context *ctx)
     }
 
     nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Color Transform", NK_TEXT_CENTERED);
+    const char *color_transform_text[] = {
+      "None (RGB)",
+      "HP1",
+      "HP2",
+      "HP3",
+    };
+    nk_combobox(ctx, color_transform_text, sizeof(color_transform_text) / sizeof(*color_transform_text),
+      &color_transform_hp, 30, nk_vec2(150, 9999)
+    );
+    if (color_transform_hp > 0) {
+      yuv_option = 1;
+      downscale_uv = 0;
+    } else if (yuv_option == 1) {
+      yuv_option = 0;
+    }
+
+    nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Motion Estimation", NK_TEXT_CENTERED);
     const char *motion_estimation_text[] = {
       "Three Step",
@@ -715,23 +738,9 @@ static void guiMain(struct nk_context *ctx)
     nk_label(ctx, "ME Downscale", NK_TEXT_CENTERED);
     nk_checkbox_label(ctx, "", &me_downscale);
 
-    nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "Color Transform", NK_TEXT_CENTERED);
-    const char *color_transform_text[] = {
-      "None (RGB)",
-      "HP1",
-      "HP2",
-      "HP3",
-    };
-    nk_combobox(ctx, color_transform_text, sizeof(color_transform_text) / sizeof(*color_transform_text),
-      &color_transform_hp, 30, nk_vec2(150, 9999)
-    );
-    if (color_transform_hp > 0) {
-      yuv_option = 1;
-      downscale_uv = 0;
-    } else if (yuv_option == 1) {
-      yuv_option = 0;
-    }
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // nk_label(ctx, "ME Interpolate", NK_TEXT_CENTERED);
+    // nk_checkbox_label(ctx, "", &me_interpolate);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Encoder", NK_TEXT_CENTERED);
