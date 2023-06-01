@@ -111,6 +111,30 @@ static inline IUINT32 iclock()
 #include <pthread.h>
 #include "main.h"
 
+#define RP_MAX(a,b) ((a) > (b) ? (a) : (b))
+#define RP_MIN(a,b) ((a) > (b) ? (b) : (a))
+
+//! 8 bit unsigned integer.
+typedef uint8_t		byte;
+
+//! 8 bit unsigned integer.
+typedef uint8_t		u8;
+//! 16 bit unsigned integer.
+typedef uint16_t	u16;
+//! 32 bit unsigned integer.
+typedef uint32_t	u32;
+//! 64 bit unsigned integer.
+typedef uint64_t	u64;
+
+//! 8 bit signed integer.
+typedef int8_t		s8;
+//! 16 bit signed integer.
+typedef int16_t		s16;
+//! 32 bit signed integer.
+typedef int32_t		s32;
+//! 64 bit signed integer.
+typedef int64_t		s64;
+
 #define WINDOW_WIDTH 800
 #define WINDOW_HEIGHT 960
 
@@ -127,7 +151,6 @@ int frame_rate_displayed;
 char window_title_with_fps[50];
 int frame_counter = 0;
 uint64_t frame_count_last_tick = 0;
-
 
 /* Platform */
 SDL_Window *win;
@@ -158,10 +181,16 @@ const char *connection_msg[CS_MAX] = {
     ".",
 };
 
+#define RP_ME_MIN_BLOCK_SIZE (8)
+#define RP_ME_MIN_SEARCH_PARAM (4)
 static int yuv_option;
 static int color_transform_hp;
 static int encoder_which;
 static nk_bool downscale_uv;
+static int me_method;
+static int me_block_size;
+static int me_search_param;
+static nk_bool me_downscale;
 static int target_frame_rate;
 static int target_mbit_rate;
 static nk_bool dynamic_priority;
@@ -173,6 +202,9 @@ static int bot_priority;
 static int ntr_yuv_option;
 static int ntr_color_transform_hp;
 static nk_bool ntr_downscale_uv;
+static int ntr_me_block_size;
+static int ntr_me_search_param;
+static nk_bool ntr_me_downscale;
 
 static atomic_uint_fast8_t ip_octets[4];
 
@@ -436,6 +468,11 @@ void *menu_tcp_thread_func(void *arg)
         args[1] |= (downscale_uv & 1) << 4;
         args[1] |= (encoder_which & 1) << 5;
 
+        args[1] |= (me_method & 0x7) << 6;
+        args[1] |= (me_block_size == RP_ME_MIN_BLOCK_SIZE ? 0 : 1) << 9;
+        args[1] |= ((me_search_param - RP_ME_MIN_SEARCH_PARAM) & 0x1f) << 10;
+        args[1] |= (me_downscale & 1) << 15;
+
         args[2] |= top_priority & 0xf;
         args[2] |= (bot_priority & 0xf) << 4;
         args[2] |= (target_mbit_rate & 0x1f) << 8;
@@ -452,6 +489,9 @@ void *menu_tcp_thread_func(void *arg)
         ntr_downscale_uv = downscale_uv;
         ntr_yuv_option = yuv_option;
         ntr_color_transform_hp = color_transform_hp;
+        ntr_me_block_size = me_block_size;
+        ntr_me_search_param = me_search_param;
+        ntr_me_downscale = me_downscale;
 
         if (ret < 0)
         {
@@ -573,6 +613,10 @@ void rpConfigSetDefault(void)
   color_transform_hp = 0;
   encoder_which = 1;
   downscale_uv = 1;
+  me_method = 4;
+  me_block_size = 16;
+  me_search_param = 7;
+  me_downscale = 0;
   target_frame_rate = 30;
   target_mbit_rate = 15;
   dynamic_priority = 1;
@@ -607,7 +651,7 @@ static void guiMain(struct nk_context *ctx)
 
   /* GUI */
   const char *remote_play_wnd = "Remote Play";
-  if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 50, 600, 600),
+  if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 50, 600, 800),
                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE))
   {
     nk_layout_row_dynamic(ctx, 30, 5);
@@ -642,6 +686,34 @@ static void guiMain(struct nk_context *ctx)
         }
       }
     }
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Motion Estimation", NK_TEXT_CENTERED);
+    const char *motion_estimation_text[] = {
+      "Three Step",
+      "Two Dimensional Log",
+      "New Three Step",
+      "Four Step",
+      "Diamond",
+      "Hexagon-Based",
+    };
+    nk_combobox(ctx, motion_estimation_text, sizeof(motion_estimation_text) / sizeof(*motion_estimation_text),
+      &me_method, 30, nk_vec2(250, 9999)
+    );
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "ME Block Size %d", me_block_size);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, RP_ME_MIN_BLOCK_SIZE, &me_block_size, RP_ME_MIN_BLOCK_SIZE << 1, RP_ME_MIN_BLOCK_SIZE);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "ME Search Param %d", me_search_param);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, RP_ME_MIN_SEARCH_PARAM, &me_search_param, 12, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "ME Downscale", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &me_downscale);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Color Transform", NK_TEXT_CENTERED);
@@ -1120,6 +1192,73 @@ void render_greyscale_to_comp3(uint8_t *dst, const uint8_t *src, int w, int h) {
   }
 }
 
+void render_greyscale_upscale_to_comp3(uint8_t *dst, int w_orig, int h_orig, const uint8_t *src, int w, int h) {
+  int w_scale = w_orig / w;
+  int h_scale = h_orig / h;
+  int w_off = w_orig % w / 2;
+  int h_off = h_orig % h / 2;
+
+  for (int v = 0; v < w_off; ++v) {
+    for (int u = 0; u < h_off; ++u) {
+      dst[2] = dst[1] = dst[0] = src[0];
+        dst += 3;
+    }
+
+    for (int i = 0; i < h; ++i) {
+      for (int y = 0; y < h_scale; ++y) {
+        dst[2] = dst[1] = dst[0] = src[i];
+        dst += 3;
+      }
+    }
+
+    for (int u = 0; u < h_off; ++u) {
+      dst[2] = dst[1] = dst[0] = src[h - 1];
+        dst += 3;
+    }
+  }
+
+  for (int j = 0; j < w; ++j) {
+    for (int x = 0; x < w_scale; ++x) {
+      for (int u = 0; u < h_off; ++u) {
+        dst[2] = dst[1] = dst[0] = src[j * h + 0];
+          dst += 3;
+      }
+
+      for (int i = 0; i < h; ++i) {
+        for (int y = 0; y < h_scale; ++y) {
+          dst[2] = dst[1] = dst[0] = src[j * h + i];
+          dst += 3;
+        }
+      }
+
+      for (int u = 0; u < h_off; ++u) {
+        dst[2] = dst[1] = dst[0] = src[j * h + h - 1];
+          dst += 3;
+      }
+    }
+  }
+
+  for (int v = 0; v < w_off; ++v) {
+    for (int u = 0; u < h_off; ++u) {
+      dst[2] = dst[1] = dst[0] = src[h * (w - 1)];
+        dst += 3;
+    }
+
+    for (int i = 0; i < h; ++i) {
+      for (int y = 0; y < h_scale; ++y) {
+        dst[2] = dst[1] = dst[0] = src[h * (w - 1) + i];
+        dst += 3;
+      }
+    }
+
+    for (int u = 0; u < h_off; ++u) {
+      dst[2] = dst[1] = dst[0] = src[h * (w - 1) + h - 1];
+        dst += 3;
+    }
+  }
+
+}
+
 void convert_to_rgb_hp(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b
 ) {
   if (ntr_color_transform_hp == 1) {
@@ -1320,12 +1459,18 @@ static inline void upsampleImage(uint8_t *dst, const uint8_t *ds_src, int w, int
 uint8_t buf[BUF_SIZE];
 ikcpcb *kcp;
 
+enum {
+	RP_SEND_HEADER_TOP_BOT = (1 << 0),
+	RP_SEND_HEADER_P_FRAME = (1 << 1),
+};
+
 struct rp_send_header {
-  uint32_t size;
-  uint8_t frame_n;
-  uint8_t top_bot;
-  uint8_t bpp;
-  uint8_t format;
+	u32 size;
+	u32 size_1;
+	u8 frame_n;
+	u8 bpp;
+	u8 format;
+	u8 flags;
 } send_header;
 
 enum {
@@ -1342,7 +1487,9 @@ int leftover_size;
 enum {
   Y_DATA,
   U_DATA,
+  ME_X_DATA,
   V_DATA,
+  ME_Y_DATA,
 } top_plane[ENCODE_BUFFER_COUNT], bot_plane[ENCODE_BUFFER_COUNT];
 
 int16_t top_plane_index[ENCODE_BUFFER_COUNT], bot_plane_index[ENCODE_BUFFER_COUNT];
@@ -1368,6 +1515,8 @@ uint8_t top_buf[ENCODE_BUFFER_COUNT][COMP_COUNT][400 * 240];
 uint8_t bot_buf[ENCODE_BUFFER_COUNT][COMP_COUNT][320 * 240];
 uint8_t top_bpp[ENCODE_BUFFER_COUNT][COMP_COUNT];
 uint8_t bot_bpp[ENCODE_BUFFER_COUNT][COMP_COUNT];
+uint8_t top_me_buf[ENCODE_BUFFER_COUNT][2][50 * 30];
+uint8_t bot_me_buf[ENCODE_BUFFER_COUNT][2][40 * 30];
 
 #define RECV_BUF_SIZE (400 * 240)
 uint8_t recv_buf[RECV_BUF_SIZE];
@@ -1449,10 +1598,17 @@ int handle_recv(uint8_t *buf, int size)
       recv_state = RECV_STATE_HEADER;
       return 0;
     }
+    // fprintf(stderr, "Receiving plane: frame_n = %d, top_bot = %d, p_frame = %d, bpp = %d, format = %d, size = %d, size_1 = %d\n",
+    //   send_header.frame_n,
+    //   !!(send_header.flags & RP_SEND_HEADER_TOP_BOT),
+    //   !!(send_header.flags & RP_SEND_HEADER_P_FRAME),
+    //   send_header.bpp, send_header.format, send_header.size, send_header.size_1);
   }
 
-  if (recv_data_remain > RECV_BUF_SIZE)
+  if (recv_data_remain > RECV_BUF_SIZE) {
+    fprintf(stderr, "too much for recv_buf %d\n", recv_data_remain);
     return -1;
+  }
 
   if (recv_data_remain <= size) {
     memcpy(recv_buf_head, buf, recv_data_remain);
@@ -1464,56 +1620,90 @@ int handle_recv(uint8_t *buf, int size)
     recv_state = RECV_STATE_HEADER;
 
     if (receiving) {
+      int top_bot = (send_header.flags & RP_SEND_HEADER_TOP_BOT) == 0 ? 0 : 1;
+      int p_frame = (send_header.flags & RP_SEND_HEADER_P_FRAME) == 0 ? 0 : 1;
 
       int pos = -1;
+      int plane;
       int comp;
 
-#define FINI(plane, index, index_pos) \
+#define FINI(plane_array, index, index_pos) do { \
   for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) { \
     if (index[i] == send_header.frame_n) { \
       pos = i; \
-      comp = ++plane[i]; \
+      plane = ++plane_array[i]; \
+      if (!p_frame && (plane == ME_X_DATA)) \
+        plane = ++plane_array[i]; \
+      if (p_frame ? plane > ME_Y_DATA : plane > V_DATA) \
+        pos = index[i] = -1; \
       break; \
     } \
   } \
   if (pos < 0) { \
     pos = index_pos++; \
     index_pos %= ENCODE_BUFFER_COUNT; \
-    comp = plane[pos] = Y_DATA; \
+    plane = plane_array[pos] = Y_DATA; \
     index[pos] = send_header.frame_n; \
-  }
-      if (send_header.top_bot == 0) {
+  } \
+  comp = plane == Y_DATA ? Y_COMP : plane == U_DATA ? U_COMP : plane == V_DATA ? V_COMP : COMP_COUNT; \
+} while (0)
+      if (top_bot == 0) {
         FINI(top_plane, top_plane_index, top_plane_index_pos);
       } else {
         FINI(bot_plane, bot_plane_index, bot_plane_index_pos);
       }
 #undef FINI
 
-      int w = send_header.top_bot == 0 ? 400 : 320;
-      int h = 240;
-      if (ntr_downscale_uv && (comp == U_DATA || comp == V_DATA)) {
+      int w = top_bot == 0 ? 400 : 320, w_orig = w;
+      int h = 240, h_orig = h;
+      if (ntr_downscale_uv && (plane == U_DATA || plane == V_DATA)) {
         w /= 2; h /= 2;
       }
-      if (comp == Y_DATA) {
-        if (send_header.top_bot == 0)
+      if (plane == Y_DATA) {
+        if (top_bot == 0)
           top_buf_valid[pos] = 1;
         else
           bot_buf_valid[pos] = 1;
       }
-      if (ffmpeg_jls_decode(send_header.top_bot == 0 ? top_buf[pos][comp] : bot_buf[pos][comp],
-        h, w, h, recv_buf, recv_buf_head - recv_buf, send_header.bpp) == w * h
-      ) {
-        // fprintf(stderr, "success %d %d comp %d\n", send_header.top_bot, send_header.frame_n, comp);
-        if (send_header.top_bot == 0) {
-          top_bpp[pos][comp] = send_header.bpp;
 
-          if (comp == Y_DATA) {
-            // render_greyscale_to_comp3(top_decoded, top_buf[pos][comp], w, h);
-          }
-          if (comp == V_DATA && top_buf_valid[pos]) {
+      u8 me_block_size_log2 = av_ceil_log2(ntr_me_block_size);
+      u8 me_bpp = RP_MAX(3, RP_MIN(6, av_ceil_log2(ntr_me_search_param * 2 + 1)));
+      u8 me_bpp_half_range = (1 << me_bpp) >> 1;
+
+      int scale_log2_offset = ntr_me_downscale == 0 ? 0 : 1;
+      int scale_log2 = 1 + scale_log2_offset;
+      u8 block_size_log2 = me_block_size_log2 + scale_log2;
+
+      if (plane == ME_X_DATA || plane == ME_Y_DATA) {
+        w >>= block_size_log2;
+        h >>= block_size_log2;
+      }
+
+      int ret;
+      if (comp < COMP_COUNT) {
+        ret = ffmpeg_jls_decode(top_bot == 0 ? top_buf[pos][comp] : bot_buf[pos][comp],
+          h, w, h, recv_buf, recv_buf_head - recv_buf, send_header.bpp) == w * h;
+      } else {
+        ret = ffmpeg_jls_decode(top_bot == 0 ? top_me_buf[pos][plane == ME_X_DATA ? 0 : 1] : bot_me_buf[pos][plane == ME_X_DATA ? 0 : 1],
+          h, w, h, recv_buf, recv_buf_head - recv_buf, me_bpp) == w * h;
+      }
+      if (ret
+      ) {
+        // fprintf(stderr, "Decoded: plane = %d, comp = %d, w = %d, h = %d\n", plane, comp, w, h);
+        // fprintf(stderr, "success %d %d comp %d\n", top_bot, send_header.frame_n, comp);
+        int frame_end = p_frame ? plane == ME_Y_DATA : plane == V_DATA;
+        if (top_bot == 0) {
+          if (comp < COMP_COUNT)
+            top_bpp[pos][comp] = send_header.bpp;
+
+          // if (plane == Y_DATA) {
+          //   render_greyscale_to_comp3(top_decoded, top_buf[pos][comp], w, h);
+          // }
+          // if (plane == ME_Y_DATA) {
+          //   render_greyscale_upscale_to_comp3(top_decoded, w_orig, h_orig, top_me_buf[pos][1], w, h);
+          // }
+          if (frame_end && top_buf_valid[pos]) {
             if (ntr_downscale_uv) {
-              int w_orig = w * 2;
-              int h_orig = h * 2;
               upsampleImage(upscaled_u_image, top_buf[pos][U_COMP], w_orig, h_orig);
               upsampleImage(upscaled_v_image, top_buf[pos][V_COMP], w_orig, h_orig);
               render_yuv_to_rgb(top_decoded, top_buf[pos][Y_COMP], upscaled_u_image, upscaled_v_image,
@@ -1521,21 +1711,23 @@ int handle_recv(uint8_t *buf, int size)
               );
             } else {
               render_yuv_to_rgb(top_decoded, top_buf[pos][Y_COMP], top_buf[pos][U_COMP], top_buf[pos][V_COMP],
-                w, h, top_bpp[pos][Y_COMP], top_bpp[pos][U_COMP], top_bpp[pos][V_COMP]
+                w_orig, h_orig, top_bpp[pos][Y_COMP], top_bpp[pos][U_COMP], top_bpp[pos][V_COMP]
               );
             }
             handle_decode_frame_screen(&top_buffer_ctx, top_decoded);
           }
         } else {
-          bot_bpp[pos][comp] = send_header.bpp;
+          if (comp < COMP_COUNT)
+            bot_bpp[pos][comp] = send_header.bpp;
 
-          if (comp == Y_DATA) {
-            // render_greyscale_to_comp3(bot_decoded, bot_buf[pos][comp], w, h);
-          }
-          if (comp == V_DATA && bot_buf_valid[pos]) {
+          // if (plane == Y_DATA) {
+          //   render_greyscale_to_comp3(bot_decoded, bot_buf[pos][comp], w, h);
+          // }
+          // if (plane == ME_Y_DATA) {
+          //   render_greyscale_upscale_to_comp3(bot_decoded, w_orig, h_orig, bot_me_buf[pos][1], w, h);
+          // }
+          if (frame_end && bot_buf_valid[pos]) {
             if (ntr_downscale_uv) {
-              int w_orig = w * 2;
-              int h_orig = h * 2;
               upsampleImage(upscaled_u_image, bot_buf[pos][U_COMP], w_orig, h_orig);
               upsampleImage(upscaled_v_image, bot_buf[pos][V_COMP], w_orig, h_orig);
               render_yuv_to_rgb(bot_decoded, bot_buf[pos][Y_COMP], upscaled_u_image, upscaled_v_image,
@@ -1543,21 +1735,29 @@ int handle_recv(uint8_t *buf, int size)
               );
             } else {
               render_yuv_to_rgb(bot_decoded, bot_buf[pos][Y_COMP], bot_buf[pos][U_COMP], bot_buf[pos][V_COMP],
-                w, h, bot_bpp[pos][Y_COMP], bot_bpp[pos][U_COMP], bot_bpp[pos][V_COMP]
+                w_orig, h_orig, bot_bpp[pos][Y_COMP], bot_bpp[pos][U_COMP], bot_bpp[pos][V_COMP]
               );
             }
             handle_decode_frame_screen(&bot_buffer_ctx, bot_decoded);
           }
         }
       } else {
-        if (send_header.top_bot == 0)
+        if (top_bot == 0)
           top_buf_valid[pos] = 0;
         else
           bot_buf_valid[pos] = 0;
-        fprintf(stderr, "fail %d %d comp %d\n", send_header.top_bot, send_header.frame_n, comp);
+        fprintf(stderr, "fail %d %d plane %d\n", top_bot, send_header.frame_n, plane);
         // char i = 0;
         // ikcp_send(kcp, &i, sizeof(i));
         // receiving = 0;
+      }
+
+      if (p_frame && (plane == U_DATA || plane == V_DATA))
+      {
+        recv_state = RECV_STATE_DATA;
+        recv_data_remain = send_header.size_1;
+        leftover_size = 0;
+        recv_buf_head = recv_buf;
       }
     }
 
@@ -1668,7 +1868,7 @@ void *udp_recv_thread_func(void *arg)
     top_buffer_ctx.updated = FBS_NOT_AVAIL;
     bot_buffer_ctx.updated = FBS_NOT_AVAIL;
     for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
-      top_plane[i] = bot_plane[i] = Y_DATA;
+      top_plane[i] = bot_plane[i] = Y_COMP;
       top_plane_index[i] = bot_plane_index[i] = -1;
       top_plane_index_pos = bot_plane_index_pos = 0;
     }
