@@ -613,10 +613,10 @@ void rpConfigSetDefault(void)
   color_transform_hp = 0;
   encoder_which = 1;
   downscale_uv = 1;
-  me_method = 4;
+  me_method = 2;
   me_block_size = 16;
   me_search_param = 7;
-  me_downscale = 0;
+  me_downscale = 1;
   target_frame_rate = 30;
   target_mbit_rate = 15;
   dynamic_priority = 1;
@@ -709,7 +709,7 @@ static void guiMain(struct nk_context *ctx)
     nk_layout_row_dynamic(ctx, 30, 2);
     snprintf(msg_buf, sizeof(msg_buf), "ME Search Param %d", me_search_param);
     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, RP_ME_MIN_SEARCH_PARAM, &me_search_param, 12, 1);
+    nk_slider_int(ctx, RP_ME_MIN_SEARCH_PARAM, &me_search_param, 15, 1);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "ME Downscale", NK_TEXT_CENTERED);
@@ -1599,10 +1599,10 @@ int handle_recv(uint8_t *buf, int size)
       return 0;
     }
     // fprintf(stderr, "Receiving plane: frame_n = %d, top_bot = %d, p_frame = %d, bpp = %d, format = %d, size = %d, size_1 = %d\n",
-    //   send_header.frame_n,
-    //   !!(send_header.flags & RP_SEND_HEADER_TOP_BOT),
-    //   !!(send_header.flags & RP_SEND_HEADER_P_FRAME),
-    //   send_header.bpp, send_header.format, send_header.size, send_header.size_1);
+      // send_header.frame_n,
+      // !!(send_header.flags & RP_SEND_HEADER_TOP_BOT),
+      // !!(send_header.flags & RP_SEND_HEADER_P_FRAME),
+      // send_header.bpp, send_header.format, send_header.size, send_header.size_1);
   }
 
   if (recv_data_remain > RECV_BUF_SIZE) {
@@ -1679,6 +1679,7 @@ int handle_recv(uint8_t *buf, int size)
         h >>= block_size_log2;
       }
 
+      // fprintf(stderr, "Decoding: plane = %d, comp = %d, w = %d, h = %d, bpp = %d\n", plane, comp, w, h, comp < COMP_COUNT ? send_header.bpp : me_bpp);
       int ret;
       if (comp < COMP_COUNT) {
         ret = ffmpeg_jls_decode(top_bot == 0 ? top_buf[pos][comp] : bot_buf[pos][comp],
@@ -1689,7 +1690,6 @@ int handle_recv(uint8_t *buf, int size)
       }
       if (ret
       ) {
-        // fprintf(stderr, "Decoded: plane = %d, comp = %d, w = %d, h = %d\n", plane, comp, w, h);
         // fprintf(stderr, "success %d %d comp %d\n", top_bot, send_header.frame_n, comp);
         int frame_end = p_frame ? plane == ME_Y_DATA : plane == V_DATA;
         if (top_bot == 0) {
