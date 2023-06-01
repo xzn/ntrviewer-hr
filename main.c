@@ -181,8 +181,8 @@ const char *connection_msg[CS_MAX] = {
     ".",
 };
 
-#define RP_ME_MIN_BLOCK_SIZE (8)
-#define RP_ME_MIN_SEARCH_PARAM (4)
+#define RP_ME_MIN_BLOCK_SIZE (4)
+#define RP_ME_MIN_SEARCH_PARAM (8)
 static int yuv_option;
 static int color_transform_hp;
 static int encoder_which;
@@ -471,10 +471,10 @@ void *menu_tcp_thread_func(void *arg)
         args[1] |= (encoder_which & 1) << 5;
 
         args[1] |= (me_method & 0x7) << 6;
-        args[1] |= (me_block_size == RP_ME_MIN_BLOCK_SIZE ? 0 : 1) << 9;
-        args[1] |= ((me_search_param - RP_ME_MIN_SEARCH_PARAM) & 0x1f) << 10;
-        args[1] |= (me_downscale & 1) << 15;
-        // args[1] |= (me_interpolate & 1) << 16;
+        args[1] |= (me_block_size & 0x3) << 9;
+        args[1] |= ((me_search_param - RP_ME_MIN_SEARCH_PARAM) & 0x1f) << 11;
+        args[1] |= (me_downscale & 1) << 16;
+        // args[1] |= (me_interpolate & 1) << 17;
 
         args[2] |= top_priority & 0xf;
         args[2] |= (bot_priority & 0xf) << 4;
@@ -492,7 +492,7 @@ void *menu_tcp_thread_func(void *arg)
         ntr_downscale_uv = downscale_uv;
         ntr_yuv_option = yuv_option;
         ntr_color_transform_hp = color_transform_hp;
-        ntr_me_block_size = me_block_size;
+        ntr_me_block_size = RP_ME_MIN_BLOCK_SIZE << me_block_size;
         ntr_me_search_param = me_search_param;
         ntr_me_downscale = me_downscale;
         ntr_me_interpolate = me_interpolate;
@@ -618,8 +618,8 @@ void rpConfigSetDefault(void)
   encoder_which = 1;
   downscale_uv = 1;
   me_method = 2;
-  me_block_size = 16;
-  me_search_param = 7;
+  me_block_size = 2;
+  me_search_param = 16;
   me_downscale = 1;
   me_interpolate = 1;
   target_frame_rate = 30;
@@ -725,14 +725,14 @@ static void guiMain(struct nk_context *ctx)
     );
 
     nk_layout_row_dynamic(ctx, 30, 2);
-    snprintf(msg_buf, sizeof(msg_buf), "ME Block Size %d", me_block_size);
+    snprintf(msg_buf, sizeof(msg_buf), "ME Block Size %d", RP_ME_MIN_BLOCK_SIZE << me_block_size);
     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, RP_ME_MIN_BLOCK_SIZE, &me_block_size, RP_ME_MIN_BLOCK_SIZE << 1, RP_ME_MIN_BLOCK_SIZE);
+    nk_slider_int(ctx, 0, &me_block_size, 3, 1);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     snprintf(msg_buf, sizeof(msg_buf), "ME Search Param %d", me_search_param);
     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, RP_ME_MIN_SEARCH_PARAM, &me_search_param, 15, 1);
+    nk_slider_int(ctx, RP_ME_MIN_SEARCH_PARAM, &me_search_param, 36, 1);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "ME Downscale", NK_TEXT_CENTERED);
@@ -1676,7 +1676,7 @@ int handle_recv(uint8_t *buf, int size)
       }
 
       u8 me_block_size_log2 = av_ceil_log2(ntr_me_block_size);
-      u8 me_bpp = RP_MAX(3, RP_MIN(6, av_ceil_log2(ntr_me_search_param * 2 + 1)));
+      u8 me_bpp = av_ceil_log2(ntr_me_search_param * 2 + 1);
       u8 me_bpp_half_range = (1 << me_bpp) >> 1;
 
       int scale_log2_offset = ntr_me_downscale == 0 ? 0 : 1;
