@@ -1009,7 +1009,13 @@ typedef struct _FrameBufferContext
   int next_index;
 } FrameBufferContext;
 
-FrameBufferContext top_buffer_ctx, bot_buffer_ctx;
+enum {
+  SCREEN_TOP,
+  SCREEN_BOT,
+  SCREEN_COUNT,
+};
+
+FrameBufferContext buffer_ctx[SCREEN_COUNT];
 
 int frame_buffer_context_next_free_index(int index, int skip_index)
 {
@@ -1021,7 +1027,7 @@ int frame_buffer_context_next_free_index(int index, int skip_index)
   return next_index;
 }
 
-static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int isTop)
+static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot)
 {
   if (ctx->updated == FBS_NOT_AVAIL)
   {
@@ -1050,7 +1056,7 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int i
   double ctx_top_f;
   double ctx_right_f;
   double ctx_bot_f;
-  if (isTop)
+  if (top_bot == SCREEN_TOP)
   {
     ctx_left_f = (double)ctx_left / win_width * 2 - 1;
     ctx_top_f = 1 - (double)ctx_top / win_height * 2;
@@ -1165,8 +1171,8 @@ MainLoop(void *loopArg)
     glClear(GL_COLOR_BUFFER_BIT);
     glClearColor(bg[0], bg[1], bg[2], bg[3]);
 
-    hr_draw_screen(&top_buffer_ctx, 400, 240, 1);
-    hr_draw_screen(&bot_buffer_ctx, 320, 240, 0);
+    hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400, 240, SCREEN_TOP);
+    hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT);
 
     /* IMPORTANT: `nk_sdl_render` modifies some global OpenGL state
      * with blending, scissor, face culling, depth test and viewport and
@@ -1268,20 +1274,29 @@ void render_greyscale_upscale_to_comp3(uint8_t *dst, int w_orig, int h_orig, con
 
 }
 
-void convert_to_rgb_hp(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b
+void convert_to_rgb_hp(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b,
+  int y_bpp, int u_bpp, int v_bpp
 ) {
+  int bpp = (y_bpp + u_bpp + v_bpp) / 3;
+  u8 half_range = 1 << (bpp - 1);
+  int bpp_2 = y_bpp - bpp;
+	u8 half_y = y >> bpp_2;
+	u8 bpp_mask = (1 << bpp) - 1;
+	u8 bpp_2_mask = (1 << (bpp + 1)) - 1;
+
   if (ntr_color_transform_hp == 1) {
-    *r = y + u - 128;
-    *g = y;
-    *b = y + v - 128;
+    *r = ((half_y + u) << (8 - bpp)) - 128;
+    *g = y << (8 - y_bpp);
+    *b = ((half_y + v) << (8 - bpp)) - 128;
   } else if (ntr_color_transform_hp == 2) {
-    *r = y + u - 128;
-    *g = y;
-    *b = v + (((uint16_t)*r + y) >> 1) - 128;
+    *r = ((half_y + u) << (8 - bpp)) - 128;
+    *g = y << (8 - y_bpp);
+    *b = (v + (((*r >> (8 - bpp)) + half_y) >> 1) << (8 - bpp)) - 128;
   } else if (ntr_color_transform_hp == 3) {
-    *g = y - (((uint16_t)u + v) >> 2) + 64;
-    *r = u + *g - 128;
-    *b = v + *g - 128;
+    *g = ((y - ((u + v) >> (2 - bpp_2))) << (8 - y_bpp)) + 64;
+    u8 half_g = *g >> (8 - bpp);
+    *r = ((u + half_g) << (8 - bpp)) - 128;
+    *b = ((v + half_g) << (8 - bpp)) - 128;
   } else {
     *r = u;
     *g = y;
@@ -1294,6 +1309,11 @@ void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uin
   int y_bpp, int u_bpp, int v_bpp
 )
 {
+  if (ntr_yuv_option == 1) {
+    convert_to_rgb_hp(y, u, v, r, g, b, y_bpp, u_bpp, v_bpp);
+    return;
+  }
+
   y <<= (8 - y_bpp);
   u <<= (8 - u_bpp);
   v <<= (8 - v_bpp);
@@ -1316,9 +1336,6 @@ void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uin
     v_in -= 128;
     u_in /= 112;
     v_in /= 112;
-  } else if (ntr_yuv_option == 1) {
-    convert_to_rgb_hp(y, u, v, r, g, b);
-    return;
   } else {
     *r = u;
     *g = y;
@@ -1369,8 +1386,7 @@ void render_yuv_to_rgb(uint8_t *dst,
   }
 }
 
-uint8_t top_decoded[400 * 240 * 3];
-uint8_t bot_decoded[320 * 240 * 3];
+uint8_t screen_decoded[SCREEN_COUNT][400 * 240 * 3];
 
 uint8_t upscaled_u_image[400 * 240];
 uint8_t upscaled_v_image[400 * 240];
@@ -1491,7 +1507,7 @@ uint32_t recv_data_remain;
 uint8_t buf_leftover[BUF_SIZE];
 int leftover_size;
 
-#define ENCODE_BUFFER_COUNT 3
+#define ENCODE_BUFFER_COUNT 4
 
 enum {
   Y_DATA,
@@ -1499,10 +1515,10 @@ enum {
   ME_X_DATA,
   V_DATA,
   ME_Y_DATA,
-} top_plane[ENCODE_BUFFER_COUNT], bot_plane[ENCODE_BUFFER_COUNT];
+} screen_plane[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
 
-int16_t top_plane_index[ENCODE_BUFFER_COUNT], bot_plane_index[ENCODE_BUFFER_COUNT];
-uint8_t top_plane_index_pos, bot_plane_index_pos;
+int16_t screen_plane_index[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
+uint8_t screen_plane_index_pos[SCREEN_COUNT];
 
 enum {
   Y_COMP,
@@ -1518,14 +1534,15 @@ char *state_string[COMP_COUNT] = {
   "Y", "U", "V"
 };
 
-uint8_t top_buf_valid[ENCODE_BUFFER_COUNT];
-uint8_t bot_buf_valid[ENCODE_BUFFER_COUNT];
-uint8_t top_buf[ENCODE_BUFFER_COUNT][COMP_COUNT][400 * 240];
-uint8_t bot_buf[ENCODE_BUFFER_COUNT][COMP_COUNT][320 * 240];
-uint8_t top_bpp[ENCODE_BUFFER_COUNT][COMP_COUNT];
-uint8_t bot_bpp[ENCODE_BUFFER_COUNT][COMP_COUNT];
-uint8_t top_me_buf[ENCODE_BUFFER_COUNT][2][400 * 240 / RP_ME_MIN_BLOCK_SIZE / RP_ME_MIN_BLOCK_SIZE / 4];
-uint8_t bot_me_buf[ENCODE_BUFFER_COUNT][2][320 * 240 / RP_ME_MIN_BLOCK_SIZE / RP_ME_MIN_BLOCK_SIZE / 4];
+uint8_t screen_done[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
+uint8_t screen_buf_valid[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
+uint8_t screen_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT][400 * 240];
+uint8_t screen_bpp[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT];
+uint8_t screen_me_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][2][400 * 240 / RP_ME_MIN_BLOCK_SIZE / RP_ME_MIN_BLOCK_SIZE / 4];
+
+uint8_t screen_frame_n[SCREEN_COUNT];
+
+int8_t image_me[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT][400 * 240];
 
 #define RECV_BUF_SIZE (400 * 240)
 uint8_t recv_buf[RECV_BUF_SIZE];
@@ -1576,6 +1593,41 @@ int decode_image(uint8_t *dst, int dst_size, const uint8_t *src, int src_size, i
   free(zero);
 
   return w * h;
+}
+
+void me_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const int8_t *me_x, const int8_t *me_y, int scale_log2, int w, int h, int bpp) {
+  if (ntr_me_downscale)
+    ++scale_log2;
+
+  u8 me_block_size_log2 = av_ceil_log2(ntr_me_block_size) + scale_log2;
+  u8 me_block_size = ntr_me_block_size << scale_log2;
+  u8 me_block_size_mask = (1 << me_block_size_log2) - 1;
+
+  u8 block_x_n = w >> me_block_size_log2;
+	u8 block_y_n = h >> me_block_size_log2;
+	u8 x_off = (w & me_block_size_mask) >> 1;
+	u8 y_off = (h & me_block_size_mask) >> 1;
+
+  u8 me_bpp = av_ceil_log2(ntr_me_search_param * 2 + 1);
+	u8 me_bpp_half_range = (1 << me_bpp) >> 1;
+
+  for (int i = 0; i < w; ++i) {
+    int me_i = RP_MAX(0, i - x_off) >> me_block_size_log2;
+    me_i = RP_MIN(me_i, block_x_n - 1);
+    for (int j = 0; j < h; ++j) {
+      int me_j = RP_MAX(0, j - y_off) >> me_block_size_log2;
+      me_j = RP_MIN(me_j, block_y_n - 1);
+
+      int x = (int)((s16)me_x[me_i * block_y_n + me_j] - (s16)me_bpp_half_range) << scale_log2;
+      int y = (int)((s16)me_y[me_i * block_y_n + me_j] - (s16)me_bpp_half_range) << scale_log2;
+
+      x = av_clip(x, -i, w - i - 1);
+      y = av_clip(y, -j, h - j - 1);
+
+      const u8 *ref_est = ref++ + (int)x * h + (int)y;
+      *dst++ = (u8)((u8)(*ref_est << (8 - bpp)) + (u8)(*cur++ << (8 - bpp)) - 128) >> (8 - bpp);
+    }
+  }
 }
 
 int receiving;
@@ -1636,32 +1688,24 @@ int handle_recv(uint8_t *buf, int size)
       int plane;
       int comp;
 
-#define FINI(plane_array, index, index_pos) do { \
-  for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) { \
-    if (index[i] == send_header.frame_n) { \
-      pos = i; \
-      plane = ++plane_array[i]; \
-      if (!p_frame && (plane == ME_X_DATA)) \
-        plane = ++plane_array[i]; \
-      if (p_frame ? plane > ME_Y_DATA : plane > V_DATA) \
-        pos = index[i] = -1; \
-      break; \
-    } \
-  } \
-  if (pos < 0) { \
-    pos = index_pos++; \
-    index_pos %= ENCODE_BUFFER_COUNT; \
-    plane = plane_array[pos] = Y_DATA; \
-    index[pos] = send_header.frame_n; \
-  } \
-  comp = plane == Y_DATA ? Y_COMP : plane == U_DATA ? U_COMP : plane == V_DATA ? V_COMP : COMP_COUNT; \
-} while (0)
-      if (top_bot == 0) {
-        FINI(top_plane, top_plane_index, top_plane_index_pos);
-      } else {
-        FINI(bot_plane, bot_plane_index, bot_plane_index_pos);
+      for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
+        if (screen_plane_index[top_bot][i] == send_header.frame_n) {
+          pos = i;
+          plane = ++screen_plane[top_bot][i];
+          if (!p_frame && (plane == ME_X_DATA))
+            plane = ++screen_plane[top_bot][i];
+          if (p_frame ? plane > ME_Y_DATA : plane > V_DATA)
+            pos = screen_plane_index[top_bot][i] = -1;
+          break;
+        }
       }
-#undef FINI
+      if (pos < 0) {
+        pos = screen_plane_index_pos[top_bot]++;
+        screen_plane_index_pos[top_bot] %= ENCODE_BUFFER_COUNT;
+        plane = screen_plane[top_bot][pos] = Y_DATA;
+        screen_plane_index[top_bot][pos] = send_header.frame_n;
+      }
+      comp = plane == Y_DATA ? Y_COMP : plane == U_DATA ? U_COMP : plane == V_DATA ? V_COMP : COMP_COUNT;
 
       int w = top_bot == 0 ? 400 : 320, w_orig = w;
       int h = 240, h_orig = h;
@@ -1669,10 +1713,8 @@ int handle_recv(uint8_t *buf, int size)
         w /= 2; h /= 2;
       }
       if (plane == Y_DATA) {
-        if (top_bot == 0)
-          top_buf_valid[pos] = 1;
-        else
-          bot_buf_valid[pos] = 1;
+        screen_done[top_bot][pos] = 0;
+        screen_buf_valid[top_bot][pos] = 1;
       }
 
       u8 me_block_size_log2 = av_ceil_log2(ntr_me_block_size);
@@ -1688,73 +1730,140 @@ int handle_recv(uint8_t *buf, int size)
         h >>= block_size_log2;
       }
 
-      // fprintf(stderr, "Decoding: plane = %d, comp = %d, w = %d, h = %d, bpp = %d\n", plane, comp, w, h, comp < COMP_COUNT ? send_header.bpp : me_bpp);
+      // fprintf(stderr, "Decoding: screen %d, frame_n = %d, plane = %d, comp = %d, w = %d, h = %d, bpp = %d, size = %d\n", top_bot, send_header.frame_n, plane, comp, w, h, comp < COMP_COUNT ? send_header.bpp : me_bpp, send_header.size);
       int ret;
       if (comp < COMP_COUNT) {
-        ret = ffmpeg_jls_decode(top_bot == 0 ? top_buf[pos][comp] : bot_buf[pos][comp],
+        ret = ffmpeg_jls_decode(screen_buf[top_bot][pos][comp],
           h, w, h, recv_buf, recv_buf_head - recv_buf, send_header.bpp) == w * h;
       } else {
-        ret = ffmpeg_jls_decode(top_bot == 0 ? top_me_buf[pos][plane == ME_X_DATA ? 0 : 1] : bot_me_buf[pos][plane == ME_X_DATA ? 0 : 1],
+        ret = ffmpeg_jls_decode(screen_me_buf[top_bot][pos][plane == ME_X_DATA ? 0 : 1],
           h, w, h, recv_buf, recv_buf_head - recv_buf, me_bpp) == w * h;
       }
       if (ret
       ) {
         // fprintf(stderr, "success %d %d comp %d\n", top_bot, send_header.frame_n, comp);
         int frame_end = p_frame ? plane == ME_Y_DATA : plane == V_DATA;
-        if (top_bot == 0) {
-          if (comp < COMP_COUNT)
-            top_bpp[pos][comp] = send_header.bpp;
 
-          // if (plane == Y_DATA) {
-          //   render_greyscale_to_comp3(top_decoded, top_buf[pos][comp], w, h);
-          // }
-          // if (plane == ME_Y_DATA) {
-          //   render_greyscale_upscale_to_comp3(top_decoded, w_orig, h_orig, top_me_buf[pos][1], w, h);
-          // }
-          if (frame_end && top_buf_valid[pos]) {
-            if (ntr_downscale_uv) {
-              upsampleImage(upscaled_u_image, top_buf[pos][U_COMP], w_orig, h_orig);
-              upsampleImage(upscaled_v_image, top_buf[pos][V_COMP], w_orig, h_orig);
-              render_yuv_to_rgb(top_decoded, top_buf[pos][Y_COMP], upscaled_u_image, upscaled_v_image,
-                w_orig, h_orig, top_bpp[pos][Y_COMP], top_bpp[pos][U_COMP], top_bpp[pos][V_COMP]
-              );
-            } else {
-              render_yuv_to_rgb(top_decoded, top_buf[pos][Y_COMP], top_buf[pos][U_COMP], top_buf[pos][V_COMP],
-                w_orig, h_orig, top_bpp[pos][Y_COMP], top_bpp[pos][U_COMP], top_bpp[pos][V_COMP]
-              );
-            }
-            handle_decode_frame_screen(&top_buffer_ctx, top_decoded);
-          }
-        } else {
-          if (comp < COMP_COUNT)
-            bot_bpp[pos][comp] = send_header.bpp;
+        if (comp < COMP_COUNT)
+          screen_bpp[top_bot][pos][comp] = send_header.bpp;
 
-          // if (plane == Y_DATA) {
-          //   render_greyscale_to_comp3(bot_decoded, bot_buf[pos][comp], w, h);
-          // }
-          // if (plane == ME_Y_DATA) {
-          //   render_greyscale_upscale_to_comp3(bot_decoded, w_orig, h_orig, bot_me_buf[pos][1], w, h);
-          // }
-          if (frame_end && bot_buf_valid[pos]) {
-            if (ntr_downscale_uv) {
-              upsampleImage(upscaled_u_image, bot_buf[pos][U_COMP], w_orig, h_orig);
-              upsampleImage(upscaled_v_image, bot_buf[pos][V_COMP], w_orig, h_orig);
-              render_yuv_to_rgb(bot_decoded, bot_buf[pos][Y_COMP], upscaled_u_image, upscaled_v_image,
-                w_orig, h_orig, bot_bpp[pos][Y_COMP], bot_bpp[pos][U_COMP], bot_bpp[pos][V_COMP]
-              );
+        if (frame_end) {
+          if (!screen_buf_valid[top_bot][pos]) {
+            // TODO request key frame
+            fprintf(stderr, "frame incomplete, requesting key frame\n");
+          } else if (send_header.frame_n - screen_frame_n[top_bot] >= ENCODE_BUFFER_COUNT) {
+            // TODO request key frame
+            fprintf(stderr, "too many missing frames (%d, %d), requesting key frame\n", screen_frame_n[top_bot], send_header.frame_n);
+          } else {
+            if (!p_frame) {
+              screen_frame_n[top_bot] = send_header.frame_n;
+              if (ntr_downscale_uv) {
+                memcpy(image_me[top_bot][pos][Y_COMP], screen_buf[top_bot][pos][Y_COMP], w_orig * h_orig);
+                memcpy(image_me[top_bot][pos][U_COMP], screen_buf[top_bot][pos][U_COMP], w_orig / 2 * h_orig / 2);
+                memcpy(image_me[top_bot][pos][V_COMP], screen_buf[top_bot][pos][V_COMP], w_orig / 2 * h_orig / 2);
+
+                upsampleImage(upscaled_u_image, screen_buf[top_bot][pos][U_COMP], w_orig, h_orig);
+                upsampleImage(upscaled_v_image, screen_buf[top_bot][pos][V_COMP], w_orig, h_orig);
+                render_yuv_to_rgb(screen_decoded[top_bot], screen_buf[top_bot][pos][Y_COMP], upscaled_u_image, upscaled_v_image,
+                  w_orig, h_orig, screen_bpp[top_bot][pos][Y_COMP], screen_bpp[top_bot][pos][U_COMP], screen_bpp[top_bot][pos][V_COMP]
+                );
+              } else {
+                memcpy(image_me[top_bot][pos][Y_COMP], screen_buf[top_bot][pos][Y_COMP], w_orig * h_orig);
+                memcpy(image_me[top_bot][pos][U_COMP], screen_buf[top_bot][pos][U_COMP], w_orig * h_orig);
+                memcpy(image_me[top_bot][pos][V_COMP], screen_buf[top_bot][pos][V_COMP], w_orig * h_orig);
+
+                render_yuv_to_rgb(screen_decoded[top_bot], screen_buf[top_bot][pos][Y_COMP], screen_buf[top_bot][pos][U_COMP], screen_buf[top_bot][pos][V_COMP],
+                  w_orig, h_orig, screen_bpp[top_bot][pos][Y_COMP], screen_bpp[top_bot][pos][U_COMP], screen_bpp[top_bot][pos][V_COMP]
+                );
+              }
+              screen_done[top_bot][pos] = 1;
+              handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot]);
             } else {
-              render_yuv_to_rgb(bot_decoded, bot_buf[pos][Y_COMP], bot_buf[pos][U_COMP], bot_buf[pos][V_COMP],
-                w_orig, h_orig, bot_bpp[pos][Y_COMP], bot_bpp[pos][U_COMP], bot_bpp[pos][V_COMP]
-              );
+              uint8_t screen_frame_n_next = (screen_frame_n[top_bot] + 1);
+              int i_prev = -1;
+              for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
+                if (screen_plane_index[top_bot][i] == screen_frame_n[top_bot]) {
+                  if (!screen_done[top_bot][i]) {
+                    break;
+                  }
+                  i_prev = i;
+                  break;
+                }
+              }
+              if (i_prev >= 0) {
+                while (screen_frame_n[top_bot] != send_header.frame_n) {
+                  int i;
+                  for (i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
+                    if (screen_plane_index[top_bot][i] == screen_frame_n_next) {
+                      if (!screen_buf_valid[top_bot][i]) {
+                        i = ENCODE_BUFFER_COUNT;
+                        break;
+                      }
+                      me_image(image_me[top_bot][i][Y_COMP],
+                        image_me[top_bot][i_prev][Y_COMP],
+                        screen_buf[top_bot][i][Y_COMP],
+                        screen_me_buf[top_bot][i][0],
+                        screen_me_buf[top_bot][i][1],
+                        1,
+                        w_orig,
+                        h_orig,
+                        screen_bpp[top_bot][i][Y_COMP]
+                      );
+                      me_image(image_me[top_bot][i][U_COMP],
+                        image_me[top_bot][i_prev][U_COMP],
+                        screen_buf[top_bot][i][U_COMP],
+                        screen_me_buf[top_bot][i][0],
+                        screen_me_buf[top_bot][i][1],
+                        1 - ntr_downscale_uv,
+                        ntr_downscale_uv ? w_orig / 2 : w_orig,
+                        ntr_downscale_uv ? h_orig / 2 : h_orig,
+                        screen_bpp[top_bot][i][U_COMP]
+                      );
+                      me_image(image_me[top_bot][i][V_COMP],
+                        image_me[top_bot][i_prev][V_COMP],
+                        screen_buf[top_bot][i][V_COMP],
+                        screen_me_buf[top_bot][i][0],
+                        screen_me_buf[top_bot][i][1],
+                        1 - ntr_downscale_uv,
+                        ntr_downscale_uv ? w_orig / 2 : w_orig,
+                        ntr_downscale_uv ? h_orig / 2 : h_orig,
+                        screen_bpp[top_bot][i][V_COMP]
+                      );
+                      if (ntr_downscale_uv) {
+                        upsampleImage(upscaled_u_image, image_me[top_bot][i][U_COMP], w_orig, h_orig);
+                        upsampleImage(upscaled_v_image, image_me[top_bot][i][V_COMP], w_orig, h_orig);
+                        render_yuv_to_rgb(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], upscaled_u_image, upscaled_v_image,
+                          w_orig, h_orig, screen_bpp[top_bot][i][Y_COMP], screen_bpp[top_bot][i][U_COMP], screen_bpp[top_bot][i][V_COMP]
+                        );
+                        // render_greyscale_to_comp3(screen_decoded[top_bot], upscaled_u_image, w_orig, h_orig);
+                      } else {
+                        render_yuv_to_rgb(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], image_me[top_bot][i][U_COMP], image_me[top_bot][i][V_COMP],
+                          w_orig, h_orig, screen_bpp[top_bot][i][Y_COMP], screen_bpp[top_bot][i][U_COMP], screen_bpp[top_bot][i][V_COMP]
+                        );
+                        // render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][U_COMP], w_orig, h_orig);
+                      }
+                      // render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], w_orig, h_orig);
+                      // render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_me_buf[top_bot][i][0], w, h);
+                      // render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_me_buf[top_bot][i][1], w, h);
+                      screen_done[top_bot][i] = 1;
+                      handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot]);
+                      break;
+                    }
+                  }
+                  if (i == ENCODE_BUFFER_COUNT) {
+                    break;
+                  }
+
+                  i_prev = i;
+                  screen_frame_n[top_bot] = screen_frame_n_next;
+                  screen_frame_n_next = (screen_frame_n[top_bot] + 1);
+                }
+              }
             }
-            handle_decode_frame_screen(&bot_buffer_ctx, bot_decoded);
           }
         }
       } else {
-        if (top_bot == 0)
-          top_buf_valid[pos] = 0;
-        else
-          bot_buf_valid[pos] = 0;
+        screen_buf_valid[top_bot][pos] = 0;
         fprintf(stderr, "fail %d %d plane %d\n", top_bot, send_header.frame_n, plane);
         // char i = 0;
         // ikcp_send(kcp, &i, sizeof(i));
@@ -1874,12 +1983,14 @@ void *udp_recv_thread_func(void *arg)
     // kcp->rx_minrto = 10;
     kcp->stream = 1;
     // fprintf(stderr, "new connection\n");
-    top_buffer_ctx.updated = FBS_NOT_AVAIL;
-    bot_buffer_ctx.updated = FBS_NOT_AVAIL;
-    for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
-      top_plane[i] = bot_plane[i] = Y_COMP;
-      top_plane_index[i] = bot_plane_index[i] = -1;
-      top_plane_index_pos = bot_plane_index_pos = 0;
+    for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
+      buffer_ctx[top_bot].updated = FBS_NOT_AVAIL;
+      for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
+        screen_plane[top_bot][i] = Y_COMP;
+        screen_plane_index[top_bot][i] = -1;
+        screen_plane_index_pos[top_bot] = 0;
+      }
+      screen_frame_n[top_bot] = 0;
     }
     recv_state = RECV_STATE_HEADER;
     leftover_size = 0;
@@ -2027,14 +2138,14 @@ int main(int argc, char *argv[])
 
   sock_startup();
 
-  glGenTextures(1, &top_buffer_ctx.gl_tex_id);
-  glGenTextures(1, &bot_buffer_ctx.gl_tex_id);
+  for (int i = 0; i < SCREEN_COUNT; ++i) {
+    glGenTextures(1, &buffer_ctx[i].gl_tex_id);
+    pthread_mutex_init(&buffer_ctx[i].gl_tex_mutex, NULL);
+  }
   gl_program = LoadProgram(vShaderStr, fShaderStr);
   gl_position_loc = glGetAttribLocation(gl_program, "a_position");
   gl_tex_coord_loc = glGetAttribLocation(gl_program, "a_texCoord");
   gl_sampler_loc = glGetUniformLocation(gl_program, "s_texture");
-  pthread_mutex_init(&top_buffer_ctx.gl_tex_mutex, NULL);
-  pthread_mutex_init(&bot_buffer_ctx.gl_tex_mutex, NULL);
 
   rpConfigSetDefault();
 
@@ -2073,12 +2184,11 @@ int main(int argc, char *argv[])
   pthread_join(menu_tcp_thread, NULL);
   pthread_join(nwm_tcp_thread, NULL);
 
-  pthread_mutex_destroy(&bot_buffer_ctx.gl_tex_mutex);
-  pthread_mutex_destroy(&top_buffer_ctx.gl_tex_mutex);
-
   glDeleteProgram(gl_program);
-  glDeleteTextures(1, &top_buffer_ctx.gl_tex_id);
-  glDeleteTextures(1, &bot_buffer_ctx.gl_tex_id);
+  for (int i = 0; i < SCREEN_COUNT; ++i) {
+    pthread_mutex_destroy(&buffer_ctx[i].gl_tex_mutex);
+    glDeleteTextures(1, &buffer_ctx[i].gl_tex_id);
+  }
 
   sock_cleanup();
   nk_sdl_shutdown();
