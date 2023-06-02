@@ -208,6 +208,8 @@ static int ntr_me_search_param;
 static nk_bool ntr_me_downscale;
 static nk_bool ntr_me_interpolate;
 
+static int debug_view_plane;
+
 static atomic_uint_fast8_t ip_octets[4];
 
 #define HEART_BEAT_EVERY_MS 250
@@ -617,7 +619,7 @@ void rpConfigSetDefault(void)
   color_transform_hp = 0;
   encoder_which = 1;
   downscale_uv = 1;
-  me_method = 2;
+  me_method = 3;
   me_block_size = 2;
   me_search_param = 16;
   me_downscale = 1;
@@ -713,12 +715,14 @@ static void guiMain(struct nk_context *ctx)
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Motion Estimation", NK_TEXT_CENTERED);
     const char *motion_estimation_text[] = {
+      "Disabled",
       "Three Step",
       "Two Dimensional Log",
       "New Three Step",
       "Four Step",
       "Diamond",
       "Hexagon-Based",
+      "None (Diff Only)",
     };
     nk_combobox(ctx, motion_estimation_text, sizeof(motion_estimation_text) / sizeof(*motion_estimation_text),
       &me_method, 30, nk_vec2(250, 9999)
@@ -811,8 +815,8 @@ static void guiMain(struct nk_context *ctx)
   nk_end(ctx);
   nk_window_show(ctx, remote_play_wnd, show_window);
 
-  const char *debug_msg_wnd = "Debug Msg";
-  if (nk_begin(ctx, debug_msg_wnd, nk_rect(625, 50, 150, 120),
+  const char *debug_msg_wnd = "Debug";
+  if (nk_begin(ctx, debug_msg_wnd, nk_rect(625, 50, 150, 250),
                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE))
   {
     nk_layout_row_dynamic(ctx, 30, 2);
@@ -829,6 +833,7 @@ static void guiMain(struct nk_context *ctx)
         menu_work_state = CS_DISCONNECTING;
       }
     }
+
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "NWM", NK_TEXT_CENTERED);
     nwm_connection = nwm_work_state;
@@ -843,6 +848,22 @@ static void guiMain(struct nk_context *ctx)
         nwm_work_state = CS_DISCONNECTING;
       }
     }
+
+    nk_layout_row_dynamic(ctx, 30, 1);
+    const char *debug_view_plane_text[] = {
+      "",
+      "Y",
+      "U",
+      "V",
+      "ME X",
+      "ME Y",
+      "Y ME",
+      "U ME",
+      "V ME",
+    };
+    nk_combobox(ctx, debug_view_plane_text, sizeof(debug_view_plane_text) / sizeof(*debug_view_plane_text),
+      &debug_view_plane, 30, nk_vec2(150, 9999)
+    );
   }
   nk_end(ctx);
   nk_window_show(ctx, debug_msg_wnd, show_window);
@@ -1832,19 +1853,36 @@ int handle_recv(uint8_t *buf, int size)
                       if (ntr_downscale_uv) {
                         upsampleImage(upscaled_u_image, image_me[top_bot][i][U_COMP], w_orig, h_orig);
                         upsampleImage(upscaled_v_image, image_me[top_bot][i][V_COMP], w_orig, h_orig);
-                        render_yuv_to_rgb(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], upscaled_u_image, upscaled_v_image,
-                          w_orig, h_orig, screen_bpp[top_bot][i][Y_COMP], screen_bpp[top_bot][i][U_COMP], screen_bpp[top_bot][i][V_COMP]
-                        );
-                        // render_greyscale_to_comp3(screen_decoded[top_bot], upscaled_u_image, w_orig, h_orig);
+                        if (debug_view_plane == 0)
+                          render_yuv_to_rgb(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], upscaled_u_image, upscaled_v_image,
+                            w_orig, h_orig, screen_bpp[top_bot][i][Y_COMP], screen_bpp[top_bot][i][U_COMP], screen_bpp[top_bot][i][V_COMP]
+                          );
+                        else if (debug_view_plane == 2)
+                          render_greyscale_to_comp3(screen_decoded[top_bot], upscaled_u_image, w_orig, h_orig);
+                        else if (debug_view_plane == 3)
+                          render_greyscale_to_comp3(screen_decoded[top_bot], upscaled_v_image, w_orig, h_orig);
                       } else {
-                        render_yuv_to_rgb(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], image_me[top_bot][i][U_COMP], image_me[top_bot][i][V_COMP],
-                          w_orig, h_orig, screen_bpp[top_bot][i][Y_COMP], screen_bpp[top_bot][i][U_COMP], screen_bpp[top_bot][i][V_COMP]
-                        );
-                        // render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][U_COMP], w_orig, h_orig);
+                        if (debug_view_plane == 0)
+                          render_yuv_to_rgb(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], image_me[top_bot][i][U_COMP], image_me[top_bot][i][V_COMP],
+                            w_orig, h_orig, screen_bpp[top_bot][i][Y_COMP], screen_bpp[top_bot][i][U_COMP], screen_bpp[top_bot][i][V_COMP]
+                          );
+                        else if (debug_view_plane == 2)
+                          render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][U_COMP], w_orig, h_orig);
+                        else if (debug_view_plane == 3)
+                          render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][V_COMP], w_orig, h_orig);
                       }
-                      // render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], w_orig, h_orig);
-                      // render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_me_buf[top_bot][i][0], w, h);
-                      // render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_me_buf[top_bot][i][1], w, h);
+                      if (debug_view_plane == 1)
+                        render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], w_orig, h_orig);
+                      else if (debug_view_plane == 4)
+                        render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_me_buf[top_bot][i][0], w, h);
+                      else if (debug_view_plane == 5)
+                        render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_me_buf[top_bot][i][1], w, h);
+                      else if (debug_view_plane == 6)
+                        render_greyscale_to_comp3(screen_decoded[top_bot], screen_buf[top_bot][i][Y_COMP], w_orig, h_orig);
+                      else if (debug_view_plane == 7)
+                        render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][U_COMP], ntr_downscale_uv ? w_orig / 2 : w_orig, ntr_downscale_uv ? h_orig / 2 : h_orig);
+                      else if (debug_view_plane == 8)
+                        render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][V_COMP], ntr_downscale_uv ? w_orig / 2 : w_orig, ntr_downscale_uv ? h_orig / 2 : h_orig);
                       screen_done[top_bot][i] = 1;
                       handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot]);
                       break;
