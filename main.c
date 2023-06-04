@@ -476,7 +476,7 @@ void *menu_tcp_thread_func(void *arg)
         args[1] |= (me_block_size & 0x3) << 9;
         args[1] |= ((me_search_param - RP_ME_MIN_SEARCH_PARAM) & 0x1f) << 11;
         args[1] |= (me_downscale & 1) << 16;
-        // args[1] |= (me_interpolate & 1) << 17;
+        args[1] |= (me_interpolate & 1) << 17;
 
         args[2] |= top_priority & 0xf;
         args[2] |= (bot_priority & 0xf) << 4;
@@ -742,9 +742,9 @@ static void guiMain(struct nk_context *ctx)
     nk_label(ctx, "ME Downscale", NK_TEXT_CENTERED);
     nk_checkbox_label(ctx, "", &me_downscale);
 
-    // nk_layout_row_dynamic(ctx, 30, 2);
-    // nk_label(ctx, "ME Interpolate", NK_TEXT_CENTERED);
-    // nk_checkbox_label(ctx, "", &me_interpolate);
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "ME Interpolate", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &me_interpolate);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Encoder", NK_TEXT_CENTERED);
@@ -1301,9 +1301,9 @@ void convert_to_rgb_hp(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, 
   int bpp = (y_bpp + u_bpp + v_bpp) / 3;
   u8 half_range = 1 << (bpp - 1);
   int bpp_2 = y_bpp - bpp;
-	u8 half_y = y >> bpp_2;
-	u8 bpp_mask = (1 << bpp) - 1;
-	u8 bpp_2_mask = (1 << (bpp + 1)) - 1;
+  u8 half_y = y >> bpp_2;
+  u8 bpp_mask = (1 << bpp) - 1;
+  u8 bpp_2_mask = (1 << (bpp + 1)) - 1;
 
   if (ntr_color_transform_hp == 1) {
     *r = ((half_y + u) << (8 - bpp)) - 128;
@@ -1478,9 +1478,8 @@ static inline uint16_t accessImageUpsampleUnscaled(const uint8_t *ds_image, int 
     return a;
 }
 
-// #define rshift_to_even(n, s) ({ typeof(n) n_ = n >> (s - 1); uint8_t b_ = n_ & 1; n_ >>= 1; uint8_t c_ = n_ & 1; n_ + (b_ & c_); })
-#define rshift_to_even(n, s) ((n + (s > 1 ? (1 << (s - 1)) : 0)) >> s)
-// #define rshift_to_even(n, s) ((n + (1 << (s - 1))) >> s)
+#define rshift_to_even(n, s) (((n) + ((s) > 1 ? (1 << ((s) - 1)) : 0)) >> (s))
+#define srshift_to_even(t, n, s) ((t)((n) + ((s) > 1 ? (1 << ((s) - 1)) : 0)) >> (s))
 
 static inline uint8_t accessImageUpsample(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
 {
@@ -1506,17 +1505,17 @@ uint8_t buf[BUF_SIZE];
 ikcpcb *kcp;
 
 enum {
-	RP_SEND_HEADER_TOP_BOT = (1 << 0),
-	RP_SEND_HEADER_P_FRAME = (1 << 1),
+  RP_SEND_HEADER_TOP_BOT = (1 << 0),
+  RP_SEND_HEADER_P_FRAME = (1 << 1),
 };
 
 struct rp_send_header {
-	u32 size;
-	u32 size_1;
-	u8 frame_n;
-	u8 bpp;
-	u8 format;
-	u8 flags;
+  u32 size;
+  u32 size_1;
+  u8 frame_n;
+  u8 bpp;
+  u8 format;
+  u8 flags;
 } send_header;
 
 enum {
@@ -1616,6 +1615,42 @@ int decode_image(uint8_t *dst, int dst_size, const uint8_t *src, int src_size, i
   return w * h;
 }
 
+enum {
+  CORNER_TOP_LEFT,
+  CORNER_BOT_LEFT,
+  CORNER_BOT_RIGHT,
+  CORNER_TOP_RIGHT,
+  CORNER_COUNT,
+};
+
+static void interpolate_me(const s8 *me_x_vec[CORNER_COUNT], const s8 *me_y_vec[CORNER_COUNT], int half_range, int scale_log2, int block_size, int block_size_log2, int i, int j, s8 *x, s8 *y) {
+  int step_total = block_size * 2;
+  int step_base = 1;
+  int step = 2;
+
+  int x_left = i * step + step_base;
+  int x_right = step_total - x_left;
+
+  int y_top = j * step + step_base;
+  int y_bot = step_total - y_top;
+
+  int rshift_scale = (block_size_log2 + 1) * 2 + 2;
+
+  int x_unscaled =
+    ((int)*me_x_vec[CORNER_TOP_LEFT] - half_range) * x_left * y_top +
+    ((int)*me_x_vec[CORNER_BOT_LEFT] - half_range) * x_left * y_bot +
+    ((int)*me_x_vec[CORNER_BOT_RIGHT] - half_range) * x_right * y_bot +
+    ((int)*me_x_vec[CORNER_TOP_RIGHT] - half_range) * x_right * y_top;
+  *x = srshift_to_even(int, x_unscaled, rshift_scale) << scale_log2;
+
+  int y_unscaled =
+    ((int)*me_y_vec[CORNER_TOP_LEFT] - half_range) * x_left * y_top +
+    ((int)*me_y_vec[CORNER_BOT_LEFT] - half_range) * x_left * y_bot +
+    ((int)*me_y_vec[CORNER_BOT_RIGHT] - half_range) * x_right * y_bot +
+    ((int)*me_y_vec[CORNER_TOP_RIGHT] - half_range) * x_right * y_top;
+  *y = srshift_to_even(int, y_unscaled, rshift_scale) << scale_log2;
+}
+
 void me_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const int8_t *me_x, const int8_t *me_y, int scale_log2, int w, int h, int bpp) {
   if (ntr_me_downscale)
     ++scale_log2;
@@ -1625,28 +1660,92 @@ void me_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const int8_t
   u8 me_block_size_mask = (1 << me_block_size_log2) - 1;
 
   u8 block_x_n = w >> me_block_size_log2;
-	u8 block_y_n = h >> me_block_size_log2;
-	u8 x_off = (w & me_block_size_mask) >> 1;
-	u8 y_off = (h & me_block_size_mask) >> 1;
+  u8 block_y_n = h >> me_block_size_log2;
+  u8 x_off = (w & me_block_size_mask) >> 1;
+  u8 y_off = (h & me_block_size_mask) >> 1;
 
   u8 me_bpp = av_ceil_log2(ntr_me_search_param * 2 + 1);
-	u8 me_bpp_half_range = (1 << me_bpp) >> 1;
+  u8 me_bpp_half_range = (1 << me_bpp) >> 1;
 
-  for (int i = 0; i < w; ++i) {
-    int me_i = RP_MAX(0, i - x_off) >> me_block_size_log2;
-    me_i = RP_MIN(me_i, block_x_n - 1);
-    for (int j = 0; j < h; ++j) {
-      int me_j = RP_MAX(0, j - y_off) >> me_block_size_log2;
-      me_j = RP_MIN(me_j, block_y_n - 1);
+  if (!ntr_me_interpolate) {
+    for (int i = 0; i < w; ++i) {
+      int me_i = RP_MAX(0, i - x_off) >> me_block_size_log2;
+      me_i = RP_MIN(me_i, block_x_n - 1);
+      for (int j = 0; j < h; ++j) {
+        int me_j = RP_MAX(0, j - y_off) >> me_block_size_log2;
+        me_j = RP_MIN(me_j, block_y_n - 1);
 
-      int x = (int)((s16)me_x[me_i * block_y_n + me_j] - (s16)me_bpp_half_range) << scale_log2;
-      int y = (int)((s16)me_y[me_i * block_y_n + me_j] - (s16)me_bpp_half_range) << scale_log2;
+        int x = (int)((s16)me_x[me_i * block_y_n + me_j] - (s16)me_bpp_half_range) << scale_log2;
+        int y = (int)((s16)me_y[me_i * block_y_n + me_j] - (s16)me_bpp_half_range) << scale_log2;
 
-      x = av_clip(x, -i, w - i - 1);
-      y = av_clip(y, -j, h - j - 1);
+        x = av_clip(x, -i, w - i - 1);
+        y = av_clip(y, -j, h - j - 1);
 
-      const u8 *ref_est = ref++ + (int)x * h + (int)y;
-      *dst++ = (u8)((u8)(*ref_est << (8 - bpp)) + (u8)(*cur++ << (8 - bpp)) - 128) >> (8 - bpp);
+        const u8 *ref_est = ref++ + (int)x * h + (int)y;
+        *dst++ = (u8)((u8)(*ref_est << (8 - bpp)) + (u8)(*cur++ << (8 - bpp)) - 128) >> (8 - bpp);
+      }
+    }
+  } else {
+    x_off += me_block_size >> 1;
+		y_off += me_block_size >> 1;
+    const s8 *me_x_col_vec[CORNER_COUNT];
+    const s8 *me_y_col_vec[CORNER_COUNT];
+    for (int i = 0; i < CORNER_COUNT; ++i) {
+      me_x_col_vec[i] = me_x;
+      me_y_col_vec[i] = me_y;
+    }
+    for (int i = 0; i < w; ++i) {
+      int i_off = (i - x_off) & me_block_size_mask;
+      if (i_off == 0) {
+        if (i < w - x_off - 1) {
+          me_x_col_vec[CORNER_BOT_LEFT] += block_y_n;
+          me_x_col_vec[CORNER_BOT_RIGHT] += block_y_n;
+
+          me_y_col_vec[CORNER_BOT_LEFT] += block_y_n;
+          me_y_col_vec[CORNER_BOT_RIGHT] += block_y_n;
+        }
+        if (i > x_off) {
+          me_x_col_vec[CORNER_TOP_LEFT] += block_y_n;
+          me_x_col_vec[CORNER_TOP_RIGHT] += block_y_n;
+
+          me_y_col_vec[CORNER_TOP_LEFT] += block_y_n;
+          me_y_col_vec[CORNER_TOP_RIGHT] += block_y_n;
+        }
+      }
+
+      const s8 *me_x_vec[CORNER_COUNT];
+      const s8 *me_y_vec[CORNER_COUNT];
+      memcpy(me_x_vec, me_x_col_vec, sizeof(me_x_vec));
+      memcpy(me_y_vec, me_y_col_vec, sizeof(me_y_vec));
+      for (int j = 0; j < h; ++j) {
+        int j_off = (j - y_off) & me_block_size_mask;
+        if (j_off == 0) {
+          if (i == 0) {
+          }
+          if (j < h - y_off - 1) {
+            ++me_x_vec[CORNER_BOT_LEFT];
+            ++me_x_vec[CORNER_BOT_RIGHT];
+
+            ++me_y_vec[CORNER_BOT_LEFT];
+            ++me_y_vec[CORNER_BOT_RIGHT];
+          }
+          if (j > y_off) {
+            ++me_x_vec[CORNER_TOP_LEFT];
+            ++me_x_vec[CORNER_TOP_RIGHT];
+
+            ++me_y_vec[CORNER_TOP_LEFT];
+            ++me_y_vec[CORNER_TOP_RIGHT];
+          }
+        }
+        s8 x, y;
+        interpolate_me(me_x_vec, me_y_vec, me_bpp_half_range, scale_log2, me_block_size, me_block_size_log2, i_off, j_off, &x, &y);
+
+        x = av_clip(x, -i, w - i - 1);
+        y = av_clip(y, -j, h - j - 1);
+
+        const u8 *ref_est = ref++ + (int)x * h + (int)y;
+        *dst++ = (u8)((u8)(*ref_est << (8 - bpp)) + (u8)(*cur++ << (8 - bpp)) - 128) >> (8 - bpp);
+      }
     }
   }
 }
