@@ -1734,8 +1734,10 @@ int handle_recv(uint8_t *buf, int size)
         w /= 2; h /= 2;
       }
       if (plane == Y_DATA) {
+        // if (!p_frame)
+        //   screen_frame_n[top_bot] = send_header.frame_n;
         screen_done[top_bot][pos] = 0;
-        screen_buf_valid[top_bot][pos] = 1;
+        screen_buf_valid[top_bot][pos] = -1;
       }
 
       u8 me_block_size_log2 = av_ceil_log2(ntr_me_block_size);
@@ -1769,13 +1771,14 @@ int handle_recv(uint8_t *buf, int size)
           screen_bpp[top_bot][pos][comp] = send_header.bpp;
 
         if (frame_end) {
-          if (!screen_buf_valid[top_bot][pos]) {
+          if (screen_buf_valid[top_bot][pos] == 0) {
             // TODO request key frame
             fprintf(stderr, "frame incomplete, requesting key frame\n");
           } else if (send_header.frame_n - screen_frame_n[top_bot] >= ENCODE_BUFFER_COUNT) {
             // TODO request key frame
             fprintf(stderr, "too many missing frames (%d, %d), requesting key frame\n", screen_frame_n[top_bot], send_header.frame_n);
           } else {
+            screen_buf_valid[top_bot][pos] = 1;
             if (!p_frame) {
               screen_frame_n[top_bot] = send_header.frame_n;
               if (ntr_downscale_uv) {
@@ -1799,103 +1802,105 @@ int handle_recv(uint8_t *buf, int size)
               }
               screen_done[top_bot][pos] = 1;
               handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot]);
-            } else {
-              uint8_t screen_frame_n_next = (screen_frame_n[top_bot] + 1);
-              int i_prev = -1;
-              for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
-                if (screen_plane_index[top_bot][i] == screen_frame_n[top_bot]) {
-                  if (!screen_done[top_bot][i]) {
-                    break;
-                  }
-                  i_prev = i;
+              // fprintf(stderr, "Displaying key frame: screen %d, frame_n = %d\n", top_bot, screen_frame_n[top_bot]);
+            }
+
+            uint8_t screen_frame_n_next = (screen_frame_n[top_bot] + 1);
+            int i_prev = -1;
+            for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
+              if (screen_plane_index[top_bot][i] == screen_frame_n[top_bot]) {
+                if (!screen_done[top_bot][i]) {
                   break;
                 }
+                i_prev = i;
+                break;
               }
-              if (i_prev >= 0) {
-                while (screen_frame_n[top_bot] != send_header.frame_n) {
-                  int i;
-                  for (i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
-                    if (screen_plane_index[top_bot][i] == screen_frame_n_next) {
-                      if (!screen_buf_valid[top_bot][i]) {
-                        i = ENCODE_BUFFER_COUNT;
-                        break;
-                      }
-                      me_image(image_me[top_bot][i][Y_COMP],
-                        image_me[top_bot][i_prev][Y_COMP],
-                        screen_buf[top_bot][i][Y_COMP],
-                        screen_me_buf[top_bot][i][0],
-                        screen_me_buf[top_bot][i][1],
-                        1,
-                        w_orig,
-                        h_orig,
-                        screen_bpp[top_bot][i][Y_COMP]
-                      );
-                      me_image(image_me[top_bot][i][U_COMP],
-                        image_me[top_bot][i_prev][U_COMP],
-                        screen_buf[top_bot][i][U_COMP],
-                        screen_me_buf[top_bot][i][0],
-                        screen_me_buf[top_bot][i][1],
-                        1 - ntr_downscale_uv,
-                        ntr_downscale_uv ? w_orig / 2 : w_orig,
-                        ntr_downscale_uv ? h_orig / 2 : h_orig,
-                        screen_bpp[top_bot][i][U_COMP]
-                      );
-                      me_image(image_me[top_bot][i][V_COMP],
-                        image_me[top_bot][i_prev][V_COMP],
-                        screen_buf[top_bot][i][V_COMP],
-                        screen_me_buf[top_bot][i][0],
-                        screen_me_buf[top_bot][i][1],
-                        1 - ntr_downscale_uv,
-                        ntr_downscale_uv ? w_orig / 2 : w_orig,
-                        ntr_downscale_uv ? h_orig / 2 : h_orig,
-                        screen_bpp[top_bot][i][V_COMP]
-                      );
-                      if (ntr_downscale_uv) {
-                        upsampleImage(upscaled_u_image, image_me[top_bot][i][U_COMP], w_orig, h_orig);
-                        upsampleImage(upscaled_v_image, image_me[top_bot][i][V_COMP], w_orig, h_orig);
-                        if (debug_view_plane == 0)
-                          render_yuv_to_rgb(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], upscaled_u_image, upscaled_v_image,
-                            w_orig, h_orig, screen_bpp[top_bot][i][Y_COMP], screen_bpp[top_bot][i][U_COMP], screen_bpp[top_bot][i][V_COMP]
-                          );
-                        else if (debug_view_plane == 2)
-                          render_greyscale_to_comp3(screen_decoded[top_bot], upscaled_u_image, w_orig, h_orig);
-                        else if (debug_view_plane == 3)
-                          render_greyscale_to_comp3(screen_decoded[top_bot], upscaled_v_image, w_orig, h_orig);
-                      } else {
-                        if (debug_view_plane == 0)
-                          render_yuv_to_rgb(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], image_me[top_bot][i][U_COMP], image_me[top_bot][i][V_COMP],
-                            w_orig, h_orig, screen_bpp[top_bot][i][Y_COMP], screen_bpp[top_bot][i][U_COMP], screen_bpp[top_bot][i][V_COMP]
-                          );
-                        else if (debug_view_plane == 2)
-                          render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][U_COMP], w_orig, h_orig);
-                        else if (debug_view_plane == 3)
-                          render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][V_COMP], w_orig, h_orig);
-                      }
-                      if (debug_view_plane == 1)
-                        render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], w_orig, h_orig);
-                      else if (debug_view_plane == 4)
-                        render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_me_buf[top_bot][i][0], w, h);
-                      else if (debug_view_plane == 5)
-                        render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_me_buf[top_bot][i][1], w, h);
-                      else if (debug_view_plane == 6)
-                        render_greyscale_to_comp3(screen_decoded[top_bot], screen_buf[top_bot][i][Y_COMP], w_orig, h_orig);
-                      else if (debug_view_plane == 7)
-                        render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][U_COMP], ntr_downscale_uv ? w_orig / 2 : w_orig, ntr_downscale_uv ? h_orig / 2 : h_orig);
-                      else if (debug_view_plane == 8)
-                        render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][V_COMP], ntr_downscale_uv ? w_orig / 2 : w_orig, ntr_downscale_uv ? h_orig / 2 : h_orig);
-                      screen_done[top_bot][i] = 1;
-                      handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot]);
+            }
+            if (i_prev >= 0) {
+              while (1) {
+                int i;
+                for (i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
+                  if (screen_plane_index[top_bot][i] == screen_frame_n_next) {
+                    if (screen_buf_valid[top_bot][i] <= 0) {
+                      i = ENCODE_BUFFER_COUNT;
                       break;
                     }
-                  }
-                  if (i == ENCODE_BUFFER_COUNT) {
+                    me_image(image_me[top_bot][i][Y_COMP],
+                      image_me[top_bot][i_prev][Y_COMP],
+                      screen_buf[top_bot][i][Y_COMP],
+                      screen_me_buf[top_bot][i][0],
+                      screen_me_buf[top_bot][i][1],
+                      1,
+                      w_orig,
+                      h_orig,
+                      screen_bpp[top_bot][i][Y_COMP]
+                    );
+                    me_image(image_me[top_bot][i][U_COMP],
+                      image_me[top_bot][i_prev][U_COMP],
+                      screen_buf[top_bot][i][U_COMP],
+                      screen_me_buf[top_bot][i][0],
+                      screen_me_buf[top_bot][i][1],
+                      1 - ntr_downscale_uv,
+                      ntr_downscale_uv ? w_orig / 2 : w_orig,
+                      ntr_downscale_uv ? h_orig / 2 : h_orig,
+                      screen_bpp[top_bot][i][U_COMP]
+                    );
+                    me_image(image_me[top_bot][i][V_COMP],
+                      image_me[top_bot][i_prev][V_COMP],
+                      screen_buf[top_bot][i][V_COMP],
+                      screen_me_buf[top_bot][i][0],
+                      screen_me_buf[top_bot][i][1],
+                      1 - ntr_downscale_uv,
+                      ntr_downscale_uv ? w_orig / 2 : w_orig,
+                      ntr_downscale_uv ? h_orig / 2 : h_orig,
+                      screen_bpp[top_bot][i][V_COMP]
+                    );
+                    if (ntr_downscale_uv) {
+                      upsampleImage(upscaled_u_image, image_me[top_bot][i][U_COMP], w_orig, h_orig);
+                      upsampleImage(upscaled_v_image, image_me[top_bot][i][V_COMP], w_orig, h_orig);
+                      if (debug_view_plane == 0)
+                        render_yuv_to_rgb(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], upscaled_u_image, upscaled_v_image,
+                          w_orig, h_orig, screen_bpp[top_bot][i][Y_COMP], screen_bpp[top_bot][i][U_COMP], screen_bpp[top_bot][i][V_COMP]
+                        );
+                      else if (debug_view_plane == 2)
+                        render_greyscale_to_comp3(screen_decoded[top_bot], upscaled_u_image, w_orig, h_orig);
+                      else if (debug_view_plane == 3)
+                        render_greyscale_to_comp3(screen_decoded[top_bot], upscaled_v_image, w_orig, h_orig);
+                    } else {
+                      if (debug_view_plane == 0)
+                        render_yuv_to_rgb(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], image_me[top_bot][i][U_COMP], image_me[top_bot][i][V_COMP],
+                          w_orig, h_orig, screen_bpp[top_bot][i][Y_COMP], screen_bpp[top_bot][i][U_COMP], screen_bpp[top_bot][i][V_COMP]
+                        );
+                      else if (debug_view_plane == 2)
+                        render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][U_COMP], w_orig, h_orig);
+                      else if (debug_view_plane == 3)
+                        render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][V_COMP], w_orig, h_orig);
+                    }
+                    if (debug_view_plane == 1)
+                      render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], w_orig, h_orig);
+                    else if (debug_view_plane == 4)
+                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_me_buf[top_bot][i][0], w, h);
+                    else if (debug_view_plane == 5)
+                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_me_buf[top_bot][i][1], w, h);
+                    else if (debug_view_plane == 6)
+                      render_greyscale_to_comp3(screen_decoded[top_bot], screen_buf[top_bot][i][Y_COMP], w_orig, h_orig);
+                    else if (debug_view_plane == 7)
+                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][U_COMP], ntr_downscale_uv ? w_orig / 2 : w_orig, ntr_downscale_uv ? h_orig / 2 : h_orig);
+                    else if (debug_view_plane == 8)
+                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][V_COMP], ntr_downscale_uv ? w_orig / 2 : w_orig, ntr_downscale_uv ? h_orig / 2 : h_orig);
+                    screen_done[top_bot][i] = 1;
+                    handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot]);
+                    // fprintf(stderr, "Displaying p_frame: screen %d, frame_n = %d\n", top_bot, screen_frame_n_next);
                     break;
                   }
-
-                  i_prev = i;
-                  screen_frame_n[top_bot] = screen_frame_n_next;
-                  screen_frame_n_next = (screen_frame_n[top_bot] + 1);
                 }
+                if (i == ENCODE_BUFFER_COUNT) {
+                  break;
+                }
+
+                i_prev = i;
+                screen_frame_n[top_bot] = screen_frame_n_next;
+                screen_frame_n_next = (screen_frame_n[top_bot] + 1);
               }
             }
           }
