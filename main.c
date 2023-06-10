@@ -1657,7 +1657,7 @@ uint32_t recv_data_remain;
 uint8_t buf_leftover[BUF_SIZE];
 int leftover_size;
 
-#define ENCODE_BUFFER_COUNT 4
+#define ENCODE_BUFFER_COUNT RP_IMAGE_FRAME_N_RANGE
 
 enum {
   RECV_STATE_HEADER,
@@ -1957,6 +1957,9 @@ int handle_recv(uint8_t *buf, int size)
       int plane;
       int comp;
 
+      plane = send_header.plane_type == 0 ? send_header.plane_comp : send_header.plane_comp + COMP_COUNT;
+      comp = plane < COMP_COUNT ? plane : COMP_COUNT;
+
       for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
         if (screen_frame_n[top_bot][i] == send_header.frame_n) {
           pos = i;
@@ -1983,8 +1986,6 @@ int handle_recv(uint8_t *buf, int size)
         screen_done[top_bot][pos] = 0;
         screen_buf_valid[top_bot][pos] = -1;
       }
-      plane = send_header.plane_type == 0 ? send_header.plane_comp : send_header.plane_comp + COMP_COUNT;
-      comp = plane < COMP_COUNT ? plane : COMP_COUNT;
 
       if (recv_buf_head - recv_buf >
         (intptr_t)sizeof(screen_recv_buf[top_bot][pos][plane]) -
@@ -2079,6 +2080,7 @@ int handle_recv(uint8_t *buf, int size)
                 );
               }
               screen_done[top_bot][pos] = 1;
+              screen_frame_n[top_bot][pos] = -1;
               handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot]);
               // fprintf(stderr, "Displaying key frame: screen %d, frame_n = %d\n", top_bot, screen_frame_n[top_bot]);
             }
@@ -2167,6 +2169,7 @@ int handle_recv(uint8_t *buf, int size)
                     else if (debug_view_plane == 8)
                       render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][V_COMP], ntr_downscale_uv ? w_orig / 2 : w_orig, ntr_downscale_uv ? h_orig / 2 : h_orig);
                     screen_done[top_bot][i] = 1;
+                    screen_frame_n[top_bot][pos] = -1;
                     handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot]);
                     // fprintf(stderr, "Displaying p_frame: screen %d, frame_n = %d\n", top_bot, screen_frame_n_next);
                     break;
