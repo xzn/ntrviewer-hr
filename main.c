@@ -14,10 +14,6 @@ typedef int SOCKET;
 #define sock_errno() errno
 #endif
 
-// #pragma GCC diagnostic warning "-Wall"
-// #pragma GCC diagnostic warning "-Wextra"
-// #pragma GCC diagnostic warning "-Wpedantic"
-
 int sock_startup(void)
 {
 #ifdef _WIN32
@@ -181,8 +177,15 @@ const char *connection_msg[CS_MAX] = {
     ".",
 };
 
-#define RP_ME_MIN_BLOCK_SIZE (4)
+#define RP_KCP_MIN_MINRTO (10)
+#define RP_KCP_MIN_SNDWNDSIZE (32)
+#define RP_ME_MIN_BLOCK_SIZE_LOG2 (2)
+#define RP_ME_MIN_BLOCK_SIZE (1 << RP_ME_MIN_BLOCK_SIZE_LOG2)
 #define RP_ME_MIN_SEARCH_PARAM (8)
+#define RP_IMAGE_ME_SELECT_BITS (6)
+#define RP_IMAGE_FRAME_N_BITS (3)
+#define RP_IMAGE_FRAME_N_RANGE (1 << RP_IMAGE_FRAME_N_BITS)
+
 static int yuv_option;
 static int color_transform_hp;
 static int encoder_which;
@@ -191,18 +194,75 @@ static int me_method;
 static int me_block_size;
 static int me_search_param;
 static nk_bool me_downscale;
+static int me_select;
 static nk_bool me_interpolate;
-static int target_frame_rate;
-static int target_mbit_rate;
 static nk_bool dynamic_priority;
+static int min_dp_frame_rate;
+static int max_frame_rate;
+static int target_mbit_rate;
 static nk_bool multicore_encode;
+static nk_bool multicore_network;
+static nk_bool multicore_screen;
 static nk_bool low_latency;
 static int top_priority;
 static int bot_priority;
+static int kcp_minrto;
+static int kcp_snd_wnd_size;
+static nk_bool kcp_nocwnd;
+static int kcp_fastresend;
+static int kcp_nodelay;
+
+union rp_conf_arg0_t {
+	int arg0;
+	struct {
+		u32 kcp_nocwnd : 1;
+		u32 kcp_fastresend : 2;
+		u32 me_select : RP_IMAGE_ME_SELECT_BITS;
+		u32 multicore_network : 1;
+		u32 multicore_screen : 1;
+	};
+};
+
+union rp_conf_arg1_t {
+	int arg1;
+	struct {
+		u32 yuv_option : 2;
+		u32 color_transform_hp : 2;
+		u32 downscale_uv : 1;
+		u32 encoder_which : 2;
+		u32 me_block_size : 2;
+		u32 me_method : 3;
+		u32 me_search_param : 5;
+		u32 me_downscale : 1;
+		u32 me_interpolate : 1;
+		u32 kcp_minrto : 7;
+		u32 kcp_snd_wnd_size : 6;
+	};
+};
+
+union rp_conf_arg2_t {
+	int arg2;
+	struct {
+		u32 top_priority : 4;
+		u32 bot_priority : 4;
+		u32 low_latency : 1;
+		u32 multicore_encode : 1;
+		u32 target_mbit_rate : 5;
+		u32 dynamic_priority : 1;
+		u32 min_dp_frame_rate : 7;
+		u32 max_frame_rate : 7;
+		u32 kcp_nodelay : 2;
+	};
+};
+
+_Static_assert(sizeof(union rp_conf_arg0_t) == sizeof(int));
+_Static_assert(sizeof(union rp_conf_arg1_t) == sizeof(int));
+_Static_assert(sizeof(union rp_conf_arg2_t) == sizeof(int));
 
 static int ntr_yuv_option;
 static int ntr_color_transform_hp;
 static nk_bool ntr_downscale_uv;
+static unsigned int ntr_me_enabled;
 static int ntr_me_block_size;
 static int ntr_me_search_param;
 static nk_bool ntr_me_downscale;
@@ -211,6 +271,38 @@ static nk_bool ntr_me_interpolate;
 static int debug_view_plane;
 
 static atomic_uint_fast8_t ip_octets[4];
+
+enum rp_send_header_type {
+	RP_SEND_HEADER_TYPE_CONF,
+	RP_SEND_HEADER_TYPE_DATA,
+};
+
+struct rp_send_info_header {
+    u32 type_conf : 1;
+    u32 downscale_uv : 1;
+    u32 yuv_option : 2;
+    u32 color_transform_hp : 2;
+    u32 me_enabled : 2;
+    u32 me_downscale : 1;
+    u32 me_search_param : 5;
+    u32 me_block_size : 2;
+    u32 me_interpolate : 1;
+};
+
+struct rp_send_data_header {
+    u32 type_data : 1;
+    u32 top_bot : 1;
+    u32 frame_n : RP_IMAGE_FRAME_N_BITS;
+    u32 p_frame : 1;
+    u32 bpp : 3;
+    u32 data_end : 1;
+    u32 data_size : 11;
+    u32 plane_type : 1;
+    u32 plane_comp : 2;
+} send_header;
+
+_Static_assert(sizeof(struct rp_send_info_header) == sizeof(u32));
+_Static_assert(sizeof(struct rp_send_data_header) == sizeof(u32));
 
 #define HEART_BEAT_EVERY_MS 250
 #define REST_EVERY_MS 100
@@ -297,7 +389,6 @@ int tcp_send_packet_header(SOCKET s, uint32_t seq, uint32_t type, uint32_t cmd, 
   }
   packet.data_len = data_len;
 
-  int ret;
   char *buf = (char *)&packet;
   int size = sizeof(packet);
   return tcp_send(s, buf, size);
@@ -372,7 +463,7 @@ SOCKET tcp_connect(int port)
   ws = CS_DISCONNECTED;      \
   fprintf(stderr, "disconnected\n");
 
-void *menu_tcp_thread_func(void *arg)
+void *menu_tcp_thread_func(void *)
 {
   int menu_tcp_status = 0;
   SOCKET sockfd = INVALID_SOCKET;
@@ -465,26 +556,39 @@ void *menu_tcp_thread_func(void *arg)
       if (menu_remote_play)
       {
         menu_remote_play = 0;
-        uint32_t args[] = { kcp_magic, 0, 0 };
 
-        args[1] |= yuv_option & 0x3;
-        args[1] |= (color_transform_hp & 0x3) << 2;
-        args[1] |= (downscale_uv & 1) << 4;
-        args[1] |= (encoder_which & 1) << 5;
-
-        args[1] |= (me_method & 0x7) << 6;
-        args[1] |= (me_block_size & 0x3) << 9;
-        args[1] |= ((me_search_param - RP_ME_MIN_SEARCH_PARAM) & 0x1f) << 11;
-        args[1] |= (me_downscale & 1) << 16;
-        args[1] |= (me_interpolate & 1) << 17;
-
-        args[2] |= top_priority & 0xf;
-        args[2] |= (bot_priority & 0xf) << 4;
-        args[2] |= (target_mbit_rate & 0x1f) << 8;
-        args[2] |= (multicore_encode & 1) << 14;
-        args[2] |= (low_latency & 1) << 13;
-        args[2] |= (dynamic_priority & 1) << 15;
-        args[2] |= (target_frame_rate & 0xff) << 16;
+        union rp_conf_arg0_t arg0 = {
+          .kcp_nocwnd = kcp_nocwnd,
+          .kcp_fastresend = kcp_fastresend,
+          .me_select = me_select,
+          .multicore_network = multicore_network,
+          .multicore_screen = multicore_screen,
+        };
+        union rp_conf_arg1_t arg1 = {
+          .yuv_option = yuv_option,
+          .color_transform_hp = color_transform_hp,
+          .downscale_uv = downscale_uv,
+          .encoder_which = encoder_which,
+          .me_block_size = me_block_size,
+          .me_method = me_method,
+          .me_search_param = me_search_param - RP_ME_MIN_SEARCH_PARAM,
+          .me_downscale = me_downscale,
+          .me_interpolate = me_interpolate,
+          .kcp_minrto = kcp_minrto - RP_KCP_MIN_MINRTO,
+          .kcp_snd_wnd_size = kcp_snd_wnd_size - RP_KCP_MIN_SNDWNDSIZE,
+        };
+        union rp_conf_arg2_t arg2 = {
+          .top_priority = top_priority,
+          .bot_priority = bot_priority,
+          .low_latency = low_latency,
+          .multicore_encode = multicore_encode,
+          .target_mbit_rate = target_mbit_rate,
+          .dynamic_priority = dynamic_priority,
+          .min_dp_frame_rate = min_dp_frame_rate,
+          .max_frame_rate = max_frame_rate,
+          .kcp_nodelay = kcp_nodelay,
+        };
+        uint32_t args[] = {arg0.arg0, arg1.arg1, arg2.arg2};
 
         ret = tcp_send_packet_header(sockfd, packet_seq, 0, 901,
                                      args, sizeof(args) / sizeof(*args), 0);
@@ -494,6 +598,7 @@ void *menu_tcp_thread_func(void *arg)
         ntr_downscale_uv = downscale_uv;
         ntr_yuv_option = yuv_option;
         ntr_color_transform_hp = color_transform_hp;
+        ntr_me_enabled = me_method > 1 ? 1 : me_method == 1 ? -1 : 0;
         ntr_me_block_size = RP_ME_MIN_BLOCK_SIZE << me_block_size;
         ntr_me_search_param = me_search_param;
         ntr_me_downscale = me_downscale;
@@ -515,7 +620,7 @@ void *menu_tcp_thread_func(void *arg)
   return 0;
 }
 
-void *nwm_tcp_thread_func(void *arg)
+void *nwm_tcp_thread_func(void *)
 {
   int nwm_tcp_status = 0;
   SOCKET sockfd = INVALID_SOCKET;
@@ -619,18 +724,27 @@ void rpConfigSetDefault(void)
   color_transform_hp = 0;
   encoder_which = 1;
   downscale_uv = 1;
-  me_method = 3;
+  me_method = 4;
   me_block_size = 2;
   me_search_param = 16;
   me_downscale = 1;
-  me_interpolate = 1;
-  target_frame_rate = 30;
-  target_mbit_rate = 15;
+  me_interpolate = 0;
+  min_dp_frame_rate = 30;
+  max_frame_rate = 72;
+  me_select = 7;
+  target_mbit_rate = 16;
   dynamic_priority = 1;
   multicore_encode = 1;
   low_latency = 0;
   top_priority = 1;
   bot_priority = 5;
+  multicore_screen = 0;
+  multicore_network = 0;
+  kcp_minrto = 95;
+  kcp_snd_wnd_size = 95;
+  kcp_nocwnd = 1;
+  kcp_fastresend = 2;
+  kcp_nodelay = 2;
 }
 
 static void guiMain(struct nk_context *ctx)
@@ -659,7 +773,7 @@ static void guiMain(struct nk_context *ctx)
   /* GUI */
   const char *remote_play_wnd = "Remote Play";
   if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 50, 600, 800),
-               NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE))
+               NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_TITLE))
   {
     nk_layout_row_dynamic(ctx, 30, 5);
     nk_label(ctx, "IP", NK_TEXT_CENTERED);
@@ -716,13 +830,13 @@ static void guiMain(struct nk_context *ctx)
     nk_label(ctx, "Motion Estimation", NK_TEXT_CENTERED);
     const char *motion_estimation_text[] = {
       "Disabled",
+      "None (Diff Only)",
       "Three Step",
       "Two Dimensional Log",
       "New Three Step",
       "Four Step",
       "Diamond",
       "Hexagon-Based",
-      "None (Diff Only)",
     };
     nk_combobox(ctx, motion_estimation_text, sizeof(motion_estimation_text) / sizeof(*motion_estimation_text),
       &me_method, 30, nk_vec2(250, 9999)
@@ -767,22 +881,20 @@ static void guiMain(struct nk_context *ctx)
     }
 
     nk_layout_row_dynamic(ctx, 30, 2);
-    snprintf(msg_buf, sizeof(msg_buf), "Target Frame Rate %d", target_frame_rate);
-    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, 0, &target_frame_rate, 255, 1);
-
-    nk_layout_row_dynamic(ctx, 30, 2);
-    snprintf(msg_buf, sizeof(msg_buf), "Target MBit Rate %d", target_mbit_rate);
-    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, 0, &target_mbit_rate, 31, 1);
-
-    nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Low Latency", NK_TEXT_CENTERED);
     nk_checkbox_label(ctx, "", &low_latency);
 
     nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "Multicore Encode", NK_TEXT_CENTERED);
+    nk_label(ctx, "MT Encode", NK_TEXT_CENTERED);
     nk_checkbox_label(ctx, "", &multicore_encode);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "MT Network Transfer", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &multicore_network);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "MT Screen Capture", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &multicore_screen);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Dynamic Priority", NK_TEXT_CENTERED);
@@ -797,6 +909,45 @@ static void guiMain(struct nk_context *ctx)
     snprintf(msg_buf, sizeof(msg_buf), "Bot Priority %d", bot_priority);
     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
     nk_slider_int(ctx, 0, &bot_priority, 15, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "Min DP Frame Rate %d", min_dp_frame_rate);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 0, &min_dp_frame_rate, 120, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "Max Frame Rate %d", max_frame_rate);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 0, &max_frame_rate, 120, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "Target MBit Rate %d", target_mbit_rate);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 0, &target_mbit_rate, 20, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "KCP MinRTO %d", kcp_minrto);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 10, &kcp_minrto, 120, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "KCP Snd Wnd Size %d", kcp_snd_wnd_size);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 32, &kcp_snd_wnd_size, 95, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "KCP Nodelay %d", kcp_nodelay);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 0, &kcp_nodelay, 2, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "KCP FastResend %d", kcp_fastresend);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 0, &kcp_fastresend, 2, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "KCP NoCwnd", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &kcp_nocwnd);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     if (nk_button_label(ctx, "Default"))
@@ -889,17 +1040,17 @@ static GLbyte fShaderStr[] =
     "} \n";
 
 static GLfloat vVertices_pos[4][3] = {
-    -0.5f, 0.5f, 0.0f,  // Position 0
-    -0.5f, -0.5f, 0.0f, // Position 1
-    0.5f, -0.5f, 0.0f,  // Position 2
-    0.5f, 0.5f, 0.0f,   // Position 3
+    { -0.5f, 0.5f, 0.0f },  // Position 0
+    { -0.5f, -0.5f, 0.0f }, // Position 1
+    { 0.5f, -0.5f, 0.0f },  // Position 2
+    { 0.5f, 0.5f, 0.0f },   // Position 3
 };
 
 static GLfloat vVertices_tex_coord[4][2] = {
-    1.0f, 0.0f, // TexCoord 2
-    0.0f, 0.0f, // TexCoord 1
-    0.0f, 1.0f, // TexCoord 0
-    1.0f, 1.0f, // TexCoord 3
+    { 1.0f, 0.0f }, // TexCoord 2
+    { 0.0f, 0.0f }, // TexCoord 1
+    { 0.0f, 1.0f }, // TexCoord 0
+    { 1.0f, 1.0f }, // TexCoord 3
 };
 static GLushort indices[] =
     {0, 1, 2, 0, 2, 3};
@@ -1152,7 +1303,7 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int t
       while (!__atomic_compare_exchange_n(&frame_counter,
         &frame_counter_current, frame_counter_next, 1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
           frame_counter_current = __atomic_load_n(&frame_counter, __ATOMIC_RELAXED);
-          int frame_counter_next = frame_counter_current - frame_counter_prev;
+          frame_counter_next = frame_counter_current - frame_counter_prev;
       }
     }
   }
@@ -1210,13 +1361,11 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb)
   pthread_mutex_lock(&ctx->gl_tex_mutex);
   int next_index = frame_buffer_context_next_free_index(ctx->next_index, ctx->index);
   uint8_t **pimage = &ctx->images[next_index];
-  uint8_t *image = *pimage;
   *pimage = rgb;
   ctx->updated = FBS_UPDATED;
   ctx->next_index = next_index;
   pthread_mutex_unlock(&ctx->gl_tex_mutex);
   __atomic_add_fetch(&frame_counter, 1, __ATOMIC_RELAXED);
-  // free(image);
 }
 
 void render_greyscale_to_comp3(uint8_t *dst, const uint8_t *src, int w, int h) {
@@ -1299,11 +1448,11 @@ void convert_to_rgb_hp(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, 
   int y_bpp, int u_bpp, int v_bpp
 ) {
   int bpp = (y_bpp + u_bpp + v_bpp) / 3;
-  u8 half_range = 1 << (bpp - 1);
+  // u8 half_range = 1 << (bpp - 1);
   int bpp_2 = y_bpp - bpp;
   u8 half_y = y >> bpp_2;
-  u8 bpp_mask = (1 << bpp) - 1;
-  u8 bpp_2_mask = (1 << (bpp + 1)) - 1;
+  // u8 bpp_mask = (1 << bpp) - 1;
+  // u8 bpp_2_mask = (1 << (bpp + 1)) - 1;
 
   if (ntr_color_transform_hp == 1) {
     *r = ((half_y + u) << (8 - bpp)) - 128;
@@ -1312,7 +1461,7 @@ void convert_to_rgb_hp(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, 
   } else if (ntr_color_transform_hp == 2) {
     *r = ((half_y + u) << (8 - bpp)) - 128;
     *g = y << (8 - y_bpp);
-    *b = (v + (((*r >> (8 - bpp)) + half_y) >> 1) << (8 - bpp)) - 128;
+    *b = ((v + (((*r >> (8 - bpp)) + half_y) >> 1)) << (8 - bpp)) - 128;
   } else if (ntr_color_transform_hp == 3) {
     *g = ((y - ((u + v) >> (2 - bpp_2))) << (8 - y_bpp)) + 64;
     u8 half_g = *g >> (8 - bpp);
@@ -1412,7 +1561,7 @@ uint8_t screen_decoded[SCREEN_COUNT][400 * 240 * 3];
 uint8_t upscaled_u_image[400 * 240];
 uint8_t upscaled_v_image[400 * 240];
 
-static uint8_t accessImageNoCheck(const uint8_t *image, int x, int y, int w, int h)
+static uint8_t accessImageNoCheck(const uint8_t *image, int x, int y, int, int h)
 {
     return image[x * h + y];
 }
@@ -1504,25 +1653,6 @@ static inline void upsampleImage(uint8_t *dst, const uint8_t *ds_src, int w, int
 uint8_t buf[BUF_SIZE];
 ikcpcb *kcp;
 
-enum {
-  RP_SEND_HEADER_TOP_BOT = (1 << 0),
-  RP_SEND_HEADER_P_FRAME = (1 << 1),
-};
-
-struct rp_send_header {
-  u32 size;
-  u32 size_1;
-  u8 frame_n;
-  u8 bpp;
-  u8 format;
-  u8 flags;
-} send_header;
-
-enum {
-  RECV_STATE_HEADER,
-  RECV_STATE_DATA,
-} recv_state;
-
 uint32_t recv_data_remain;
 uint8_t buf_leftover[BUF_SIZE];
 int leftover_size;
@@ -1530,15 +1660,9 @@ int leftover_size;
 #define ENCODE_BUFFER_COUNT 4
 
 enum {
-  Y_DATA,
-  U_DATA,
-  ME_X_DATA,
-  V_DATA,
-  ME_Y_DATA,
-} screen_plane[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
-
-int16_t screen_plane_index[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
-uint8_t screen_plane_index_pos[SCREEN_COUNT];
+  RECV_STATE_HEADER,
+  RECV_STATE_DATA,
+} recv_state;
 
 enum {
   Y_COMP,
@@ -1547,8 +1671,23 @@ enum {
   R_COMP = Y_COMP,
   G_COMP,
   B_COMP,
-  COMP_COUNT
+  COMP_COUNT,
+  ME_X_COMP = 0,
+  ME_Y_COMP,
+  ME_COMP_COUNT,
 };
+
+enum {
+  Y_DATA,
+  U_DATA,
+  V_DATA,
+  ME_X_DATA,
+  ME_Y_DATA,
+  PLANE_COUNT,
+};
+
+int16_t screen_frame_n[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
+uint8_t screen_pos[SCREEN_COUNT];
 
 char *state_string[COMP_COUNT] = {
   "Y", "U", "V"
@@ -1558,20 +1697,23 @@ uint8_t screen_done[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
 uint8_t screen_buf_valid[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
 uint8_t screen_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT][400 * 240];
 uint8_t screen_bpp[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT];
-uint8_t screen_me_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][2][400 * 240 / RP_ME_MIN_BLOCK_SIZE / RP_ME_MIN_BLOCK_SIZE / 4];
+int8_t screen_me_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][ME_COMP_COUNT][400 * 240 / RP_ME_MIN_BLOCK_SIZE / RP_ME_MIN_BLOCK_SIZE / 4];
+uint8_t screen_recv_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT][400 * 240];
+uint8_t *screen_recv_buf_head[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT];
+uint8_t screen_recv_done[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT];
 
-uint8_t screen_frame_n[SCREEN_COUNT];
+uint8_t frame_n[SCREEN_COUNT];
 
-int8_t image_me[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT][400 * 240];
+uint8_t image_me[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT][400 * 240];
 
-#define RECV_BUF_SIZE (400 * 240)
+#define RECV_BUF_SIZE (2000)
 uint8_t recv_buf[RECV_BUF_SIZE];
 uint8_t *recv_buf_head;
 
 #include "ffmpeg_opt/libavcodec/ffmpeg_jls.h"
 #include "ffmpeg_opt/libavcodec/jpegls.h"
 
-int decode_image(uint8_t *dst, int dst_size, const uint8_t *src, int src_size, int w, int h, int bpp) {
+int decode_image(uint8_t *dst, int, const uint8_t *src, int src_size, int w, int h, int bpp) {
   JLSState state = { 0 };
   state.bpp = bpp;
   ff_jpegls_reset_coding_parameters(&state, 0);
@@ -1756,7 +1898,7 @@ int handle_recv(uint8_t *buf, int size)
   // return 0;
 
   if (recv_state == RECV_STATE_HEADER) {
-    if (leftover_size + size < sizeof(struct rp_send_header)) {
+    if (leftover_size + size < (intptr_t)sizeof(struct rp_send_data_header)) {
       memcpy(buf_leftover + leftover_size, buf, size);
       leftover_size += size;
       return 0;
@@ -1765,25 +1907,29 @@ int handle_recv(uint8_t *buf, int size)
     // fprintf(stderr, "Receiving with leftover %d, buf size: %d\n", leftover_size, size),
 
     memcpy(&send_header, buf_leftover, leftover_size);
-    memcpy((char *)&send_header + leftover_size, buf, sizeof(struct rp_send_header) - leftover_size);
-    buf += sizeof(struct rp_send_header) - leftover_size;
-    size -= sizeof(struct rp_send_header) - leftover_size;
+    memcpy((char *)&send_header + leftover_size, buf, sizeof(struct rp_send_data_header) - leftover_size);
+    buf += sizeof(struct rp_send_data_header) - leftover_size;
+    size -= sizeof(struct rp_send_data_header) - leftover_size;
+
+    if (send_header.type_data == RP_SEND_HEADER_TYPE_CONF) {
+      struct rp_send_info_header send_info_header;
+      memcpy(&send_info_header, &send_header, sizeof(struct rp_send_info_header));
+      ntr_downscale_uv = send_info_header.downscale_uv;
+      ntr_yuv_option = send_info_header.yuv_option;
+      ntr_color_transform_hp = send_info_header.color_transform_hp;
+      ntr_me_enabled = send_info_header.me_enabled;
+      ntr_me_downscale = send_info_header.me_downscale;
+      ntr_me_block_size = RP_ME_MIN_BLOCK_SIZE << send_info_header.me_block_size;
+      ntr_me_search_param = send_info_header.me_search_param + RP_ME_MIN_SEARCH_PARAM;
+      ntr_me_interpolate = send_info_header.me_interpolate;
+
+      return handle_recv(buf, size);
+    }
+
     recv_state = RECV_STATE_DATA;
-    recv_data_remain = send_header.size;
+    recv_data_remain = send_header.data_size;
     leftover_size = 0;
     recv_buf_head = recv_buf;
-
-    if (send_header.size == 0) {
-      fprintf(stderr, "empty header received\n");
-      receiving = 1;
-      recv_state = RECV_STATE_HEADER;
-      return 0;
-    }
-    // fprintf(stderr, "Receiving plane: frame_n = %d, top_bot = %d, p_frame = %d, bpp = %d, format = %d, size = %d, size_1 = %d\n",
-      // send_header.frame_n,
-      // !!(send_header.flags & RP_SEND_HEADER_TOP_BOT),
-      // !!(send_header.flags & RP_SEND_HEADER_P_FRAME),
-      // send_header.bpp, send_header.format, send_header.size, send_header.size_1);
   }
 
   if (recv_data_remain > RECV_BUF_SIZE) {
@@ -1791,7 +1937,7 @@ int handle_recv(uint8_t *buf, int size)
     return -1;
   }
 
-  if (recv_data_remain <= size) {
+  if (recv_data_remain <= (uintptr_t)size) {
     memcpy(recv_buf_head, buf, recv_data_remain);
     recv_buf_head += recv_data_remain;
     // fprintf(stderr, "Done\n");
@@ -1801,47 +1947,66 @@ int handle_recv(uint8_t *buf, int size)
     recv_state = RECV_STATE_HEADER;
 
     if (receiving) {
-      int top_bot = (send_header.flags & RP_SEND_HEADER_TOP_BOT) == 0 ? 0 : 1;
-      int p_frame = (send_header.flags & RP_SEND_HEADER_P_FRAME) == 0 ? 0 : 1;
+      int top_bot = send_header.top_bot;
+      int p_frame = send_header.p_frame;
 
       int pos = -1;
       int plane;
       int comp;
 
       for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
-        if (screen_plane_index[top_bot][i] == send_header.frame_n) {
+        if (screen_frame_n[top_bot][i] == send_header.frame_n) {
           pos = i;
-          plane = ++screen_plane[top_bot][i];
-          if (!p_frame && (plane == ME_X_DATA))
-            plane = ++screen_plane[top_bot][i];
-          if (p_frame ? plane > ME_Y_DATA : plane > V_DATA)
-            pos = screen_plane_index[top_bot][i] = -1;
           break;
         }
       }
       if (pos < 0) {
-        pos = screen_plane_index_pos[top_bot]++;
-        screen_plane_index_pos[top_bot] %= ENCODE_BUFFER_COUNT;
-        plane = screen_plane[top_bot][pos] = Y_DATA;
-        screen_plane_index[top_bot][pos] = send_header.frame_n;
+        pos = screen_pos[top_bot]++;
+        screen_pos[top_bot] %= ENCODE_BUFFER_COUNT;
+        screen_frame_n[top_bot][pos] = send_header.frame_n;
+
+        screen_recv_buf_head[top_bot][pos][Y_DATA] = screen_recv_buf[top_bot][pos][Y_DATA];
+        screen_recv_buf_head[top_bot][pos][U_DATA] = screen_recv_buf[top_bot][pos][U_DATA];
+        screen_recv_buf_head[top_bot][pos][V_DATA] = screen_recv_buf[top_bot][pos][V_DATA];
+        screen_recv_buf_head[top_bot][pos][ME_X_DATA] = screen_recv_buf[top_bot][pos][ME_X_DATA];
+        screen_recv_buf_head[top_bot][pos][ME_Y_DATA] = screen_recv_buf[top_bot][pos][ME_Y_DATA];
+
+        screen_recv_done[top_bot][pos][Y_DATA] = 0;
+        screen_recv_done[top_bot][pos][U_DATA] = 0;
+        screen_recv_done[top_bot][pos][V_DATA] = 0;
+        screen_recv_done[top_bot][pos][ME_X_DATA] = 0;
+        screen_recv_done[top_bot][pos][ME_Y_DATA] = 0;
+
+        screen_done[top_bot][pos] = 0;
+        screen_buf_valid[top_bot][pos] = -1;
       }
-      comp = plane == Y_DATA ? Y_COMP : plane == U_DATA ? U_COMP : plane == V_DATA ? V_COMP : COMP_COUNT;
+      plane = send_header.plane_type == 0 ? send_header.plane_comp : send_header.plane_comp + COMP_COUNT;
+      comp = plane < COMP_COUNT ? plane : COMP_COUNT;
+
+      if (recv_buf_head - recv_buf >
+        (intptr_t)sizeof(screen_recv_buf[top_bot][pos][plane]) -
+          (screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]
+        )
+      ) {
+        screen_buf_valid[top_bot][pos] = 0;
+        fprintf(stderr, "buffer overflow %d %d plane %d\n", top_bot, send_header.frame_n, plane);
+        goto final;
+      }
+      memcpy(screen_recv_buf_head[top_bot][pos][plane], recv_buf, recv_buf_head - recv_buf);
+      screen_recv_buf_head[top_bot][pos][plane] += recv_buf_head - recv_buf;
+
+      if (!send_header.data_end)
+        goto final;
 
       int w = top_bot == 0 ? 400 : 320, w_orig = w;
       int h = 240, h_orig = h;
       if (ntr_downscale_uv && (plane == U_DATA || plane == V_DATA)) {
         w /= 2; h /= 2;
       }
-      if (plane == Y_DATA) {
-        // if (!p_frame)
-        //   screen_frame_n[top_bot] = send_header.frame_n;
-        screen_done[top_bot][pos] = 0;
-        screen_buf_valid[top_bot][pos] = -1;
-      }
 
       u8 me_block_size_log2 = av_ceil_log2(ntr_me_block_size);
-      u8 me_bpp = av_ceil_log2(ntr_me_search_param * 2 + 1);
-      u8 me_bpp_half_range = (1 << me_bpp) >> 1;
+      // u8 me_bpp = av_ceil_log2(ntr_me_search_param * 2 + 1);
+      // u8 me_bpp_half_range = (1 << me_bpp) >> 1;
 
       int scale_log2_offset = ntr_me_downscale == 0 ? 0 : 1;
       int scale_log2 = 1 + scale_log2_offset;
@@ -1856,15 +2021,23 @@ int handle_recv(uint8_t *buf, int size)
       int ret;
       if (comp < COMP_COUNT) {
         ret = ffmpeg_jls_decode(screen_buf[top_bot][pos][comp],
-          h, w, h, recv_buf, recv_buf_head - recv_buf, send_header.bpp) == w * h;
+          h, w, h, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane], send_header.bpp) == w * h;
       } else {
-        ret = ffmpeg_jls_decode(screen_me_buf[top_bot][pos][plane == ME_X_DATA ? 0 : 1],
-          h, w, h, recv_buf, recv_buf_head - recv_buf, me_bpp) == w * h;
+        ret = ffmpeg_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT],
+          h, w, h, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane], send_header.bpp) == w * h;
       }
       if (ret
       ) {
         // fprintf(stderr, "success %d %d comp %d\n", top_bot, send_header.frame_n, comp);
-        int frame_end = p_frame ? plane == ME_Y_DATA : plane == V_DATA;
+        screen_recv_done[top_bot][pos][plane] = 1;
+
+        int frame_end = 1;
+        for (int i = 0; i < PLANE_COUNT; ++i) {
+          if (!screen_recv_done[top_bot][pos][i]) {
+            frame_end = 0;
+            break;
+          }
+        }
 
         if (comp < COMP_COUNT)
           screen_bpp[top_bot][pos][comp] = send_header.bpp;
@@ -1873,13 +2046,13 @@ int handle_recv(uint8_t *buf, int size)
           if (screen_buf_valid[top_bot][pos] == 0) {
             // TODO request key frame
             fprintf(stderr, "frame incomplete, requesting key frame\n");
-          } else if (send_header.frame_n - screen_frame_n[top_bot] >= ENCODE_BUFFER_COUNT) {
+          } else if (send_header.frame_n - frame_n[top_bot] >= ENCODE_BUFFER_COUNT) {
             // TODO request key frame
-            fprintf(stderr, "too many missing frames (%d, %d), requesting key frame\n", screen_frame_n[top_bot], send_header.frame_n);
+            fprintf(stderr, "too many missing frames (%d, %d), requesting key frame\n", frame_n[top_bot], send_header.frame_n);
           } else {
             screen_buf_valid[top_bot][pos] = 1;
             if (!p_frame) {
-              screen_frame_n[top_bot] = send_header.frame_n;
+              frame_n[top_bot] = send_header.frame_n;
               if (ntr_downscale_uv) {
                 memcpy(image_me[top_bot][pos][Y_COMP], screen_buf[top_bot][pos][Y_COMP], w_orig * h_orig);
                 memcpy(image_me[top_bot][pos][U_COMP], screen_buf[top_bot][pos][U_COMP], w_orig / 2 * h_orig / 2);
@@ -1904,10 +2077,10 @@ int handle_recv(uint8_t *buf, int size)
               // fprintf(stderr, "Displaying key frame: screen %d, frame_n = %d\n", top_bot, screen_frame_n[top_bot]);
             }
 
-            uint8_t screen_frame_n_next = (screen_frame_n[top_bot] + 1);
+            uint8_t frame_n_next = (frame_n[top_bot] + 1);
             int i_prev = -1;
             for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
-              if (screen_plane_index[top_bot][i] == screen_frame_n[top_bot]) {
+              if (screen_frame_n[top_bot][i] == frame_n[top_bot]) {
                 if (!screen_done[top_bot][i]) {
                   break;
                 }
@@ -1919,7 +2092,7 @@ int handle_recv(uint8_t *buf, int size)
               while (1) {
                 int i;
                 for (i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
-                  if (screen_plane_index[top_bot][i] == screen_frame_n_next) {
+                  if (screen_frame_n[top_bot][i] == frame_n_next) {
                     if (screen_buf_valid[top_bot][i] <= 0) {
                       i = ENCODE_BUFFER_COUNT;
                       break;
@@ -1927,8 +2100,8 @@ int handle_recv(uint8_t *buf, int size)
                     me_image(image_me[top_bot][i][Y_COMP],
                       image_me[top_bot][i_prev][Y_COMP],
                       screen_buf[top_bot][i][Y_COMP],
-                      screen_me_buf[top_bot][i][0],
-                      screen_me_buf[top_bot][i][1],
+                      screen_me_buf[top_bot][i][ME_X_COMP],
+                      screen_me_buf[top_bot][i][ME_Y_COMP],
                       1,
                       w_orig,
                       h_orig,
@@ -1937,8 +2110,8 @@ int handle_recv(uint8_t *buf, int size)
                     me_image(image_me[top_bot][i][U_COMP],
                       image_me[top_bot][i_prev][U_COMP],
                       screen_buf[top_bot][i][U_COMP],
-                      screen_me_buf[top_bot][i][0],
-                      screen_me_buf[top_bot][i][1],
+                      screen_me_buf[top_bot][i][ME_X_COMP],
+                      screen_me_buf[top_bot][i][ME_Y_COMP],
                       1 - ntr_downscale_uv,
                       ntr_downscale_uv ? w_orig / 2 : w_orig,
                       ntr_downscale_uv ? h_orig / 2 : h_orig,
@@ -1947,8 +2120,8 @@ int handle_recv(uint8_t *buf, int size)
                     me_image(image_me[top_bot][i][V_COMP],
                       image_me[top_bot][i_prev][V_COMP],
                       screen_buf[top_bot][i][V_COMP],
-                      screen_me_buf[top_bot][i][0],
-                      screen_me_buf[top_bot][i][1],
+                      screen_me_buf[top_bot][i][ME_X_COMP],
+                      screen_me_buf[top_bot][i][ME_Y_COMP],
                       1 - ntr_downscale_uv,
                       ntr_downscale_uv ? w_orig / 2 : w_orig,
                       ntr_downscale_uv ? h_orig / 2 : h_orig,
@@ -1978,9 +2151,9 @@ int handle_recv(uint8_t *buf, int size)
                     if (debug_view_plane == 1)
                       render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], w_orig, h_orig);
                     else if (debug_view_plane == 4)
-                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_me_buf[top_bot][i][0], w, h);
+                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, (const u8 *)screen_me_buf[top_bot][i][ME_X_COMP], w, h);
                     else if (debug_view_plane == 5)
-                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_me_buf[top_bot][i][1], w, h);
+                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, (const u8 *)screen_me_buf[top_bot][i][ME_Y_COMP], w, h);
                     else if (debug_view_plane == 6)
                       render_greyscale_to_comp3(screen_decoded[top_bot], screen_buf[top_bot][i][Y_COMP], w_orig, h_orig);
                     else if (debug_view_plane == 7)
@@ -1998,8 +2171,8 @@ int handle_recv(uint8_t *buf, int size)
                 }
 
                 i_prev = i;
-                screen_frame_n[top_bot] = screen_frame_n_next;
-                screen_frame_n_next = (screen_frame_n[top_bot] + 1);
+                frame_n[top_bot] = frame_n_next;
+                frame_n_next = (frame_n[top_bot] + 1) % RP_IMAGE_FRAME_N_RANGE;
               }
             }
           }
@@ -2011,16 +2184,9 @@ int handle_recv(uint8_t *buf, int size)
         // ikcp_send(kcp, &i, sizeof(i));
         // receiving = 0;
       }
-
-      if (p_frame && (plane == U_DATA || plane == V_DATA))
-      {
-        recv_state = RECV_STATE_DATA;
-        recv_data_remain = send_header.size_1;
-        leftover_size = 0;
-        recv_buf_head = recv_buf;
-      }
     }
 
+final:
     if (size) {
       return handle_recv(buf, size);
     }
@@ -2038,7 +2204,7 @@ int handle_recv(uint8_t *buf, int size)
 
 SOCKET s;
 struct sockaddr_in remoteAddr;
-int udp_output(const char *buf, int len, ikcpcb *kcp, void *user)
+int udp_output(const char *buf, int len, ikcpcb *, void *)
 {
   remoteAddr.sin_port = htons(8000);
   if (ip_octets[0] == 0 &&
@@ -2091,12 +2257,12 @@ void receive_from_socket(SOCKET s)
     }
     kcpLastRecvMs = iclock();
 
-    if ((ret = ikcp_input(kcp, buf, ret)) < 0)
+    if ((ret = ikcp_input(kcp, (const char *)buf, ret)) < 0)
     {
       fprintf(stderr, "ikcp_input failed: %d\n", ret);
     }
 
-    while ((ret = ikcp_recv(kcp, buf, sizeof(buf))) >= 0)
+    while ((ret = ikcp_recv(kcp, (char *)buf, sizeof(buf))) >= 0)
     {
       // fprintf(stderr, "ikcp_recv: %d\n", ret);
       if (handle_recv(buf, ret) < 0)
@@ -2110,7 +2276,7 @@ void receive_from_socket(SOCKET s)
 #define PACKET_SIZE 1448
 #define KCP_SND_WND_SIZE 40
 #define KCP_SOCKET_TIMEOUT 10
-void *udp_recv_thread_func(void *arg)
+void *udp_recv_thread_func(void *)
 {
   SDL_GL_MakeCurrent(win, glThreadContext);
   while (running)
@@ -2128,11 +2294,10 @@ void *udp_recv_thread_func(void *arg)
     for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
       buffer_ctx[top_bot].updated = FBS_NOT_AVAIL;
       for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
-        screen_plane[top_bot][i] = Y_COMP;
-        screen_plane_index[top_bot][i] = -1;
-        screen_plane_index_pos[top_bot] = 0;
+        screen_frame_n[top_bot][i] = -1;
       }
-      screen_frame_n[top_bot] = 0;
+      screen_pos[top_bot] = 0;
+      frame_n[top_bot] = 0;
     }
     recv_state = RECV_STATE_HEADER;
     leftover_size = 0;
@@ -2284,7 +2449,7 @@ int main(int argc, char *argv[])
     glGenTextures(1, &buffer_ctx[i].gl_tex_id);
     pthread_mutex_init(&buffer_ctx[i].gl_tex_mutex, NULL);
   }
-  gl_program = LoadProgram(vShaderStr, fShaderStr);
+  gl_program = LoadProgram((const char *)vShaderStr, (const char *)fShaderStr);
   gl_position_loc = glGetAttribLocation(gl_program, "a_position");
   gl_tex_coord_loc = glGetAttribLocation(gl_program, "a_texCoord");
   gl_sampler_loc = glGetUniformLocation(gl_program, "s_texture");
@@ -2292,19 +2457,19 @@ int main(int argc, char *argv[])
   rpConfigSetDefault();
 
   pthread_t udp_recv_thread;
-  if (ret = pthread_create(&udp_recv_thread, NULL, udp_recv_thread_func, NULL))
+  if ((ret = pthread_create(&udp_recv_thread, NULL, udp_recv_thread_func, NULL)))
   {
     fprintf(stderr, "pthread_create failed\n");
     return -1;
   }
   pthread_t menu_tcp_thread;
-  if (ret = pthread_create(&menu_tcp_thread, NULL, menu_tcp_thread_func, NULL))
+  if ((ret = pthread_create(&menu_tcp_thread, NULL, menu_tcp_thread_func, NULL)))
   {
     fprintf(stderr, "pthread_create failed\n");
     return -1;
   }
   pthread_t nwm_tcp_thread;
-  if (ret = pthread_create(&nwm_tcp_thread, NULL, nwm_tcp_thread_func, NULL))
+  if ((ret = pthread_create(&nwm_tcp_thread, NULL, nwm_tcp_thread_func, NULL)))
   {
     fprintf(stderr, "pthread_create failed\n");
     return -1;

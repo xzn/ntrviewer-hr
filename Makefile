@@ -14,6 +14,9 @@ $(TARGET): main.o libNK.o libNKSDL.o libGLAD.o ikcp.o ffmpeg_opt/libavcodec/jpeg
 %.o: %.c
 	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Iffmpeg_opt
 
+main.o: main.c
+	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Iffmpeg_opt -Wall -Wextra
+
 libNK.o: libNK.c
 	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -std=c89 -Wall -Wextra
 
