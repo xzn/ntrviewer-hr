@@ -1923,7 +1923,10 @@ int handle_recv(uint8_t *buf, int size)
       ntr_me_search_param = send_info_header.me_search_param + RP_ME_MIN_SEARCH_PARAM;
       ntr_me_interpolate = send_info_header.me_interpolate;
 
-      return handle_recv(buf, size);
+      if (size)
+        return handle_recv(buf, size);
+      else
+        return 0;
     }
 
     recv_state = RECV_STATE_DATA;
@@ -2017,14 +2020,17 @@ int handle_recv(uint8_t *buf, int size)
         h >>= block_size_log2;
       }
 
-      // fprintf(stderr, "Decoding: screen %d, frame_n = %d, plane = %d, comp = %d, w = %d, h = %d, bpp = %d, size = %d\n", top_bot, send_header.frame_n, plane, comp, w, h, comp < COMP_COUNT ? send_header.bpp : me_bpp, send_header.size);
+      int bpp = send_header.bpp ? send_header.bpp : 8;
+
+      // fprintf(stderr, "Decoding: screen %d, frame_n = %d, plane = %d, comp = %d, w = %d, h = %d, bpp = %d, size = %d\n", top_bot, send_header.frame_n, plane, comp, w, h, bpp,
+      //   (int)(screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]));
       int ret;
       if (comp < COMP_COUNT) {
         ret = ffmpeg_jls_decode(screen_buf[top_bot][pos][comp],
-          h, w, h, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane], send_header.bpp) == w * h;
+          h, w, h, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane], bpp) == w * h;
       } else {
         ret = ffmpeg_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT],
-          h, w, h, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane], send_header.bpp) == w * h;
+          h, w, h, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane], bpp) == w * h;
       }
       if (ret
       ) {
@@ -2032,7 +2038,7 @@ int handle_recv(uint8_t *buf, int size)
         screen_recv_done[top_bot][pos][plane] = 1;
 
         int frame_end = 1;
-        for (int i = 0; i < PLANE_COUNT; ++i) {
+        for (int i = 0; i < (p_frame ? PLANE_COUNT : COMP_COUNT); ++i) {
           if (!screen_recv_done[top_bot][pos][i]) {
             frame_end = 0;
             break;
@@ -2040,13 +2046,13 @@ int handle_recv(uint8_t *buf, int size)
         }
 
         if (comp < COMP_COUNT)
-          screen_bpp[top_bot][pos][comp] = send_header.bpp;
+          screen_bpp[top_bot][pos][comp] = bpp;
 
         if (frame_end) {
           if (screen_buf_valid[top_bot][pos] == 0) {
             // TODO request key frame
             fprintf(stderr, "frame incomplete, requesting key frame\n");
-          } else if (send_header.frame_n - frame_n[top_bot] >= ENCODE_BUFFER_COUNT) {
+          } else if ((send_header.frame_n - frame_n[top_bot]) % RP_IMAGE_FRAME_N_RANGE >= ENCODE_BUFFER_COUNT) {
             // TODO request key frame
             fprintf(stderr, "too many missing frames (%d, %d), requesting key frame\n", frame_n[top_bot], send_header.frame_n);
           } else {
@@ -2301,7 +2307,7 @@ void *udp_recv_thread_func(void *)
     }
     recv_state = RECV_STATE_HEADER;
     leftover_size = 0;
-    receiving = 0;
+    receiving = 1;
 
     s = 0;
     int ret;
