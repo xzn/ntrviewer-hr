@@ -724,7 +724,7 @@ void rpConfigSetDefault(void)
   color_transform_hp = 0;
   encoder_which = 1;
   downscale_uv = 1;
-  me_method = 4;
+  me_method = 7;
   me_block_size = 2;
   me_search_param = 16;
   me_downscale = 1;
@@ -735,11 +735,11 @@ void rpConfigSetDefault(void)
   target_mbit_rate = 16;
   dynamic_priority = 1;
   multicore_encode = 1;
-  low_latency = 0;
+  low_latency = 1;
   top_priority = 1;
   bot_priority = 5;
-  multicore_screen = 0;
   multicore_network = 0;
+  multicore_screen = 1;
   kcp_minrto = 95;
   kcp_snd_wnd_size = 95;
   kcp_nocwnd = 1;
@@ -1694,7 +1694,7 @@ char *state_string[COMP_COUNT] = {
 };
 
 uint8_t screen_done[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
-uint8_t screen_buf_valid[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
+int8_t screen_buf_valid[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
 uint8_t screen_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT][400 * 240];
 uint8_t screen_bpp[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT];
 int8_t screen_me_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][ME_COMP_COUNT][400 * 240 / RP_ME_MIN_BLOCK_SIZE / RP_ME_MIN_BLOCK_SIZE / 4];
@@ -2066,6 +2066,7 @@ int handle_recv(uint8_t *buf, int size)
             fprintf(stderr, "too many missing frames (%d, %d), requesting key frame\n", frame_n[top_bot], send_header.frame_n);
           } else {
             screen_buf_valid[top_bot][pos] = 1;
+            // fprintf(stderr, "full frame %d %d (%d) pos %d\n", top_bot, send_header.frame_n, screen_frame_n[top_bot][pos], pos);
             if (!p_frame) {
               frame_n[top_bot] = send_header.frame_n;
               if (ntr_downscale_uv) {
@@ -2090,7 +2091,7 @@ int handle_recv(uint8_t *buf, int size)
               screen_done[top_bot][pos] = 1;
               screen_frame_n[top_bot][pos] += RP_IMAGE_FRAME_N_RANGE;
               handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot]);
-              // fprintf(stderr, "Displaying key frame: screen %d, frame_n = %d\n", top_bot, screen_frame_n[top_bot]);
+              // fprintf(stderr, "Displaying key frame: screen %d, frame_n = %d\n", top_bot, frame_n[top_bot]);
             }
 
             uint8_t frame_n_next = (frame_n[top_bot] + 1) % RP_IMAGE_FRAME_N_RANGE;
@@ -2115,6 +2116,7 @@ int handle_recv(uint8_t *buf, int size)
                       i = ENCODE_BUFFER_COUNT;
                       break;
                     }
+                    // fprintf(stderr, "full next frame %d %d pos %d valid %d\n", top_bot, screen_frame_n[top_bot][i], i, screen_buf_valid[top_bot][i]);
                     me_image(image_me[top_bot][i][Y_COMP],
                       image_me[top_bot][i_prev][Y_COMP],
                       screen_buf[top_bot][i][Y_COMP],
@@ -2180,7 +2182,7 @@ int handle_recv(uint8_t *buf, int size)
                       render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][V_COMP], ntr_downscale_uv ? w_orig / 2 : w_orig, ntr_downscale_uv ? h_orig / 2 : h_orig);
                     screen_done[top_bot][i] = 1;
                     handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot]);
-                    // fprintf(stderr, "Displaying p_frame: screen %d, frame_n = %d\n", top_bot, screen_frame_n_next);
+                    // fprintf(stderr, "Displaying p_frame: screen %d, frame_n = %d\n", top_bot, frame_n_next);
                     break;
                   }
                 }
