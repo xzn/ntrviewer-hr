@@ -731,7 +731,7 @@ void rpConfigSetDefault(void)
   me_interpolate = 0;
   min_dp_frame_rate = 30;
   max_frame_rate = 72;
-  me_select = 7;
+  me_select = 0;
   target_mbit_rate = 16;
   dynamic_priority = 1;
   multicore_encode = 1;
@@ -1958,6 +1958,10 @@ int handle_recv(uint8_t *buf, int size)
       int comp;
 
       plane = send_header.plane_type == 0 ? send_header.plane_comp : send_header.plane_comp + COMP_COUNT;
+      if (plane >= PLANE_COUNT) {
+        fprintf(stderr, "plane_comp error\n");
+        goto final;
+      }
       comp = plane < COMP_COUNT ? plane : COMP_COUNT;
 
       for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
@@ -1993,7 +1997,9 @@ int handle_recv(uint8_t *buf, int size)
         )
       ) {
         screen_buf_valid[top_bot][pos] = 0;
-        fprintf(stderr, "buffer overflow %d %d plane %d\n", top_bot, send_header.frame_n, plane);
+        fprintf(stderr, "buffer overflow %d %d plane %d, size so far %d, size incoming %d\n", top_bot, send_header.frame_n, plane,
+          (int)(screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]),
+          (int)(recv_buf_head - recv_buf));
         goto final;
       }
       memcpy(screen_recv_buf_head[top_bot][pos][plane], recv_buf, recv_buf_head - recv_buf);
@@ -2016,9 +2022,11 @@ int handle_recv(uint8_t *buf, int size)
       int scale_log2 = 1 + scale_log2_offset;
       u8 block_size_log2 = me_block_size_log2 + scale_log2;
 
+      int me_w = w >> block_size_log2;
+      int me_h = h >> block_size_log2;
       if (plane == ME_X_DATA || plane == ME_Y_DATA) {
-        w >>= block_size_log2;
-        h >>= block_size_log2;
+        w = me_w;
+        h = me_h;
       }
 
       int bpp = send_header.bpp ? send_header.bpp : 8;
@@ -2035,8 +2043,11 @@ int handle_recv(uint8_t *buf, int size)
       }
       if (ret
       ) {
-        // fprintf(stderr, "success %d %d comp %d\n", top_bot, send_header.frame_n, comp);
+        // fprintf(stderr, "success %d %d plane %d\n", top_bot, send_header.frame_n, plane);
         screen_recv_done[top_bot][pos][plane] = 1;
+
+        if (comp < COMP_COUNT)
+          screen_bpp[top_bot][pos][comp] = bpp;
 
         int frame_end = 1;
         for (int i = 0; i < (p_frame ? PLANE_COUNT : COMP_COUNT); ++i) {
@@ -2045,9 +2056,6 @@ int handle_recv(uint8_t *buf, int size)
             break;
           }
         }
-
-        if (comp < COMP_COUNT)
-          screen_bpp[top_bot][pos][comp] = bpp;
 
         if (frame_end) {
           if (screen_buf_valid[top_bot][pos] == 0) {
@@ -2080,15 +2088,16 @@ int handle_recv(uint8_t *buf, int size)
                 );
               }
               screen_done[top_bot][pos] = 1;
-              screen_frame_n[top_bot][pos] = -1;
+              screen_frame_n[top_bot][pos] += RP_IMAGE_FRAME_N_RANGE;
               handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot]);
               // fprintf(stderr, "Displaying key frame: screen %d, frame_n = %d\n", top_bot, screen_frame_n[top_bot]);
             }
 
-            uint8_t frame_n_next = (frame_n[top_bot] + 1);
+            uint8_t frame_n_next = (frame_n[top_bot] + 1) % RP_IMAGE_FRAME_N_RANGE;
             int i_prev = -1;
             for (int i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
-              if (screen_frame_n[top_bot][i] == frame_n[top_bot]) {
+              if (screen_frame_n[top_bot][i] == frame_n[top_bot] + RP_IMAGE_FRAME_N_RANGE
+              ) {
                 if (!screen_done[top_bot][i]) {
                   break;
                 }
@@ -2100,7 +2109,8 @@ int handle_recv(uint8_t *buf, int size)
               while (1) {
                 int i;
                 for (i = 0; i < ENCODE_BUFFER_COUNT; ++i) {
-                  if (screen_frame_n[top_bot][i] == frame_n_next) {
+                  if (screen_frame_n[top_bot][i] == frame_n_next
+                  ) {
                     if (screen_buf_valid[top_bot][i] <= 0) {
                       i = ENCODE_BUFFER_COUNT;
                       break;
@@ -2159,9 +2169,9 @@ int handle_recv(uint8_t *buf, int size)
                     if (debug_view_plane == 1)
                       render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], w_orig, h_orig);
                     else if (debug_view_plane == 4)
-                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, (const u8 *)screen_me_buf[top_bot][i][ME_X_COMP], w, h);
+                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, (const u8 *)screen_me_buf[top_bot][i][ME_X_COMP], me_w, me_h);
                     else if (debug_view_plane == 5)
-                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, (const u8 *)screen_me_buf[top_bot][i][ME_Y_COMP], w, h);
+                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, (const u8 *)screen_me_buf[top_bot][i][ME_Y_COMP], me_w, me_h);
                     else if (debug_view_plane == 6)
                       render_greyscale_to_comp3(screen_decoded[top_bot], screen_buf[top_bot][i][Y_COMP], w_orig, h_orig);
                     else if (debug_view_plane == 7)
@@ -2169,7 +2179,6 @@ int handle_recv(uint8_t *buf, int size)
                     else if (debug_view_plane == 8)
                       render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][V_COMP], ntr_downscale_uv ? w_orig / 2 : w_orig, ntr_downscale_uv ? h_orig / 2 : h_orig);
                     screen_done[top_bot][i] = 1;
-                    screen_frame_n[top_bot][pos] = -1;
                     handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot]);
                     // fprintf(stderr, "Displaying p_frame: screen %d, frame_n = %d\n", top_bot, screen_frame_n_next);
                     break;
@@ -2179,6 +2188,7 @@ int handle_recv(uint8_t *buf, int size)
                   break;
                 }
 
+                screen_frame_n[top_bot][i] += RP_IMAGE_FRAME_N_RANGE;
                 i_prev = i;
                 frame_n[top_bot] = frame_n_next;
                 frame_n_next = (frame_n[top_bot] + 1) % RP_IMAGE_FRAME_N_RANGE;
