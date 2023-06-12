@@ -735,8 +735,8 @@ void rpConfigSetDefault(void)
   encoder_which = 1;
   downscale_uv = 1;
   me_method = 7;
-  me_block_size = 2;
-  me_search_param = 16;
+  me_block_size = 0;
+  me_search_param = 32;
   me_downscale = 1;
   me_interpolate = 0;
   min_dp_frame_rate = 30;
@@ -1375,7 +1375,7 @@ MainLoop(void *loopArg)
       struct timespec to;
       clock_gettime(CLOCK_REALTIME, &to);
       if (hide_windows) {
-        to.tv_sec += 100 * 1000 * 1000;
+        to.tv_nsec += 100 * 1000 * 1000;
       } else {
         to.tv_nsec += 10 * 1000 * 1000;
       }
