@@ -262,6 +262,7 @@ _Static_assert(sizeof(union rp_conf_arg2_t) == sizeof(int));
 static int ntr_yuv_option;
 static int ntr_color_transform_hp;
 static nk_bool ntr_downscale_uv;
+static int ntr_encoder_which;
 static unsigned int ntr_me_enabled;
 static int ntr_me_block_size;
 static int ntr_me_search_param;
@@ -271,6 +272,13 @@ static nk_bool ntr_me_interpolate;
 static int debug_view_plane;
 
 static atomic_uint_fast8_t ip_octets[4];
+
+enum {
+    RP_ENCODER_FFMPEG_JLS,
+    RP_ENCODER_HP_JLS,
+    RP_ENCODER_JLS_COUNT,
+    RP_ENCODER_IMAGE_ZERO = RP_ENCODER_JLS_COUNT
+};
 
 enum rp_send_header_type {
 	RP_SEND_HEADER_TYPE_CONF,
@@ -282,6 +290,7 @@ struct rp_send_info_header {
     u32 downscale_uv : 1;
     u32 yuv_option : 2;
     u32 color_transform_hp : 2;
+	  u32 encoder_which : 2;
     u32 me_enabled : 2;
     u32 me_downscale : 1;
     u32 me_search_param : 5;
@@ -598,6 +607,7 @@ void *menu_tcp_thread_func(void *)
         ntr_downscale_uv = downscale_uv;
         ntr_yuv_option = yuv_option;
         ntr_color_transform_hp = color_transform_hp;
+        ntr_encoder_which = encoder_which;
         ntr_me_enabled = me_method > 1 ? 1 : me_method == 1 ? -1 : 0;
         ntr_me_block_size = RP_ME_MIN_BLOCK_SIZE << me_block_size;
         ntr_me_search_param = me_search_param;
@@ -747,10 +757,9 @@ void rpConfigSetDefault(void)
   kcp_nodelay = 2;
 }
 
+int hide_windows = 0;
 static void guiMain(struct nk_context *ctx)
 {
-  static int hide_windows = 0;
-
   struct nk_style_item fixed_background = ctx->style.window.fixed_background;
   ctx->style.window.fixed_background = nk_style_item_hide();
   const char *background_wnd = "Background";
@@ -878,6 +887,7 @@ static void guiMain(struct nk_context *ctx)
     const char *encoder_which_text[] = {
       "FFmpeg JPEG-LS",
       "HP JPEG-LS",
+      "ImageZero",
     };
     nk_combobox(ctx, encoder_which_text, sizeof(encoder_which_text) / sizeof(*encoder_which_text),
       &encoder_which, 30, nk_vec2(150, 9999)
@@ -1194,6 +1204,10 @@ typedef struct _FrameBufferContext
   int next_index;
 } FrameBufferContext;
 
+int gl_updated = 0;
+pthread_cond_t gl_updated_cond = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t gl_updated_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 enum {
   SCREEN_TOP,
   SCREEN_BOT,
@@ -1356,6 +1370,22 @@ MainLoop(void *loopArg)
     glClear(GL_COLOR_BUFFER_BIT);
     glClearColor(bg[0], bg[1], bg[2], bg[3]);
 
+    pthread_mutex_lock(&gl_updated_mutex);
+    while (!gl_updated) {
+      struct timespec to;
+      clock_gettime(CLOCK_REALTIME, &to);
+      if (hide_windows) {
+        to.tv_sec += 100 * 1000 * 1000;
+      } else {
+        to.tv_nsec += 10 * 1000 * 1000;
+      }
+      if (ETIMEDOUT == pthread_cond_timedwait(&gl_updated_cond, &gl_updated_mutex, &to)) {
+        break;
+      }
+    }
+    gl_updated = 0;
+    pthread_mutex_unlock(&gl_updated_mutex);
+
     hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400, 240, SCREEN_TOP);
     hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT);
 
@@ -1379,6 +1409,11 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb)
   ctx->next_index = next_index;
   pthread_mutex_unlock(&ctx->gl_tex_mutex);
   __atomic_add_fetch(&frame_counter, 1, __ATOMIC_RELAXED);
+
+  pthread_mutex_lock(&gl_updated_mutex);
+  gl_updated = 1;
+  pthread_cond_signal(&gl_updated_cond);
+  pthread_mutex_unlock(&gl_updated_mutex);
 }
 
 void render_greyscale_to_comp3(uint8_t *dst, const uint8_t *src, int w, int h) {
@@ -1570,6 +1605,16 @@ void render_yuv_to_rgb(uint8_t *dst,
   }
 }
 
+void render_rgb_bpp(uint8_t *rgb_image, int w, int h, int bpp) {
+  for (int j = 0; j < w; ++j) {
+    for (int i = 0; i < h; ++i) {
+      for (int k = 0; k < 3; ++k) {
+        *rgb_image++ <<= (8 - bpp);
+      }
+    }
+  }
+}
+
 uint8_t screen_decoded[SCREEN_COUNT][400 * 240 * 3];
 
 uint8_t upscaled_u_image[400 * 240];
@@ -1716,6 +1761,10 @@ uint8_t screen_recv_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT][400 * 24
 uint8_t *screen_recv_buf_head[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT];
 uint8_t screen_recv_done[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT];
 
+uint8_t screen_iz_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][400 * 240 * 3];
+uint8_t *screen_iz_buf_head[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
+uint8_t screen_iz_done[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
+
 uint8_t frame_n[SCREEN_COUNT];
 
 uint8_t image_me[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT][400 * 240];
@@ -1726,6 +1775,7 @@ uint8_t *recv_buf_head;
 
 #include "ffmpeg_opt/libavcodec/ffmpeg_jls.h"
 #include "ffmpeg_opt/libavcodec/jpegls.h"
+#include "imagezero/iz_c.h"
 
 int decode_image(uint8_t *dst, int, const uint8_t *src, int src_size, int w, int h, int bpp) {
   JLSState state = { 0 };
@@ -1982,6 +2032,7 @@ int handle_recv(uint8_t *buf, int size)
       ntr_downscale_uv = send_info_header.downscale_uv;
       ntr_yuv_option = send_info_header.yuv_option;
       ntr_color_transform_hp = send_info_header.color_transform_hp;
+      ntr_encoder_which = send_info_header.encoder_which;
       ntr_me_enabled = send_info_header.me_enabled;
       ntr_me_downscale = send_info_header.me_downscale;
       ntr_me_block_size = RP_ME_MIN_BLOCK_SIZE << send_info_header.me_block_size;
@@ -2022,6 +2073,8 @@ int handle_recv(uint8_t *buf, int size)
       int plane;
       int comp;
 
+      int encoder_iz = ntr_encoder_which == RP_ENCODER_IMAGE_ZERO;
+
       plane = send_header.plane_type == 0 ? send_header.plane_comp : send_header.plane_comp + COMP_COUNT;
       if (plane >= PLANE_COUNT) {
         fprintf(stderr, "plane_comp error\n");
@@ -2040,11 +2093,23 @@ int handle_recv(uint8_t *buf, int size)
         screen_pos[top_bot] %= ENCODE_BUFFER_COUNT;
         screen_frame_n[top_bot][pos] = send_header.frame_n;
 
-        screen_recv_buf_head[top_bot][pos][Y_DATA] = screen_recv_buf[top_bot][pos][Y_DATA];
-        screen_recv_buf_head[top_bot][pos][U_DATA] = screen_recv_buf[top_bot][pos][U_DATA];
-        screen_recv_buf_head[top_bot][pos][V_DATA] = screen_recv_buf[top_bot][pos][V_DATA];
-        screen_recv_buf_head[top_bot][pos][ME_X_DATA] = screen_recv_buf[top_bot][pos][ME_X_DATA];
-        screen_recv_buf_head[top_bot][pos][ME_Y_DATA] = screen_recv_buf[top_bot][pos][ME_Y_DATA];
+        if (encoder_iz) {
+          screen_recv_buf_head[top_bot][pos][Y_DATA] = 0;
+          screen_recv_buf_head[top_bot][pos][U_DATA] = 0;
+          screen_recv_buf_head[top_bot][pos][V_DATA] = 0;
+          screen_recv_buf_head[top_bot][pos][ME_X_DATA] = 0;
+          screen_recv_buf_head[top_bot][pos][ME_Y_DATA] = 0;
+
+          screen_iz_buf_head[top_bot][pos] = screen_iz_buf[top_bot][pos];
+        } else {
+          screen_recv_buf_head[top_bot][pos][Y_DATA] = screen_recv_buf[top_bot][pos][Y_DATA];
+          screen_recv_buf_head[top_bot][pos][U_DATA] = screen_recv_buf[top_bot][pos][U_DATA];
+          screen_recv_buf_head[top_bot][pos][V_DATA] = screen_recv_buf[top_bot][pos][V_DATA];
+          screen_recv_buf_head[top_bot][pos][ME_X_DATA] = screen_recv_buf[top_bot][pos][ME_X_DATA];
+          screen_recv_buf_head[top_bot][pos][ME_Y_DATA] = screen_recv_buf[top_bot][pos][ME_Y_DATA];
+
+          screen_iz_buf_head[top_bot][pos] = 0;
+        }
 
         screen_recv_done[top_bot][pos][Y_DATA] = 0;
         screen_recv_done[top_bot][pos][U_DATA] = 0;
@@ -2052,23 +2117,45 @@ int handle_recv(uint8_t *buf, int size)
         screen_recv_done[top_bot][pos][ME_X_DATA] = 0;
         screen_recv_done[top_bot][pos][ME_Y_DATA] = 0;
 
+        screen_iz_done[top_bot][pos] = 0;
+
         screen_done[top_bot][pos] = 0;
         screen_buf_valid[top_bot][pos] = -1;
       }
 
-      if (recv_buf_head - recv_buf >
-        (intptr_t)sizeof(screen_recv_buf[top_bot][pos][plane]) -
-          (screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]
-        )
-      ) {
-        screen_buf_valid[top_bot][pos] = 0;
-        fprintf(stderr, "buffer overflow %d %d plane %d, size so far %d, size incoming %d\n", top_bot, send_header.frame_n, plane,
-          (int)(screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]),
-          (int)(recv_buf_head - recv_buf));
-        goto final;
+      if (encoder_iz) {
+        if (!screen_iz_buf_head[top_bot][pos])
+          goto final;
+        if (recv_buf_head - recv_buf >
+          (intptr_t)sizeof(screen_iz_buf[top_bot][pos]) -
+            (screen_iz_buf_head[top_bot][pos] - screen_iz_buf[top_bot][pos]
+          )
+        ) {
+          screen_buf_valid[top_bot][pos] = 0;
+          fprintf(stderr, "buffer overflow %d %d plane %d, size so far %d, size incoming %d\n", top_bot, send_header.frame_n, plane,
+            (int)(screen_iz_buf_head[top_bot][pos] - screen_iz_buf[top_bot][pos]),
+            (int)(recv_buf_head - recv_buf));
+          goto final;
+        }
+        memcpy(screen_iz_buf_head[top_bot][pos], recv_buf, recv_buf_head - recv_buf);
+        screen_iz_buf_head[top_bot][pos] += recv_buf_head - recv_buf;
+      } else {
+        if (!screen_recv_buf_head[top_bot][pos][plane])
+          goto final;
+        if (recv_buf_head - recv_buf >
+          (intptr_t)sizeof(screen_recv_buf[top_bot][pos][plane]) -
+            (screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]
+          )
+        ) {
+          screen_buf_valid[top_bot][pos] = 0;
+          fprintf(stderr, "buffer overflow %d %d plane %d, size so far %d, size incoming %d\n", top_bot, send_header.frame_n, plane,
+            (int)(screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]),
+            (int)(recv_buf_head - recv_buf));
+          goto final;
+        }
+        memcpy(screen_recv_buf_head[top_bot][pos][plane], recv_buf, recv_buf_head - recv_buf);
+        screen_recv_buf_head[top_bot][pos][plane] += recv_buf_head - recv_buf;
       }
-      memcpy(screen_recv_buf_head[top_bot][pos][plane], recv_buf, recv_buf_head - recv_buf);
-      screen_recv_buf_head[top_bot][pos][plane] += recv_buf_head - recv_buf;
 
       if (!send_header.data_end)
         goto final;
@@ -2086,7 +2173,7 @@ int handle_recv(uint8_t *buf, int size)
 
       int me_w = w >> block_size_log2;
       int me_h = h >> block_size_log2;
-      
+
       if (ntr_downscale_uv && (plane == U_DATA || plane == V_DATA)) {
         w /= 2; h /= 2;
       }
@@ -2099,9 +2186,15 @@ int handle_recv(uint8_t *buf, int size)
       int bpp = send_header.bpp ? send_header.bpp : 8;
 
       // fprintf(stderr, "Decoding: screen %d, frame_n = %d, plane = %d, comp = %d, w = %d, h = %d, bpp = %d, size = %d\n", top_bot, send_header.frame_n, plane, comp, w, h, bpp,
-      //   (int)(screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]));
+      //   encoder_iz ?
+      //     (int)(screen_iz_buf_head[top_bot][pos] - screen_iz_buf[top_bot][pos]) :
+      //     (int)(screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]));
       int ret;
-      if (comp < COMP_COUNT) {
+      if (encoder_iz) {
+        ret = izDecodeImageRGB(screen_decoded[top_bot], screen_iz_buf[top_bot][pos], h_orig, w_orig);
+        // fprintf(stderr, "izDecodeImageRGB: %d (%d)\n", ret, (int)(screen_iz_buf_head[top_bot][pos] - screen_iz_buf[top_bot][pos]));
+        ret = ret == screen_iz_buf_head[top_bot][pos] - screen_iz_buf[top_bot][pos];
+      } else if (comp < COMP_COUNT) {
         ret = ffmpeg_jls_decode(screen_buf[top_bot][pos][comp],
           h, w, h, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane], bpp) == w * h;
       } else {
@@ -2111,16 +2204,20 @@ int handle_recv(uint8_t *buf, int size)
       if (ret
       ) {
         // fprintf(stderr, "success %d %d plane %d\n", top_bot, send_header.frame_n, plane);
-        screen_recv_done[top_bot][pos][plane] = 1;
-
-        if (comp < COMP_COUNT)
-          screen_bpp[top_bot][pos][comp] = bpp;
-
         int frame_end = 1;
-        for (int i = 0; i < (ntr_me_enabled == 1 && p_frame ? PLANE_COUNT : COMP_COUNT + (ntr_me_enabled == 3 && p_frame)); ++i) {
-          if (!screen_recv_done[top_bot][pos][i]) {
-            frame_end = 0;
-            break;
+        if (encoder_iz) {
+          screen_iz_done[top_bot][pos] = 1;
+        } else {
+          screen_recv_done[top_bot][pos][plane] = 1;
+
+          if (comp < COMP_COUNT)
+            screen_bpp[top_bot][pos][comp] = bpp;
+
+          for (int i = 0; i < (ntr_me_enabled == 1 && p_frame ? PLANE_COUNT : COMP_COUNT + (ntr_me_enabled == 3 && p_frame)); ++i) {
+            if (!screen_recv_done[top_bot][pos][i]) {
+              frame_end = 0;
+              break;
+            }
           }
         }
 
@@ -2136,7 +2233,9 @@ int handle_recv(uint8_t *buf, int size)
             // fprintf(stderr, "full frame %d %d (%d) pos %d\n", top_bot, send_header.frame_n, screen_frame_n[top_bot][pos], pos);
             if (!p_frame) {
               frame_n[top_bot] = send_header.frame_n;
-              if (ntr_downscale_uv) {
+              if (encoder_iz) {
+                render_rgb_bpp(screen_decoded[top_bot], w_orig, h_orig, bpp);
+              } else if (ntr_downscale_uv) {
                 memcpy(image_me[top_bot][pos][Y_COMP], screen_buf[top_bot][pos][Y_COMP], w_orig * h_orig);
                 memcpy(image_me[top_bot][pos][U_COMP], screen_buf[top_bot][pos][U_COMP], w_orig / 2 * h_orig / 2);
                 memcpy(image_me[top_bot][pos][V_COMP], screen_buf[top_bot][pos][V_COMP], w_orig / 2 * h_orig / 2);
@@ -2585,6 +2684,7 @@ int main(int argc, char *argv[])
   set_style(ctx, THEME_DARK);
 
   sock_startup();
+  izInitDecodeTable();
 
   for (int i = 0; i < SCREEN_COUNT; ++i) {
     glGenTextures(1, &buffer_ctx[i].gl_tex_id);
