@@ -177,6 +177,8 @@ const char *connection_msg[CS_MAX] = {
     ".",
 };
 
+#define RP_KCP_SNDWNDSIZE_BITS (6)
+#define RP_KCP_MAX_SNDWNDSIZE (RP_KCP_MIN_SNDWNDSIZE + (1 << RP_KCP_SNDWNDSIZE_BITS) - 1)
 #define RP_KCP_MIN_MINRTO (10)
 #define RP_KCP_MIN_SNDWNDSIZE (32)
 #define RP_ME_MIN_BLOCK_SIZE_LOG2 (2)
@@ -185,12 +187,15 @@ const char *connection_msg[CS_MAX] = {
 #define RP_IMAGE_ME_SELECT_BITS (6)
 #define RP_IMAGE_FRAME_N_BITS (3)
 #define RP_IMAGE_FRAME_N_RANGE (1 << RP_IMAGE_FRAME_N_BITS)
+#define RP_ZSTD_COMP_LEVEL_BITS (3)
+#define RP_ZSTD_COMP_LEVEL_HALF_RANGE (1 << (RP_ZSTD_COMP_LEVEL_BITS - 1))
 
 static int yuv_option;
 static int color_transform_hp;
 static int encoder_which;
 static nk_bool downscale_uv;
 static int jpeg_quality;
+static int zstd_comp_level;
 static int me_method;
 static int me_block_size;
 static int me_search_param;
@@ -219,9 +224,11 @@ union rp_conf_arg0_t {
 		u32 kcp_nocwnd : 1;
 		u32 kcp_fastresend : 2;
 		u32 me_select : RP_IMAGE_ME_SELECT_BITS;
+		u32 me_interpolate : 1;
 		u32 multicore_network : 1;
 		u32 multicore_screen : 1;
 		u32 jpeg_quality : 7;
+		u32 zstd_comp_level : RP_ZSTD_COMP_LEVEL_BITS;
 	};
 };
 
@@ -231,14 +238,13 @@ union rp_conf_arg1_t {
 		u32 yuv_option : 2;
 		u32 color_transform_hp : 2;
 		u32 downscale_uv : 1;
-		u32 encoder_which : 2;
+		u32 encoder_which : 3;
 		u32 me_block_size : 2;
 		u32 me_method : 3;
 		u32 me_search_param : 5;
 		u32 me_downscale : 1;
-		u32 me_interpolate : 1;
 		u32 kcp_minrto : 7;
-		u32 kcp_snd_wnd_size : 6;
+		u32 kcp_snd_wnd_size : RP_KCP_SNDWNDSIZE_BITS;
 	};
 };
 
@@ -278,6 +284,8 @@ static atomic_uint_fast8_t ip_octets[4];
 enum {
     RP_ENCODER_FFMPEG_JLS,
     RP_ENCODER_HP_JLS,
+    RP_ENCODER_JLS_USE_LUT_COUNT,
+    RP_ENCODER_ZSTD_JLS = RP_ENCODER_JLS_USE_LUT_COUNT,
     RP_ENCODER_JLS_COUNT,
     RP_ENCODER_IMAGE_ZERO = RP_ENCODER_JLS_COUNT,
     RP_ENCODER_JPEG_TURBO,
@@ -293,7 +301,7 @@ struct rp_send_info_header {
     u32 downscale_uv : 1;
     u32 yuv_option : 2;
     u32 color_transform_hp : 2;
-	  u32 encoder_which : 2;
+	  u32 encoder_which : 3;
     u32 me_enabled : 2;
     u32 me_downscale : 1;
     u32 me_search_param : 5;
@@ -576,6 +584,8 @@ void *menu_tcp_thread_func(void *)
           .multicore_network = multicore_network,
           .multicore_screen = multicore_screen,
           .jpeg_quality = jpeg_quality,
+          .me_interpolate = me_interpolate,
+          .zstd_comp_level = zstd_comp_level,
         };
         union rp_conf_arg1_t arg1 = {
           .yuv_option = yuv_option,
@@ -586,7 +596,6 @@ void *menu_tcp_thread_func(void *)
           .me_method = me_method,
           .me_search_param = me_search_param - RP_ME_MIN_SEARCH_PARAM,
           .me_downscale = me_downscale,
-          .me_interpolate = me_interpolate,
           .kcp_minrto = kcp_minrto - RP_KCP_MIN_MINRTO,
           .kcp_snd_wnd_size = kcp_snd_wnd_size - RP_KCP_MIN_SNDWNDSIZE,
         };
@@ -738,10 +747,11 @@ void rpConfigSetDefault(void)
 {
   yuv_option = 3;
   color_transform_hp = 0;
-  encoder_which = 0;
+  encoder_which = 2;
   downscale_uv = 1;
   jpeg_quality = 90;
-  me_method = 7;
+  zstd_comp_level = 4;
+  me_method = 1;
   me_block_size = 0;
   me_search_param = 32;
   me_downscale = 1;
@@ -894,12 +904,21 @@ static void guiMain(struct nk_context *ctx)
     const char *encoder_which_text[] = {
       "FFmpeg JPEG-LS",
       "HP JPEG-LS",
+      "ZSTD Med-Pred",
       "ImageZero",
       "JPEG Turbo",
     };
     nk_combobox(ctx, encoder_which_text, sizeof(encoder_which_text) / sizeof(*encoder_which_text),
       &encoder_which, 30, nk_vec2(150, 9999)
     );
+
+    int zstd_comp_level_disp = zstd_comp_level - RP_ZSTD_COMP_LEVEL_HALF_RANGE;
+    if (zstd_comp_level_disp >= 0)
+      ++zstd_comp_level_disp;
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "ZSTD Comp Level %d", zstd_comp_level_disp);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 0, &zstd_comp_level, 7, 1);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     snprintf(msg_buf, sizeof(msg_buf), "JPEG Quality %d", jpeg_quality);
@@ -969,7 +988,7 @@ static void guiMain(struct nk_context *ctx)
     nk_layout_row_dynamic(ctx, 30, 2);
     snprintf(msg_buf, sizeof(msg_buf), "KCP Snd Wnd Size %d", kcp_snd_wnd_size);
     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, 32, &kcp_snd_wnd_size, 95, 1);
+    nk_slider_int(ctx, RP_KCP_MIN_SNDWNDSIZE, &kcp_snd_wnd_size, RP_KCP_MAX_SNDWNDSIZE, 1);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     snprintf(msg_buf, sizeof(msg_buf), "KCP Nodelay %d", kcp_nodelay);
@@ -1790,6 +1809,9 @@ uint8_t *recv_buf_head;
 #include "ffmpeg_opt/libavcodec/jpegls.h"
 #include "imagezero/iz_c.h"
 #include "jpeg_turbo/jpeglib.h"
+#define ZSTD_STATIC_LINKING_ONLY
+#include "zstd/zstd.h"
+#include "zstd/decompress/zstd_decompress_internal.h"
 
 int decode_image(uint8_t *dst, int, const uint8_t *src, int src_size, int w, int h, int bpp) {
   JLSState state = { 0 };
@@ -2021,6 +2043,98 @@ void me_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const int8_t
   }
 }
 
+static uint8_t zstd_pred_med(uint8_t Rb, uint8_t Ra, uint8_t Rc) {
+  uint8_t minx;
+  uint8_t maxx;
+
+  if (Rb > Ra) {
+    minx = Ra;
+    maxx = Rb;
+  } else {
+    maxx = Ra;
+    minx = Rb;
+  }
+  if (Rc >= maxx)
+    return minx;
+  else if (Rc <= minx)
+    return maxx;
+  else
+    return Ra + Rb - Rc;
+  }
+
+int zstd_jls_decode(uint8_t *dst, int dst_x, int dst_y, const uint8_t *src, int src_size) {
+  size_t ret;
+
+  size_t ws_size = ZSTD_estimateDStreamSize_fromFrame(src, src_size);
+  if (ZSTD_isError(ws_size)) {
+    fprintf(stderr, "ZSTD_estimateDStreamSize_fromFrame failed: %d.\n", (int)ws_size);
+    return -1;
+  }
+
+  void *ws = malloc(ws_size);
+
+  ZSTD_DStream *dstream = ZSTD_initStaticDStream(ws, ws_size);
+  if (!dstream) {
+    fprintf(stderr, "ZSTD_initStaticDStream error\n");
+    free(ws);
+    return -1;
+  }
+
+  ret = ZSTD_initDStream(dstream);
+  if (ZSTD_isError(ret)) {
+    fprintf(stderr, "ZSTD_initDStream error: %d\n", (int)ret);
+    free(ws);
+    return -1;
+  }
+
+  ZSTD_inBuffer cur_input = {
+    .src = src,
+    .size = src_size,
+  };
+
+  uint8_t *pred_buf = malloc(dst_x);
+  if (!pred_buf) {
+    free(ws);
+    return -1;
+  }
+
+  for (int j = 0; j < dst_y; ++j) {
+    ZSTD_outBuffer cur_output = {
+      .dst = pred_buf,
+      .size = dst_x,
+    };
+
+    while (cur_output.pos < cur_output.size && cur_input.pos < cur_input.size) {
+      ret = ZSTD_decompressStream(dstream, &cur_output, &cur_input);
+      if (ZSTD_isError(ret)) {
+        fprintf(stderr, "ZSTD_decompressStream error: %d\n", (int)ret);
+        free(ws);
+        free(pred_buf);
+        return -1;
+      }
+    }
+
+    if (cur_output.pos < cur_output.size && cur_input.pos >= cur_input.size) {
+      fprintf(stderr, "not enough input\n");
+      free(ws);
+      free(pred_buf);
+      return -1;
+    }
+
+    uint8_t *dst_row = dst + j * dst_x;
+    for (int i = 0; i < dst_x; ++i) {
+      uint8_t Rb = j > 0 ? dst_row[i - dst_x] : 0, Ra = i > 0 ? dst_row[i - 1] : Rb, Rc = j > 0 && i > 0 ? dst_row[i - dst_x - 1] : Rb;
+      uint8_t pred = zstd_pred_med(Rb, Ra, Rc);
+      dst_row[i] = pred_buf[i] + pred;
+    }
+  }
+
+  free(ws);
+  free(pred_buf);
+
+  return dst_x * dst_y;
+}
+
 int receiving;
 int handle_recv(uint8_t *buf, int size)
 {
@@ -2203,7 +2317,7 @@ int handle_recv(uint8_t *buf, int size)
       //   encoder_rgb ?
       //     (int)(screen_rgb_buf_head[top_bot][pos] - screen_rgb_buf[top_bot][pos]) :
       //     (int)(screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]));
-      int ret;
+      int ret = 0;
       if (encoder_rgb) {
         if (ntr_encoder_which == RP_ENCODER_IMAGE_ZERO) {
           ret = izDecodeImageRGB(screen_decoded[top_bot], screen_rgb_buf[top_bot][pos], h_orig, w_orig);
@@ -2236,12 +2350,25 @@ int handle_recv(uint8_t *buf, int size)
             ret = 0;
           }
         }
-      } else if (comp < COMP_COUNT) {
-        ret = ffmpeg_jls_decode(screen_buf[top_bot][pos][comp],
-          h, w, h, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane], bpp) == w * h;
+      } else if (ntr_encoder_which < RP_ENCODER_JLS_USE_LUT_COUNT) {
+        if (comp < COMP_COUNT) {
+          ret = ffmpeg_jls_decode(screen_buf[top_bot][pos][comp],
+            h, w, h, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane], bpp) == w * h;
+        } else {
+          ret = ffmpeg_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT],
+            h, w, h, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane], bpp) == w * h;
+        }
+      } else if (ntr_encoder_which == RP_ENCODER_ZSTD_JLS) {
+        if (comp < COMP_COUNT) {
+          ret = zstd_jls_decode(screen_buf[top_bot][pos][comp],
+            h, w, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]) == w * h;
+        } else {
+          ret = zstd_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT],
+            h, w, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]) == w * h;
+        }
       } else {
-        ret = ffmpeg_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT],
-          h, w, h, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane], bpp) == w * h;
+        fprintf(stderr, "Unknown encoder\n");
+        ret = 0;
       }
       if (ret
       ) {
