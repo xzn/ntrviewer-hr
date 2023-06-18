@@ -194,6 +194,7 @@ static int yuv_option;
 static int color_transform_hp;
 static int encoder_which;
 static nk_bool downscale_uv;
+static nk_bool encode_lq;
 static int jpeg_quality;
 static int zstd_comp_level;
 static int me_method;
@@ -227,6 +228,7 @@ union rp_conf_arg0_t {
 		u32 me_interpolate : 1;
 		u32 multicore_network : 1;
 		u32 multicore_screen : 1;
+		u32 encode_lq : 1;
 		u32 jpeg_quality : 7;
 		u32 zstd_comp_level : RP_ZSTD_COMP_LEVEL_BITS;
 	};
@@ -586,6 +588,7 @@ void *menu_tcp_thread_func(void *)
           .jpeg_quality = jpeg_quality,
           .me_interpolate = me_interpolate,
           .zstd_comp_level = zstd_comp_level,
+          .encode_lq = encode_lq,
         };
         union rp_conf_arg1_t arg1 = {
           .yuv_option = yuv_option,
@@ -747,8 +750,9 @@ void rpConfigSetDefault(void)
 {
   yuv_option = 3;
   color_transform_hp = 0;
-  encoder_which = 2;
+  encoder_which = 0;
   downscale_uv = 1;
+  encode_lq = 1;
   jpeg_quality = 90;
   zstd_comp_level = 4;
   me_method = 1;
@@ -756,8 +760,8 @@ void rpConfigSetDefault(void)
   me_search_param = 32;
   me_downscale = 1;
   me_interpolate = 0;
-  min_dp_frame_rate = 30;
-  max_frame_rate = 72;
+  min_dp_frame_rate = 24;
+  max_frame_rate = 48;
   me_select = 7;
   target_mbit_rate = 16;
   dynamic_priority = 1;
@@ -767,8 +771,8 @@ void rpConfigSetDefault(void)
   bot_priority = 5;
   multicore_network = 0;
   multicore_screen = 1;
-  kcp_minrto = 95;
-  kcp_snd_wnd_size = 95;
+  kcp_minrto = 48;
+  kcp_snd_wnd_size = 32;
   kcp_nocwnd = 1;
   kcp_fastresend = 2;
   kcp_nodelay = 2;
@@ -911,6 +915,10 @@ static void guiMain(struct nk_context *ctx)
     nk_combobox(ctx, encoder_which_text, sizeof(encoder_which_text) / sizeof(*encoder_which_text),
       &encoder_which, 30, nk_vec2(150, 9999)
     );
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Encode LQ", NK_TEXT_CENTERED);
+    nk_checkbox_label(ctx, "", &encode_lq);
 
     int zstd_comp_level_disp = zstd_comp_level - RP_ZSTD_COMP_LEVEL_HALF_RANGE;
     if (zstd_comp_level_disp >= 0)
