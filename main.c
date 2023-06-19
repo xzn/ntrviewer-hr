@@ -1557,11 +1557,23 @@ void convert_to_rgb_hp(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, 
     *r = ((u + half_g) << (8 - bpp)) - 128;
     *b = ((v + half_g) << (8 - bpp)) - 128;
   } else {
-    *r = u;
-    *g = y;
-    *b = v;
+    *r = u << (8 - u_bpp);
+    *g = y << (8 - y_bpp);
+    *b = v << (8 - v_bpp);
     return;
   }
+
+  double r_in = *r;
+  double g_in = *g;
+  double b_in = *b;
+
+  g_in = g_in / (double)(((1 << y_bpp) - 1) << (8 - y_bpp)) * (double)((1 << 8) - 1);
+  r_in = r_in / (double)(((1 << u_bpp) - 1) << (8 - u_bpp)) * (double)((1 << 8) - 1);
+  b_in = b_in / (double)(((1 << v_bpp) - 1) << (8 - v_bpp)) * (double)((1 << 8) - 1);
+
+  *r = r_in;
+  *g = g_in;
+  *b = b_in;
 }
 
 void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b,
@@ -1573,13 +1585,21 @@ void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uin
     return;
   }
 
-  y <<= (8 - y_bpp);
-  u <<= (8 - u_bpp);
-  v <<= (8 - v_bpp);
-
   double y_in = y;
   double u_in = u;
   double v_in = v;
+
+  y_in = y_in > (double)((1 << y_bpp) - 1) / 2. ? y_in : y_in + .5;
+  u_in = u_in > (double)((1 << u_bpp) - 1) / 2. ? u_in : u_in + .5;
+  v_in = v_in > (double)((1 << v_bpp) - 1) / 2. ? v_in : v_in + .5;
+
+  y_in = y_in / (double)(1 << y_bpp) * (double)(1 << 8);
+  u_in = u_in / (double)(1 << u_bpp) * (double)(1 << 8);
+  v_in = v_in / (double)(1 << v_bpp) * (double)(1 << 8);
+
+  y = round(y_in);
+  u = round(u_in);
+  v = round(v_in);
 
   if (ntr_yuv_option == 2)
   {
