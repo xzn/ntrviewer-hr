@@ -107,6 +107,14 @@ static inline IUINT32 iclock()
 #include <pthread.h>
 #include "main.h"
 
+#include "ffmpeg_opt/libavcodec/ffmpeg_jls.h"
+#include "ffmpeg_opt/libavcodec/jpegls.h"
+#include "imagezero/iz_c.h"
+#include "jpeg_turbo/jpeglib.h"
+#define ZSTD_STATIC_LINKING_ONLY
+#include "zstd/zstd.h"
+#include "zstd/decompress/zstd_decompress_internal.h"
+
 #define RP_MAX(a,b) ((a) > (b) ? (a) : (b))
 #define RP_MIN(a,b) ((a) > (b) ? (b) : (a))
 
@@ -138,8 +146,8 @@ typedef int64_t		s64;
 #define MAX_ELEMENT_MEMORY 128 * 1024
 
 #define UNUSED(a) (void)a
-#define MIN(a, b) ((a) < (b) ? (a) : (b))
-#define MAX(a, b) ((a) < (b) ? (b) : (a))
+// #define MIN(a, b) ((a) < (b) ? (a) : (b))
+// #define MAX(a, b) ((a) < (b) ? (b) : (a))
 #define LEN(a) (sizeof(a) / sizeof(a)[0])
 
 #define FRAME_STAT_EVERY_X_FRAMES 10
@@ -1456,10 +1464,11 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb)
   pthread_mutex_unlock(&gl_updated_mutex);
 }
 
-void render_greyscale_to_comp3(uint8_t *dst, const uint8_t *src, int w, int h) {
+void render_greyscale_to_comp3(uint8_t *dst, const uint8_t *src, int w, int h, int bpp) {
+  int scale = (1 << (8 - bpp));
   for (int j = 0; j < w; ++j) {
     for (int i = 0; i < h; ++i) {
-      dst[2] = dst[1] = dst[0] = *src++;
+      dst[2] = dst[1] = dst[0] = *src++ * scale;
       dst += 3;
     }
   }
@@ -1589,33 +1598,37 @@ void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uin
   double u_in = u;
   double v_in = v;
 
-  y_in = y_in > (double)((1 << y_bpp) - 1) / 2. ? y_in : y_in + .5;
-  u_in = u_in > (double)((1 << u_bpp) - 1) / 2. ? u_in : u_in + .5;
-  v_in = v_in > (double)((1 << v_bpp) - 1) / 2. ? v_in : v_in + .5;
+  if (ntr_yuv_option == 2 || ntr_yuv_option == 3)
+  {
+    y_in = y_in / (double)((1 << y_bpp) - 1) * (double)((1 << 8) - 1);
+    y = round(y_in);
 
-  y_in = y_in / (double)(1 << y_bpp) * (double)(1 << 8);
-  u_in = u_in / (double)(1 << u_bpp) * (double)(1 << 8);
-  v_in = v_in / (double)(1 << v_bpp) * (double)(1 << 8);
+    u_in -= (128 >> (8 - u_bpp));
+    u_in *= 1 << (8 - u_bpp);
 
-  y = round(y_in);
-  u = round(u_in);
-  v = round(v_in);
+    v_in -= (128 >> (8 - v_bpp));
+    v_in *= 1 << (8 - v_bpp);
+  }
 
   if (ntr_yuv_option == 2)
   {
     y_in /= 255;
-    u_in -= 128;
-    v_in -= 128;
     u_in /= 127;
     v_in /= 127;
   } else if (ntr_yuv_option == 3) {
     y_in -= 16;
     y_in /= 219;
-    u_in -= 128;
-    v_in -= 128;
     u_in /= 112;
     v_in /= 112;
   } else {
+    y_in = y_in / (double)((1 << y_bpp) - 1) * (double)((1 << 8) - 1);
+    u_in = u_in / (double)((1 << u_bpp) - 1) * (double)((1 << 8) - 1);
+    v_in = v_in / (double)((1 << v_bpp) - 1) * (double)((1 << 8) - 1);
+
+    y = round(y_in);
+    u = round(u_in);
+    v = round(v_in);
+
     *r = u;
     *g = y;
     *b = v;
@@ -1832,14 +1845,6 @@ uint8_t image_me[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT][400 * 240];
 #define RECV_BUF_SIZE (2000)
 uint8_t recv_buf[RECV_BUF_SIZE];
 uint8_t *recv_buf_head;
-
-#include "ffmpeg_opt/libavcodec/ffmpeg_jls.h"
-#include "ffmpeg_opt/libavcodec/jpegls.h"
-#include "imagezero/iz_c.h"
-#include "jpeg_turbo/jpeglib.h"
-#define ZSTD_STATIC_LINKING_ONLY
-#include "zstd/zstd.h"
-#include "zstd/decompress/zstd_decompress_internal.h"
 
 int decode_image(uint8_t *dst, int, const uint8_t *src, int src_size, int w, int h, int bpp) {
   JLSState state = { 0 };
@@ -2570,28 +2575,28 @@ int handle_recv(uint8_t *buf, int size)
                           w_orig, h_orig, screen_bpp[top_bot][i][Y_COMP], screen_bpp[top_bot][i][U_COMP], screen_bpp[top_bot][i][V_COMP]
                         );
                       else if (debug_view_plane == 2)
-                        render_greyscale_to_comp3(screen_decoded[top_bot], upscaled_u_image, w_orig, h_orig);
+                        render_greyscale_to_comp3(screen_decoded[top_bot], upscaled_u_image, w_orig, h_orig, screen_bpp[top_bot][i][U_COMP]);
                       else if (debug_view_plane == 3)
-                        render_greyscale_to_comp3(screen_decoded[top_bot], upscaled_v_image, w_orig, h_orig);
+                        render_greyscale_to_comp3(screen_decoded[top_bot], upscaled_v_image, w_orig, h_orig, screen_bpp[top_bot][i][V_COMP]);
                     } else {
                       if (debug_view_plane == 0)
                         render_yuv_to_rgb(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], image_me[top_bot][i][U_COMP], image_me[top_bot][i][V_COMP],
                           w_orig, h_orig, screen_bpp[top_bot][i][Y_COMP], screen_bpp[top_bot][i][U_COMP], screen_bpp[top_bot][i][V_COMP]
                         );
                       else if (debug_view_plane == 2)
-                        render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][U_COMP], w_orig, h_orig);
+                        render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][U_COMP], w_orig, h_orig, screen_bpp[top_bot][i][U_COMP]);
                       else if (debug_view_plane == 3)
-                        render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][V_COMP], w_orig, h_orig);
+                        render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][V_COMP], w_orig, h_orig, screen_bpp[top_bot][i][V_COMP]);
                     }
                     u8 me_bpp = ntr_me_enabled == 1 ? av_ceil_log2(ntr_me_search_param * 2 + 1) : 1;
                     if (debug_view_plane == 1)
-                      render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], w_orig, h_orig);
+                      render_greyscale_to_comp3(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], w_orig, h_orig, screen_bpp[top_bot][i][Y_COMP]);
                     else if (debug_view_plane == 4)
                       render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, (const u8 *)screen_me_buf[top_bot][i][ME_X_COMP], me_w, me_h, me_bpp);
                     else if (debug_view_plane == 5)
                       render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, (const u8 *)screen_me_buf[top_bot][i][ME_Y_COMP], me_w, me_h, me_bpp);
                     else if (debug_view_plane == 6)
-                      render_greyscale_to_comp3(screen_decoded[top_bot], screen_buf[top_bot][i][Y_COMP], w_orig, h_orig);
+                      render_greyscale_to_comp3(screen_decoded[top_bot], screen_buf[top_bot][i][Y_COMP], w_orig, h_orig, screen_bpp[top_bot][i][Y_COMP]);
                     else if (debug_view_plane == 7)
                       render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][U_COMP], ntr_downscale_uv ? w_orig / 2 : w_orig, ntr_downscale_uv ? h_orig / 2 : h_orig, screen_bpp[top_bot][i][U_COMP]);
                     else if (debug_view_plane == 8)
