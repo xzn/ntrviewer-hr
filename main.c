@@ -1598,27 +1598,33 @@ void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uin
   double u_in = u;
   double v_in = v;
 
-  if (ntr_yuv_option == 2 || ntr_yuv_option == 3)
-  {
-    y_in = y_in / (double)((1 << y_bpp) - 1) * (double)((1 << 8) - 1);
-    y = round(y_in);
-
-    u_in -= (128 >> (8 - u_bpp));
-    u_in *= 1 << (8 - u_bpp);
-
-    v_in -= (128 >> (8 - v_bpp));
-    v_in *= 1 << (8 - v_bpp);
-  }
-
   if (ntr_yuv_option == 2)
   {
+    y_in = y_in / (double)((1 << y_bpp) - 1) * (double)((1 << 8) - 1);
     y_in /= 255;
+
+    u_in -= 1;
+    u_in = u_in / (double)((1 << u_bpp) - 2) * (double)((1 << 8) - 2);
+    u_in -= 127;
     u_in /= 127;
+
+    v_in -= 1;
+    v_in = v_in / (double)((1 << v_bpp) - 2) * (double)((1 << 8) - 2);
+    v_in -= 127;
     v_in /= 127;
   } else if (ntr_yuv_option == 3) {
-    y_in -= 16;
+    y_in -= 16 >> (8 - y_bpp);
+    y_in = y_in / (double)((1 << y_bpp) - 1 - (36 >> (8 - y_bpp))) * (double)((1 << 8) - 1 - 36);
     y_in /= 219;
+
+    u_in -= 16 >> (8 - u_bpp);
+    u_in = u_in / (double)((1 << u_bpp) - (32 >> (8 - u_bpp))) * (double)((1 << 8) - 32);
+    u_in -= 112;
     u_in /= 112;
+
+    v_in -= 16 >> (8 - v_bpp);
+    v_in = v_in / (double)((1 << v_bpp) - (32 >> (8 - v_bpp))) * (double)((1 << 8) - 32);
+    v_in -= 112;
     v_in /= 112;
   } else {
     y_in = y_in / (double)((1 << y_bpp) - 1) * (double)((1 << 8) - 1);
@@ -1760,7 +1766,9 @@ static inline uint16_t accessImageUpsampleUnscaled(const uint8_t *ds_image, int 
 }
 
 #define rshift_to_even(n, s) (((n) + ((s) > 1 ? (1 << ((s) - 1)) : 0)) >> (s))
-#define srshift_to_even(t, n, s) ((t)((n) + ((s) > 1 ? (1 << ((s) - 1)) : 0)) >> (s))
+#define srshift_to_even(n, s) ((n) > 0 ? rshift_to_even((n), (s)) : -rshift_to_even(-(n), (s)))
+#define srshift(n, s) ((n) > 0 ? (n) >> (s) : -(-(n) >> (s)))
+#define RP_CLIP(n, min, max) RP_MIN(RP_MAX((n), (typeof(n))(min)), (typeof(n))(max))
 
 static inline uint8_t accessImageUpsample(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
 {
@@ -1916,14 +1924,14 @@ static void interpolate_me(const s8 *me_x_vec[CORNER_COUNT], const s8 *me_y_vec[
     ((int)*me_x_vec[CORNER_BOT_LEFT] - half_range) * x_left * y_bot +
     ((int)*me_x_vec[CORNER_BOT_RIGHT] - half_range) * x_right * y_bot +
     ((int)*me_x_vec[CORNER_TOP_RIGHT] - half_range) * x_right * y_top;
-  *x = srshift_to_even(int, x_unscaled, rshift_scale) << scale_log2;
+  *x = srshift_to_even(x_unscaled, rshift_scale) << scale_log2;
 
   int y_unscaled =
     ((int)*me_y_vec[CORNER_TOP_LEFT] - half_range) * x_left * y_top +
     ((int)*me_y_vec[CORNER_BOT_LEFT] - half_range) * x_left * y_bot +
     ((int)*me_y_vec[CORNER_BOT_RIGHT] - half_range) * x_right * y_bot +
     ((int)*me_y_vec[CORNER_TOP_RIGHT] - half_range) * x_right * y_top;
-  *y = srshift_to_even(int, y_unscaled, rshift_scale) << scale_log2;
+  *y = srshift_to_even(y_unscaled, rshift_scale) << scale_log2;
 }
 
 void diff_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, int w, int h, int bpp) {
