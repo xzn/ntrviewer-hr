@@ -202,7 +202,7 @@ static int yuv_option;
 static int color_transform_hp;
 static int encoder_which;
 static nk_bool downscale_uv;
-static nk_bool encode_lq;
+static int encode_lq;
 static int jpeg_quality;
 static int zstd_comp_level;
 static int me_method;
@@ -236,7 +236,7 @@ union rp_conf_arg0_t {
 		u32 me_interpolate : 1;
 		u32 multicore_network : 1;
 		u32 multicore_screen : 1;
-		u32 encode_lq : 1;
+		u32 encode_lq : 2;
 		u32 jpeg_quality : 7;
 		u32 zstd_comp_level : RP_ZSTD_COMP_LEVEL_BITS;
 	};
@@ -760,7 +760,7 @@ void rpConfigSetDefault(void)
   color_transform_hp = 0;
   encoder_which = 0;
   downscale_uv = 1;
-  encode_lq = 1;
+  encode_lq = 2;
   jpeg_quality = 90;
   zstd_comp_level = 4;
   me_method = 1;
@@ -925,8 +925,9 @@ static void guiMain(struct nk_context *ctx)
     );
 
     nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "Encode LQ", NK_TEXT_CENTERED);
-    nk_checkbox_label(ctx, "", &encode_lq);
+    snprintf(msg_buf, sizeof(msg_buf), "Encode LQ %d", encode_lq);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 0, &encode_lq, 3, 1);
 
     int zstd_comp_level_disp = zstd_comp_level - RP_ZSTD_COMP_LEVEL_HALF_RANGE;
     if (zstd_comp_level_disp >= 0)
@@ -1613,7 +1614,7 @@ void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uin
     v_in -= 127;
     v_in /= 127;
   } else if (ntr_yuv_option == 3) {
-    y_in -= 16 >> (8 - y_bpp);
+    // y_in -= 16 >> (8 - y_bpp);
     y_in = y_in / (double)((1 << y_bpp) - 1 - (36 >> (8 - y_bpp))) * (double)((1 << 8) - 1 - 36);
     y_in /= 219;
 
@@ -1766,8 +1767,8 @@ static inline uint16_t accessImageUpsampleUnscaled(const uint8_t *ds_image, int 
 }
 
 #define rshift_to_even(n, s) (((n) + ((s) > 1 ? (1 << ((s) - 1)) : 0)) >> (s))
-#define srshift_to_even(n, s) ((n) > 0 ? rshift_to_even((n), (s)) : -rshift_to_even(-(n), (s)))
-#define srshift(n, s) ((n) > 0 ? (n) >> (s) : -(-(n) >> (s)))
+#define srshift_to_even(n, s) rshift_to_even(n, s)
+#define srshift_s32(n, s) ((n) / (1 << (s)))
 #define RP_CLIP(n, min, max) RP_MIN(RP_MAX((n), (typeof(n))(min)), (typeof(n))(max))
 
 static inline uint8_t accessImageUpsample(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
