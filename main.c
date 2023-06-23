@@ -114,6 +114,7 @@ static inline IUINT32 iclock()
 #define ZSTD_STATIC_LINKING_ONLY
 #include "zstd/zstd.h"
 #include "zstd/decompress/zstd_decompress_internal.h"
+#include "lz4.h"
 
 #define RP_MAX(a,b) ((a) > (b) ? (a) : (b))
 #define RP_MIN(a,b) ((a) > (b) ? (b) : (a))
@@ -296,6 +297,8 @@ enum {
     RP_ENCODER_HP_JLS,
     RP_ENCODER_JLS_USE_LUT_COUNT,
     RP_ENCODER_ZSTD_JLS = RP_ENCODER_JLS_USE_LUT_COUNT,
+    RP_ENCODER_LZ4_JLS,
+    RP_ENCODER_HUFF_JLS,
     RP_ENCODER_JLS_COUNT,
     RP_ENCODER_IMAGE_ZERO = RP_ENCODER_JLS_COUNT,
     RP_ENCODER_JPEG_TURBO,
@@ -917,6 +920,8 @@ static void guiMain(struct nk_context *ctx)
       "FFmpeg JPEG-LS",
       "HP JPEG-LS",
       "ZSTD Med-Pred",
+      "LZ4 Med-Pred",
+      "Huff Med-Pred",
       "ImageZero",
       "JPEG Turbo",
     };
@@ -1839,11 +1844,11 @@ int8_t screen_buf_valid[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
 uint8_t screen_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT][400 * 240];
 uint8_t screen_bpp[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT];
 int8_t screen_me_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][ME_COMP_COUNT][400 * 240 / RP_ME_MIN_BLOCK_SIZE / RP_ME_MIN_BLOCK_SIZE / 4];
-uint8_t screen_recv_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT][400 * 240];
+uint8_t screen_recv_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT][400 * 240 * 16 / 15];
 uint8_t *screen_recv_buf_head[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT];
 uint8_t screen_recv_done[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT];
 
-uint8_t screen_rgb_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][400 * 240 * 3];
+uint8_t screen_rgb_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][400 * 240 * 3 * 16 / 15];
 uint8_t *screen_rgb_buf_head[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
 uint8_t screen_rgb_done[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
 
@@ -2102,7 +2107,62 @@ static uint8_t zstd_pred_med(uint8_t Rb, uint8_t Ra, uint8_t Rc) {
     return maxx;
   else
     return Ra + Rb - Rc;
+}
+
+int lz4_jls_decode(uint8_t *dst, int dst_x, int dst_y, const uint8_t *src, int src_size) {
+  LZ4_streamDecode_t lz4StreamDecode_body;
+  LZ4_streamDecode_t* lz4StreamDecode = &lz4StreamDecode_body;
+  LZ4_setStreamDecode(lz4StreamDecode, NULL, 0);
+
+  uint8_t (*pred_buf)[dst_x] = malloc(dst_x * 2);
+  if (!pred_buf) {
+    return -1;
   }
+  uint8_t pred_buf_index = 0;
+
+  for (int j = 0; j < dst_y; ++j) {
+    uint8_t cmpBytes = 0;
+
+    if (src_size < (int)sizeof(int)) {
+      fprintf(stderr, "not enough input\n");
+      free(pred_buf);
+      return -1;
+    }
+
+    cmpBytes = *(const uint8_t *)src;
+    src += sizeof(uint8_t);
+    src_size -= sizeof(uint8_t);
+
+    if (src_size < cmpBytes) {
+      fprintf(stderr, "not enough input data at col %d: %d (%d)\n", j, cmpBytes, src_size);
+      free(pred_buf);
+      return -1;
+    }
+
+    uint8_t* const pred_buf0 = pred_buf[pred_buf_index];
+    const int decBytes = LZ4_decompress_safe_continue(lz4StreamDecode, (const char *)src, (char *)pred_buf0, cmpBytes, dst_x);
+    if(decBytes <= 0) {
+      fprintf(stderr, "LZ4_decompress_safe_continue failed\n");
+      free(pred_buf);
+      return -1;
+    }
+    src += cmpBytes;
+    src_size -= cmpBytes;
+
+    uint8_t *dst_row = dst + j * dst_x;
+    for (int i = 0; i < dst_x; ++i) {
+      uint8_t Rb = j > 0 ? dst_row[i - dst_x] : 0, Ra = i > 0 ? dst_row[i - 1] : Rb, Rc = j > 0 && i > 0 ? dst_row[i - dst_x - 1] : Rb;
+      uint8_t pred = zstd_pred_med(Rb, Ra, Rc);
+      dst_row[i] = pred_buf0[i] + pred;
+    }
+
+    pred_buf_index = (pred_buf_index + 1) % 2;
+  }
+
+  free(pred_buf);
+
+  return dst_x * dst_y;
+}
 
 int zstd_jls_decode(uint8_t *dst, int dst_x, int dst_y, const uint8_t *src, int src_size) {
   size_t ret;
@@ -2399,6 +2459,14 @@ int handle_recv(uint8_t *buf, int size)
         } else {
           ret = ffmpeg_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT],
             h, w, h, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane], bpp) == w * h;
+        }
+      } else if (ntr_encoder_which == RP_ENCODER_LZ4_JLS) {
+        if (comp < COMP_COUNT) {
+          ret = lz4_jls_decode(screen_buf[top_bot][pos][comp],
+            h, w, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]) == w * h;
+        } else {
+          ret = lz4_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT],
+            h, w, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]) == w * h;
         }
       } else if (ntr_encoder_which == RP_ENCODER_ZSTD_JLS) {
         if (comp < COMP_COUNT) {
