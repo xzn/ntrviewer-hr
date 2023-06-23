@@ -115,6 +115,8 @@ static inline IUINT32 iclock()
 #include "zstd/zstd.h"
 #include "zstd/decompress/zstd_decompress_internal.h"
 #include "lz4.h"
+#include "huffmancodec.h"
+#include "rlecodec.h"
 
 #define RP_MAX(a,b) ((a) > (b) ? (a) : (b))
 #define RP_MIN(a,b) ((a) > (b) ? (b) : (a))
@@ -761,7 +763,7 @@ void rpConfigSetDefault(void)
 {
   yuv_option = 3;
   color_transform_hp = 0;
-  encoder_which = 0;
+  encoder_which = 4;
   downscale_uv = 1;
   encode_lq = 2;
   jpeg_quality = 90;
@@ -771,8 +773,8 @@ void rpConfigSetDefault(void)
   me_search_param = 32;
   me_downscale = 1;
   me_interpolate = 0;
-  min_dp_frame_rate = 24;
-  max_frame_rate = 48;
+  min_dp_frame_rate = 36;
+  max_frame_rate = 72;
   me_select = 7;
   target_mbit_rate = 16;
   dynamic_priority = 1;
@@ -782,7 +784,7 @@ void rpConfigSetDefault(void)
   bot_priority = 5;
   multicore_network = 0;
   multicore_screen = 1;
-  kcp_minrto = 48;
+  kcp_minrto = 24;
   kcp_snd_wnd_size = 32;
   kcp_nocwnd = 1;
   kcp_fastresend = 2;
@@ -2164,6 +2166,54 @@ int lz4_jls_decode(uint8_t *dst, int dst_x, int dst_y, const uint8_t *src, int s
   return dst_x * dst_y;
 }
 
+int huff_jls_decode(uint8_t *dst, int dst_x, int dst_y, const uint8_t *src, int src_size) {
+  if (src_size < (int)sizeof(u32))
+    return -1;
+
+  int rle_size = *(u32 *)src;
+  src += sizeof(u32);
+  src_size -= sizeof(u32);
+
+  uint8_t *rle_src = malloc(rle_size);
+  if (!rle_src)
+    return -1;
+
+  int ret;
+  ret = huffman_decode(rle_src, rle_size, src, src_size);
+
+  if (ret < 0) {
+    fprintf(stderr, "huffman_decode failed\n");
+    return ret;
+  }
+  if (ret != rle_size) {
+    fprintf(stderr, "huffman_decode mismatch %d (%d)\n", ret, rle_size);
+    return -1;
+  }
+  
+  ret = rle_decode(dst, dst_x * dst_y, rle_src, rle_size);
+  if (ret < 0) {
+    fprintf(stderr, "rle_decode failed\n");
+    free(rle_src);
+    return ret;
+  } else if (ret != dst_x * dst_y) {
+    fprintf(stderr, "rle_decode mismatch %d (%d)\n", ret, dst_x * dst_y);
+    free(rle_src);
+    return ret;
+  }
+
+  for (int j = 0; j < dst_y; ++j) {
+    uint8_t *dst_row = dst + j * dst_x;
+    for (int i = 0; i < dst_x; ++i) {
+      uint8_t Rb = j > 0 ? dst_row[i - dst_x] : 0, Ra = i > 0 ? dst_row[i - 1] : Rb, Rc = j > 0 && i > 0 ? dst_row[i - dst_x - 1] : Rb;
+      uint8_t pred = zstd_pred_med(Rb, Ra, Rc);
+      dst_row[i] = dst_row[i] + pred;
+    }
+  }
+
+  free(rle_src);
+  return ret;
+}
+
 int zstd_jls_decode(uint8_t *dst, int dst_x, int dst_y, const uint8_t *src, int src_size) {
   size_t ret;
 
@@ -2466,6 +2516,14 @@ int handle_recv(uint8_t *buf, int size)
             h, w, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]) == w * h;
         } else {
           ret = lz4_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT],
+            h, w, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]) == w * h;
+        }
+      } else if (ntr_encoder_which == RP_ENCODER_HUFF_JLS) {
+        if (comp < COMP_COUNT) {
+          ret = huff_jls_decode(screen_buf[top_bot][pos][comp],
+            h, w, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]) == w * h;
+        } else {
+          ret = huff_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT],
             h, w, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]) == w * h;
         }
       } else if (ntr_encoder_which == RP_ENCODER_ZSTD_JLS) {

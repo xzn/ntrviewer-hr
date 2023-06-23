@@ -18,7 +18,7 @@ JT_OBJ_S := $(JT_SRC_S:.asm=.o)
 ZSTD_SRC := $(wildcard zstd/common/*.c) $(wildcard zstd/decompress/*.c)
 ZSTD_OBJ := $(ZSTD_SRC:.c=.o)
 
-$(TARGET): main.o lz4.o libNK.o libNKSDL.o libGLAD.o ikcp.o ffmpeg_opt/libavcodec/jpegls.o ffmpeg_opt/libavcodec/jpeglsdec.o ffmpeg_opt/libavcodec/mathtables.o ffmpeg_opt/libavutil/intmath.o ffmpeg_opt/libavcodec/decode.o imagezero/iz_dec.o imagezero/table.o $(JT_OBJ) $(JT_OBJ_S) $(ZSTD_OBJ)
+$(TARGET): main.o huffmandec.o rledec.o lz4.o libNK.o libNKSDL.o libGLAD.o ikcp.o ffmpeg_opt/libavcodec/jpegls.o ffmpeg_opt/libavcodec/jpeglsdec.o ffmpeg_opt/libavcodec/mathtables.o ffmpeg_opt/libavutil/intmath.o ffmpeg_opt/libavcodec/decode.o imagezero/iz_dec.o imagezero/table.o $(JT_OBJ) $(JT_OBJ_S) $(ZSTD_OBJ)
 	$(CC) $^ -o $@ $(CFLAGS) $(LDLIBS) $(LDFLAGS)
 
 %.o: %.c
