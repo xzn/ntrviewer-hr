@@ -1822,6 +1822,7 @@ enum {
   Y_COMP,
   U_COMP,
   V_COMP,
+  UV_COMP,
   R_COMP = Y_COMP,
   G_COMP,
   B_COMP,
@@ -2186,7 +2187,7 @@ int lz4_jls_decode(uint8_t *dst, int dst_x, int dst_y, const uint8_t *src, int s
   return dst_x * dst_y;
 }
 
-int huff_jls_decode(uint8_t *dst, int dst_x, int dst_y, const uint8_t *src, int src_size) {
+int huff_jls_decode_2(uint8_t *dst, uint8_t *dst_2, int dst_x, int dst_y, const uint8_t *src, int src_size) {
   if (src_size < (int)sizeof(u32))
     return -1;
 
@@ -2210,28 +2211,43 @@ int huff_jls_decode(uint8_t *dst, int dst_x, int dst_y, const uint8_t *src, int 
     return -1;
   }
 
-  ret = rle_decode(dst, dst_x * dst_y, rle_src, rle_size);
+  int dst_size_1 = dst_x * dst_y, dst_size = dst_size_1;
+  if (dst_2)
+    dst_size *= 2;
+
+  ret = rle_decode(dst, dst_size, rle_src, rle_size);
   if (ret < 0) {
     fprintf(stderr, "rle_decode failed\n");
     free(rle_src);
     return ret;
-  } else if (ret != dst_x * dst_y) {
-    fprintf(stderr, "rle_decode mismatch %d (%d)\n", ret, dst_x * dst_y);
+  } else if (ret != dst_size) {
+    fprintf(stderr, "rle_decode mismatch %d (%d)\n", ret, dst_size);
     free(rle_src);
     return ret;
   }
 
-  for (int j = 0; j < dst_y; ++j) {
-    uint8_t *dst_row = dst + j * dst_x;
-    for (int i = 0; i < dst_x; ++i) {
-      uint8_t Rb = j > 0 ? dst_row[i - dst_x] : 0, Ra = i > 0 ? dst_row[i - 1] : Rb, Rc = j > 0 && i > 0 ? dst_row[i - dst_x - 1] : Rb;
-      uint8_t pred = zstd_pred_med(Rb, Ra, Rc);
-      dst_row[i] = dst_row[i] + pred;
+  if (dst_2)
+    memcpy(dst_2, dst + dst_size_1, dst_size_1);
+
+  uint8_t *out_2[] = {dst, dst_2};
+
+  for (int k = 0; k < (int)(sizeof(out_2) / sizeof(*out_2)) && out_2[k]; ++k) {
+    for (int j = 0; j < dst_y; ++j) {
+      uint8_t *dst_row = out_2[k] + j * dst_x;
+      for (int i = 0; i < dst_x; ++i) {
+        uint8_t Rb = j > 0 ? dst_row[i - dst_x] : 0, Ra = i > 0 ? dst_row[i - 1] : Rb, Rc = j > 0 && i > 0 ? dst_row[i - dst_x - 1] : Rb;
+        uint8_t pred = zstd_pred_med(Rb, Ra, Rc);
+        dst_row[i] = dst_row[i] + pred;
+      }
     }
   }
 
   free(rle_src);
-  return ret;
+  return dst_size_1;
+}
+
+int huff_jls_decode(uint8_t *dst, int dst_x, int dst_y, const uint8_t *src, int src_size) {
+    return huff_jls_decode_2(dst, 0, dst_x, dst_y, src, src_size);
 }
 
 int zstd_jls_decode(uint8_t *dst, int dst_x, int dst_y, const uint8_t *src, int src_size) {
@@ -2374,11 +2390,16 @@ int handle_recv(uint8_t *buf, int size)
       int comp;
 
       int encoder_rgb = ntr_encoder_which >= RP_ENCODER_JLS_COUNT;
+      int uv_comp = send_header.plane_type == 0 && send_header.plane_comp == UV_COMP;
 
-      plane = send_header.plane_type == 0 ? send_header.plane_comp : send_header.plane_comp + COMP_COUNT;
-      if (plane >= PLANE_COUNT) {
-        fprintf(stderr, "plane_comp error\n");
-        goto final;
+      if (uv_comp) {
+        plane = U_COMP;
+      } else {
+        plane = send_header.plane_type == 0 ? send_header.plane_comp : send_header.plane_comp + COMP_COUNT;
+        if (plane >= PLANE_COUNT) {
+          fprintf(stderr, "plane_comp error\n");
+          goto final;
+        }
       }
       comp = plane < COMP_COUNT ? plane : COMP_COUNT;
 
@@ -2539,7 +2560,10 @@ int handle_recv(uint8_t *buf, int size)
             h, w, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]) == w * h;
         }
       } else if (ntr_encoder_which == RP_ENCODER_HUFF_JLS) {
-        if (comp < COMP_COUNT) {
+        if (uv_comp) {
+          ret = huff_jls_decode_2(screen_buf[top_bot][pos][U_COMP], screen_buf[top_bot][pos][V_COMP],
+            h, w, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]) == w * h;
+        } else if (comp < COMP_COUNT) {
           ret = huff_jls_decode(screen_buf[top_bot][pos][comp],
             h, w, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]) == w * h;
         } else {
@@ -2565,10 +2589,14 @@ int handle_recv(uint8_t *buf, int size)
         if (encoder_rgb) {
           screen_rgb_done[top_bot][pos] = 1;
         } else {
-          screen_recv_done[top_bot][pos][plane] = 1;
-
-          if (comp < COMP_COUNT)
-            screen_bpp[top_bot][pos][comp] = bpp;
+          if (uv_comp) {
+            screen_recv_done[top_bot][pos][V_COMP] = screen_recv_done[top_bot][pos][U_COMP] = 1;
+            screen_bpp[top_bot][pos][V_COMP] = screen_bpp[top_bot][pos][U_COMP] = bpp;
+          } else {
+            screen_recv_done[top_bot][pos][plane] = 1;
+            if (comp < COMP_COUNT)
+              screen_bpp[top_bot][pos][comp] = bpp;
+          }
 
           for (int i = 0; i < (ntr_me_enabled == 1 && p_frame ? PLANE_COUNT : COMP_COUNT + (ntr_me_enabled == 3 && p_frame)); ++i) {
             if (!screen_recv_done[top_bot][pos][i]) {
