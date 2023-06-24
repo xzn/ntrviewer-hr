@@ -188,6 +188,8 @@ const char *connection_msg[CS_MAX] = {
     ".",
 };
 
+#define RP_ENCODE_STATIC_LQ (0)
+
 #define RP_KCP_SNDWNDSIZE_BITS (6)
 #define RP_KCP_MAX_SNDWNDSIZE (RP_KCP_MIN_SNDWNDSIZE + (1 << RP_KCP_SNDWNDSIZE_BITS) - 1)
 #define RP_KCP_MIN_MINRTO (10)
@@ -1611,11 +1613,13 @@ void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uin
     y_in = y_in / (double)((1 << y_bpp) - 1) * (double)((1 << 8) - 1);
     y_in /= 255;
 
+    u_in = RP_MAX(u_in, 1);
     u_in -= 1;
     u_in = u_in / (double)((1 << u_bpp) - 2) * (double)((1 << 8) - 2);
     u_in -= 127;
     u_in /= 127;
 
+    v_in = RP_MAX(v_in, 1);
     v_in -= 1;
     v_in = v_in / (double)((1 << v_bpp) - 2) * (double)((1 << 8) - 2);
     v_in -= 127;
@@ -1625,12 +1629,14 @@ void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uin
     y_in = y_in / (double)((1 << y_bpp) - 1 - (36 >> (8 - y_bpp))) * (double)((1 << 8) - 1 - 36);
     y_in /= 219;
 
-    u_in -= 16 >> (8 - u_bpp);
+    u_in = RP_MAX(u_in, 1);
+    u_in -= 16;
     u_in = u_in / (double)((1 << u_bpp) - (32 >> (8 - u_bpp))) * (double)((1 << 8) - 32);
     u_in -= 112;
     u_in /= 112;
 
-    v_in -= 16 >> (8 - v_bpp);
+    v_in = RP_MAX(v_in, 1);
+    v_in -= 16;
     v_in = v_in / (double)((1 << v_bpp) - (32 >> (8 - v_bpp))) * (double)((1 << 8) - 32);
     v_in -= 112;
     v_in /= 112;
@@ -1942,15 +1948,24 @@ static void interpolate_me(const s8 *me_x_vec[CORNER_COUNT], const s8 *me_y_vec[
   *y = srshift_to_even(y_unscaled, rshift_scale) << scale_log2;
 }
 
-void diff_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, int w, int h, int bpp) {
+#define DO_DIFF() do { \
+  if (RP_ENCODE_STATIC_LQ) { \
+    *dst++ = (u8)((u8)(*ref++ << (8 - bpp)) + (u8)(*cur++ << (8 - bpp)) - 128) >> (8 - bpp); \
+  } else { \
+    *dst++ = *ref + ((*cur - (128 >> (8 - bpp))) * (1 << (bpp_prev - bpp))); \
+    ++ref, ++cur; \
+  } \
+} while (0)
+
+void diff_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, int w, int h, int bpp, int bpp_prev UNUSED_ATTR) {
   for (int i = 0; i < w; ++i) {
     for (int j = 0; j < h; ++j) {
-      *dst++ = (u8)((u8)(*ref++ << (8 - bpp)) + (u8)(*cur++ << (8 - bpp)) - 128) >> (8 - bpp);
+      DO_DIFF();
     }
   }
 }
 
-void select_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const int8_t *me_x, int scale_log2, int w, int h, int bpp) {
+void select_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const int8_t *me_x, int scale_log2, int w, int h, int bpp, int bpp_prev UNUSED_ATTR) {
   if (ntr_me_downscale)
     ++scale_log2;
 
@@ -1976,10 +1991,15 @@ void select_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const in
       int x = me_x[me_i * block_y_n + me_j];
 
       if (x) {
-        ref++;
-        *dst++ = *cur++;
+        if (RP_ENCODE_STATIC_LQ) {
+          ref++;
+          *dst++ = *cur++;
+        } else {
+          ref++;
+          *dst++ = *cur++ << (8 - bpp);
+        }
       } else {
-        *dst++ = (u8)((u8)(*ref++ << (8 - bpp)) + (u8)(*cur++ << (8 - bpp)) - 128) >> (8 - bpp);
+        DO_DIFF();
       }
     }
   }
@@ -2189,7 +2209,7 @@ int huff_jls_decode(uint8_t *dst, int dst_x, int dst_y, const uint8_t *src, int 
     fprintf(stderr, "huffman_decode mismatch %d (%d)\n", ret, rle_size);
     return -1;
   }
-  
+
   ret = rle_decode(dst, dst_x * dst_y, rle_src, rle_size);
   if (ret < 0) {
     fprintf(stderr, "rle_decode failed\n");
@@ -2659,7 +2679,8 @@ int handle_recv(uint8_t *buf, int size)
                         1,
                         w_orig,
                         h_orig,
-                        screen_bpp[top_bot][i][Y_COMP]
+                        screen_bpp[top_bot][i][Y_COMP],
+                        screen_bpp[top_bot][i_prev][Y_COMP]
                       );
                       select_image(image_me[top_bot][i][U_COMP],
                         image_me[top_bot][i_prev][U_COMP],
@@ -2668,7 +2689,8 @@ int handle_recv(uint8_t *buf, int size)
                         1 - ntr_downscale_uv,
                         ntr_downscale_uv ? w_orig / 2 : w_orig,
                         ntr_downscale_uv ? h_orig / 2 : h_orig,
-                        screen_bpp[top_bot][i][U_COMP]
+                        screen_bpp[top_bot][i][U_COMP],
+                        screen_bpp[top_bot][i_prev][U_COMP]
                       );
                       select_image(image_me[top_bot][i][V_COMP],
                         image_me[top_bot][i_prev][V_COMP],
@@ -2677,7 +2699,8 @@ int handle_recv(uint8_t *buf, int size)
                         1 - ntr_downscale_uv,
                         ntr_downscale_uv ? w_orig / 2 : w_orig,
                         ntr_downscale_uv ? h_orig / 2 : h_orig,
-                        screen_bpp[top_bot][i][V_COMP]
+                        screen_bpp[top_bot][i][V_COMP],
+                        screen_bpp[top_bot][i_prev][V_COMP]
                       );
                     } else {
                       diff_image(image_me[top_bot][i][Y_COMP],
@@ -2685,22 +2708,32 @@ int handle_recv(uint8_t *buf, int size)
                         screen_buf[top_bot][i][Y_COMP],
                         w_orig,
                         h_orig,
-                        screen_bpp[top_bot][i][Y_COMP]
+                        screen_bpp[top_bot][i][Y_COMP],
+                        screen_bpp[top_bot][i_prev][Y_COMP]
                       );
                       diff_image(image_me[top_bot][i][U_COMP],
                         image_me[top_bot][i_prev][U_COMP],
                         screen_buf[top_bot][i][U_COMP],
                         ntr_downscale_uv ? w_orig / 2 : w_orig,
                         ntr_downscale_uv ? h_orig / 2 : h_orig,
-                        screen_bpp[top_bot][i][U_COMP]
+                        screen_bpp[top_bot][i][U_COMP],
+                        screen_bpp[top_bot][i_prev][U_COMP]
                       );
                       diff_image(image_me[top_bot][i][V_COMP],
                         image_me[top_bot][i_prev][V_COMP],
                         screen_buf[top_bot][i][V_COMP],
                         ntr_downscale_uv ? w_orig / 2 : w_orig,
                         ntr_downscale_uv ? h_orig / 2 : h_orig,
-                        screen_bpp[top_bot][i][V_COMP]
+                        screen_bpp[top_bot][i][V_COMP],
+                        screen_bpp[top_bot][i_prev][V_COMP]
                       );
+                    }
+                    u8 screen_bpp_cur[COMP_COUNT];
+                    if (!RP_ENCODE_STATIC_LQ) {
+                      for (int c = 0; c < COMP_COUNT; ++c) {
+                        screen_bpp_cur[c] = screen_bpp[top_bot][i][c];
+                        screen_bpp[top_bot][i][c] = screen_bpp[top_bot][i_prev][c];
+                      }
                     }
                     if (ntr_downscale_uv) {
                       upsampleImage(upscaled_u_image, image_me[top_bot][i][U_COMP], w_orig, h_orig);
@@ -2731,11 +2764,11 @@ int handle_recv(uint8_t *buf, int size)
                     else if (debug_view_plane == 5)
                       render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, (const u8 *)screen_me_buf[top_bot][i][ME_Y_COMP], me_w, me_h, me_bpp);
                     else if (debug_view_plane == 6)
-                      render_greyscale_to_comp3(screen_decoded[top_bot], screen_buf[top_bot][i][Y_COMP], w_orig, h_orig, screen_bpp[top_bot][i][Y_COMP]);
+                      render_greyscale_to_comp3(screen_decoded[top_bot], screen_buf[top_bot][i][Y_COMP], w_orig, h_orig, screen_bpp_cur[Y_COMP]);
                     else if (debug_view_plane == 7)
-                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][U_COMP], ntr_downscale_uv ? w_orig / 2 : w_orig, ntr_downscale_uv ? h_orig / 2 : h_orig, screen_bpp[top_bot][i][U_COMP]);
+                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][U_COMP], ntr_downscale_uv ? w_orig / 2 : w_orig, ntr_downscale_uv ? h_orig / 2 : h_orig, screen_bpp_cur[U_COMP]);
                     else if (debug_view_plane == 8)
-                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][V_COMP], ntr_downscale_uv ? w_orig / 2 : w_orig, ntr_downscale_uv ? h_orig / 2 : h_orig, screen_bpp[top_bot][i][V_COMP]);
+                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][V_COMP], ntr_downscale_uv ? w_orig / 2 : w_orig, ntr_downscale_uv ? h_orig / 2 : h_orig, screen_bpp_cur[V_COMP]);
                     screen_done[top_bot][i] = 1;
                     handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot]);
                     // fprintf(stderr, "Displaying p_frame: screen %d, frame_n = %d\n", top_bot, frame_n_next);
