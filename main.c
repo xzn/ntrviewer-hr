@@ -2360,6 +2360,28 @@ int zstd_jls_decode(uint8_t *dst, int dst_x, int dst_y, const uint8_t *src, int 
   return dst_x * dst_y;
 }
 
+int bits_array_decode(uint8_t *dst, int dst_x, int dst_y, const uint8_t *src, int src_size) {
+  int ret;
+  GetBitContext s;
+  ret = init_get_bits8(&s, src, src_size);
+  if (ret < 0) {
+    fprintf(stderr, "bits_array_decode init_get_bits8 error\n");
+    return 0;
+  }
+
+  for (int i = 0; i < dst_x; ++i) {
+    for (int j = 0; j < dst_y; ++j) {
+      if (get_bits_left(&s) <= 0) {
+        fprintf(stderr, "bits_array_decode not enough data\n");
+        return 0;
+      }
+      *dst++ = get_bits1(&s);
+    }
+  }
+
+  return dst_x * dst_y;
+}
+
 int receiving;
 int handle_recv(uint8_t *buf, int size)
 {
@@ -2614,6 +2636,17 @@ int handle_recv(uint8_t *buf, int size)
             }
           }
         }
+      } else if (send_header.bpp == 1) {
+        if (plane != ME_X_DATA) {
+          ret = 0;
+        } else {
+          for (int k = 0; k < (ntr_encode_split_image ? RP_SCREEN_SPLIT_COUNT : 1); ++k) {
+            ret = bits_array_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT] + w * h * k, w, h,
+              screen_recv_buf[top_bot][pos][plane][k], screen_recv_buf_head[top_bot][pos][plane][k] - screen_recv_buf[top_bot][pos][plane][k]) == w * h;
+            if (!ret)
+              break;
+          }
+        }
       } else if (ntr_encoder_which < RP_ENCODER_JLS_USE_LUT_COUNT) {
         for (int k = 0; k < (ntr_encode_split_image ? RP_SCREEN_SPLIT_COUNT : 1); ++k) {
           if (comp < COMP_COUNT) {
@@ -2623,6 +2656,8 @@ int handle_recv(uint8_t *buf, int size)
             ret = ffmpeg_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT] + w * h * k,
               h, w, h, screen_recv_buf[top_bot][pos][plane][k], screen_recv_buf_head[top_bot][pos][plane][k] - screen_recv_buf[top_bot][pos][plane][k], bpp) == w * h;
           }
+          if (!ret)
+            break;
         }
       } else if (ntr_encoder_which == RP_ENCODER_LZ4_JLS) {
         for (int k = 0; k < (ntr_encode_split_image ? RP_SCREEN_SPLIT_COUNT : 1); ++k) {
@@ -2633,6 +2668,8 @@ int handle_recv(uint8_t *buf, int size)
             ret = lz4_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT] + w * h * k,
               h, w, screen_recv_buf[top_bot][pos][plane][k], screen_recv_buf_head[top_bot][pos][plane][k] - screen_recv_buf[top_bot][pos][plane][k]) == w * h;
           }
+          if (!ret)
+            break;
         }
       } else if (ntr_encoder_which == RP_ENCODER_HUFF_JLS) {
         for (int k = 0; k < (ntr_encode_split_image ? RP_SCREEN_SPLIT_COUNT : 1); ++k) {
@@ -2646,6 +2683,8 @@ int handle_recv(uint8_t *buf, int size)
             ret = huff_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT] + w * h * k,
               h, w, screen_recv_buf[top_bot][pos][plane][k], screen_recv_buf_head[top_bot][pos][plane][k] - screen_recv_buf[top_bot][pos][plane][k]) == w * h;
           }
+          if (!ret)
+            break;
         }
       } else if (ntr_encoder_which == RP_ENCODER_ZSTD_JLS) {
         for (int k = 0; k < (ntr_encode_split_image ? RP_SCREEN_SPLIT_COUNT : 1); ++k) {
@@ -2656,6 +2695,8 @@ int handle_recv(uint8_t *buf, int size)
             ret = zstd_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT] + w * h * k,
               h, w, screen_recv_buf[top_bot][pos][plane][k], screen_recv_buf_head[top_bot][pos][plane][k] - screen_recv_buf[top_bot][pos][plane][k]) == w * h;
           }
+          if (!ret)
+            break;
         }
       } else {
         fprintf(stderr, "Unknown encoder\n");
