@@ -286,6 +286,7 @@ static int ntr_yuv_option;
 static int ntr_color_transform_hp;
 static nk_bool ntr_downscale_uv;
 static int ntr_encoder_which;
+static nk_bool ntr_encode_split_image;
 static unsigned int ntr_me_enabled;
 static int ntr_me_block_size;
 static int ntr_me_search_param;
@@ -318,7 +319,8 @@ struct rp_send_info_header {
     u32 downscale_uv : 1;
     u32 yuv_option : 2;
     u32 color_transform_hp : 2;
-	  u32 encoder_which : 3;
+    u32 encoder_which : 3;
+    u32 encode_split_image: 1;
     u32 me_enabled : 2;
     u32 me_downscale : 1;
     u32 me_search_param : 5;
@@ -330,6 +332,7 @@ struct rp_send_data_header {
     u32 type_data : 1;
     u32 top_bot : 1;
     u32 frame_n : RP_IMAGE_FRAME_N_BITS;
+    u32 left_right : 1;
     u32 p_frame : 1;
     u32 bpp : 3;
     u32 data_end : 1;
@@ -1605,40 +1608,46 @@ void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uin
   }
 
   double y_in = y;
-  double u_in = u;
-  double v_in = v;
+  // double u_in = u;
+  // double v_in = v;
+  double u_in = (s8)u;
+  double v_in = (s8)v;
 
   if (ntr_yuv_option == 2)
   {
     y_in = y_in / (double)((1 << y_bpp) - 1) * (double)((1 << 8) - 1);
     y_in /= 255;
 
-    u_in = RP_MAX(u_in, 1);
-    u_in -= 1;
-    u_in = u_in / (double)((1 << u_bpp) - 2) * (double)((1 << 8) - 2);
-    u_in -= 127;
+    // u_in = RP_MAX(u_in, 1);
+    // u_in -= 1;
+    // u_in = u_in / (double)((1 << u_bpp) - 2) * (double)((1 << 8) - 2);
+    // u_in -= 127;
+    u_in = u_in / (double)((1 << (u_bpp - 1)) - 1) * (double)((1 << 7) - 1);
     u_in /= 127;
 
-    v_in = RP_MAX(v_in, 1);
-    v_in -= 1;
-    v_in = v_in / (double)((1 << v_bpp) - 2) * (double)((1 << 8) - 2);
-    v_in -= 127;
+    // v_in = RP_MAX(v_in, 1);
+    // v_in -= 1;
+    // v_in = v_in / (double)((1 << v_bpp) - 2) * (double)((1 << 8) - 2);
+    // v_in -= 127;
+    v_in = v_in / (double)((1 << (v_bpp - 1)) - 1) * (double)((1 << 7) - 1);
     v_in /= 127;
   } else if (ntr_yuv_option == 3) {
     // y_in -= 16 >> (8 - y_bpp);
     y_in = y_in / (double)((1 << y_bpp) - 1 - (36 >> (8 - y_bpp))) * (double)((1 << 8) - 1 - 36);
     y_in /= 219;
 
-    u_in = RP_MAX(u_in, 1);
-    u_in -= 16;
-    u_in = u_in / (double)((1 << u_bpp) - (32 >> (8 - u_bpp))) * (double)((1 << 8) - 32);
-    u_in -= 112;
+    // u_in = RP_MAX(u_in, 1);
+    // u_in -= 16;
+    // u_in = u_in / (double)((1 << u_bpp) - (32 >> (8 - u_bpp))) * (double)((1 << 8) - 32);
+    // u_in -= 112;
+    u_in = u_in / (double)((1 << (u_bpp - 1)) - (32 >> (8 - (u_bpp - 1)))) * (double)((1 << 7) - 16);
     u_in /= 112;
 
-    v_in = RP_MAX(v_in, 1);
-    v_in -= 16;
-    v_in = v_in / (double)((1 << v_bpp) - (32 >> (8 - v_bpp))) * (double)((1 << 8) - 32);
-    v_in -= 112;
+    // v_in = RP_MAX(v_in, 1);
+    // v_in -= 16;
+    // v_in = v_in / (double)((1 << v_bpp) - (32 >> (8 - v_bpp))) * (double)((1 << 8) - 32);
+    // v_in -= 112;
+    v_in = v_in / (double)((1 << (v_bpp - 1)) - (32 >> (8 - (v_bpp - 1)))) * (double)((1 << 7) - 16);
     v_in /= 112;
   } else {
     y_in = y_in / (double)((1 << y_bpp) - 1) * (double)((1 << 8) - 1);
@@ -1723,7 +1732,7 @@ static inline uint8_t accessImage(const uint8_t *image, int x, int y, int w, int
     return accessImageNoCheck(image, HR_MAX(HR_MIN(x, w - 1), 0), HR_MAX(HR_MIN(y, h - 1), 0), w, h);
 }
 
-static inline uint16_t accessImageUpsampleUnscaled(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
+static inline int16_t accessImageUpsampleUnscaled(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
 {
     int ds_w = wOrig / 2;
     int ds_h = hOrig / 2;
@@ -1751,10 +1760,10 @@ static inline uint16_t accessImageUpsampleUnscaled(const uint8_t *ds_image, int 
         --ds_y0;
     }
 
-    uint16_t a = accessImage(ds_image, ds_x0, ds_y0, ds_w, ds_h);
-    uint16_t b = accessImage(ds_image, ds_x1, ds_y0, ds_w, ds_h);
-    uint16_t c = accessImage(ds_image, ds_x0, ds_y1, ds_w, ds_h);
-    uint16_t d = accessImage(ds_image, ds_x1, ds_y1, ds_w, ds_h);
+    int16_t a = (int8_t)accessImage(ds_image, ds_x0, ds_y0, ds_w, ds_h);
+    int16_t b = (int8_t)accessImage(ds_image, ds_x1, ds_y0, ds_w, ds_h);
+    int16_t c = (int8_t)accessImage(ds_image, ds_x0, ds_y1, ds_w, ds_h);
+    int16_t d = (int8_t)accessImage(ds_image, ds_x1, ds_y1, ds_w, ds_h);
 
     if (xOrig < ds_x1 * 2)
     {
@@ -1786,8 +1795,8 @@ static inline uint16_t accessImageUpsampleUnscaled(const uint8_t *ds_image, int 
 
 static inline uint8_t accessImageUpsample(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
 {
-    uint16_t p = accessImageUpsampleUnscaled(ds_image, xOrig, yOrig, wOrig, hOrig);
-    return rshift_to_even(p, 4);
+    int16_t p = accessImageUpsampleUnscaled(ds_image, xOrig, yOrig, wOrig, hOrig);
+    return srshift_to_even(p, 4);
 }
 
 static inline void upsampleImage(uint8_t *dst, const uint8_t *ds_src, int w, int h)
@@ -1841,6 +1850,13 @@ enum {
   PLANE_COUNT,
 };
 
+enum {
+  RP_SCREEN_SPLIT_LEFT,
+  RP_SCREEN_SPLIT_RIGHT,
+  RP_SCREEN_SPLIT_COUNT,
+  RP_SCREEN_SPLIT_FULL = (u8)-1,
+};
+
 int16_t screen_frame_n[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
 uint8_t screen_pos[SCREEN_COUNT];
 
@@ -1853,12 +1869,12 @@ int8_t screen_buf_valid[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
 uint8_t screen_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT][400 * 240];
 uint8_t screen_bpp[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT];
 int8_t screen_me_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][ME_COMP_COUNT][400 * 240 / RP_ME_MIN_BLOCK_SIZE / RP_ME_MIN_BLOCK_SIZE / 4];
-uint8_t screen_recv_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT][400 * 240 * 16 / 15];
-uint8_t *screen_recv_buf_head[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT];
+uint8_t screen_recv_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT][RP_SCREEN_SPLIT_COUNT][400 * 240 * 16 / 15];
+uint8_t *screen_recv_buf_head[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT][RP_SCREEN_SPLIT_COUNT];
 uint8_t screen_recv_done[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT];
 
-uint8_t screen_rgb_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][400 * 240 * 3 * 16 / 15];
-uint8_t *screen_rgb_buf_head[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
+uint8_t screen_rgb_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][RP_SCREEN_SPLIT_COUNT][400 * 240 * 3 * 16 / 15];
+uint8_t *screen_rgb_buf_head[SCREEN_COUNT][ENCODE_BUFFER_COUNT][RP_SCREEN_SPLIT_COUNT];
 uint8_t screen_rgb_done[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
 
 uint8_t frame_n[SCREEN_COUNT];
@@ -1949,16 +1965,33 @@ static void interpolate_me(const s8 *me_x_vec[CORNER_COUNT], const s8 *me_y_vec[
   *y = srshift_to_even(y_unscaled, rshift_scale) << scale_log2;
 }
 
-#define DO_DIFF() do { \
+#define DO_DIFF_UNSIGNED() do { \
   if (RP_ENCODE_STATIC_LQ) { \
-    *dst++ = (u8)((u8)(*ref++ << (8 - bpp)) + (u8)(*cur++ << (8 - bpp)) - 128) >> (8 - bpp); \
+    *dst++ = (u8)((u8)(*ref++ << (8 - bpp)) + (u8)((s8)*cur++ << (8 - bpp))) >> (8 - bpp); \
   } else { \
-    *dst++ = *ref + ((*cur - (128 >> (8 - bpp))) * (1 << (bpp_prev - bpp))); \
+    *dst++ = *ref + ((s8)*cur * (1 << (bpp_prev - bpp))); \
     ++ref, ++cur; \
   } \
 } while (0)
 
-void diff_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, int w, int h, int bpp, int bpp_prev UNUSED_ATTR) {
+#define DO_DIFF_SIGNED() do { \
+  if (RP_ENCODE_STATIC_LQ) { \
+    *dst++ = (((s8)*ref++ << (8 - bpp)) + ((s8)*cur++ << (8 - bpp))) >> (8 - bpp); \
+  } else { \
+    *dst++ = (s8)*ref + ((s8)*cur * (1 << (bpp_prev - bpp))); \
+    ++ref, ++cur; \
+  } \
+} while (0)
+
+#define DO_DIFF() do { \
+  if (unsigned_signed == 0) { \
+    DO_DIFF_UNSIGNED(); \
+  } else { \
+    DO_DIFF_SIGNED(); \
+  } \
+} while (0)
+
+void diff_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, int w, int h, int bpp, int bpp_prev UNUSED_ATTR, u8 unsigned_signed) {
   for (int i = 0; i < w; ++i) {
     for (int j = 0; j < h; ++j) {
       DO_DIFF();
@@ -1966,7 +1999,7 @@ void diff_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, int w, int
   }
 }
 
-void select_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const int8_t *me_x, int scale_log2, int w, int h, int bpp, int bpp_prev UNUSED_ATTR) {
+void select_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const int8_t *me_x, int scale_log2, int w, int h, int bpp, int bpp_prev UNUSED_ATTR, u8 unsigned_signed) {
   if (ntr_me_downscale)
     ++scale_log2;
 
@@ -1997,7 +2030,11 @@ void select_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const in
           *dst++ = *cur++;
         } else {
           ref++;
-          *dst++ = *cur++ << (8 - bpp);
+          if (unsigned_signed == 0) {
+            *dst++ = *cur++ << (8 - bpp);
+          } else {
+            *dst++ = (s8)*cur++ << (8 - bpp);
+          }
         }
       } else {
         DO_DIFF();
@@ -2349,6 +2386,7 @@ int handle_recv(uint8_t *buf, int size)
       ntr_yuv_option = send_info_header.yuv_option;
       ntr_color_transform_hp = send_info_header.color_transform_hp;
       ntr_encoder_which = send_info_header.encoder_which;
+      ntr_encode_split_image = send_info_header.encode_split_image;
       ntr_me_enabled = send_info_header.me_enabled;
       ntr_me_downscale = send_info_header.me_downscale;
       ntr_me_block_size = RP_ME_MIN_BLOCK_SIZE << send_info_header.me_block_size;
@@ -2384,6 +2422,7 @@ int handle_recv(uint8_t *buf, int size)
     if (receiving) {
       int top_bot = send_header.top_bot;
       int p_frame = send_header.p_frame;
+      int left_right = send_header.left_right;
 
       int pos = -1;
       int plane;
@@ -2391,6 +2430,8 @@ int handle_recv(uint8_t *buf, int size)
 
       int encoder_rgb = ntr_encoder_which >= RP_ENCODER_JLS_COUNT;
       int uv_comp = send_header.plane_type == 0 && send_header.plane_comp == UV_COMP;
+
+      // fprintf(stderr, "Receiving: screen %d, frame_n = %d, left_right = %d, plane_type = %d, plane_comp = %d, bpp = %d, size = %d, done = %d\n", top_bot, send_header.frame_n, send_header.left_right, send_header.plane_type, send_header.plane_comp, send_header.bpp, send_header.data_size, send_header.data_end);
 
       if (uv_comp) {
         plane = U_COMP;
@@ -2414,22 +2455,24 @@ int handle_recv(uint8_t *buf, int size)
         screen_pos[top_bot] %= ENCODE_BUFFER_COUNT;
         screen_frame_n[top_bot][pos] = send_header.frame_n;
 
-        if (encoder_rgb) {
-          screen_recv_buf_head[top_bot][pos][Y_DATA] = 0;
-          screen_recv_buf_head[top_bot][pos][U_DATA] = 0;
-          screen_recv_buf_head[top_bot][pos][V_DATA] = 0;
-          screen_recv_buf_head[top_bot][pos][ME_X_DATA] = 0;
-          screen_recv_buf_head[top_bot][pos][ME_Y_DATA] = 0;
+        for (int k = 0; k < RP_SCREEN_SPLIT_COUNT; ++k) {
+          if (encoder_rgb) {
+            screen_recv_buf_head[top_bot][pos][Y_DATA][k] = 0;
+            screen_recv_buf_head[top_bot][pos][U_DATA][k] = 0;
+            screen_recv_buf_head[top_bot][pos][V_DATA][k] = 0;
+            screen_recv_buf_head[top_bot][pos][ME_X_DATA][k] = 0;
+            screen_recv_buf_head[top_bot][pos][ME_Y_DATA][k] = 0;
 
-          screen_rgb_buf_head[top_bot][pos] = screen_rgb_buf[top_bot][pos];
-        } else {
-          screen_recv_buf_head[top_bot][pos][Y_DATA] = screen_recv_buf[top_bot][pos][Y_DATA];
-          screen_recv_buf_head[top_bot][pos][U_DATA] = screen_recv_buf[top_bot][pos][U_DATA];
-          screen_recv_buf_head[top_bot][pos][V_DATA] = screen_recv_buf[top_bot][pos][V_DATA];
-          screen_recv_buf_head[top_bot][pos][ME_X_DATA] = screen_recv_buf[top_bot][pos][ME_X_DATA];
-          screen_recv_buf_head[top_bot][pos][ME_Y_DATA] = screen_recv_buf[top_bot][pos][ME_Y_DATA];
+            screen_rgb_buf_head[top_bot][pos][k] = screen_rgb_buf[top_bot][pos][k];
+          } else {
+            screen_recv_buf_head[top_bot][pos][Y_DATA][k] = screen_recv_buf[top_bot][pos][Y_DATA][k];
+            screen_recv_buf_head[top_bot][pos][U_DATA][k] = screen_recv_buf[top_bot][pos][U_DATA][k];
+            screen_recv_buf_head[top_bot][pos][V_DATA][k] = screen_recv_buf[top_bot][pos][V_DATA][k];
+            screen_recv_buf_head[top_bot][pos][ME_X_DATA][k] = screen_recv_buf[top_bot][pos][ME_X_DATA][k];
+            screen_recv_buf_head[top_bot][pos][ME_Y_DATA][k] = screen_recv_buf[top_bot][pos][ME_Y_DATA][k];
 
-          screen_rgb_buf_head[top_bot][pos] = 0;
+            screen_rgb_buf_head[top_bot][pos][k] = 0;
+          }
         }
 
         screen_recv_done[top_bot][pos][Y_DATA] = 0;
@@ -2445,43 +2488,64 @@ int handle_recv(uint8_t *buf, int size)
       }
 
       if (encoder_rgb) {
-        if (!screen_rgb_buf_head[top_bot][pos])
+        if (!screen_rgb_buf_head[top_bot][pos][left_right])
           goto final;
         if (recv_buf_head - recv_buf >
-          (intptr_t)sizeof(screen_rgb_buf[top_bot][pos]) -
-            (screen_rgb_buf_head[top_bot][pos] - screen_rgb_buf[top_bot][pos]
+          (intptr_t)sizeof(screen_rgb_buf[top_bot][pos][left_right]) -
+            (screen_rgb_buf_head[top_bot][pos][left_right] - screen_rgb_buf[top_bot][pos][left_right]
           )
         ) {
           screen_buf_valid[top_bot][pos] = 0;
           fprintf(stderr, "buffer overflow %d %d plane %d, size so far %d, size incoming %d\n", top_bot, send_header.frame_n, plane,
-            (int)(screen_rgb_buf_head[top_bot][pos] - screen_rgb_buf[top_bot][pos]),
+            (int)(screen_rgb_buf_head[top_bot][pos][left_right] - screen_rgb_buf[top_bot][pos][left_right]),
             (int)(recv_buf_head - recv_buf));
           goto final;
         }
-        memcpy(screen_rgb_buf_head[top_bot][pos], recv_buf, recv_buf_head - recv_buf);
-        screen_rgb_buf_head[top_bot][pos] += recv_buf_head - recv_buf;
+        memcpy(screen_rgb_buf_head[top_bot][pos][left_right], recv_buf, recv_buf_head - recv_buf);
+        screen_rgb_buf_head[top_bot][pos][left_right] += recv_buf_head - recv_buf;
       } else {
-        if (!screen_recv_buf_head[top_bot][pos][plane])
+        if (!screen_recv_buf_head[top_bot][pos][plane][left_right])
           goto final;
         if (recv_buf_head - recv_buf >
-          (intptr_t)sizeof(screen_recv_buf[top_bot][pos][plane]) -
-            (screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]
+          (intptr_t)sizeof(screen_recv_buf[top_bot][pos][plane][left_right]) -
+            (screen_recv_buf_head[top_bot][pos][plane][left_right] - screen_recv_buf[top_bot][pos][plane][left_right]
           )
         ) {
           screen_buf_valid[top_bot][pos] = 0;
           fprintf(stderr, "buffer overflow %d %d plane %d, size so far %d, size incoming %d\n", top_bot, send_header.frame_n, plane,
-            (int)(screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]),
+            (int)(screen_recv_buf_head[top_bot][pos][plane][left_right] - screen_recv_buf[top_bot][pos][plane][left_right]),
             (int)(recv_buf_head - recv_buf));
           goto final;
         }
-        memcpy(screen_recv_buf_head[top_bot][pos][plane], recv_buf, recv_buf_head - recv_buf);
-        screen_recv_buf_head[top_bot][pos][plane] += recv_buf_head - recv_buf;
+        memcpy(screen_recv_buf_head[top_bot][pos][plane][left_right], recv_buf, recv_buf_head - recv_buf);
+        screen_recv_buf_head[top_bot][pos][plane][left_right] += recv_buf_head - recv_buf;
       }
 
       if (!send_header.data_end)
         goto final;
 
-      int w = top_bot == SCREEN_TOP ? 400 : 320, w_orig = w;
+      int split_image_count= ntr_encode_split_image ? RP_SCREEN_SPLIT_COUNT : 1;
+      if (encoder_rgb) {
+        ++screen_rgb_done[top_bot][pos];
+        if (screen_rgb_done[top_bot][pos] < split_image_count)
+          goto final;
+      } else {
+        if (uv_comp) {
+          ++screen_recv_done[top_bot][pos][V_COMP];
+          ++screen_recv_done[top_bot][pos][U_COMP];
+          if (screen_recv_done[top_bot][pos][V_COMP] < split_image_count || screen_recv_done[top_bot][pos][U_COMP] < split_image_count)
+            goto final;
+        } else {
+          ++screen_recv_done[top_bot][pos][plane];
+          if (screen_recv_done[top_bot][pos][plane] < split_image_count)
+            goto final;
+        }
+      }
+
+      int w_orig_full = top_bot == SCREEN_TOP ? 400 : 320, w = w_orig_full;
+      if (ntr_encode_split_image)
+        w /= 2;
+      int w_orig = w;
       int h = 240, h_orig = h;
 
       u8 me_block_size_log2 = av_ceil_log2(ntr_me_block_size);
@@ -2493,6 +2557,7 @@ int handle_recv(uint8_t *buf, int size)
       u8 block_size_log2 = me_block_size_log2 + scale_log2;
 
       int me_w = w >> block_size_log2;
+      int me_w_full = w_orig_full >> block_size_log2;
       int me_h = h >> block_size_log2;
 
       if (ntr_downscale_uv && (plane == U_DATA || plane == V_DATA)) {
@@ -2506,77 +2571,91 @@ int handle_recv(uint8_t *buf, int size)
 
       int bpp = send_header.bpp ? send_header.bpp : 8;
 
-      // fprintf(stderr, "Decoding: screen %d, frame_n = %d, plane = %d, comp = %d, w = %d, h = %d, bpp = %d, size = %d\n", top_bot, send_header.frame_n, plane, comp, w, h, bpp,
+      // fprintf(stderr, "Decoding: screen %d, frame_n = %d, left_right = %d, plane = %d, comp = %d, w = %d, h = %d, bpp = %d, size = %d\n", top_bot, send_header.frame_n, send_header.left_right, plane, comp, w, h, bpp,
       //   encoder_rgb ?
-      //     (int)(screen_rgb_buf_head[top_bot][pos] - screen_rgb_buf[top_bot][pos]) :
-      //     (int)(screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]));
+      //     (int)(screen_rgb_buf_head[top_bot][pos][left_right] - screen_rgb_buf[top_bot][pos][left_right]) :
+      //     (int)(screen_recv_buf_head[top_bot][pos][plane][left_right] - screen_recv_buf[top_bot][pos][plane][left_right]));
       int ret = 0;
       if (encoder_rgb) {
         if (ntr_encoder_which == RP_ENCODER_IMAGE_ZERO) {
-          ret = izDecodeImageRGB(screen_decoded[top_bot], screen_rgb_buf[top_bot][pos], h_orig, w_orig);
+          ret = izDecodeImageRGB(screen_decoded[top_bot], screen_rgb_buf[top_bot][pos][RP_SCREEN_SPLIT_LEFT], h_orig, w_orig);
           // fprintf(stderr, "izDecodeImageRGB: %d (%d)\n", ret, (int)(screen_rgb_buf_head[top_bot][pos] - screen_rgb_buf[top_bot][pos]));
-          ret = ret == screen_rgb_buf_head[top_bot][pos] - screen_rgb_buf[top_bot][pos];
+          ret = ret == screen_rgb_buf_head[top_bot][pos][RP_SCREEN_SPLIT_LEFT] - screen_rgb_buf[top_bot][pos][RP_SCREEN_SPLIT_LEFT];
+          if (ret && ntr_encode_split_image) {
+            ret = izDecodeImageRGB(screen_decoded[top_bot] + w_orig * h_orig, screen_rgb_buf[top_bot][pos][RP_SCREEN_SPLIT_RIGHT], h_orig, w_orig);
+            ret = ret == screen_rgb_buf_head[top_bot][pos][RP_SCREEN_SPLIT_RIGHT] - screen_rgb_buf[top_bot][pos][RP_SCREEN_SPLIT_RIGHT];
+          }
         } else {
-          struct jpeg_decompress_struct cinfo;
-          struct jpeg_error_mgr jerr;
-          cinfo.err = jpeg_std_error(&jerr);
-          jpeg_create_decompress(&cinfo);
-          jpeg_mem_src(&cinfo, screen_rgb_buf[top_bot][pos], screen_rgb_buf_head[top_bot][pos] - screen_rgb_buf[top_bot][pos]);
-          ret = jpeg_read_header(&cinfo, TRUE);
-          if (ret == JPEG_HEADER_OK) {
-            jpeg_start_decompress(&cinfo);
-            // fprintf(stderr, "jpeg_read_header: %d %d\n", (int)cinfo.output_width, (int)cinfo.output_height);
-            if ((int)cinfo.output_width == h_orig && (int)cinfo.output_height == w_orig) {
-              while (cinfo.output_scanline < cinfo.output_height) {
-                uint8_t *buffer = screen_decoded[top_bot] + cinfo.output_scanline * cinfo.output_width * 3;
-                jpeg_read_scanlines(&cinfo, &buffer, 1);
+          for (int k = 0; k < (ntr_encode_split_image ? RP_SCREEN_SPLIT_COUNT : 1); ++k) {
+            struct jpeg_decompress_struct cinfo;
+            struct jpeg_error_mgr jerr;
+            cinfo.err = jpeg_std_error(&jerr);
+            jpeg_create_decompress(&cinfo);
+            jpeg_mem_src(&cinfo, screen_rgb_buf[top_bot][pos][k], screen_rgb_buf_head[top_bot][pos][k] - screen_rgb_buf[top_bot][pos][k]);
+            ret = jpeg_read_header(&cinfo, TRUE);
+            if (ret == JPEG_HEADER_OK) {
+              jpeg_start_decompress(&cinfo);
+              // fprintf(stderr, "jpeg_read_header: %d %d\n", (int)cinfo.output_width, (int)cinfo.output_height);
+              if ((int)cinfo.output_width == h_orig && (int)cinfo.output_height == w_orig) {
+                while (cinfo.output_scanline < cinfo.output_height) {
+                  uint8_t *buffer = screen_decoded[top_bot] + w_orig * h_orig * k + cinfo.output_scanline * cinfo.output_width * 3;
+                  jpeg_read_scanlines(&cinfo, &buffer, 1);
+                }
+                jpeg_finish_decompress(&cinfo);
+                jpeg_destroy_decompress(&cinfo);
+                ret = 1;
+              } else {
+                jpeg_destroy_decompress(&cinfo);
+                ret = 0;
               }
-              jpeg_finish_decompress(&cinfo);
-              jpeg_destroy_decompress(&cinfo);
-              ret = 1;
             } else {
               jpeg_destroy_decompress(&cinfo);
               ret = 0;
             }
-          } else {
-            jpeg_destroy_decompress(&cinfo);
-            ret = 0;
           }
         }
       } else if (ntr_encoder_which < RP_ENCODER_JLS_USE_LUT_COUNT) {
-        if (comp < COMP_COUNT) {
-          ret = ffmpeg_jls_decode(screen_buf[top_bot][pos][comp],
-            h, w, h, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane], bpp) == w * h;
-        } else {
-          ret = ffmpeg_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT],
-            h, w, h, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane], bpp) == w * h;
+        for (int k = 0; k < (ntr_encode_split_image ? RP_SCREEN_SPLIT_COUNT : 1); ++k) {
+          if (comp < COMP_COUNT) {
+            ret = ffmpeg_jls_decode(screen_buf[top_bot][pos][comp] + w * h * k,
+              h, w, h, screen_recv_buf[top_bot][pos][plane][k], screen_recv_buf_head[top_bot][pos][plane][k] - screen_recv_buf[top_bot][pos][plane][k], bpp) == w * h;
+          } else {
+            ret = ffmpeg_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT] + w * h * k,
+              h, w, h, screen_recv_buf[top_bot][pos][plane][k], screen_recv_buf_head[top_bot][pos][plane][k] - screen_recv_buf[top_bot][pos][plane][k], bpp) == w * h;
+          }
         }
       } else if (ntr_encoder_which == RP_ENCODER_LZ4_JLS) {
-        if (comp < COMP_COUNT) {
-          ret = lz4_jls_decode(screen_buf[top_bot][pos][comp],
-            h, w, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]) == w * h;
-        } else {
-          ret = lz4_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT],
-            h, w, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]) == w * h;
+        for (int k = 0; k < (ntr_encode_split_image ? RP_SCREEN_SPLIT_COUNT : 1); ++k) {
+          if (comp < COMP_COUNT) {
+            ret = lz4_jls_decode(screen_buf[top_bot][pos][comp] + w * h * k,
+              h, w, screen_recv_buf[top_bot][pos][plane][k], screen_recv_buf_head[top_bot][pos][plane][k] - screen_recv_buf[top_bot][pos][plane][k]) == w * h;
+          } else {
+            ret = lz4_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT] + w * h * k,
+              h, w, screen_recv_buf[top_bot][pos][plane][k], screen_recv_buf_head[top_bot][pos][plane][k] - screen_recv_buf[top_bot][pos][plane][k]) == w * h;
+          }
         }
       } else if (ntr_encoder_which == RP_ENCODER_HUFF_JLS) {
-        if (uv_comp) {
-          ret = huff_jls_decode_2(screen_buf[top_bot][pos][U_COMP], screen_buf[top_bot][pos][V_COMP],
-            h, w, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]) == w * h;
-        } else if (comp < COMP_COUNT) {
-          ret = huff_jls_decode(screen_buf[top_bot][pos][comp],
-            h, w, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]) == w * h;
-        } else {
-          ret = huff_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT],
-            h, w, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]) == w * h;
+        for (int k = 0; k < (ntr_encode_split_image ? RP_SCREEN_SPLIT_COUNT : 1); ++k) {
+          if (uv_comp) {
+            ret = huff_jls_decode_2(screen_buf[top_bot][pos][U_COMP] + w * h * k, screen_buf[top_bot][pos][V_COMP] + w * h * k,
+              h, w, screen_recv_buf[top_bot][pos][plane][k], screen_recv_buf_head[top_bot][pos][plane][k] - screen_recv_buf[top_bot][pos][plane][k]) == w * h;
+          } else if (comp < COMP_COUNT) {
+            ret = huff_jls_decode(screen_buf[top_bot][pos][comp] + w * h * k,
+              h, w, screen_recv_buf[top_bot][pos][plane][k], screen_recv_buf_head[top_bot][pos][plane][k] - screen_recv_buf[top_bot][pos][plane][k]) == w * h;
+          } else {
+            ret = huff_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT] + w * h * k,
+              h, w, screen_recv_buf[top_bot][pos][plane][k], screen_recv_buf_head[top_bot][pos][plane][k] - screen_recv_buf[top_bot][pos][plane][k]) == w * h;
+          }
         }
       } else if (ntr_encoder_which == RP_ENCODER_ZSTD_JLS) {
-        if (comp < COMP_COUNT) {
-          ret = zstd_jls_decode(screen_buf[top_bot][pos][comp],
-            h, w, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]) == w * h;
-        } else {
-          ret = zstd_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT],
-            h, w, screen_recv_buf[top_bot][pos][plane], screen_recv_buf_head[top_bot][pos][plane] - screen_recv_buf[top_bot][pos][plane]) == w * h;
+        for (int k = 0; k < (ntr_encode_split_image ? RP_SCREEN_SPLIT_COUNT : 1); ++k) {
+          if (comp < COMP_COUNT) {
+            ret = zstd_jls_decode(screen_buf[top_bot][pos][comp] + w * h * k,
+              h, w, screen_recv_buf[top_bot][pos][plane][k], screen_recv_buf_head[top_bot][pos][plane][k] - screen_recv_buf[top_bot][pos][plane][k]) == w * h;
+          } else {
+            ret = zstd_jls_decode((u8 *)screen_me_buf[top_bot][pos][plane - COMP_COUNT] + w * h * k,
+              h, w, screen_recv_buf[top_bot][pos][plane][k], screen_recv_buf_head[top_bot][pos][plane][k] - screen_recv_buf[top_bot][pos][plane][k]) == w * h;
+          }
         }
       } else {
         fprintf(stderr, "Unknown encoder\n");
@@ -2587,19 +2666,17 @@ int handle_recv(uint8_t *buf, int size)
         // fprintf(stderr, "success %d %d plane %d\n", top_bot, send_header.frame_n, plane);
         int frame_end = 1;
         if (encoder_rgb) {
-          screen_rgb_done[top_bot][pos] = 1;
+          // done
         } else {
           if (uv_comp) {
-            screen_recv_done[top_bot][pos][V_COMP] = screen_recv_done[top_bot][pos][U_COMP] = 1;
             screen_bpp[top_bot][pos][V_COMP] = screen_bpp[top_bot][pos][U_COMP] = bpp;
           } else {
-            screen_recv_done[top_bot][pos][plane] = 1;
             if (comp < COMP_COUNT)
               screen_bpp[top_bot][pos][comp] = bpp;
           }
 
           for (int i = 0; i < (ntr_me_enabled == 1 && p_frame ? PLANE_COUNT : COMP_COUNT + (ntr_me_enabled == 3 && p_frame)); ++i) {
-            if (!screen_recv_done[top_bot][pos][i]) {
+            if (screen_recv_done[top_bot][pos][i] < split_image_count) {
               frame_end = 0;
               break;
             }
@@ -2617,6 +2694,8 @@ int handle_recv(uint8_t *buf, int size)
             screen_buf_valid[top_bot][pos] = 1;
             // fprintf(stderr, "full frame %d %d (%d) pos %d\n", top_bot, send_header.frame_n, screen_frame_n[top_bot][pos], pos);
             if (!p_frame) {
+              int w_orig_split = w_orig;
+              w_orig = w_orig_full;
               frame_n[top_bot] = send_header.frame_n;
               if (encoder_rgb) {
                 render_rgb_bpp(screen_decoded[top_bot], w_orig, h_orig, bpp);
@@ -2643,6 +2722,7 @@ int handle_recv(uint8_t *buf, int size)
               screen_frame_n[top_bot][pos] += RP_IMAGE_FRAME_N_RANGE;
               handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot]);
               // fprintf(stderr, "Displaying key frame: screen %d, frame_n = %d\n", top_bot, frame_n[top_bot]);
+              w_orig = w_orig_split;
             }
 
             uint8_t frame_n_next = (frame_n[top_bot] + 1) % RP_IMAGE_FRAME_N_RANGE;
@@ -2668,93 +2748,110 @@ int handle_recv(uint8_t *buf, int size)
                       break;
                     }
                     // fprintf(stderr, "full next frame %d %d pos %d valid %d\n", top_bot, screen_frame_n[top_bot][i], i, screen_buf_valid[top_bot][i]);
-                    if (ntr_me_enabled == 1) {
-                      me_image(image_me[top_bot][i][Y_COMP],
-                        image_me[top_bot][i_prev][Y_COMP],
-                        screen_buf[top_bot][i][Y_COMP],
-                        screen_me_buf[top_bot][i][ME_X_COMP],
-                        screen_me_buf[top_bot][i][ME_Y_COMP],
-                        1,
-                        w_orig,
-                        h_orig,
-                        screen_bpp[top_bot][i][Y_COMP]
-                      );
-                      me_image(image_me[top_bot][i][U_COMP],
-                        image_me[top_bot][i_prev][U_COMP],
-                        screen_buf[top_bot][i][U_COMP],
-                        screen_me_buf[top_bot][i][ME_X_COMP],
-                        screen_me_buf[top_bot][i][ME_Y_COMP],
-                        1 - ntr_downscale_uv,
-                        ntr_downscale_uv ? w_orig / 2 : w_orig,
-                        ntr_downscale_uv ? h_orig / 2 : h_orig,
-                        screen_bpp[top_bot][i][U_COMP]
-                      );
-                      me_image(image_me[top_bot][i][V_COMP],
-                        image_me[top_bot][i_prev][V_COMP],
-                        screen_buf[top_bot][i][V_COMP],
-                        screen_me_buf[top_bot][i][ME_X_COMP],
-                        screen_me_buf[top_bot][i][ME_Y_COMP],
-                        1 - ntr_downscale_uv,
-                        ntr_downscale_uv ? w_orig / 2 : w_orig,
-                        ntr_downscale_uv ? h_orig / 2 : h_orig,
-                        screen_bpp[top_bot][i][V_COMP]
-                      );
-                    } else if (ntr_me_enabled == 3) {
-                      select_image(image_me[top_bot][i][Y_COMP],
-                        image_me[top_bot][i_prev][Y_COMP],
-                        screen_buf[top_bot][i][Y_COMP],
-                        screen_me_buf[top_bot][i][ME_X_COMP],
-                        1,
-                        w_orig,
-                        h_orig,
-                        screen_bpp[top_bot][i][Y_COMP],
-                        screen_bpp[top_bot][i_prev][Y_COMP]
-                      );
-                      select_image(image_me[top_bot][i][U_COMP],
-                        image_me[top_bot][i_prev][U_COMP],
-                        screen_buf[top_bot][i][U_COMP],
-                        screen_me_buf[top_bot][i][ME_X_COMP],
-                        1 - ntr_downscale_uv,
-                        ntr_downscale_uv ? w_orig / 2 : w_orig,
-                        ntr_downscale_uv ? h_orig / 2 : h_orig,
-                        screen_bpp[top_bot][i][U_COMP],
-                        screen_bpp[top_bot][i_prev][U_COMP]
-                      );
-                      select_image(image_me[top_bot][i][V_COMP],
-                        image_me[top_bot][i_prev][V_COMP],
-                        screen_buf[top_bot][i][V_COMP],
-                        screen_me_buf[top_bot][i][ME_X_COMP],
-                        1 - ntr_downscale_uv,
-                        ntr_downscale_uv ? w_orig / 2 : w_orig,
-                        ntr_downscale_uv ? h_orig / 2 : h_orig,
-                        screen_bpp[top_bot][i][V_COMP],
-                        screen_bpp[top_bot][i_prev][V_COMP]
-                      );
-                    } else {
-                      diff_image(image_me[top_bot][i][Y_COMP],
-                        image_me[top_bot][i_prev][Y_COMP],
-                        screen_buf[top_bot][i][Y_COMP],
-                        w_orig,
-                        h_orig,
-                        screen_bpp[top_bot][i][Y_COMP],
-                        screen_bpp[top_bot][i_prev][Y_COMP]
-                      );
-                      diff_image(image_me[top_bot][i][U_COMP],
-                        image_me[top_bot][i_prev][U_COMP],
-                        screen_buf[top_bot][i][U_COMP],
-                        ntr_downscale_uv ? w_orig / 2 : w_orig,
-                        ntr_downscale_uv ? h_orig / 2 : h_orig,
-                        screen_bpp[top_bot][i][U_COMP],
-                        screen_bpp[top_bot][i_prev][U_COMP]
-                      );
-                      diff_image(image_me[top_bot][i][V_COMP],
-                        image_me[top_bot][i_prev][V_COMP],
-                        screen_buf[top_bot][i][V_COMP],
-                        ntr_downscale_uv ? w_orig / 2 : w_orig,
-                        ntr_downscale_uv ? h_orig / 2 : h_orig,
-                        screen_bpp[top_bot][i][V_COMP],
-                        screen_bpp[top_bot][i_prev][V_COMP]
-                      );
+                    for (int k = 0; k < (ntr_encode_split_image ? RP_SCREEN_SPLIT_COUNT : 1); ++k) {
+                      if (ntr_me_enabled == 1) {
+                        int size_orig = w_orig * h_orig;
+                        me_image(image_me[top_bot][i][Y_COMP] + size_orig * k,
+                          image_me[top_bot][i_prev][Y_COMP] + size_orig * k,
+                          screen_buf[top_bot][i][Y_COMP] + size_orig * k,
+                          screen_me_buf[top_bot][i][ME_X_COMP] + me_w * me_h * k,
+                          screen_me_buf[top_bot][i][ME_Y_COMP] + me_w * me_h * k,
+                          1,
+                          w_orig,
+                          h_orig,
+                          screen_bpp[top_bot][i][Y_COMP]
+                        );
+                        if (ntr_downscale_uv)
+                          size_orig /= 4;
+                        me_image(image_me[top_bot][i][U_COMP] + size_orig * k,
+                          image_me[top_bot][i_prev][U_COMP] + size_orig * k,
+                          screen_buf[top_bot][i][U_COMP] + size_orig * k,
+                          screen_me_buf[top_bot][i][ME_X_COMP] + me_w * me_h * k,
+                          screen_me_buf[top_bot][i][ME_Y_COMP] + me_w * me_h * k,
+                          1 - ntr_downscale_uv,
+                          ntr_downscale_uv ? w_orig / 2 : w_orig,
+                          ntr_downscale_uv ? h_orig / 2 : h_orig,
+                          screen_bpp[top_bot][i][U_COMP]
+                        );
+                        me_image(image_me[top_bot][i][V_COMP] + size_orig * k,
+                          image_me[top_bot][i_prev][V_COMP] + size_orig * k,
+                          screen_buf[top_bot][i][V_COMP] + size_orig * k,
+                          screen_me_buf[top_bot][i][ME_X_COMP] + me_w * me_h * k,
+                          screen_me_buf[top_bot][i][ME_Y_COMP] + me_w * me_h * k,
+                          1 - ntr_downscale_uv,
+                          ntr_downscale_uv ? w_orig / 2 : w_orig,
+                          ntr_downscale_uv ? h_orig / 2 : h_orig,
+                          screen_bpp[top_bot][i][V_COMP]
+                        );
+                      } else if (ntr_me_enabled == 3) {
+                        int size_orig = w_orig * h_orig;
+                        select_image(image_me[top_bot][i][Y_COMP] + size_orig * k,
+                          image_me[top_bot][i_prev][Y_COMP] + size_orig * k,
+                          screen_buf[top_bot][i][Y_COMP] + size_orig * k,
+                          screen_me_buf[top_bot][i][ME_X_COMP] + me_w * me_h * k,
+                          1,
+                          w_orig,
+                          h_orig,
+                          screen_bpp[top_bot][i][Y_COMP],
+                          screen_bpp[top_bot][i_prev][Y_COMP],
+                          0
+                        );
+                        if (ntr_downscale_uv)
+                          size_orig /= 4;
+                        select_image(image_me[top_bot][i][U_COMP] + size_orig * k,
+                          image_me[top_bot][i_prev][U_COMP] + size_orig * k,
+                          screen_buf[top_bot][i][U_COMP] + size_orig * k,
+                          screen_me_buf[top_bot][i][ME_X_COMP] + me_w * me_h * k,
+                          1 - ntr_downscale_uv,
+                          ntr_downscale_uv ? w_orig / 2 : w_orig,
+                          ntr_downscale_uv ? h_orig / 2 : h_orig,
+                          screen_bpp[top_bot][i][U_COMP],
+                          screen_bpp[top_bot][i_prev][U_COMP],
+                          1
+                        );
+                        select_image(image_me[top_bot][i][V_COMP] + size_orig * k,
+                          image_me[top_bot][i_prev][V_COMP] + size_orig * k,
+                          screen_buf[top_bot][i][V_COMP] + size_orig * k,
+                          screen_me_buf[top_bot][i][ME_X_COMP] + me_w * me_h * k,
+                          1 - ntr_downscale_uv,
+                          ntr_downscale_uv ? w_orig / 2 : w_orig,
+                          ntr_downscale_uv ? h_orig / 2 : h_orig,
+                          screen_bpp[top_bot][i][V_COMP],
+                          screen_bpp[top_bot][i_prev][V_COMP],
+                          1
+                        );
+                      } else {
+                        int size_orig = w_orig * h_orig;
+                        diff_image(image_me[top_bot][i][Y_COMP] + size_orig * k,
+                          image_me[top_bot][i_prev][Y_COMP] + size_orig * k,
+                          screen_buf[top_bot][i][Y_COMP] + size_orig * k,
+                          w_orig,
+                          h_orig,
+                          screen_bpp[top_bot][i][Y_COMP],
+                          screen_bpp[top_bot][i_prev][Y_COMP],
+                          0
+                        );
+                        if (ntr_downscale_uv)
+                          size_orig /= 4;
+                        diff_image(image_me[top_bot][i][U_COMP] + size_orig * k,
+                          image_me[top_bot][i_prev][U_COMP] + size_orig * k,
+                          screen_buf[top_bot][i][U_COMP] + size_orig * k,
+                          ntr_downscale_uv ? w_orig / 2 : w_orig,
+                          ntr_downscale_uv ? h_orig / 2 : h_orig,
+                          screen_bpp[top_bot][i][U_COMP],
+                          screen_bpp[top_bot][i_prev][U_COMP],
+                          1
+                        );
+                        diff_image(image_me[top_bot][i][V_COMP] + size_orig * k,
+                          image_me[top_bot][i_prev][V_COMP] + size_orig * k,
+                          screen_buf[top_bot][i][V_COMP] + size_orig * k,
+                          ntr_downscale_uv ? w_orig / 2 : w_orig,
+                          ntr_downscale_uv ? h_orig / 2 : h_orig,
+                          screen_bpp[top_bot][i][V_COMP],
+                          screen_bpp[top_bot][i_prev][V_COMP],
+                          1
+                        );
+                      }
                     }
                     u8 screen_bpp_cur[COMP_COUNT];
                     if (!RP_ENCODE_STATIC_LQ) {
@@ -2763,6 +2860,8 @@ int handle_recv(uint8_t *buf, int size)
                         screen_bpp[top_bot][i][c] = screen_bpp[top_bot][i_prev][c];
                       }
                     }
+                    w_orig = w_orig_full;
+                    me_w = me_w_full;
                     if (ntr_downscale_uv) {
                       upsampleImage(upscaled_u_image, image_me[top_bot][i][U_COMP], w_orig, h_orig);
                       upsampleImage(upscaled_v_image, image_me[top_bot][i][V_COMP], w_orig, h_orig);
