@@ -333,6 +333,7 @@ struct rp_send_data_header {
     u32 top_bot : 1;
     u32 frame_n : RP_IMAGE_FRAME_N_BITS;
     u32 left_right : 1;
+    u32 data_stats : 1;
     u32 p_frame : 1;
     u32 bpp : 3;
     u32 data_end : 1;
@@ -766,11 +767,11 @@ void *nwm_tcp_thread_func(void *)
 
 void rpConfigSetDefault(void)
 {
-  yuv_option = 3;
+  yuv_option = 2;
   color_transform_hp = 0;
   encoder_which = 4;
   downscale_uv = 1;
-  encode_lq = 2;
+  encode_lq = 1;
   jpeg_quality = 90;
   zstd_comp_level = 4;
   me_method = 1;
@@ -786,7 +787,7 @@ void rpConfigSetDefault(void)
   multicore_encode = 1;
   low_latency = 1;
   top_priority = 1;
-  bot_priority = 5;
+  bot_priority = 2;
   multicore_network = 0;
   multicore_screen = 1;
   kcp_minrto = 24;
@@ -2229,6 +2230,9 @@ int huff_jls_decode_2(uint8_t *dst, uint8_t *dst_2, int dst_x, int dst_y, const 
     return -1;
 
   int rle_size = *(u32 *)src;
+  if (!rle_size)
+    return -1;
+
   src += sizeof(u32);
   src_size -= sizeof(u32);
 
@@ -2509,6 +2513,12 @@ int handle_recv(uint8_t *buf, int size)
         screen_buf_valid[top_bot][pos] = -1;
       }
 
+      if (ntr_encode_split_image && comp < COMP_COUNT && !send_header.data_stats) {
+        if (screen_recv_buf_head[top_bot][pos][plane][left_right] == screen_recv_buf[top_bot][pos][plane][left_right]) {
+          screen_recv_buf_head[top_bot][pos][plane][left_right] += 256;
+        }
+      }
+
       if (encoder_rgb) {
         if (!screen_rgb_buf_head[top_bot][pos][left_right])
           goto final;
@@ -2546,7 +2556,7 @@ int handle_recv(uint8_t *buf, int size)
       if (!send_header.data_end)
         goto final;
 
-      int split_image_count= ntr_encode_split_image ? RP_SCREEN_SPLIT_COUNT : 1;
+      int split_image_count = ntr_encode_split_image ? RP_SCREEN_SPLIT_COUNT : 1;
       if (encoder_rgb) {
         ++screen_rgb_done[top_bot][pos];
         if (screen_rgb_done[top_bot][pos] < split_image_count)
@@ -2561,6 +2571,16 @@ int handle_recv(uint8_t *buf, int size)
           ++screen_recv_done[top_bot][pos][plane];
           if (screen_recv_done[top_bot][pos][plane] < split_image_count)
             goto final;
+        }
+      }
+
+      if (ntr_encode_split_image && comp < COMP_COUNT) {
+        if (send_header.data_stats) {
+          memcpy(screen_recv_buf[top_bot][pos][plane][!left_right], screen_recv_buf[top_bot][pos][plane][!left_right] + 256, sizeof(u32));
+          memcpy(screen_recv_buf[top_bot][pos][plane][!left_right] + sizeof(u32), screen_recv_buf[top_bot][pos][plane][left_right] + sizeof(u32), 256);
+        } else {
+          memcpy(screen_recv_buf[top_bot][pos][plane][left_right], screen_recv_buf[top_bot][pos][plane][left_right] + 256, sizeof(u32));
+          memcpy(screen_recv_buf[top_bot][pos][plane][left_right] + sizeof(u32), screen_recv_buf[top_bot][pos][plane][!left_right] + sizeof(u32), 256);
         }
       }
 

@@ -69,7 +69,7 @@ int huffman_decode(uint8_t *dst, int dst_size, const uint8_t *src, int src_size)
     int fsym, pix;
     int ret;
     GetBitContext gb;
-    const uint8_t *src_end = src + src_size, *dst_end = dst + dst_size;
+    const uint8_t *src_end = src + src_size, *dst_end = dst + dst_size, *dst_begin = dst;
 
     if (src_size < 256)
     {
@@ -95,7 +95,7 @@ int huffman_decode(uint8_t *dst, int dst_size, const uint8_t *src, int src_size)
 
         if (get_bits_left(&gb) < 0)
         {
-            fprintf(stderr, "Slice decoding ran out of bits\n");
+            fprintf(stderr, "Slice decoding ran out of bits at %d\n", (int)(dst - dst_begin));
             goto fail;
         }
     }
