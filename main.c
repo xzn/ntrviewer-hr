@@ -779,10 +779,10 @@ void rpConfigSetDefault(void)
   me_search_param = 32;
   me_downscale = 1;
   me_interpolate = 0;
-  min_dp_frame_rate = 36;
-  max_frame_rate = 72;
+  min_dp_frame_rate = 30;
+  max_frame_rate = 0;
   me_select = 7;
-  target_mbit_rate = 16;
+  target_mbit_rate = 12;
   dynamic_priority = 1;
   multicore_encode = 1;
   low_latency = 1;
@@ -1001,7 +1001,11 @@ static void guiMain(struct nk_context *ctx)
     nk_slider_int(ctx, 0, &min_dp_frame_rate, 120, 1);
 
     nk_layout_row_dynamic(ctx, 30, 2);
-    snprintf(msg_buf, sizeof(msg_buf), "Max Frame Rate %d", max_frame_rate);
+    if (max_frame_rate) {
+      snprintf(msg_buf, sizeof(msg_buf), "Max Frame Rate %d", max_frame_rate);
+    } else {
+      snprintf(msg_buf, sizeof(msg_buf), "Max Frame Rate Off");
+    }
     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
     nk_slider_int(ctx, 0, &max_frame_rate, 120, 1);
 
