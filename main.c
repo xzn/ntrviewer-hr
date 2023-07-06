@@ -775,9 +775,9 @@ void rpConfigSetDefault(void)
   jpeg_quality = 90;
   zstd_comp_level = 4;
   me_method = 1;
-  me_block_size = 0;
+  me_block_size = 3;
   me_search_param = 32;
-  me_downscale = 1;
+  me_downscale = 0;
   me_interpolate = 0;
   min_dp_frame_rate = 30;
   max_frame_rate = 0;
