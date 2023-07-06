@@ -347,6 +347,7 @@ nk_sdl_handle_event(SDL_Event *evt)
     struct nk_context *ctx = &sdl.ctx;
 
     /* optional grabbing behavior */
+#if 0
     if (ctx->input.mouse.grab) {
         SDL_SetRelativeMouseMode(SDL_TRUE);
         ctx->input.mouse.grab = 0;
@@ -356,6 +357,7 @@ nk_sdl_handle_event(SDL_Event *evt)
         SDL_WarpMouseInWindow(sdl.win, x, y);
         ctx->input.mouse.ungrab = 0;
     }
+#endif
 
     switch(evt->type)
     {

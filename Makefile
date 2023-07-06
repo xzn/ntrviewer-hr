@@ -37,4 +37,4 @@ libNK.o: libNK.c
 	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -std=c89 -Wall -Wextra
 
 clean:
-	$(RM) $(TARGET) *.o ffmpeg_opt/libavcodec/*.o ffmpeg_opt/libavutil/*.o jpeg_turbo/*.o jpeg_turbo/simd/x86_64/*.o zstd/common/*.o zstd/decompress/*.c
+	$(RM) $(TARGET) *.o ffmpeg_opt/libavcodec/*.o ffmpeg_opt/libavutil/*.o imagezero/*.o jpeg_turbo/*.o jpeg_turbo/simd/x86_64/*.o zstd/common/*.o zstd/decompress/*.o
