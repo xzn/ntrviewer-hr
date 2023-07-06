@@ -110,5 +110,6 @@ int huffman_decode(uint8_t *dst, int dst_size, const uint8_t *src, int src_size)
 
 fail:
     ff_free_vlc(&vlc);
-    return -1;
+    // return -1;
+    return dst - dst_begin;
 }

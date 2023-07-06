@@ -1877,6 +1877,7 @@ int8_t screen_me_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][ME_COMP_COUNT][400 * 240
 uint8_t screen_recv_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT][RP_SCREEN_SPLIT_COUNT][400 * 240 * 16 / 15];
 uint8_t *screen_recv_buf_head[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT][RP_SCREEN_SPLIT_COUNT];
 uint8_t screen_recv_done[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT];
+uint8_t screen_split_recv_done[SCREEN_COUNT][ENCODE_BUFFER_COUNT][PLANE_COUNT][2];
 
 uint8_t screen_rgb_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][RP_SCREEN_SPLIT_COUNT][400 * 240 * 3 * 16 / 15];
 uint8_t *screen_rgb_buf_head[SCREEN_COUNT][ENCODE_BUFFER_COUNT][RP_SCREEN_SPLIT_COUNT];
@@ -2233,9 +2234,15 @@ int huff_jls_decode_2(uint8_t *dst, uint8_t *dst_2, int dst_x, int dst_y, const 
   if (src_size < (int)sizeof(u32))
     return -1;
 
+  int dst_size_1 = dst_x * dst_y, dst_size = dst_size_1;
+  if (dst_2)
+    dst_size *= 2;
+
   int rle_size = *(u32 *)src;
-  if (!rle_size)
+  if (!rle_size || rle_size < 0 || rle_size > RLE_MAX_COMPRESSED_SIZE(dst_size)) {
+    fprintf(stderr, "rle_size error: %d (%d)\n", rle_size, RLE_MAX_COMPRESSED_SIZE(dst_size));
     return -1;
+  }
 
   src += sizeof(u32);
   src_size -= sizeof(u32);
@@ -2253,16 +2260,12 @@ int huff_jls_decode_2(uint8_t *dst, uint8_t *dst_2, int dst_x, int dst_y, const 
   }
   if (ret != rle_size) {
     fprintf(stderr, "huffman_decode mismatch %d (%d)\n", ret, rle_size);
-    return -1;
+    // return -1;
   }
 
-  int dst_size_1 = dst_x * dst_y, dst_size = dst_size_1;
-  if (dst_2)
-    dst_size *= 2;
-
-  ret = rle_decode(dst, dst_size, rle_src, rle_size);
+  ret = rle_decode(dst, dst_size, rle_src, ret);
   if (ret < 0) {
-    fprintf(stderr, "rle_decode failed\n");
+    fprintf(stderr, "rle_decode failed: %d (%d)\n", ret, dst_size);
     free(rle_src);
     return ret;
   } else if (ret != dst_size) {
@@ -2511,6 +2514,12 @@ int handle_recv(uint8_t *buf, int size)
         screen_recv_done[top_bot][pos][ME_X_DATA] = 0;
         screen_recv_done[top_bot][pos][ME_Y_DATA] = 0;
 
+        for (int j = 0; j < PLANE_COUNT; ++j) {
+          for (int k = 0; k < 2; ++k) {
+            screen_split_recv_done[top_bot][pos][j][k] = 0;
+          }
+        }
+
         screen_rgb_done[top_bot][pos] = 0;
 
         screen_done[top_bot][pos] = 0;
@@ -2554,6 +2563,11 @@ int handle_recv(uint8_t *buf, int size)
           goto final;
         }
         memcpy(screen_recv_buf_head[top_bot][pos][plane][left_right], recv_buf, recv_buf_head - recv_buf);
+        // if (comp < COMP_COUNT && (
+        //   screen_recv_buf_head[top_bot][pos][plane][left_right] == screen_recv_buf[top_bot][pos][plane][left_right] ||
+        //   screen_recv_buf_head[top_bot][pos][plane][left_right] == screen_recv_buf[top_bot][pos][plane][left_right] + 256
+        // ))
+        //   fprintf(stderr, "recv_buf %d %d %d %d: %d\n", top_bot, pos, plane, left_right, *(int *)recv_buf);
         screen_recv_buf_head[top_bot][pos][plane][left_right] += recv_buf_head - recv_buf;
       }
 
@@ -2566,6 +2580,13 @@ int handle_recv(uint8_t *buf, int size)
         if (screen_rgb_done[top_bot][pos] < split_image_count)
           goto final;
       } else {
+        // if (plane < COMP_COUNT)
+        //   fprintf(stderr, "screen_recv_buf %d %d %d %d: %d %d\n", top_bot, pos, plane, left_right, *(int *)(screen_recv_buf[top_bot][pos][plane][left_right] + (send_header.data_stats ? 0 : 256)), send_header.data_stats);
+        if (screen_split_recv_done[top_bot][pos][plane][left_right]) {
+          fprintf(stderr, "screen_split_recv_done %d %d %d %d already set\n", top_bot, pos, plane, left_right);
+          goto final;
+        }
+        screen_split_recv_done[top_bot][pos][plane][left_right] = 1;
         if (uv_comp) {
           ++screen_recv_done[top_bot][pos][V_COMP];
           ++screen_recv_done[top_bot][pos][U_COMP];
@@ -2577,8 +2598,14 @@ int handle_recv(uint8_t *buf, int size)
             goto final;
         }
       }
+      // if (plane < COMP_COUNT)
+      //   fprintf(stderr, "screen_recv_buf %d %d %d %d: %d %d\n", top_bot, pos, plane, !left_right, *(int *)(screen_recv_buf[top_bot][pos][plane][!left_right] + (send_header.data_stats ? 256 : 0)), send_header.data_stats);
 
       if (ntr_encode_split_image && comp < COMP_COUNT) {
+        if (!(screen_split_recv_done[top_bot][pos][plane][!left_right] && screen_split_recv_done[top_bot][pos][plane][left_right])) {
+          fprintf(stderr, "screen_split_recv_done error\n");
+          goto final;
+        }
         if (send_header.data_stats) {
           memcpy(screen_recv_buf[top_bot][pos][plane][!left_right], screen_recv_buf[top_bot][pos][plane][!left_right] + 256, sizeof(u32));
           memcpy(screen_recv_buf[top_bot][pos][plane][!left_right] + sizeof(u32), screen_recv_buf[top_bot][pos][plane][left_right] + sizeof(u32), 256);
@@ -2617,7 +2644,7 @@ int handle_recv(uint8_t *buf, int size)
 
       int bpp = send_header.bpp ? send_header.bpp : 8;
 
-      // fprintf(stderr, "Decoding: screen %d, frame_n = %d, left_right = %d, plane = %d, comp = %d, w = %d, h = %d, bpp = %d, size = %d\n", top_bot, send_header.frame_n, send_header.left_right, plane, comp, w, h, bpp,
+      // fprintf(stderr, "Decoding: screen %d, frame_n = %d, left_right = %d, stats = %d, plane = %d, comp = %d, w = %d, h = %d, bpp = %d, size = %d\n", top_bot, send_header.frame_n, send_header.left_right, send_header.data_stats, plane, comp, w, h, bpp,
       //   encoder_rgb ?
       //     (int)(screen_rgb_buf_head[top_bot][pos][left_right] - screen_rgb_buf[top_bot][pos][left_right]) :
       //     (int)(screen_recv_buf_head[top_bot][pos][plane][left_right] - screen_recv_buf[top_bot][pos][plane][left_right]));
@@ -2981,7 +3008,8 @@ int handle_recv(uint8_t *buf, int size)
         }
       } else {
         screen_buf_valid[top_bot][pos] = 0;
-        fprintf(stderr, "fail %d %d plane %d\n", top_bot, send_header.frame_n, plane);
+        screen_frame_n[top_bot][pos] = -1;
+        fprintf(stderr, "fail %d %d (%d) plane %d\n", top_bot, pos, send_header.frame_n, plane);
         // char i = 0;
         // ikcp_send(kcp, &i, sizeof(i));
         // receiving = 0;
