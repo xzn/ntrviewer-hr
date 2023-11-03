@@ -2037,9 +2037,9 @@ void select_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const in
         } else {
           ref++;
           if (unsigned_signed == 0) {
-            *dst++ = *cur++ << (8 - bpp);
+            *dst++ = *cur++;
           } else {
-            *dst++ = (s8)*cur++ << (8 - bpp);
+            *dst++ = (s8)*cur++;
           }
         }
       } else {
@@ -2946,12 +2946,12 @@ int handle_recv(uint8_t *buf, int size)
                       }
                     }
                     u8 screen_bpp_cur[COMP_COUNT];
-                    if (!RP_ENCODE_STATIC_LQ) {
+                    // if (!RP_ENCODE_STATIC_LQ) {
                       for (int c = 0; c < COMP_COUNT; ++c) {
                         screen_bpp_cur[c] = screen_bpp[top_bot][i][c];
                         screen_bpp[top_bot][i][c] = screen_bpp[top_bot][i_prev][c];
                       }
-                    }
+                    // }
                     w_orig = w_orig_full;
                     me_w = me_w_full;
                     if (ntr_downscale_uv) {
