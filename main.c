@@ -160,18 +160,28 @@ enum {
   RP_SCREEN_SPLIT_FULL = (u8)-1,
 };
 
+enum {
+  SCREEN_TOP,
+  SCREEN_BOT,
+  SCREEN_COUNT,
+};
+
 #define FRAME_STAT_EVERY_X_FRAMES 24
 char window_title_with_fps[500];
 struct {
   int display;
   int counter;
   uint64_t last_tick;
-} frame_rate_tracker[2] = {};
+} frame_rate_tracker[SCREEN_COUNT] = {};
 struct {
   int index;
   int counter[RP_SCREEN_SPLIT_COUNT][FRAME_STAT_EVERY_X_FRAMES];
   int total[RP_SCREEN_SPLIT_COUNT];
-} frame_size_tracker[2] = {};
+} frame_size_tracker[SCREEN_COUNT] = {};
+struct {
+  int index;
+  uint32_t counter[RP_SCREEN_SPLIT_COUNT][FRAME_STAT_EVERY_X_FRAMES];
+} delay_between_packet_tracker[SCREEN_COUNT] = {};
 
 /* Platform */
 SDL_Window *win;
@@ -1288,12 +1298,6 @@ int gl_updated = 0;
 pthread_cond_t gl_updated_cond = PTHREAD_COND_INITIALIZER;
 pthread_mutex_t gl_updated_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-enum {
-  SCREEN_TOP,
-  SCREEN_BOT,
-  SCREEN_COUNT,
-};
-
 FrameBufferContext buffer_ctx[SCREEN_COUNT];
 
 int frame_buffer_context_next_free_index(int index, int skip_index)
@@ -1392,7 +1396,8 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int t
     glGenerateMipmap(GL_TEXTURE_2D);
 
     int frame_stat_updated = 0;
-    for (int i = 0; i < 2; ++i) {
+    static uint32_t max_delay_between_packet[SCREEN_COUNT] = {};
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
       int frame_counter_current;
       if ((frame_counter_current = __atomic_load_n(&frame_rate_tracker[i].counter, __ATOMIC_RELAXED)) >=
         FRAME_STAT_EVERY_X_FRAMES
@@ -1418,12 +1423,23 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int t
 
       if (frame_size_tracker[i].index == 0)
         frame_stat_updated = 1;
+      
+      if (delay_between_packet_tracker[i].index == 0) {
+        frame_stat_updated = 1;
+
+        max_delay_between_packet[i] = 0;
+        for (int j = 0; j < FRAME_STAT_EVERY_X_FRAMES; ++j)
+          for (int k = 0; k < RP_SCREEN_SPLIT_COUNT; ++k)
+            if (max_delay_between_packet[i] < delay_between_packet_tracker[i].counter[k][j])
+              max_delay_between_packet[i] = delay_between_packet_tracker[i].counter[k][j];
+      }
     }
     if (frame_stat_updated) {
-      snprintf(window_title_with_fps, sizeof(window_title_with_fps), "NTR Viewer HR (FPS %03d %03d) (Size %05d %05d | %05d %05d)",
-        frame_rate_tracker[0].display, frame_rate_tracker[1].display,
-        frame_size_tracker[0].total[0] / FRAME_STAT_EVERY_X_FRAMES, frame_size_tracker[0].total[1] / FRAME_STAT_EVERY_X_FRAMES,
-        frame_size_tracker[1].total[0] / FRAME_STAT_EVERY_X_FRAMES, frame_size_tracker[1].total[1] / FRAME_STAT_EVERY_X_FRAMES);
+      snprintf(window_title_with_fps, sizeof(window_title_with_fps), "NTR Viewer HR (FPS %03d %03d) (Size %05d %05d | %05d %05d) (Packet time %04d %04d)",
+        frame_rate_tracker[SCREEN_TOP].display, frame_rate_tracker[SCREEN_BOT].display,
+        frame_size_tracker[SCREEN_TOP].total[RP_SCREEN_SPLIT_LEFT] / FRAME_STAT_EVERY_X_FRAMES, frame_size_tracker[SCREEN_TOP].total[RP_SCREEN_SPLIT_RIGHT] / FRAME_STAT_EVERY_X_FRAMES,
+        frame_size_tracker[SCREEN_BOT].total[RP_SCREEN_SPLIT_LEFT] / FRAME_STAT_EVERY_X_FRAMES, frame_size_tracker[SCREEN_BOT].total[RP_SCREEN_SPLIT_RIGHT] / FRAME_STAT_EVERY_X_FRAMES,
+        max_delay_between_packet[SCREEN_TOP], max_delay_between_packet[SCREEN_BOT]);
       SDL_SetWindowTitle(win, window_title_with_fps);
     }
   }
@@ -1492,7 +1508,7 @@ MainLoop(void *loopArg)
   }
 }
 
-void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int top_bot, int frame_size_left, int frame_size_right)
+void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int top_bot, int frame_size_left, int frame_size_right, int delay_between_packet_left, int delay_between_packet_right)
 {
   pthread_mutex_lock(&ctx->gl_tex_mutex);
   int next_index = frame_buffer_context_next_free_index(ctx->next_index, ctx->index);
@@ -1503,15 +1519,17 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int top_b
   pthread_mutex_unlock(&ctx->gl_tex_mutex);
   __atomic_add_fetch(&frame_rate_tracker[top_bot].counter, 1, __ATOMIC_RELAXED);
 
-  frame_size_tracker[top_bot].total[0] += frame_size_left;
-  frame_size_tracker[top_bot].total[0] -= frame_size_tracker[top_bot].counter[0][frame_size_tracker[top_bot].index];
-  frame_size_tracker[top_bot].counter[0][frame_size_tracker[top_bot].index] = frame_size_left;
-
-  frame_size_tracker[top_bot].total[1] += frame_size_right;
-  frame_size_tracker[top_bot].total[1] -= frame_size_tracker[top_bot].counter[1][frame_size_tracker[top_bot].index];
-  frame_size_tracker[top_bot].counter[1][frame_size_tracker[top_bot].index] = frame_size_right;
-
+  frame_size_tracker[top_bot].total[RP_SCREEN_SPLIT_LEFT] += frame_size_left;
+  frame_size_tracker[top_bot].total[RP_SCREEN_SPLIT_LEFT] -= frame_size_tracker[top_bot].counter[RP_SCREEN_SPLIT_LEFT][frame_size_tracker[top_bot].index];
+  frame_size_tracker[top_bot].counter[RP_SCREEN_SPLIT_LEFT][frame_size_tracker[top_bot].index] = frame_size_left;
+  frame_size_tracker[top_bot].total[RP_SCREEN_SPLIT_RIGHT] += frame_size_right;
+  frame_size_tracker[top_bot].total[RP_SCREEN_SPLIT_RIGHT] -= frame_size_tracker[top_bot].counter[RP_SCREEN_SPLIT_RIGHT][frame_size_tracker[top_bot].index];
+  frame_size_tracker[top_bot].counter[RP_SCREEN_SPLIT_RIGHT][frame_size_tracker[top_bot].index] = frame_size_right;
   frame_size_tracker[top_bot].index = (frame_size_tracker[top_bot].index + 1) % FRAME_STAT_EVERY_X_FRAMES;
+
+  delay_between_packet_tracker[top_bot].counter[RP_SCREEN_SPLIT_LEFT][delay_between_packet_tracker[top_bot].index] = delay_between_packet_left;
+  delay_between_packet_tracker[top_bot].counter[RP_SCREEN_SPLIT_RIGHT][delay_between_packet_tracker[top_bot].index] = delay_between_packet_right;
+  delay_between_packet_tracker[top_bot].index = (delay_between_packet_tracker[top_bot].index + 1) % FRAME_STAT_EVERY_X_FRAMES;
 
   pthread_mutex_lock(&gl_updated_mutex);
   gl_updated = 1;
@@ -1905,6 +1923,8 @@ char *state_string[COMP_COUNT] = {
 
 uint8_t screen_done[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
 uint32_t screen_data_size[SCREEN_COUNT][ENCODE_BUFFER_COUNT][RP_SCREEN_SPLIT_COUNT];
+uint32_t screen_data_delay_between_packet[SCREEN_COUNT][ENCODE_BUFFER_COUNT][RP_SCREEN_SPLIT_COUNT];
+uint32_t screen_data_last_packet_time[SCREEN_COUNT][ENCODE_BUFFER_COUNT][RP_SCREEN_SPLIT_COUNT];
 int8_t screen_buf_valid[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
 uint8_t screen_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT][400 * 240];
 uint8_t screen_bpp[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT];
@@ -2558,20 +2578,33 @@ int handle_recv(uint8_t *buf, int size)
         screen_rgb_done[top_bot][pos] = 0;
 
         screen_done[top_bot][pos] = 0;
-        for (int k = 0; k < RP_SCREEN_SPLIT_COUNT; ++k)
+        for (int k = 0; k < RP_SCREEN_SPLIT_COUNT; ++k) {
           screen_data_size[top_bot][pos][k] = 0;
+          screen_data_delay_between_packet[top_bot][pos][k] = 0;
+          screen_data_last_packet_time[top_bot][pos][k] = iclock();
+        }
         screen_buf_valid[top_bot][pos] = -1;
+      }
+
+      {
+        uint32_t screen_data_packet_time = iclock();
+        uint32_t screen_data_delay_from_last_packet = screen_data_packet_time - screen_data_last_packet_time[top_bot][pos][send_header.left_right];
+        if (screen_data_delay_from_last_packet > screen_data_delay_between_packet[top_bot][pos][send_header.left_right]) {
+          screen_data_delay_between_packet[top_bot][pos][send_header.left_right] = screen_data_delay_from_last_packet;
+        }
+        screen_data_last_packet_time[top_bot][pos][send_header.left_right] = screen_data_packet_time;
       }
 
       if (ntr_encode_split_image && comp < COMP_COUNT) {
         // screen_data_size[top_bot][pos][send_header.left_right] += send_header.data_size;
         if (send_header.data_stats) {
-          screen_data_size[top_bot][pos][0] += send_header.data_size - 256;
+          screen_data_size[top_bot][pos][RP_SCREEN_SPLIT_LEFT] += send_header.data_size - 256;
         } else {
+          screen_data_size[top_bot][pos][RP_SCREEN_SPLIT_RIGHT] += send_header.data_size;
+
           if (screen_recv_buf_head[top_bot][pos][plane][left_right] == screen_recv_buf[top_bot][pos][plane][left_right]) {
             screen_recv_buf_head[top_bot][pos][plane][left_right] += 256;
           }
-          screen_data_size[top_bot][pos][1] += send_header.data_size;
         }
       }
 
@@ -2855,7 +2888,9 @@ int handle_recv(uint8_t *buf, int size)
               }
               screen_done[top_bot][pos] = 1;
               screen_frame_n[top_bot][pos] += RP_IMAGE_FRAME_N_RANGE;
-              handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot], top_bot, screen_data_size[top_bot][pos][0], screen_data_size[top_bot][pos][1]);
+              handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot], top_bot,
+                screen_data_size[top_bot][pos][RP_SCREEN_SPLIT_LEFT], screen_data_size[top_bot][pos][RP_SCREEN_SPLIT_RIGHT],
+                screen_data_delay_between_packet[top_bot][pos][RP_SCREEN_SPLIT_LEFT], screen_data_delay_between_packet[top_bot][pos][RP_SCREEN_SPLIT_RIGHT]);
               // fprintf(stderr, "Displaying key frame: screen %d, frame_n = %d\n", top_bot, frame_n[top_bot]);
               w_orig = w_orig_split;
             }
@@ -3032,7 +3067,9 @@ int handle_recv(uint8_t *buf, int size)
                     else if (debug_view_plane == 8)
                       render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][V_COMP], ntr_downscale_uv ? w_orig / 2 : w_orig, ntr_downscale_uv ? h_orig / 2 : h_orig, screen_bpp_cur[V_COMP]);
                     screen_done[top_bot][i] = 1;
-                    handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot], top_bot, screen_data_size[top_bot][pos][0], screen_data_size[top_bot][pos][1]);
+                    handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot], top_bot,
+                      screen_data_size[top_bot][pos][RP_SCREEN_SPLIT_LEFT], screen_data_size[top_bot][pos][RP_SCREEN_SPLIT_RIGHT],
+                      screen_data_delay_between_packet[top_bot][pos][RP_SCREEN_SPLIT_LEFT], screen_data_delay_between_packet[top_bot][pos][RP_SCREEN_SPLIT_RIGHT]);
                     // fprintf(stderr, "Displaying p_frame: screen %d, frame_n = %d\n", top_bot, frame_n_next);
                     break;
                   }
@@ -3175,6 +3212,10 @@ void *udp_recv_thread_func(void *)
     recv_state = RECV_STATE_HEADER;
     leftover_size = 0;
     receiving = 1;
+
+    memset(frame_rate_tracker, 0, sizeof(frame_rate_tracker));
+    memset(frame_size_tracker, 0, sizeof(frame_size_tracker));
+    memset(delay_between_packet_tracker, 0, sizeof(delay_between_packet_tracker));
 
     s = 0;
     int ret;
