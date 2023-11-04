@@ -153,11 +153,25 @@ typedef int64_t		s64;
 // #define MAX(a, b) ((a) < (b) ? (b) : (a))
 #define LEN(a) (sizeof(a) / sizeof(a)[0])
 
-#define FRAME_STAT_EVERY_X_FRAMES 10
-int frame_rate_displayed;
-char window_title_with_fps[50];
-int frame_counter = 0;
-uint64_t frame_count_last_tick = 0;
+enum {
+  RP_SCREEN_SPLIT_LEFT,
+  RP_SCREEN_SPLIT_RIGHT,
+  RP_SCREEN_SPLIT_COUNT,
+  RP_SCREEN_SPLIT_FULL = (u8)-1,
+};
+
+#define FRAME_STAT_EVERY_X_FRAMES 24
+char window_title_with_fps[500];
+struct {
+  int display;
+  int counter;
+  uint64_t last_tick;
+} frame_rate_tracker[2] = {};
+struct {
+  int index;
+  int counter[RP_SCREEN_SPLIT_COUNT][FRAME_STAT_EVERY_X_FRAMES];
+  int total[RP_SCREEN_SPLIT_COUNT];
+} frame_size_tracker[2] = {};
 
 /* Platform */
 SDL_Window *win;
@@ -779,15 +793,15 @@ void rpConfigSetDefault(void)
   me_search_param = 32;
   me_downscale = 0;
   me_interpolate = 0;
-  min_dp_frame_rate = 30;
+  min_dp_frame_rate = 0;
   max_frame_rate = 0;
   me_select = 7;
   target_mbit_rate = 12;
   dynamic_priority = 1;
   multicore_encode = 1;
   low_latency = 1;
-  top_priority = 1;
-  bot_priority = 2;
+  top_priority = 9;
+  bot_priority = 10;
   multicore_network = 0;
   multicore_screen = 1;
   kcp_minrto = 24;
@@ -1377,27 +1391,40 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int t
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glGenerateMipmap(GL_TEXTURE_2D);
 
-    int frame_counter_current;
-    if ((frame_counter_current = __atomic_load_n(&frame_counter, __ATOMIC_RELAXED)) >=
-      FRAME_STAT_EVERY_X_FRAMES
-    )
-    {
-      uint64_t next_tick = iclock64();
-      if (frame_count_last_tick != 0)
+    int frame_stat_updated = 0;
+    for (int i = 0; i < 2; ++i) {
+      int frame_counter_current;
+      if ((frame_counter_current = __atomic_load_n(&frame_rate_tracker[i].counter, __ATOMIC_RELAXED)) >=
+        FRAME_STAT_EVERY_X_FRAMES
+      )
       {
-        // fprintf(stderr, "%d ms for %d rendered frames\n", next_tick - frame_count_last_tick, FRAME_STAT_EVERY_X_FRAMES);
-        frame_rate_displayed = frame_counter_current * 1000 / (next_tick - frame_count_last_tick);
-        snprintf(window_title_with_fps, sizeof(window_title_with_fps), "NTR Viewer HR (%d FPS)", frame_rate_displayed);
-        SDL_SetWindowTitle(win, window_title_with_fps);
-      }
-      frame_count_last_tick = next_tick;
+        uint64_t next_tick = iclock64();
+        if (frame_rate_tracker[i].last_tick != 0)
+        {
+          // fprintf(stderr, "%d ms for %d rendered frames\n", next_tick - frame_count_last_tick, FRAME_STAT_EVERY_X_FRAMES);
+          frame_rate_tracker[i].display = frame_counter_current * 1000 / (next_tick - frame_rate_tracker[i].last_tick);
+        }
+        frame_rate_tracker[i].last_tick = next_tick;
 
-      int frame_counter_next = 0, frame_counter_prev = frame_counter_current;
-      while (!__atomic_compare_exchange_n(&frame_counter,
-        &frame_counter_current, frame_counter_next, 1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
-          frame_counter_current = __atomic_load_n(&frame_counter, __ATOMIC_RELAXED);
-          frame_counter_next = frame_counter_current - frame_counter_prev;
+        int frame_counter_next = 0, frame_counter_prev = frame_counter_current;
+        while (!__atomic_compare_exchange_n(&frame_rate_tracker[i].counter,
+          &frame_counter_current, frame_counter_next, 1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+            frame_counter_current = __atomic_load_n(&frame_rate_tracker[i].counter, __ATOMIC_RELAXED);
+            frame_counter_next = frame_counter_current - frame_counter_prev;
+        }
+
+        frame_stat_updated = 1;
       }
+
+      if (frame_size_tracker[i].index == 0)
+        frame_stat_updated = 1;
+    }
+    if (frame_stat_updated) {
+      snprintf(window_title_with_fps, sizeof(window_title_with_fps), "NTR Viewer HR (FPS %03d %03d) (Size %05d %05d | %05d %05d)",
+        frame_rate_tracker[0].display, frame_rate_tracker[1].display,
+        frame_size_tracker[0].total[0] / FRAME_STAT_EVERY_X_FRAMES, frame_size_tracker[0].total[1] / FRAME_STAT_EVERY_X_FRAMES,
+        frame_size_tracker[1].total[0] / FRAME_STAT_EVERY_X_FRAMES, frame_size_tracker[1].total[1] / FRAME_STAT_EVERY_X_FRAMES);
+      SDL_SetWindowTitle(win, window_title_with_fps);
     }
   }
   else
@@ -1465,7 +1492,7 @@ MainLoop(void *loopArg)
   }
 }
 
-void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb)
+void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int top_bot, int frame_size_left, int frame_size_right)
 {
   pthread_mutex_lock(&ctx->gl_tex_mutex);
   int next_index = frame_buffer_context_next_free_index(ctx->next_index, ctx->index);
@@ -1474,7 +1501,17 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb)
   ctx->updated = FBS_UPDATED;
   ctx->next_index = next_index;
   pthread_mutex_unlock(&ctx->gl_tex_mutex);
-  __atomic_add_fetch(&frame_counter, 1, __ATOMIC_RELAXED);
+  __atomic_add_fetch(&frame_rate_tracker[top_bot].counter, 1, __ATOMIC_RELAXED);
+
+  frame_size_tracker[top_bot].total[0] += frame_size_left;
+  frame_size_tracker[top_bot].total[0] -= frame_size_tracker[top_bot].counter[0][frame_size_tracker[top_bot].index];
+  frame_size_tracker[top_bot].counter[0][frame_size_tracker[top_bot].index] = frame_size_left;
+
+  frame_size_tracker[top_bot].total[1] += frame_size_right;
+  frame_size_tracker[top_bot].total[1] -= frame_size_tracker[top_bot].counter[1][frame_size_tracker[top_bot].index];
+  frame_size_tracker[top_bot].counter[1][frame_size_tracker[top_bot].index] = frame_size_right;
+
+  frame_size_tracker[top_bot].index = (frame_size_tracker[top_bot].index + 1) % FRAME_STAT_EVERY_X_FRAMES;
 
   pthread_mutex_lock(&gl_updated_mutex);
   gl_updated = 1;
@@ -1622,6 +1659,8 @@ void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uin
   {
     y_in = y_in / (double)((1 << y_bpp) - 1) * (double)((1 << 8) - 1);
     y_in /= 255;
+    // y_in = (y_in - 1) / (double)((1 << y_bpp) - 2) * (double)((1 << 8) - 2);
+    // y_in /= 254;
 
     // u_in = RP_MAX(u_in, 1);
     // u_in -= 1;
@@ -1640,6 +1679,8 @@ void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uin
     // y_in -= 16 >> (8 - y_bpp);
     y_in = y_in / (double)((1 << y_bpp) - 1 - (36 >> (8 - y_bpp))) * (double)((1 << 8) - 1 - 36);
     y_in /= 219;
+    // y_in = (y_in - 1) / (double)((1 << y_bpp) - 1 - (36 >> (8 - y_bpp)) - 1) * (double)((1 << 8) - 1 - 36 - 1);
+    // y_in /= 219 - 1;
 
     // u_in = RP_MAX(u_in, 1);
     // u_in -= 16;
@@ -1855,13 +1896,6 @@ enum {
   PLANE_COUNT,
 };
 
-enum {
-  RP_SCREEN_SPLIT_LEFT,
-  RP_SCREEN_SPLIT_RIGHT,
-  RP_SCREEN_SPLIT_COUNT,
-  RP_SCREEN_SPLIT_FULL = (u8)-1,
-};
-
 int16_t screen_frame_n[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
 uint8_t screen_pos[SCREEN_COUNT];
 
@@ -1870,6 +1904,7 @@ char *state_string[COMP_COUNT] = {
 };
 
 uint8_t screen_done[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
+uint32_t screen_data_size[SCREEN_COUNT][ENCODE_BUFFER_COUNT][RP_SCREEN_SPLIT_COUNT];
 int8_t screen_buf_valid[SCREEN_COUNT][ENCODE_BUFFER_COUNT];
 uint8_t screen_buf[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT][400 * 240];
 uint8_t screen_bpp[SCREEN_COUNT][ENCODE_BUFFER_COUNT][COMP_COUNT];
@@ -2523,12 +2558,20 @@ int handle_recv(uint8_t *buf, int size)
         screen_rgb_done[top_bot][pos] = 0;
 
         screen_done[top_bot][pos] = 0;
+        for (int k = 0; k < RP_SCREEN_SPLIT_COUNT; ++k)
+          screen_data_size[top_bot][pos][k] = 0;
         screen_buf_valid[top_bot][pos] = -1;
       }
 
-      if (ntr_encode_split_image && comp < COMP_COUNT && !send_header.data_stats) {
-        if (screen_recv_buf_head[top_bot][pos][plane][left_right] == screen_recv_buf[top_bot][pos][plane][left_right]) {
-          screen_recv_buf_head[top_bot][pos][plane][left_right] += 256;
+      if (ntr_encode_split_image && comp < COMP_COUNT) {
+        // screen_data_size[top_bot][pos][send_header.left_right] += send_header.data_size;
+        if (send_header.data_stats) {
+          screen_data_size[top_bot][pos][0] += send_header.data_size - 256;
+        } else {
+          if (screen_recv_buf_head[top_bot][pos][plane][left_right] == screen_recv_buf[top_bot][pos][plane][left_right]) {
+            screen_recv_buf_head[top_bot][pos][plane][left_right] += 256;
+          }
+          screen_data_size[top_bot][pos][1] += send_header.data_size;
         }
       }
 
@@ -2812,7 +2855,7 @@ int handle_recv(uint8_t *buf, int size)
               }
               screen_done[top_bot][pos] = 1;
               screen_frame_n[top_bot][pos] += RP_IMAGE_FRAME_N_RANGE;
-              handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot]);
+              handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot], top_bot, screen_data_size[top_bot][pos][0], screen_data_size[top_bot][pos][1]);
               // fprintf(stderr, "Displaying key frame: screen %d, frame_n = %d\n", top_bot, frame_n[top_bot]);
               w_orig = w_orig_split;
             }
@@ -2989,7 +3032,7 @@ int handle_recv(uint8_t *buf, int size)
                     else if (debug_view_plane == 8)
                       render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][V_COMP], ntr_downscale_uv ? w_orig / 2 : w_orig, ntr_downscale_uv ? h_orig / 2 : h_orig, screen_bpp_cur[V_COMP]);
                     screen_done[top_bot][i] = 1;
-                    handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot]);
+                    handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot], top_bot, screen_data_size[top_bot][pos][0], screen_data_size[top_bot][pos][1]);
                     // fprintf(stderr, "Displaying p_frame: screen %d, frame_n = %d\n", top_bot, frame_n_next);
                     break;
                   }
