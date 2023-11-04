@@ -227,6 +227,8 @@ const char *connection_msg[CS_MAX] = {
 #define RP_ZSTD_COMP_LEVEL_BITS (3)
 #define RP_ZSTD_COMP_LEVEL_HALF_RANGE (1 << (RP_ZSTD_COMP_LEVEL_BITS - 1))
 
+#define RP_HUFF_SHARE_STATS (0)
+
 static int yuv_option;
 static int color_transform_hp;
 static int encoder_which;
@@ -2595,17 +2597,20 @@ int handle_recv(uint8_t *buf, int size)
         screen_data_last_packet_time[top_bot][pos][send_header.left_right] = screen_data_packet_time;
       }
 
-      if (ntr_encode_split_image && comp < COMP_COUNT) {
-        // screen_data_size[top_bot][pos][send_header.left_right] += send_header.data_size;
-        if (send_header.data_stats) {
-          screen_data_size[top_bot][pos][RP_SCREEN_SPLIT_LEFT] += send_header.data_size - 256;
-        } else {
-          screen_data_size[top_bot][pos][RP_SCREEN_SPLIT_RIGHT] += send_header.data_size;
+      if (RP_HUFF_SHARE_STATS) {
+        if (ntr_encode_split_image && comp < COMP_COUNT) {
+          if (send_header.data_stats) {
+            screen_data_size[top_bot][pos][RP_SCREEN_SPLIT_LEFT] += send_header.data_size - 256;
+          } else {
+            screen_data_size[top_bot][pos][RP_SCREEN_SPLIT_RIGHT] += send_header.data_size;
 
-          if (screen_recv_buf_head[top_bot][pos][plane][left_right] == screen_recv_buf[top_bot][pos][plane][left_right]) {
-            screen_recv_buf_head[top_bot][pos][plane][left_right] += 256;
+            if (screen_recv_buf_head[top_bot][pos][plane][left_right] == screen_recv_buf[top_bot][pos][plane][left_right]) {
+              screen_recv_buf_head[top_bot][pos][plane][left_right] += 256;
+            }
           }
         }
+      } else {
+        screen_data_size[top_bot][pos][send_header.left_right] += send_header.data_size;
       }
 
       if (encoder_rgb) {
@@ -2682,12 +2687,14 @@ int handle_recv(uint8_t *buf, int size)
           fprintf(stderr, "screen_split_recv_done error\n");
           goto final;
         }
-        if (send_header.data_stats) {
-          memcpy(screen_recv_buf[top_bot][pos][plane][!left_right], screen_recv_buf[top_bot][pos][plane][!left_right] + 256, sizeof(u32));
-          memcpy(screen_recv_buf[top_bot][pos][plane][!left_right] + sizeof(u32), screen_recv_buf[top_bot][pos][plane][left_right] + sizeof(u32), 256);
-        } else {
-          memcpy(screen_recv_buf[top_bot][pos][plane][left_right], screen_recv_buf[top_bot][pos][plane][left_right] + 256, sizeof(u32));
-          memcpy(screen_recv_buf[top_bot][pos][plane][left_right] + sizeof(u32), screen_recv_buf[top_bot][pos][plane][!left_right] + sizeof(u32), 256);
+        if (RP_HUFF_SHARE_STATS) {
+          if (send_header.data_stats) {
+            memcpy(screen_recv_buf[top_bot][pos][plane][!left_right], screen_recv_buf[top_bot][pos][plane][!left_right] + 256, sizeof(u32));
+            memcpy(screen_recv_buf[top_bot][pos][plane][!left_right] + sizeof(u32), screen_recv_buf[top_bot][pos][plane][left_right] + sizeof(u32), 256);
+          } else {
+            memcpy(screen_recv_buf[top_bot][pos][plane][left_right], screen_recv_buf[top_bot][pos][plane][left_right] + 256, sizeof(u32));
+            memcpy(screen_recv_buf[top_bot][pos][plane][left_right] + sizeof(u32), screen_recv_buf[top_bot][pos][plane][!left_right] + sizeof(u32), 256);
+          }
         }
       }
 
