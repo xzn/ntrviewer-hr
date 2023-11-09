@@ -232,7 +232,7 @@ const char *connection_msg[CS_MAX] = {
 static int yuv_option;
 static int color_transform_hp;
 static int encoder_which;
-static nk_bool downscale_uv;
+static int downscale_uv;
 static int encode_lq;
 static int jpeg_quality;
 static int zstd_comp_level;
@@ -276,9 +276,9 @@ union rp_conf_arg0_t {
 union rp_conf_arg1_t {
 	int arg1;
 	struct {
-		u32 yuv_option : 2;
-		u32 color_transform_hp : 2;
-		u32 downscale_uv : 1;
+		u32 yuv_option : 1;
+		// u32 color_transform_hp : 2;
+		u32 downscale_uv : 2;
 		u32 encoder_which : 3;
 		u32 me_block_size : 2;
 		u32 me_method : 3;
@@ -342,9 +342,9 @@ enum rp_send_header_type {
 
 struct rp_send_info_header {
     u32 type_conf : 1;
-    u32 downscale_uv : 1;
-    u32 yuv_option : 2;
-    u32 color_transform_hp : 2;
+    u32 downscale_uv : 2;
+    u32 yuv_option : 1;
+    // u32 color_transform_hp : 2;
     u32 encoder_which : 3;
     u32 encode_split_image: 1;
     u32 me_enabled : 2;
@@ -637,7 +637,7 @@ void *menu_tcp_thread_func(void *)
         };
         union rp_conf_arg1_t arg1 = {
           .yuv_option = yuv_option,
-          .color_transform_hp = color_transform_hp,
+          // .color_transform_hp = color_transform_hp,
           .downscale_uv = downscale_uv,
           .encoder_which = encoder_which,
           .me_block_size = me_block_size,
@@ -667,7 +667,7 @@ void *menu_tcp_thread_func(void *)
 
         if (0) {
           ntr_downscale_uv = downscale_uv;
-          ntr_yuv_option = yuv_option;
+          ntr_yuv_option = (yuv_option & 1) | 0x2;
           ntr_color_transform_hp = color_transform_hp;
           ntr_encoder_which = encoder_which;
           ntr_me_enabled = me_method > 1 ? 1 : me_method == 1 ? -1 : 0;
@@ -793,7 +793,7 @@ void *nwm_tcp_thread_func(void *)
 
 void rpConfigSetDefault(void)
 {
-  yuv_option = 2;
+  yuv_option = 0;
   color_transform_hp = 0;
   encoder_which = 4;
   downscale_uv = 1;
@@ -863,43 +863,43 @@ static void guiMain(struct nk_context *ctx)
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "YUV option", NK_TEXT_CENTERED);
     const char *yuv_options_text[] = {
-      "None (RGB)",
-      "Color Transform",
+      // "None (RGB)",
+      // "Color Transform",
       "Full Swing",
       "Studio Swing",
     };
     nk_combobox(ctx, yuv_options_text, sizeof(yuv_options_text) / sizeof(*yuv_options_text),
       &yuv_option, 30, nk_vec2(150, 9999)
     );
-    if (yuv_option != 1) {
-      color_transform_hp = 0;
-    }
-    if (yuv_option < 2) {
-      downscale_uv = 0;
-      if (yuv_option == 1) {
-        if (color_transform_hp == 0) {
-          color_transform_hp = 3;
-        }
-      }
-    }
+    // if (yuv_option != 1) {
+    //   color_transform_hp = 0;
+    // }
+    // if (yuv_option < 2) {
+    //   downscale_uv = 0;
+    //   if (yuv_option == 1) {
+    //     if (color_transform_hp == 0) {
+    //       color_transform_hp = 3;
+    //     }
+    //   }
+    // }
 
-    nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "Color Transform", NK_TEXT_CENTERED);
-    const char *color_transform_text[] = {
-      "None (RGB)",
-      "HP1",
-      "HP2",
-      "HP3",
-    };
-    nk_combobox(ctx, color_transform_text, sizeof(color_transform_text) / sizeof(*color_transform_text),
-      &color_transform_hp, 30, nk_vec2(150, 9999)
-    );
-    if (color_transform_hp > 0) {
-      yuv_option = 1;
-      downscale_uv = 0;
-    } else if (yuv_option == 1) {
-      yuv_option = 0;
-    }
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // nk_label(ctx, "Color Transform", NK_TEXT_CENTERED);
+    // const char *color_transform_text[] = {
+    //   "None (RGB)",
+    //   "HP1",
+    //   "HP2",
+    //   "HP3",
+    // };
+    // nk_combobox(ctx, color_transform_text, sizeof(color_transform_text) / sizeof(*color_transform_text),
+    //   &color_transform_hp, 30, nk_vec2(150, 9999)
+    // );
+    // if (color_transform_hp > 0) {
+    //   yuv_option = 1;
+    //   downscale_uv = 0;
+    // } else if (yuv_option == 1) {
+    //   yuv_option = 0;
+    // }
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Motion Estimation", NK_TEXT_CENTERED);
@@ -981,15 +981,20 @@ static void guiMain(struct nk_context *ctx)
     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
     nk_slider_int(ctx, 1, &jpeg_quality, 100, 1);
 
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // nk_label(ctx, "Downscale UV", NK_TEXT_CENTERED);
+    // nk_checkbox_label(ctx, "", &downscale_uv);
+    // if (downscale_uv) {
+    //   color_transform_hp = 0;
+    //   if (yuv_option < 2) {
+    //     yuv_option = 3;
+    //   }
+    // }
+
     nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "Downscale UV", NK_TEXT_CENTERED);
-    nk_checkbox_label(ctx, "", &downscale_uv);
-    if (downscale_uv) {
-      color_transform_hp = 0;
-      if (yuv_option < 2) {
-        yuv_option = 3;
-      }
-    }
+    snprintf(msg_buf, sizeof(msg_buf), "Downscale UV %d", downscale_uv);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 0, &downscale_uv, 3, 1);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Low Latency", NK_TEXT_CENTERED);
@@ -2473,8 +2478,8 @@ int handle_recv(uint8_t *buf, int size)
       struct rp_send_info_header send_info_header;
       memcpy(&send_info_header, &send_header, sizeof(struct rp_send_info_header));
       ntr_downscale_uv = send_info_header.downscale_uv;
-      ntr_yuv_option = send_info_header.yuv_option;
-      ntr_color_transform_hp = send_info_header.color_transform_hp;
+      ntr_yuv_option = (send_info_header.yuv_option & 1) | 0x2;
+      // ntr_color_transform_hp = send_info_header.color_transform_hp;
       ntr_encoder_which = send_info_header.encoder_which;
       ntr_encode_split_image = send_info_header.encode_split_image;
       ntr_me_enabled = send_info_header.me_enabled;
