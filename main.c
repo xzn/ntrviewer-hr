@@ -1441,7 +1441,7 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int t
       }
     }
     if (frame_stat_updated) {
-      snprintf(window_title_with_fps, sizeof(window_title_with_fps), "NTR Viewer HR (FPS %03d %03d) (Size %05d %05d | %05d %05d) (Packet time %04d %04d)",
+      snprintf(window_title_with_fps, sizeof(window_title_with_fps), "NTR Viewer HR (FPS %03d %03d) (Size %06d %06d | %06d %06d) (Packet time %04d %04d)",
         frame_rate_tracker[SCREEN_TOP].display, frame_rate_tracker[SCREEN_BOT].display,
         frame_size_tracker[SCREEN_TOP].total[RP_SCREEN_SPLIT_LEFT] / FRAME_STAT_EVERY_X_FRAMES, frame_size_tracker[SCREEN_TOP].total[RP_SCREEN_SPLIT_RIGHT] / FRAME_STAT_EVERY_X_FRAMES,
         frame_size_tracker[SCREEN_BOT].total[RP_SCREEN_SPLIT_LEFT] / FRAME_STAT_EVERY_X_FRAMES, frame_size_tracker[SCREEN_BOT].total[RP_SCREEN_SPLIT_RIGHT] / FRAME_STAT_EVERY_X_FRAMES,
