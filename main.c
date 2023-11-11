@@ -905,12 +905,12 @@ static void guiMain(struct nk_context *ctx)
     const char *motion_estimation_text[] = {
       "Disabled",
       "None (Diff Only)",
-      "Three Step",
-      "Two Dimensional Log",
-      "New Three Step",
-      "Four Step",
-      "Diamond",
-      "Hexagon-Based",
+      // "Three Step",
+      // "Two Dimensional Log",
+      // "New Three Step",
+      // "Four Step",
+      // "Diamond",
+      // "Hexagon-Based",
     };
     nk_combobox(ctx, motion_estimation_text, sizeof(motion_estimation_text) / sizeof(*motion_estimation_text),
       &me_method, 30, nk_vec2(250, 9999)
