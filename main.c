@@ -307,6 +307,8 @@ _Static_assert(sizeof(union rp_conf_arg0_t) == sizeof(int));
 _Static_assert(sizeof(union rp_conf_arg1_t) == sizeof(int));
 _Static_assert(sizeof(union rp_conf_arg2_t) == sizeof(int));
 
+static int uv_unsigned_signed;
+
 static int ntr_yuv_option;
 static int ntr_color_transform_hp;
 static int ntr_downscale_uv;
@@ -1676,8 +1678,19 @@ void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uin
   double y_in = y;
   // double u_in = u;
   // double v_in = v;
-  double u_in = (s8)u;
-  double v_in = (s8)v;
+
+  double u_in, v_in;
+
+  if (uv_unsigned_signed)
+  {
+    u_in = (s8)u;
+    v_in = (s8)v;
+  }
+  else
+  {
+    u_in = u; u_in -= 1 << (u_bpp - 1);
+    v_in = v; v_in -= 1 << (v_bpp - 1);
+  }
 
   if (ntr_yuv_option == 2)
   {
@@ -1839,10 +1852,25 @@ static inline int16_t accessImageUpsampleUnscaled(const uint8_t *ds_image, int x
   //   --ds_y0;
   // }
 
-  int16_t a = (int8_t)accessImage(ds_image, ds_x0, ds_y0, ds_w, ds_h);
-  int16_t b = (int8_t)accessImage(ds_image, ds_x1, ds_y0, ds_w, ds_h);
-  int16_t c = (int8_t)accessImage(ds_image, ds_x0, ds_y1, ds_w, ds_h);
-  int16_t d = (int8_t)accessImage(ds_image, ds_x1, ds_y1, ds_w, ds_h);
+  int16_t a;
+  int16_t b;
+  int16_t c;
+  int16_t d;
+
+  if (uv_unsigned_signed)
+  {
+    a = (int8_t)accessImage(ds_image, ds_x0, ds_y0, ds_w, ds_h);
+    b = (int8_t)accessImage(ds_image, ds_x1, ds_y0, ds_w, ds_h);
+    c = (int8_t)accessImage(ds_image, ds_x0, ds_y1, ds_w, ds_h);
+    d = (int8_t)accessImage(ds_image, ds_x1, ds_y1, ds_w, ds_h);
+  }
+  else
+  {
+    a = accessImage(ds_image, ds_x0, ds_y0, ds_w, ds_h);
+    b = accessImage(ds_image, ds_x1, ds_y0, ds_w, ds_h);
+    c = accessImage(ds_image, ds_x0, ds_y1, ds_w, ds_h);
+    d = accessImage(ds_image, ds_x1, ds_y1, ds_w, ds_h);
+  }
 
   if (xOrig == ds_x0 * 2)
   {
@@ -1902,10 +1930,25 @@ static inline int16_t accessImageUpsample4Unscaled(const uint8_t *ds_image, int 
   ++ds_x1;
   ++ds_y1;
 
-  int16_t a = (int8_t)accessImage(ds_image, ds_x0, ds_y0, ds_w, ds_h);
-  int16_t b = (int8_t)accessImage(ds_image, ds_x1, ds_y0, ds_w, ds_h);
-  int16_t c = (int8_t)accessImage(ds_image, ds_x0, ds_y1, ds_w, ds_h);
-  int16_t d = (int8_t)accessImage(ds_image, ds_x1, ds_y1, ds_w, ds_h);
+  int16_t a;
+  int16_t b;
+  int16_t c;
+  int16_t d;
+
+  if (uv_unsigned_signed)
+  {
+    a = (int8_t)accessImage(ds_image, ds_x0, ds_y0, ds_w, ds_h);
+    b = (int8_t)accessImage(ds_image, ds_x1, ds_y0, ds_w, ds_h);
+    c = (int8_t)accessImage(ds_image, ds_x0, ds_y1, ds_w, ds_h);
+    d = (int8_t)accessImage(ds_image, ds_x1, ds_y1, ds_w, ds_h);
+  }
+  else
+  {
+    a = accessImage(ds_image, ds_x0, ds_y0, ds_w, ds_h);
+    b = accessImage(ds_image, ds_x1, ds_y0, ds_w, ds_h);
+    c = accessImage(ds_image, ds_x0, ds_y1, ds_w, ds_h);
+    d = accessImage(ds_image, ds_x1, ds_y1, ds_w, ds_h);
+  }
 
   if (xOrig == ds_x0 * 4)
   {
@@ -1983,10 +2026,25 @@ static inline int16_t accessImageUpsample3Unscaled(const uint8_t *ds_image, int 
   ++ds_x1;
   ++ds_y1;
 
-  int16_t a = (int8_t)accessImage(ds_image, ds_x0, ds_y0, ds_w, ds_h);
-  int16_t b = (int8_t)accessImage(ds_image, ds_x1, ds_y0, ds_w, ds_h);
-  int16_t c = (int8_t)accessImage(ds_image, ds_x0, ds_y1, ds_w, ds_h);
-  int16_t d = (int8_t)accessImage(ds_image, ds_x1, ds_y1, ds_w, ds_h);
+  int16_t a;
+  int16_t b;
+  int16_t c;
+  int16_t d;
+
+  if (uv_unsigned_signed)
+  {
+    a = (int8_t)accessImage(ds_image, ds_x0, ds_y0, ds_w, ds_h);
+    b = (int8_t)accessImage(ds_image, ds_x1, ds_y0, ds_w, ds_h);
+    c = (int8_t)accessImage(ds_image, ds_x0, ds_y1, ds_w, ds_h);
+    d = (int8_t)accessImage(ds_image, ds_x1, ds_y1, ds_w, ds_h);
+  }
+  else
+  {
+    a = accessImage(ds_image, ds_x0, ds_y0, ds_w, ds_h);
+    b = accessImage(ds_image, ds_x1, ds_y0, ds_w, ds_h);
+    c = accessImage(ds_image, ds_x0, ds_y1, ds_w, ds_h);
+    d = accessImage(ds_image, ds_x1, ds_y1, ds_w, ds_h);
+  }
 
   if (xOrig == ds_x0 * 3)
   {
@@ -2692,6 +2750,8 @@ int handle_recv(uint8_t *buf, int size)
     recv_state = RECV_STATE_HEADER;
 
     if (receiving) {
+      uv_unsigned_signed = ntr_yuv_option == 3;
+
       int top_bot = send_header.top_bot;
       int p_frame = send_header.p_frame;
       int left_right = send_header.left_right;
@@ -3109,7 +3169,6 @@ int handle_recv(uint8_t *buf, int size)
                       break;
                     }
                     // fprintf(stderr, "full next frame %d %d pos %d valid %d\n", top_bot, screen_frame_n[top_bot][i], i, screen_buf_valid[top_bot][i]);
-                    int uv_unsigned_signed = !!(ntr_yuv_option & 0x2);
                     for (int k = 0; k < (ntr_encode_split_image ? RP_SCREEN_SPLIT_COUNT : 1); ++k) {
                       if (ntr_me_enabled == 1) {
                         int size_orig = w_orig * h_orig;
