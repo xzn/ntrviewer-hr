@@ -1990,31 +1990,31 @@ static inline int16_t accessImageUpsample3Unscaled(const uint8_t *ds_image, int 
 
   if (xOrig == ds_x0 * 3)
   {
-    a = (a * 5 + b);
-    c = (c * 5 + d);
+    a = a * 6;
+    c = c * 6;
   }
   else if (xOrig == ds_x0 * 3 + 1)
   {
-    a = (a * 3 + b * 3);
-    c = (c * 3 + d * 3);
+    a = (a * 4 + b * 2);
+    c = (c * 4 + d * 2);
   }
   else
   {
-    a = (a + b * 5);
-    c = (c + d * 5);
+    a = (a * 2 + b * 4);
+    c = (c * 2 + d * 4);
   }
 
   if (yOrig == ds_y0 * 3)
   {
-    a = (a * 5 + c);
+    a = (a * 6);
   }
   else if (yOrig == ds_y0 * 3 + 1)
   {
-    a = (a * 3 + c * 3);
+    a = (a * 4 + c * 2);
   }
   else
   {
-    a = (a + c * 5);
+    a = (a * 2 + c * 4);
   }
 
   return a;
