@@ -811,8 +811,8 @@ void rpConfigSetDefault(void)
   dynamic_priority = 1;
   multicore_encode = 1;
   low_latency = 1;
-  top_priority = 9;
-  bot_priority = 10;
+  top_priority = 3;
+  bot_priority = 5;
   multicore_network = 0;
   multicore_screen = 1;
   kcp_minrto = 24;
