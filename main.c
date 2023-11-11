@@ -196,8 +196,7 @@ enum ConnectionState
   CS_CONNECTED,
   CS_DISCONNECTING,
   CS_MAX,
-} menu_connection,
-    nwm_connection;
+} menu_connection, nwm_connection;
 
 atomic_int menu_work_state;
 atomic_int nwm_work_state;
@@ -206,10 +205,10 @@ atomic_bool menu_remote_play;
 static char ip_addr_buf[16];
 
 const char *connection_msg[CS_MAX] = {
-    "+",
-    "...",
-    "-",
-    ".",
+  "+",
+  "...",
+  "-",
+  ".",
 };
 
 #define RP_ENCODE_STATIC_LQ (0)
@@ -259,49 +258,49 @@ static int kcp_fastresend;
 static int kcp_nodelay;
 
 union rp_conf_arg0_t {
-	int arg0;
-	struct {
-		u32 kcp_nocwnd : 1;
-		u32 kcp_fastresend : 2;
-		u32 me_select : RP_IMAGE_ME_SELECT_BITS;
-		u32 me_downscale : 1;
-		u32 me_interpolate : 1;
-		u32 multicore_network : 1;
-		u32 multicore_screen : 1;
-		u32 encode_lq : 2;
-		u32 jpeg_quality : 7;
-		u32 zstd_comp_level : RP_ZSTD_COMP_LEVEL_BITS;
-	};
+  int arg0;
+  struct {
+    u32 kcp_nocwnd : 1;
+    u32 kcp_fastresend : 2;
+    u32 me_select : RP_IMAGE_ME_SELECT_BITS;
+    u32 me_downscale : 1;
+    u32 me_interpolate : 1;
+    u32 multicore_network : 1;
+    u32 multicore_screen : 1;
+    u32 encode_lq : 2;
+    u32 jpeg_quality : 7;
+    u32 zstd_comp_level : RP_ZSTD_COMP_LEVEL_BITS;
+  };
 };
 
 union rp_conf_arg1_t {
-	int arg1;
-	struct {
-		u32 yuv_option : 2;
-		u32 color_transform_hp : 2;
-		u32 downscale_uv : 2;
-		u32 encoder_which : 3;
-		u32 me_block_size : 2;
-		u32 me_method : 3;
-		u32 me_search_param : 5;
-		u32 kcp_minrto : 7;
-		u32 kcp_snd_wnd_size : RP_KCP_SNDWNDSIZE_BITS;
-	};
+  int arg1;
+  struct {
+    u32 yuv_option : 2;
+    u32 color_transform_hp : 2;
+    u32 downscale_uv : 2;
+    u32 encoder_which : 3;
+    u32 me_block_size : 2;
+    u32 me_method : 3;
+    u32 me_search_param : 5;
+    u32 kcp_minrto : 7;
+    u32 kcp_snd_wnd_size : RP_KCP_SNDWNDSIZE_BITS;
+  };
 };
 
 union rp_conf_arg2_t {
-	int arg2;
-	struct {
-		u32 top_priority : 4;
-		u32 bot_priority : 4;
-		u32 low_latency : 1;
-		u32 multicore_encode : 1;
-		u32 target_mbit_rate : 5;
-		u32 dynamic_priority : 1;
-		u32 min_dp_frame_rate : 7;
-		u32 max_frame_rate : 7;
-		u32 kcp_nodelay : 2;
-	};
+  int arg2;
+  struct {
+    u32 top_priority : 4;
+    u32 bot_priority : 4;
+    u32 low_latency : 1;
+    u32 multicore_encode : 1;
+    u32 target_mbit_rate : 5;
+    u32 dynamic_priority : 1;
+    u32 min_dp_frame_rate : 7;
+    u32 max_frame_rate : 7;
+    u32 kcp_nodelay : 2;
+  };
 };
 
 _Static_assert(sizeof(union rp_conf_arg0_t) == sizeof(int));
@@ -310,7 +309,7 @@ _Static_assert(sizeof(union rp_conf_arg2_t) == sizeof(int));
 
 static int ntr_yuv_option;
 static int ntr_color_transform_hp;
-static nk_bool ntr_downscale_uv;
+static int ntr_downscale_uv;
 static int ntr_encoder_which;
 static nk_bool ntr_encode_split_image;
 static unsigned int ntr_me_enabled;
@@ -324,48 +323,48 @@ static int debug_view_plane;
 static atomic_uint_fast8_t ip_octets[4];
 
 enum {
-    RP_ENCODER_FFMPEG_JLS,
-    RP_ENCODER_HP_JLS,
-    RP_ENCODER_JLS_USE_LUT_COUNT,
-    RP_ENCODER_ZSTD_JLS = RP_ENCODER_JLS_USE_LUT_COUNT,
-    RP_ENCODER_LZ4_JLS,
-    RP_ENCODER_HUFF_JLS,
-    RP_ENCODER_JLS_COUNT,
-    RP_ENCODER_IMAGE_ZERO = RP_ENCODER_JLS_COUNT,
-    RP_ENCODER_JPEG_TURBO,
+  RP_ENCODER_FFMPEG_JLS,
+  RP_ENCODER_HP_JLS,
+  RP_ENCODER_JLS_USE_LUT_COUNT,
+  RP_ENCODER_ZSTD_JLS = RP_ENCODER_JLS_USE_LUT_COUNT,
+  RP_ENCODER_LZ4_JLS,
+  RP_ENCODER_HUFF_JLS,
+  RP_ENCODER_JLS_COUNT,
+  RP_ENCODER_IMAGE_ZERO = RP_ENCODER_JLS_COUNT,
+  RP_ENCODER_JPEG_TURBO,
 };
 
 enum rp_send_header_type {
-	RP_SEND_HEADER_TYPE_CONF,
-	RP_SEND_HEADER_TYPE_DATA,
+  RP_SEND_HEADER_TYPE_CONF,
+  RP_SEND_HEADER_TYPE_DATA,
 };
 
 struct rp_send_info_header {
-    u32 type_conf : 1;
-    u32 downscale_uv : 2;
-    u32 yuv_option : 2;
-    u32 color_transform_hp : 2;
-    u32 encoder_which : 3;
-    u32 encode_split_image: 1;
-    u32 me_enabled : 2;
-    u32 me_downscale : 1;
-    u32 me_search_param : 5;
-    u32 me_block_size : 2;
-    u32 me_interpolate : 1;
+  u32 type_conf : 1;
+  u32 downscale_uv : 2;
+  u32 yuv_option : 2;
+  u32 color_transform_hp : 2;
+  u32 encoder_which : 3;
+  u32 encode_split_image: 1;
+  u32 me_enabled : 2;
+  u32 me_downscale : 1;
+  u32 me_search_param : 5;
+  u32 me_block_size : 2;
+  u32 me_interpolate : 1;
 };
 
 struct rp_send_data_header {
-    u32 type_data : 1;
-    u32 top_bot : 1;
-    u32 frame_n : RP_IMAGE_FRAME_N_BITS;
-    u32 left_right : 1;
-    u32 data_stats : 1;
-    u32 p_frame : 1;
-    u32 bpp : 3;
-    u32 data_end : 1;
-    u32 data_size : 11;
-    u32 plane_type : 1;
-    u32 plane_comp : 2;
+  u32 type_data : 1;
+  u32 top_bot : 1;
+  u32 frame_n : RP_IMAGE_FRAME_N_BITS;
+  u32 left_right : 1;
+  u32 data_stats : 1;
+  u32 p_frame : 1;
+  u32 bpp : 3;
+  u32 data_end : 1;
+  u32 data_size : 11;
+  u32 plane_type : 1;
+  u32 plane_comp : 2;
 } send_header;
 
 _Static_assert(sizeof(struct rp_send_info_header) == sizeof(u32));
@@ -984,17 +983,17 @@ static void guiMain(struct nk_context *ctx)
     // nk_layout_row_dynamic(ctx, 30, 2);
     // nk_label(ctx, "Downscale UV", NK_TEXT_CENTERED);
     // nk_checkbox_label(ctx, "", &downscale_uv);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "Downscale UV %d", downscale_uv);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 0, &downscale_uv, 3, 1);
     if (downscale_uv > 0) {
       color_transform_hp = 0;
       if (yuv_option < 2) {
         yuv_option = 2;
       }
     }
-
-    nk_layout_row_dynamic(ctx, 30, 2);
-    snprintf(msg_buf, sizeof(msg_buf), "Downscale UV %d", downscale_uv);
-    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, 0, &downscale_uv, 3, 1);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Low Latency", NK_TEXT_CENTERED);
@@ -1430,7 +1429,7 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int t
 
       if (frame_size_tracker[i].index == 0)
         frame_stat_updated = 1;
-      
+
       if (delay_between_packet_tracker[i].index == 0) {
         frame_stat_updated = 1;
 
@@ -1803,84 +1802,262 @@ static inline uint8_t accessImage(const uint8_t *image, int x, int y, int w, int
     return accessImageNoCheck(image, HR_MAX(HR_MIN(x, w - 1), 0), HR_MAX(HR_MIN(y, h - 1), 0), w, h);
 }
 
-static inline int16_t accessImageUpsampleUnscaled(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
-{
-    int ds_w = wOrig / 2;
-    int ds_h = hOrig / 2;
-
-    int ds_x0 = xOrig / 2;
-    int ds_x1 = ds_x0;
-    int ds_y0 = yOrig / 2;
-    int ds_y1 = ds_y0;
-
-    if (xOrig > ds_x0 * 2)
-    { // xOrig is odd -> ds_x0 * 2 + 1 = xOrig = ds_x1 * 2 - 1
-        ++ds_x1;
-    }
-    else
-    { // xOrig is even -> ds_x0 * 2 + 2 = xOrig = ds_x1 * 2
-        --ds_x0;
-    }
-
-    if (yOrig > ds_y0 * 2)
-    {
-        ++ds_y1;
-    }
-    else
-    {
-        --ds_y0;
-    }
-
-    int16_t a = (int8_t)accessImage(ds_image, ds_x0, ds_y0, ds_w, ds_h);
-    int16_t b = (int8_t)accessImage(ds_image, ds_x1, ds_y0, ds_w, ds_h);
-    int16_t c = (int8_t)accessImage(ds_image, ds_x0, ds_y1, ds_w, ds_h);
-    int16_t d = (int8_t)accessImage(ds_image, ds_x1, ds_y1, ds_w, ds_h);
-
-    if (xOrig < ds_x1 * 2)
-    {
-        a = (a * 3 + b);
-        c = (c * 3 + d);
-    }
-    else
-    {
-        a = (a + b * 3);
-        c = (c + d * 3);
-    }
-
-    if (yOrig < ds_y1 * 2)
-    {
-        a = (a * 3 + c);
-    }
-    else
-    {
-        a = (a + c * 3);
-    }
-
-    return a;
-}
-
 #define rshift_to_even(n, s) (((n) + ((s) > 1 ? (1 << ((s) - 1)) : 0)) >> (s))
 #define srshift_to_even(n, s) rshift_to_even(n, s)
 #define srshift_s32(n, s) ((n) / (1 << (s)))
 #define RP_CLIP(n, min, max) RP_MIN(RP_MAX((n), (typeof(n))(min)), (typeof(n))(max))
+#define DSX_DIM(w, dsx) (((w) + (dsx) - 1) / (dsx))
+
+static inline int16_t accessImageUpsampleUnscaled(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
+{
+  int ds_w = wOrig / 2;
+  int ds_h = hOrig / 2;
+
+  xOrig -= 1;
+  yOrig -= 1;
+
+  int ds_x0 = xOrig / 2;
+  int ds_x1 = ds_x0;
+  int ds_y0 = yOrig / 2;
+  int ds_y1 = ds_y0;
+
+  // if (xOrig > ds_x0 * 2)
+  // { // xOrig is odd -> ds_x0 * 2 + 1 = xOrig = ds_x1 * 2 - 1
+    ++ds_x1;
+  // }
+  // else
+  // { // xOrig is even -> ds_x0 * 2 + 2 = xOrig = ds_x1 * 2
+    // --ds_x0;
+  // }
+
+  // if (yOrig > ds_y0 * 2)
+  // {
+    ++ds_y1;
+  // }
+  // else
+  // {
+  //   --ds_y0;
+  // }
+
+  int16_t a = (int8_t)accessImage(ds_image, ds_x0, ds_y0, ds_w, ds_h);
+  int16_t b = (int8_t)accessImage(ds_image, ds_x1, ds_y0, ds_w, ds_h);
+  int16_t c = (int8_t)accessImage(ds_image, ds_x0, ds_y1, ds_w, ds_h);
+  int16_t d = (int8_t)accessImage(ds_image, ds_x1, ds_y1, ds_w, ds_h);
+
+  if (xOrig == ds_x0 * 2)
+  {
+    a = (a * 3 + b);
+    c = (c * 3 + d);
+  }
+  else
+  {
+    a = (a + b * 3);
+    c = (c + d * 3);
+  }
+
+  if (yOrig == ds_y0 * 2)
+  {
+    a = (a * 3 + c);
+  }
+  else
+  {
+    a = (a + c * 3);
+  }
+
+  return a;
+}
 
 static inline uint8_t accessImageUpsample(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
 {
-    int16_t p = accessImageUpsampleUnscaled(ds_image, xOrig, yOrig, wOrig, hOrig);
-    return srshift_to_even(p, 4);
+  int16_t p = accessImageUpsampleUnscaled(ds_image, xOrig, yOrig, wOrig, hOrig);
+  return srshift_to_even(p, 4);
 }
 
 static inline void upsampleImage(uint8_t *dst, const uint8_t *ds_src, int w, int h)
 {
-    int i = 0, j = 0;
-    for (; i < w; ++i)
+  int i = 0, j = 0;
+  for (; i < w; ++i)
+  {
+    j = 0;
+    for (; j < h; ++j)
     {
-        j = 0;
-        for (; j < h; ++j)
-        {
-            *dst++ = accessImageUpsample(ds_src, i, j, w, h);
-        }
+      *dst++ = accessImageUpsample(ds_src, i, j, w, h);
     }
+  }
+}
+
+static inline int16_t accessImageUpsample4Unscaled(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
+{
+  int ds_w = wOrig / 4;
+  int ds_h = hOrig / 4;
+
+  xOrig -= 2;
+  yOrig -= 2;
+
+  int ds_x0 = xOrig / 4;
+  int ds_x1 = ds_x0;
+  int ds_y0 = yOrig / 4;
+  int ds_y1 = ds_y0;
+
+  ++ds_x1;
+  ++ds_y1;
+
+  int16_t a = (int8_t)accessImage(ds_image, ds_x0, ds_y0, ds_w, ds_h);
+  int16_t b = (int8_t)accessImage(ds_image, ds_x1, ds_y0, ds_w, ds_h);
+  int16_t c = (int8_t)accessImage(ds_image, ds_x0, ds_y1, ds_w, ds_h);
+  int16_t d = (int8_t)accessImage(ds_image, ds_x1, ds_y1, ds_w, ds_h);
+
+  if (xOrig == ds_x0 * 4)
+  {
+    a = (a * 7 + b);
+    c = (c * 7 + d);
+  }
+  else if (xOrig == ds_x0 * 4 + 1)
+  {
+    a = (a * 5 + b * 3);
+    c = (c * 5 + d * 3);
+  }
+  else if (xOrig == ds_x0 * 4 + 2)
+  {
+    a = (a * 3 + b * 5);
+    c = (c * 3 + d * 5);
+  }
+  else
+  {
+    a = (a + b * 7);
+    c = (c + d * 7);
+  }
+
+  if (yOrig == ds_y0 * 4)
+  {
+    a = (a * 7 + c);
+  }
+  else if (yOrig == ds_y0 * 4 + 1)
+  {
+    a = (a * 5 + c * 3);
+  }
+  else if (yOrig == ds_y0 * 4 + 2)
+  {
+    a = (a * 3 + c * 5);
+  }
+  else
+  {
+    a = (a + c * 7);
+  }
+
+  return a;
+}
+
+static inline uint8_t accessImageUpsample4(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
+{
+  int16_t p = accessImageUpsample4Unscaled(ds_image, xOrig, yOrig, wOrig, hOrig);
+  return srshift_to_even(p, 6);
+}
+
+static inline void upsample4Image(uint8_t *dst, const uint8_t *ds_src, int w, int h)
+{
+  int i = 0, j = 0;
+  for (; i < w; ++i)
+  {
+    j = 0;
+    for (; j < h; ++j)
+    {
+      *dst++ = accessImageUpsample4(ds_src, i, j, w, h);
+    }
+  }
+}
+
+static inline int16_t accessImageUpsample3Unscaled(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
+{
+  int ds_w = DSX_DIM(wOrig, 3);
+  int ds_h = DSX_DIM(hOrig, 3);
+
+  xOrig -= 1;
+  yOrig -= 1;
+
+  int ds_x0 = xOrig / 3;
+  int ds_x1 = ds_x0;
+  int ds_y0 = yOrig / 3;
+  int ds_y1 = ds_y0;
+
+  ++ds_x1;
+  ++ds_y1;
+
+  int16_t a = (int8_t)accessImage(ds_image, ds_x0, ds_y0, ds_w, ds_h);
+  int16_t b = (int8_t)accessImage(ds_image, ds_x1, ds_y0, ds_w, ds_h);
+  int16_t c = (int8_t)accessImage(ds_image, ds_x0, ds_y1, ds_w, ds_h);
+  int16_t d = (int8_t)accessImage(ds_image, ds_x1, ds_y1, ds_w, ds_h);
+
+  if (xOrig == ds_x0 * 3)
+  {
+    a = (a * 5 + b);
+    c = (c * 5 + d);
+  }
+  else if (xOrig == ds_x0 * 3 + 1)
+  {
+    a = (a * 3 + b * 3);
+    c = (c * 3 + d * 3);
+  }
+  else
+  {
+    a = (a + b * 5);
+    c = (c + d * 5);
+  }
+
+  if (yOrig == ds_y0 * 3)
+  {
+    a = (a * 5 + c);
+  }
+  else if (yOrig == ds_y0 * 3 + 1)
+  {
+    a = (a * 3 + c * 3);
+  }
+  else
+  {
+    a = (a + c * 5);
+  }
+
+  return a;
+}
+
+static inline uint8_t accessImageUpsample3(const uint8_t *ds_image, int xOrig, int yOrig, int wOrig, int hOrig)
+{
+  int16_t p = accessImageUpsample3Unscaled(ds_image, xOrig, yOrig, wOrig, hOrig);
+  return round((double)p * (1.0 / 36.0));
+}
+
+static inline void upsample3Image(uint8_t *dst, const uint8_t *ds_src, int w, int h)
+{
+  int i = 0, j = 0;
+  for (; i < w; ++i)
+  {
+    j = 0;
+    for (; j < h; ++j)
+    {
+      *dst++ = accessImageUpsample3(ds_src, i, j, w, h);
+    }
+  }
+}
+
+static inline void upsampleXImage(uint8_t *dst, const uint8_t *ds_src, int w, int h, int dsx)
+{
+  switch (dsx) {
+    default:
+      fprintf(stderr, "upsampleXImage dsx err %d\n", dsx);
+      return;
+
+    case 2:
+      upsampleImage(dst, ds_src, w, h);
+      return;
+
+    case 3:
+      upsample3Image(dst, ds_src, w, h);
+      return;
+
+    case 4:
+      upsample4Image(dst, ds_src, w, h);
+      return;
+  }
 }
 
 #define BUF_SIZE 2000
@@ -2067,27 +2244,27 @@ void diff_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, int w, int
   }
 }
 
-void select_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const int8_t *me_x, int scale_log2, int w, int h, int bpp, int bpp_prev UNUSED_ATTR, u8 unsigned_signed) {
+void select_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const int8_t *me_x, int scale_log2, int dsx, int w, int h, int bpp, int bpp_prev UNUSED_ATTR, u8 unsigned_signed) {
   if (ntr_me_downscale)
     ++scale_log2;
 
-  u8 me_block_size_log2 = av_ceil_log2(ntr_me_block_size) + scale_log2;
-  // u8 me_block_size = ntr_me_block_size << scale_log2;
-  u8 me_block_size_mask = (1 << me_block_size_log2) - 1;
+  // u8 me_block_size_log2 = av_ceil_log2(ntr_me_block_size) + scale_log2;
+  u8 me_block_size = (ntr_me_block_size << scale_log2) / dsx;
+  // u8 me_block_size_mask = (1 << me_block_size_log2) - 1;
 
-  u8 block_x_n = w >> me_block_size_log2;
-  u8 block_y_n = h >> me_block_size_log2;
-  u8 x_off = (w & me_block_size_mask) >> 1;
-  u8 y_off = (h & me_block_size_mask) >> 1;
+  u8 block_x_n = w / me_block_size;
+  u8 block_y_n = h / me_block_size;
+  u8 x_off = (w % me_block_size) >> 1;
+  u8 y_off = (h % me_block_size) >> 1;
 
   // u8 me_bpp = av_ceil_log2(ntr_me_search_param * 2 + 1);
   // u8 me_bpp_half_range = (1 << me_bpp) >> 1;
 
   for (int i = 0; i < w; ++i) {
-    int me_i = RP_MAX(0, i - x_off) >> me_block_size_log2;
+    int me_i = RP_MAX(0, i - x_off) / me_block_size;
     me_i = RP_MIN(me_i, block_x_n - 1);
     for (int j = 0; j < h; ++j) {
-      int me_j = RP_MAX(0, j - y_off) >> me_block_size_log2;
+      int me_j = RP_MAX(0, j - y_off) / me_block_size;
       me_j = RP_MIN(me_j, block_y_n - 1);
 
       int x = me_x[me_i * block_y_n + me_j];
@@ -2111,28 +2288,28 @@ void select_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const in
   }
 }
 
-void me_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const int8_t *me_x, const int8_t *me_y, int scale_log2, int w, int h, int bpp) {
+void me_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const int8_t *me_x, const int8_t *me_y, int scale_log2, int dsx, int w, int h, int bpp) {
   if (ntr_me_downscale)
     ++scale_log2;
 
   u8 me_block_size_log2 = av_ceil_log2(ntr_me_block_size) + scale_log2;
-  u8 me_block_size = ntr_me_block_size << scale_log2;
-  u8 me_block_size_mask = (1 << me_block_size_log2) - 1;
+  u8 me_block_size = (ntr_me_block_size << scale_log2) / dsx;
+  // u8 me_block_size_mask = (1 << me_block_size_log2) - 1;
 
-  u8 block_x_n = w >> me_block_size_log2;
-  u8 block_y_n = h >> me_block_size_log2;
-  u8 x_off = (w & me_block_size_mask) >> 1;
-  u8 y_off = (h & me_block_size_mask) >> 1;
+  u8 block_x_n = w / me_block_size;
+  u8 block_y_n = h / me_block_size;
+  u8 x_off = (w % me_block_size) >> 1;
+  u8 y_off = (h % me_block_size) >> 1;
 
   u8 me_bpp = av_ceil_log2(ntr_me_search_param * 2 + 1);
   u8 me_bpp_half_range = (1 << me_bpp) >> 1;
 
   if (!ntr_me_interpolate) {
     for (int i = 0; i < w; ++i) {
-      int me_i = RP_MAX(0, i - x_off) >> me_block_size_log2;
+      int me_i = RP_MAX(0, i - x_off) / me_block_size;
       me_i = RP_MIN(me_i, block_x_n - 1);
       for (int j = 0; j < h; ++j) {
-        int me_j = RP_MAX(0, j - y_off) >> me_block_size_log2;
+        int me_j = RP_MAX(0, j - y_off) / me_block_size;
         me_j = RP_MIN(me_j, block_y_n - 1);
 
         int x = me_x[me_i * block_y_n + me_j];
@@ -2155,7 +2332,7 @@ void me_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const int8_t
     }
   } else {
     x_off += me_block_size >> 1;
-		y_off += me_block_size >> 1;
+    y_off += me_block_size >> 1;
     const s8 *me_x_col_vec[CORNER_COUNT];
     const s8 *me_y_col_vec[CORNER_COUNT];
     for (int i = 0; i < CORNER_COUNT; ++i) {
@@ -2163,7 +2340,7 @@ void me_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const int8_t
       me_y_col_vec[i] = me_y;
     }
     for (int i = 0; i < w; ++i) {
-      int i_off = (i - x_off) & me_block_size_mask;
+      int i_off = (i - x_off) % me_block_size;
       if (i_off == 0) {
         if (i < w - x_off - 1) {
           me_x_col_vec[CORNER_BOT_LEFT] += block_y_n;
@@ -2186,7 +2363,7 @@ void me_image(uint8_t *dst, const uint8_t *ref, const uint8_t *cur, const int8_t
       memcpy(me_x_vec, me_x_col_vec, sizeof(me_x_vec));
       memcpy(me_y_vec, me_y_col_vec, sizeof(me_y_vec));
       for (int j = 0; j < h; ++j) {
-        int j_off = (j - y_off) & me_block_size_mask;
+        int j_off = (j - y_off) % me_block_size;
         if (j_off == 0) {
           if (i == 0) {
           }
@@ -2331,7 +2508,7 @@ int huff_jls_decode_2(uint8_t *dst, uint8_t *dst_2, int dst_x, int dst_y, const 
     free(rle_src);
     return ret;
   } else if (ret != dst_size) {
-    fprintf(stderr, "rle_decode mismatch %d (%d)\n", ret, dst_size);
+    fprintf(stderr, "rle_decode mismatch %d (%d %dx%d)\n", ret, dst_size, dst_x, dst_y);
     free(rle_src);
     return ret;
   }
@@ -2721,8 +2898,10 @@ int handle_recv(uint8_t *buf, int size)
       int me_w_full = w_orig_full >> block_size_log2;
       int me_h = h >> block_size_log2;
 
+      int dsx = ntr_downscale_uv + 1;
       if (ntr_downscale_uv && (plane == U_DATA || plane == V_DATA)) {
-        w /= 2; h /= 2;
+        w = DSX_DIM(w, dsx);
+        h = DSX_DIM(h, dsx);
       }
 
       if (plane == ME_X_DATA || plane == ME_Y_DATA) {
@@ -2881,11 +3060,11 @@ int handle_recv(uint8_t *buf, int size)
                 render_rgb_bpp(screen_decoded[top_bot], w_orig, h_orig, bpp);
               } else if (ntr_downscale_uv) {
                 memcpy(image_me[top_bot][pos][Y_COMP], screen_buf[top_bot][pos][Y_COMP], w_orig * h_orig);
-                memcpy(image_me[top_bot][pos][U_COMP], screen_buf[top_bot][pos][U_COMP], w_orig / 2 * h_orig / 2);
-                memcpy(image_me[top_bot][pos][V_COMP], screen_buf[top_bot][pos][V_COMP], w_orig / 2 * h_orig / 2);
+                memcpy(image_me[top_bot][pos][U_COMP], screen_buf[top_bot][pos][U_COMP], DSX_DIM(w_orig, dsx) * DSX_DIM(h_orig, dsx));
+                memcpy(image_me[top_bot][pos][V_COMP], screen_buf[top_bot][pos][V_COMP], DSX_DIM(w_orig, dsx) * DSX_DIM(h_orig, dsx));
 
-                upsampleImage(upscaled_u_image, screen_buf[top_bot][pos][U_COMP], w_orig, h_orig);
-                upsampleImage(upscaled_v_image, screen_buf[top_bot][pos][V_COMP], w_orig, h_orig);
+                upsampleXImage(upscaled_u_image, screen_buf[top_bot][pos][U_COMP], w_orig, h_orig, dsx);
+                upsampleXImage(upscaled_v_image, screen_buf[top_bot][pos][V_COMP], w_orig, h_orig, dsx);
                 render_yuv_to_rgb(screen_decoded[top_bot], screen_buf[top_bot][pos][Y_COMP], upscaled_u_image, upscaled_v_image,
                   w_orig, h_orig, screen_bpp[top_bot][pos][Y_COMP], screen_bpp[top_bot][pos][U_COMP], screen_bpp[top_bot][pos][V_COMP]
                 );
@@ -2940,20 +3119,22 @@ int handle_recv(uint8_t *buf, int size)
                           screen_me_buf[top_bot][i][ME_X_COMP] + me_w * me_h * k,
                           screen_me_buf[top_bot][i][ME_Y_COMP] + me_w * me_h * k,
                           1,
+                          1,
                           w_orig,
                           h_orig,
                           screen_bpp[top_bot][i][Y_COMP]
                         );
                         if (ntr_downscale_uv)
-                          size_orig /= 4;
+                          size_orig = DSX_DIM(w_orig, dsx) * DSX_DIM(h_orig, dsx);
                         me_image(image_me[top_bot][i][U_COMP] + size_orig * k,
                           image_me[top_bot][i_prev][U_COMP] + size_orig * k,
                           screen_buf[top_bot][i][U_COMP] + size_orig * k,
                           screen_me_buf[top_bot][i][ME_X_COMP] + me_w * me_h * k,
                           screen_me_buf[top_bot][i][ME_Y_COMP] + me_w * me_h * k,
-                          1 - ntr_downscale_uv,
-                          ntr_downscale_uv ? w_orig / 2 : w_orig,
-                          ntr_downscale_uv ? h_orig / 2 : h_orig,
+                          1,
+                          dsx,
+                          ntr_downscale_uv ? DSX_DIM(w_orig, dsx) : w_orig,
+                          ntr_downscale_uv ? DSX_DIM(h_orig, dsx) : h_orig,
                           screen_bpp[top_bot][i][U_COMP]
                         );
                         me_image(image_me[top_bot][i][V_COMP] + size_orig * k,
@@ -2961,17 +3142,21 @@ int handle_recv(uint8_t *buf, int size)
                           screen_buf[top_bot][i][V_COMP] + size_orig * k,
                           screen_me_buf[top_bot][i][ME_X_COMP] + me_w * me_h * k,
                           screen_me_buf[top_bot][i][ME_Y_COMP] + me_w * me_h * k,
-                          1 - ntr_downscale_uv,
-                          ntr_downscale_uv ? w_orig / 2 : w_orig,
-                          ntr_downscale_uv ? h_orig / 2 : h_orig,
+                          1,
+                          dsx,
+                          ntr_downscale_uv ? DSX_DIM(w_orig, dsx) : w_orig,
+                          ntr_downscale_uv ? DSX_DIM(h_orig, dsx) : h_orig,
                           screen_bpp[top_bot][i][V_COMP]
                         );
-                      } else if (ntr_me_enabled == 3) {
+                      } else
+                      if (ntr_me_enabled == 3)
+                      {
                         int size_orig = w_orig * h_orig;
                         select_image(image_me[top_bot][i][Y_COMP] + size_orig * k,
                           image_me[top_bot][i_prev][Y_COMP] + size_orig * k,
                           screen_buf[top_bot][i][Y_COMP] + size_orig * k,
                           screen_me_buf[top_bot][i][ME_X_COMP] + me_w * me_h * k,
+                          1,
                           1,
                           w_orig,
                           h_orig,
@@ -2980,14 +3165,15 @@ int handle_recv(uint8_t *buf, int size)
                           0
                         );
                         if (ntr_downscale_uv)
-                          size_orig /= 4;
+                          size_orig = DSX_DIM(w_orig, dsx) * DSX_DIM(h_orig, dsx);
                         select_image(image_me[top_bot][i][U_COMP] + size_orig * k,
                           image_me[top_bot][i_prev][U_COMP] + size_orig * k,
                           screen_buf[top_bot][i][U_COMP] + size_orig * k,
                           screen_me_buf[top_bot][i][ME_X_COMP] + me_w * me_h * k,
-                          1 - ntr_downscale_uv,
-                          ntr_downscale_uv ? w_orig / 2 : w_orig,
-                          ntr_downscale_uv ? h_orig / 2 : h_orig,
+                          1,
+                          dsx,
+                          ntr_downscale_uv ? DSX_DIM(w_orig, dsx) : w_orig,
+                          ntr_downscale_uv ? DSX_DIM(h_orig, dsx) : h_orig,
                           screen_bpp[top_bot][i][U_COMP],
                           screen_bpp[top_bot][i_prev][U_COMP],
                           uv_unsigned_signed
@@ -2996,14 +3182,16 @@ int handle_recv(uint8_t *buf, int size)
                           image_me[top_bot][i_prev][V_COMP] + size_orig * k,
                           screen_buf[top_bot][i][V_COMP] + size_orig * k,
                           screen_me_buf[top_bot][i][ME_X_COMP] + me_w * me_h * k,
-                          1 - ntr_downscale_uv,
-                          ntr_downscale_uv ? w_orig / 2 : w_orig,
-                          ntr_downscale_uv ? h_orig / 2 : h_orig,
+                          1,
+                          dsx,
+                          ntr_downscale_uv ? DSX_DIM(w_orig, dsx) : w_orig,
+                          ntr_downscale_uv ? DSX_DIM(h_orig, dsx) : h_orig,
                           screen_bpp[top_bot][i][V_COMP],
                           screen_bpp[top_bot][i_prev][V_COMP],
                           uv_unsigned_signed
                         );
-                      } else {
+                      } else
+                      {
                         int size_orig = w_orig * h_orig;
                         diff_image(image_me[top_bot][i][Y_COMP] + size_orig * k,
                           image_me[top_bot][i_prev][Y_COMP] + size_orig * k,
@@ -3015,12 +3203,12 @@ int handle_recv(uint8_t *buf, int size)
                           0
                         );
                         if (ntr_downscale_uv)
-                          size_orig /= 4;
+                          size_orig = DSX_DIM(w_orig, dsx) * DSX_DIM(h_orig, dsx);
                         diff_image(image_me[top_bot][i][U_COMP] + size_orig * k,
                           image_me[top_bot][i_prev][U_COMP] + size_orig * k,
                           screen_buf[top_bot][i][U_COMP] + size_orig * k,
-                          ntr_downscale_uv ? w_orig / 2 : w_orig,
-                          ntr_downscale_uv ? h_orig / 2 : h_orig,
+                          ntr_downscale_uv ? DSX_DIM(w_orig, dsx) : w_orig,
+                          ntr_downscale_uv ? DSX_DIM(h_orig, dsx) : h_orig,
                           screen_bpp[top_bot][i][U_COMP],
                           screen_bpp[top_bot][i_prev][U_COMP],
                           uv_unsigned_signed
@@ -3028,8 +3216,8 @@ int handle_recv(uint8_t *buf, int size)
                         diff_image(image_me[top_bot][i][V_COMP] + size_orig * k,
                           image_me[top_bot][i_prev][V_COMP] + size_orig * k,
                           screen_buf[top_bot][i][V_COMP] + size_orig * k,
-                          ntr_downscale_uv ? w_orig / 2 : w_orig,
-                          ntr_downscale_uv ? h_orig / 2 : h_orig,
+                          ntr_downscale_uv ? DSX_DIM(w_orig, dsx) : w_orig,
+                          ntr_downscale_uv ? DSX_DIM(h_orig, dsx) : h_orig,
                           screen_bpp[top_bot][i][V_COMP],
                           screen_bpp[top_bot][i_prev][V_COMP],
                           uv_unsigned_signed
@@ -3046,8 +3234,8 @@ int handle_recv(uint8_t *buf, int size)
                     w_orig = w_orig_full;
                     me_w = me_w_full;
                     if (ntr_downscale_uv) {
-                      upsampleImage(upscaled_u_image, image_me[top_bot][i][U_COMP], w_orig, h_orig);
-                      upsampleImage(upscaled_v_image, image_me[top_bot][i][V_COMP], w_orig, h_orig);
+                      upsampleXImage(upscaled_u_image, image_me[top_bot][i][U_COMP], w_orig, h_orig, dsx);
+                      upsampleXImage(upscaled_v_image, image_me[top_bot][i][V_COMP], w_orig, h_orig, dsx);
                       if (debug_view_plane == 0)
                         render_yuv_to_rgb(screen_decoded[top_bot], image_me[top_bot][i][Y_COMP], upscaled_u_image, upscaled_v_image,
                           w_orig, h_orig, screen_bpp[top_bot][i][Y_COMP], screen_bpp[top_bot][i][U_COMP], screen_bpp[top_bot][i][V_COMP]
@@ -3076,9 +3264,9 @@ int handle_recv(uint8_t *buf, int size)
                     else if (debug_view_plane == 6)
                       render_greyscale_to_comp3(screen_decoded[top_bot], screen_buf[top_bot][i][Y_COMP], w_orig, h_orig, screen_bpp_cur[Y_COMP]);
                     else if (debug_view_plane == 7)
-                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][U_COMP], ntr_downscale_uv ? w_orig / 2 : w_orig, ntr_downscale_uv ? h_orig / 2 : h_orig, screen_bpp_cur[U_COMP]);
+                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][U_COMP], ntr_downscale_uv ? DSX_DIM(w_orig, dsx): w_orig, ntr_downscale_uv ? DSX_DIM(h_orig, dsx) : h_orig, screen_bpp_cur[U_COMP]);
                     else if (debug_view_plane == 8)
-                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][V_COMP], ntr_downscale_uv ? w_orig / 2 : w_orig, ntr_downscale_uv ? h_orig / 2 : h_orig, screen_bpp_cur[V_COMP]);
+                      render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][V_COMP], ntr_downscale_uv ? DSX_DIM(w_orig, dsx) : w_orig, ntr_downscale_uv ? DSX_DIM(h_orig, dsx) : h_orig, screen_bpp_cur[V_COMP]);
                     screen_done[top_bot][i] = 1;
                     handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot], top_bot,
                       screen_data_size[top_bot][pos][RP_SCREEN_SPLIT_LEFT], screen_data_size[top_bot][pos][RP_SCREEN_SPLIT_RIGHT],
