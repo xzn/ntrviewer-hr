@@ -808,7 +808,7 @@ void rpConfigSetDefault(void)
   me_interpolate = 0;
   min_dp_frame_rate = 0;
   max_frame_rate = 0;
-  me_select = 7;
+  me_select = 23;
   target_mbit_rate = 12;
   dynamic_priority = 1;
   multicore_encode = 1;
@@ -867,7 +867,7 @@ static void guiMain(struct nk_context *ctx)
       "None (RGB)",
       "Color Transform",
       "Full Swing",
-      "Studio Swing",
+      // "Studio Swing",
     };
     nk_combobox(ctx, yuv_options_text, sizeof(yuv_options_text) / sizeof(*yuv_options_text),
       &yuv_option, 30, nk_vec2(150, 9999)
@@ -884,23 +884,23 @@ static void guiMain(struct nk_context *ctx)
       }
     }
 
-    nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "Color Transform", NK_TEXT_CENTERED);
-    const char *color_transform_text[] = {
-      "None (RGB)",
-      "HP1",
-      "HP2",
-      "HP3",
-    };
-    nk_combobox(ctx, color_transform_text, sizeof(color_transform_text) / sizeof(*color_transform_text),
-      &color_transform_hp, 30, nk_vec2(150, 9999)
-    );
-    if (color_transform_hp > 0) {
-      yuv_option = 1;
-      downscale_uv = 0;
-    } else if (yuv_option == 1) {
-      yuv_option = 0;
-    }
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // nk_label(ctx, "Color Transform", NK_TEXT_CENTERED);
+    // const char *color_transform_text[] = {
+    //   "None (RGB)",
+    //   "HP1",
+    //   "HP2",
+    //   "HP3",
+    // };
+    // nk_combobox(ctx, color_transform_text, sizeof(color_transform_text) / sizeof(*color_transform_text),
+    //   &color_transform_hp, 30, nk_vec2(150, 9999)
+    // );
+    // if (color_transform_hp > 0) {
+    //   yuv_option = 1;
+    //   downscale_uv = 0;
+    // } else if (yuv_option == 1) {
+    //   yuv_option = 0;
+    // }
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Motion Estimation", NK_TEXT_CENTERED);
@@ -918,15 +918,15 @@ static void guiMain(struct nk_context *ctx)
       &me_method, 30, nk_vec2(250, 9999)
     );
 
-    nk_layout_row_dynamic(ctx, 30, 2);
-    snprintf(msg_buf, sizeof(msg_buf), "ME Block Size %d", RP_ME_MIN_BLOCK_SIZE << me_block_size);
-    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, 0, &me_block_size, 3, 1);
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // snprintf(msg_buf, sizeof(msg_buf), "ME Block Size %d", RP_ME_MIN_BLOCK_SIZE << me_block_size);
+    // nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    // nk_slider_int(ctx, 0, &me_block_size, 3, 1);
 
-    nk_layout_row_dynamic(ctx, 30, 2);
-    snprintf(msg_buf, sizeof(msg_buf), "ME Search Param %d", me_search_param);
-    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, RP_ME_MIN_SEARCH_PARAM, &me_search_param, 36, 1);
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // snprintf(msg_buf, sizeof(msg_buf), "ME Search Param %d", me_search_param);
+    // nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    // nk_slider_int(ctx, RP_ME_MIN_SEARCH_PARAM, &me_search_param, 36, 1);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     if (me_select) {
@@ -939,48 +939,48 @@ static void guiMain(struct nk_context *ctx)
     if (me_select)
       me_interpolate = 0;
 
-    nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "ME Downscale", NK_TEXT_CENTERED);
-    nk_checkbox_label(ctx, "", &me_downscale);
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // nk_label(ctx, "ME Downscale", NK_TEXT_CENTERED);
+    // nk_checkbox_label(ctx, "", &me_downscale);
 
-    nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "ME Interpolate", NK_TEXT_CENTERED);
-    nk_checkbox_label(ctx, "", &me_interpolate);
-    if (me_interpolate)
-      me_select = 0;
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // nk_label(ctx, "ME Interpolate", NK_TEXT_CENTERED);
+    // nk_checkbox_label(ctx, "", &me_interpolate);
+    // if (me_interpolate)
+    //   me_select = 0;
 
-    nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "Encoder", NK_TEXT_CENTERED);
-    const char *encoder_which_text[] = {
-      "FFmpeg JPEG-LS",
-      "HP JPEG-LS",
-      "ZSTD Med-Pred",
-      "LZ4 Med-Pred",
-      "Huff Med-Pred",
-      "ImageZero",
-      "JPEG Turbo",
-    };
-    nk_combobox(ctx, encoder_which_text, sizeof(encoder_which_text) / sizeof(*encoder_which_text),
-      &encoder_which, 30, nk_vec2(150, 9999)
-    );
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // nk_label(ctx, "Encoder", NK_TEXT_CENTERED);
+    // const char *encoder_which_text[] = {
+    //   "FFmpeg JPEG-LS",
+    //   "HP JPEG-LS",
+    //   "ZSTD Med-Pred",
+    //   "LZ4 Med-Pred",
+    //   "Huff Med-Pred",
+    //   "ImageZero",
+    //   "JPEG Turbo",
+    // };
+    // nk_combobox(ctx, encoder_which_text, sizeof(encoder_which_text) / sizeof(*encoder_which_text),
+    //   &encoder_which, 30, nk_vec2(150, 9999)
+    // );
 
     nk_layout_row_dynamic(ctx, 30, 2);
     snprintf(msg_buf, sizeof(msg_buf), "Encode LQ %d", encode_lq);
     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
     nk_slider_int(ctx, 0, &encode_lq, 3, 1);
 
-    int zstd_comp_level_disp = zstd_comp_level - RP_ZSTD_COMP_LEVEL_HALF_RANGE;
-    if (zstd_comp_level_disp >= 0)
-      ++zstd_comp_level_disp;
-    nk_layout_row_dynamic(ctx, 30, 2);
-    snprintf(msg_buf, sizeof(msg_buf), "ZSTD Comp Level %d", zstd_comp_level_disp);
-    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, 0, &zstd_comp_level, 7, 1);
+    // int zstd_comp_level_disp = zstd_comp_level - RP_ZSTD_COMP_LEVEL_HALF_RANGE;
+    // if (zstd_comp_level_disp >= 0)
+    //   ++zstd_comp_level_disp;
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // snprintf(msg_buf, sizeof(msg_buf), "ZSTD Comp Level %d", zstd_comp_level_disp);
+    // nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    // nk_slider_int(ctx, 0, &zstd_comp_level, 7, 1);
 
-    nk_layout_row_dynamic(ctx, 30, 2);
-    snprintf(msg_buf, sizeof(msg_buf), "JPEG Quality %d", jpeg_quality);
-    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, 1, &jpeg_quality, 100, 1);
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // snprintf(msg_buf, sizeof(msg_buf), "JPEG Quality %d", jpeg_quality);
+    // nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    // nk_slider_int(ctx, 1, &jpeg_quality, 100, 1);
 
     // nk_layout_row_dynamic(ctx, 30, 2);
     // nk_label(ctx, "Downscale UV", NK_TEXT_CENTERED);
@@ -997,21 +997,21 @@ static void guiMain(struct nk_context *ctx)
       }
     }
 
-    nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "Low Latency", NK_TEXT_CENTERED);
-    nk_checkbox_label(ctx, "", &low_latency);
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // nk_label(ctx, "Low Latency", NK_TEXT_CENTERED);
+    // nk_checkbox_label(ctx, "", &low_latency);
 
-    nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "MT Encode", NK_TEXT_CENTERED);
-    nk_checkbox_label(ctx, "", &multicore_encode);
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // nk_label(ctx, "MT Encode", NK_TEXT_CENTERED);
+    // nk_checkbox_label(ctx, "", &multicore_encode);
 
-    nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "MT Network Transfer", NK_TEXT_CENTERED);
-    nk_checkbox_label(ctx, "", &multicore_network);
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // nk_label(ctx, "MT Network Transfer", NK_TEXT_CENTERED);
+    // nk_checkbox_label(ctx, "", &multicore_network);
 
-    nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "MT Screen Capture", NK_TEXT_CENTERED);
-    nk_checkbox_label(ctx, "", &multicore_screen);
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // nk_label(ctx, "MT Screen Capture", NK_TEXT_CENTERED);
+    // nk_checkbox_label(ctx, "", &multicore_screen);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Dynamic Priority", NK_TEXT_CENTERED);
