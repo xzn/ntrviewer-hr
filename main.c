@@ -1733,9 +1733,9 @@ void convert_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uin
     v_in = v_in / (double)((1 << (v_bpp - 1)) - (32 >> (8 - (v_bpp - 1)))) * (double)((1 << 7) - 16);
     v_in /= 112;
   } else {
-    y_in = y_in / (double)((1 << y_bpp) - 1) * (double)((1 << 8) - 1);
-    u_in = u_in / (double)((1 << u_bpp) - 1) * (double)((1 << 8) - 1);
-    v_in = v_in / (double)((1 << v_bpp) - 1) * (double)((1 << 8) - 1);
+    y_in = y / (double)((1 << y_bpp) - 1) * (double)((1 << 8) - 1);
+    u_in = u / (double)((1 << u_bpp) - 1) * (double)((1 << 8) - 1);
+    v_in = v / (double)((1 << v_bpp) - 1) * (double)((1 << 8) - 1);
 
     y = round(y_in);
     u = round(u_in);
