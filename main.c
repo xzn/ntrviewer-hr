@@ -796,10 +796,11 @@ void rpConfigSetDefault(void)
 {
   yuv_option = 2;
   color_transform_hp = 0;
-  encoder_which = 4;
+  // encoder_which = 4;
+  encoder_which = 6;
   downscale_uv = 1;
   encode_lq = 1;
-  jpeg_quality = 90;
+  jpeg_quality = 75;
   zstd_comp_level = 4;
   me_method = 1;
   me_block_size = 3;
@@ -813,8 +814,8 @@ void rpConfigSetDefault(void)
   dynamic_priority = 1;
   multicore_encode = 1;
   low_latency = 1;
-  top_priority = 3;
-  bot_priority = 5;
+  top_priority = 1;
+  bot_priority = 3;
   multicore_network = 0;
   multicore_screen = 1;
   kcp_minrto = 24;
@@ -861,28 +862,28 @@ static void guiMain(struct nk_context *ctx)
       ip_octets[i] = ip_octet;
     }
 
-    nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "YUV option", NK_TEXT_CENTERED);
-    const char *yuv_options_text[] = {
-      "None (RGB)",
-      "Color Transform",
-      "Full Swing",
-      // "Studio Swing",
-    };
-    nk_combobox(ctx, yuv_options_text, sizeof(yuv_options_text) / sizeof(*yuv_options_text),
-      &yuv_option, 30, nk_vec2(150, 9999)
-    );
-    if (yuv_option != 1) {
-      color_transform_hp = 0;
-    }
-    if (yuv_option < 2) {
-      downscale_uv = 0;
-      if (yuv_option == 1) {
-        if (color_transform_hp == 0) {
-          color_transform_hp = 3;
-        }
-      }
-    }
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // nk_label(ctx, "YUV option", NK_TEXT_CENTERED);
+    // const char *yuv_options_text[] = {
+    //   "None (RGB)",
+    //   "Color Transform",
+    //   "Full Swing",
+    //   // "Studio Swing",
+    // };
+    // nk_combobox(ctx, yuv_options_text, sizeof(yuv_options_text) / sizeof(*yuv_options_text),
+    //   &yuv_option, 30, nk_vec2(150, 9999)
+    // );
+    // if (yuv_option != 1) {
+    //   color_transform_hp = 0;
+    // }
+    // if (yuv_option < 2) {
+    //   downscale_uv = 0;
+    //   if (yuv_option == 1) {
+    //     if (color_transform_hp == 0) {
+    //       color_transform_hp = 3;
+    //     }
+    //   }
+    // }
 
     // nk_layout_row_dynamic(ctx, 30, 2);
     // nk_label(ctx, "Color Transform", NK_TEXT_CENTERED);
@@ -902,21 +903,21 @@ static void guiMain(struct nk_context *ctx)
     //   yuv_option = 0;
     // }
 
-    nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "Motion Estimation", NK_TEXT_CENTERED);
-    const char *motion_estimation_text[] = {
-      "Disabled",
-      "None (Diff Only)",
-      // "Three Step",
-      // "Two Dimensional Log",
-      // "New Three Step",
-      // "Four Step",
-      // "Diamond",
-      // "Hexagon-Based",
-    };
-    nk_combobox(ctx, motion_estimation_text, sizeof(motion_estimation_text) / sizeof(*motion_estimation_text),
-      &me_method, 30, nk_vec2(250, 9999)
-    );
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // nk_label(ctx, "Motion Estimation", NK_TEXT_CENTERED);
+    // const char *motion_estimation_text[] = {
+    //   "Disabled",
+    //   "None (Diff Only)",
+    //   // "Three Step",
+    //   // "Two Dimensional Log",
+    //   // "New Three Step",
+    //   // "Four Step",
+    //   // "Diamond",
+    //   // "Hexagon-Based",
+    // };
+    // nk_combobox(ctx, motion_estimation_text, sizeof(motion_estimation_text) / sizeof(*motion_estimation_text),
+    //   &me_method, 30, nk_vec2(250, 9999)
+    // );
 
     // nk_layout_row_dynamic(ctx, 30, 2);
     // snprintf(msg_buf, sizeof(msg_buf), "ME Block Size %d", RP_ME_MIN_BLOCK_SIZE << me_block_size);
@@ -928,16 +929,16 @@ static void guiMain(struct nk_context *ctx)
     // nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
     // nk_slider_int(ctx, RP_ME_MIN_SEARCH_PARAM, &me_search_param, 36, 1);
 
-    nk_layout_row_dynamic(ctx, 30, 2);
-    if (me_select) {
-      snprintf(msg_buf, sizeof(msg_buf), "ME Select %d/64", me_select);
-    } else {
-      snprintf(msg_buf, sizeof(msg_buf), "ME Select Off");
-    }
-    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, 0, &me_select, 63, 1);
-    if (me_select)
-      me_interpolate = 0;
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // if (me_select) {
+    //   snprintf(msg_buf, sizeof(msg_buf), "ME Select %d/64", me_select);
+    // } else {
+    //   snprintf(msg_buf, sizeof(msg_buf), "ME Select Off");
+    // }
+    // nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    // nk_slider_int(ctx, 0, &me_select, 63, 1);
+    // if (me_select)
+    //   me_interpolate = 0;
 
     // nk_layout_row_dynamic(ctx, 30, 2);
     // nk_label(ctx, "ME Downscale", NK_TEXT_CENTERED);
@@ -964,10 +965,10 @@ static void guiMain(struct nk_context *ctx)
     //   &encoder_which, 30, nk_vec2(150, 9999)
     // );
 
-    nk_layout_row_dynamic(ctx, 30, 2);
-    snprintf(msg_buf, sizeof(msg_buf), "Encode LQ %d", encode_lq);
-    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, 0, &encode_lq, 3, 1);
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // snprintf(msg_buf, sizeof(msg_buf), "Encode LQ %d", encode_lq);
+    // nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    // nk_slider_int(ctx, 0, &encode_lq, 3, 1);
 
     // int zstd_comp_level_disp = zstd_comp_level - RP_ZSTD_COMP_LEVEL_HALF_RANGE;
     // if (zstd_comp_level_disp >= 0)
@@ -977,25 +978,25 @@ static void guiMain(struct nk_context *ctx)
     // nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
     // nk_slider_int(ctx, 0, &zstd_comp_level, 7, 1);
 
-    // nk_layout_row_dynamic(ctx, 30, 2);
-    // snprintf(msg_buf, sizeof(msg_buf), "JPEG Quality %d", jpeg_quality);
-    // nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    // nk_slider_int(ctx, 1, &jpeg_quality, 100, 1);
+    nk_layout_row_dynamic(ctx, 30, 2);
+    snprintf(msg_buf, sizeof(msg_buf), "JPEG Quality %d", jpeg_quality);
+    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    nk_slider_int(ctx, 1, &jpeg_quality, 100, 1);
 
     // nk_layout_row_dynamic(ctx, 30, 2);
     // nk_label(ctx, "Downscale UV", NK_TEXT_CENTERED);
     // nk_checkbox_label(ctx, "", &downscale_uv);
 
-    nk_layout_row_dynamic(ctx, 30, 2);
-    snprintf(msg_buf, sizeof(msg_buf), "Downscale UV %d", downscale_uv);
-    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, 0, &downscale_uv, 3, 1);
-    if (downscale_uv > 0) {
-      color_transform_hp = 0;
-      if (yuv_option < 2) {
-        yuv_option = 2;
-      }
-    }
+    // nk_layout_row_dynamic(ctx, 30, 2);
+    // snprintf(msg_buf, sizeof(msg_buf), "Downscale UV %d", downscale_uv);
+    // nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    // nk_slider_int(ctx, 0, &downscale_uv, 3, 1);
+    // if (downscale_uv > 0) {
+    //   color_transform_hp = 0;
+    //   if (yuv_option < 2) {
+    //     yuv_option = 2;
+    //   }
+    // }
 
     // nk_layout_row_dynamic(ctx, 30, 2);
     // nk_label(ctx, "Low Latency", NK_TEXT_CENTERED);
@@ -2920,22 +2921,23 @@ int handle_recv(uint8_t *buf, int size)
           if (screen_recv_done[top_bot][pos][plane] < split_image_count)
             goto final;
         }
-      }
-      // if (plane < COMP_COUNT)
-      //   fprintf(stderr, "screen_recv_buf %d %d %d %d: %d %d\n", top_bot, pos, plane, !left_right, *(int *)(screen_recv_buf[top_bot][pos][plane][!left_right] + (send_header.data_stats ? 256 : 0)), send_header.data_stats);
 
-      if (ntr_encode_split_image && comp < COMP_COUNT) {
-        if (!(screen_split_recv_done[top_bot][pos][plane][!left_right] && screen_split_recv_done[top_bot][pos][plane][left_right])) {
-          fprintf(stderr, "screen_split_recv_done error\n");
-          goto final;
-        }
-        if (RP_HUFF_SHARE_STATS) {
-          if (send_header.data_stats) {
-            memcpy(screen_recv_buf[top_bot][pos][plane][!left_right], screen_recv_buf[top_bot][pos][plane][!left_right] + 256, sizeof(u32));
-            memcpy(screen_recv_buf[top_bot][pos][plane][!left_right] + sizeof(u32), screen_recv_buf[top_bot][pos][plane][left_right] + sizeof(u32), 256);
-          } else {
-            memcpy(screen_recv_buf[top_bot][pos][plane][left_right], screen_recv_buf[top_bot][pos][plane][left_right] + 256, sizeof(u32));
-            memcpy(screen_recv_buf[top_bot][pos][plane][left_right] + sizeof(u32), screen_recv_buf[top_bot][pos][plane][!left_right] + sizeof(u32), 256);
+        // if (plane < COMP_COUNT)
+        //   fprintf(stderr, "screen_recv_buf %d %d %d %d: %d %d\n", top_bot, pos, plane, !left_right, *(int *)(screen_recv_buf[top_bot][pos][plane][!left_right] + (send_header.data_stats ? 256 : 0)), send_header.data_stats);
+
+        if (ntr_encode_split_image && comp < COMP_COUNT) {
+          if (!(screen_split_recv_done[top_bot][pos][plane][!left_right] && screen_split_recv_done[top_bot][pos][plane][left_right])) {
+            fprintf(stderr, "screen_split_recv_done error\n");
+            goto final;
+          }
+          if (RP_HUFF_SHARE_STATS) {
+            if (send_header.data_stats) {
+              memcpy(screen_recv_buf[top_bot][pos][plane][!left_right], screen_recv_buf[top_bot][pos][plane][!left_right] + 256, sizeof(u32));
+              memcpy(screen_recv_buf[top_bot][pos][plane][!left_right] + sizeof(u32), screen_recv_buf[top_bot][pos][plane][left_right] + sizeof(u32), 256);
+            } else {
+              memcpy(screen_recv_buf[top_bot][pos][plane][left_right], screen_recv_buf[top_bot][pos][plane][left_right] + 256, sizeof(u32));
+              memcpy(screen_recv_buf[top_bot][pos][plane][left_right] + sizeof(u32), screen_recv_buf[top_bot][pos][plane][!left_right] + sizeof(u32), 256);
+            }
           }
         }
       }
@@ -2998,7 +3000,7 @@ int handle_recv(uint8_t *buf, int size)
               // fprintf(stderr, "jpeg_read_header: %d %d\n", (int)cinfo.output_width, (int)cinfo.output_height);
               if ((int)cinfo.output_width == h_orig && (int)cinfo.output_height == w_orig) {
                 while (cinfo.output_scanline < cinfo.output_height) {
-                  uint8_t *buffer = screen_decoded[top_bot] + w_orig * h_orig * k + cinfo.output_scanline * cinfo.output_width * 3;
+                  uint8_t *buffer = screen_decoded[top_bot] + w_orig * h_orig * k * 3 + cinfo.output_scanline * cinfo.output_width * 3;
                   jpeg_read_scanlines(&cinfo, &buffer, 1);
                 }
                 jpeg_finish_decompress(&cinfo);
