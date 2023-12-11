@@ -291,6 +291,9 @@ static nk_bool kcp_nocwnd;
 static int kcp_fastresend;
 static int kcp_nodelay;
 
+static nk_bool upscaling_filter;
+static nk_bool upscaling_filter_created;
+
 union rp_conf_arg0_t {
   int arg0;
   struct {
@@ -1118,6 +1121,17 @@ static void guiMain(struct nk_context *ctx)
       }
       menu_remote_play = TRUE;
     }
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Upscaling Filter", NK_TEXT_CENTERED);
+    if (nk_checkbox_label(ctx, "", &upscaling_filter)) {
+      if (upscaling_filter) {
+        if (!upscaling_filter_created) {
+          sr_create();
+          upscaling_filter_created = 1;
+        }
+      }
+    }
   }
   nk_end(ctx);
   nk_window_show(ctx, remote_play_wnd, show_window);
@@ -1331,6 +1345,7 @@ typedef struct _FrameBufferContext
 {
   pthread_mutex_t gl_tex_mutex;
   uint8_t *images[3];
+  nk_bool images_upscaled[3];
   GLuint gl_tex_id;
   enum FrameBufferStatus updated;
   int index;
@@ -1427,9 +1442,11 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int t
 
     pthread_mutex_unlock(&ctx->gl_tex_mutex);
 
+    nk_bool upscaled = ctx->images_upscaled[index];
+    int scale = upscaled ? screen_upscale_factor : 1;
     glTexImage2D(GL_TEXTURE_2D, 0,
-                 GL_RGB, height,
-                 width, 0,
+                 GL_RGB, height * scale,
+                 width * scale, 0,
                  GL_RGB, GL_UNSIGNED_BYTE,
                  ctx->images[index]);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
@@ -1538,8 +1555,8 @@ MainLoop(void *loopArg)
     gl_updated = 0;
     pthread_mutex_unlock(&gl_updated_mutex);
 
-    hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400 * screen_upscale_factor, 240 * screen_upscale_factor, SCREEN_TOP);
-    hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320 * screen_upscale_factor, 240 * screen_upscale_factor, SCREEN_BOT);
+    hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400, 240, SCREEN_TOP);
+    hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT);
 
     /* IMPORTANT: `nk_sdl_render` modifies some global OpenGL state
      * with blending, scissor, face culling, depth test and viewport and
@@ -1554,7 +1571,11 @@ MainLoop(void *loopArg)
 void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, uint8_t *rgb_upscaled, int top_bot, int frame_size_left, int frame_size_right, int delay_between_packet_left, int delay_between_packet_right)
 {
 #if (screen_upscale_factor > 1)
-  sr_run(240, top_bot == 0 ? 400 : 320, 3, rgb, rgb_upscaled);
+  nk_bool upscaled = upscaling_filter && upscaling_filter_created;
+  if (upscaled)
+    sr_run(240, top_bot == 0 ? 400 : 320, 3, rgb, rgb_upscaled);
+  else
+    rgb_upscaled = rgb;
 #else
   rgb_upscaled = rgb;
 #endif
@@ -1563,6 +1584,7 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, uint8_t *
   int next_index = frame_buffer_context_next_free_index(ctx->next_index, ctx->index);
   uint8_t **pimage = &ctx->images[next_index];
   *pimage = rgb_upscaled;
+  ctx->images_upscaled[next_index] = upscaled;
   ctx->updated = FBS_UPDATED;
   ctx->next_index = next_index;
   pthread_mutex_unlock(&ctx->gl_tex_mutex);
@@ -3587,8 +3609,11 @@ void *udp_recv_thread_func(void *)
 int main(int argc, char *argv[])
 {
   CoInitializeEx(NULL, COINIT_MULTITHREADED);
-  if (sr_create() < 0)
-    return -1;
+  if (upscaling_filter) {
+    if (sr_create() < 0)
+      return -1;
+    upscaling_filter_created = 1;
+  }
 
   /* GUI */
   struct nk_context *ctx;
@@ -3726,6 +3751,7 @@ int main(int argc, char *argv[])
   SDL_DestroyWindow(win);
   SDL_Quit();
 
-  sr_destroy();
+  if (upscaling_filter_created)
+    sr_destroy();
   return 0;
 }
