@@ -1,5 +1,39 @@
 #include "ikcp.h"
 
+int realsr_create();
+void realsr_run(int w, int h, int c, const unsigned char *indata, unsigned char *outdata);
+void realsr_destroy();
+
+int srmd_create();
+void srmd_run(int w, int h, int c, const unsigned char *indata, unsigned char *outdata);
+void srmd_destroy();
+
+int realcugan_create();
+void realcugan_run(int w, int h, int c, const unsigned char *indata, unsigned char *outdata);
+void realcugan_destroy();
+
+#if 0
+#define screen_upscale_factor (4)
+#define sr_create realsr_create
+#define sr_run realsr_run
+#define sr_destroy realsr_destroy
+#elif 0
+#define screen_upscale_factor (2)
+#define sr_create srmd_create
+#define sr_run srmd_run
+#define sr_destroy srmd_destroy
+#elif 1
+#define screen_upscale_factor (2)
+#define sr_create realcugan_create
+#define sr_run realcugan_run
+#define sr_destroy realcugan_destroy
+#else
+#define screen_upscale_factor (1)
+#define sr_create() (0)
+#define sr_run()
+#define sr_destroy()
+#endif
+
 #define HR_MAX(a, b) ((a) > (b) ? (a) : (b))
 #define HR_MIN(a, b) ((a) < (b) ? (a) : (b))
 
@@ -800,7 +834,7 @@ void rpConfigSetDefault(void)
   encoder_which = 6;
   downscale_uv = 1;
   encode_lq = 1;
-  jpeg_quality = 75;
+  jpeg_quality = 90;
   zstd_comp_level = 4;
   me_method = 1;
   me_block_size = 3;
@@ -810,7 +844,7 @@ void rpConfigSetDefault(void)
   min_dp_frame_rate = 0;
   max_frame_rate = 0;
   me_select = 23;
-  target_mbit_rate = 12;
+  target_mbit_rate = 16;
   dynamic_priority = 1;
   multicore_encode = 1;
   low_latency = 1;
@@ -1504,8 +1538,8 @@ MainLoop(void *loopArg)
     gl_updated = 0;
     pthread_mutex_unlock(&gl_updated_mutex);
 
-    hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400, 240, SCREEN_TOP);
-    hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT);
+    hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400 * screen_upscale_factor, 240 * screen_upscale_factor, SCREEN_TOP);
+    hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320 * screen_upscale_factor, 240 * screen_upscale_factor, SCREEN_BOT);
 
     /* IMPORTANT: `nk_sdl_render` modifies some global OpenGL state
      * with blending, scissor, face culling, depth test and viewport and
@@ -1517,12 +1551,18 @@ MainLoop(void *loopArg)
   }
 }
 
-void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int top_bot, int frame_size_left, int frame_size_right, int delay_between_packet_left, int delay_between_packet_right)
+void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, uint8_t *rgb_upscaled, int top_bot, int frame_size_left, int frame_size_right, int delay_between_packet_left, int delay_between_packet_right)
 {
+#if (screen_upscale_factor > 1)
+  sr_run(240, top_bot == 0 ? 400 : 320, 3, rgb, rgb_upscaled);
+#else
+  rgb_upscaled = rgb;
+#endif
+
   pthread_mutex_lock(&ctx->gl_tex_mutex);
   int next_index = frame_buffer_context_next_free_index(ctx->next_index, ctx->index);
   uint8_t **pimage = &ctx->images[next_index];
-  *pimage = rgb;
+  *pimage = rgb_upscaled;
   ctx->updated = FBS_UPDATED;
   ctx->next_index = next_index;
   pthread_mutex_unlock(&ctx->gl_tex_mutex);
@@ -1802,6 +1842,7 @@ void render_rgb_bpp(uint8_t *rgb_image, int w, int h, int bpp) {
 }
 
 uint8_t screen_decoded[SCREEN_COUNT][400 * 240 * 3];
+uint8_t screen_upscaled[SCREEN_COUNT][400 * 240 * 3 * screen_upscale_factor * screen_upscale_factor];
 
 uint8_t upscaled_u_image[400 * 240];
 uint8_t upscaled_v_image[400 * 240];
@@ -3141,7 +3182,7 @@ int handle_recv(uint8_t *buf, int size)
               }
               screen_done[top_bot][pos] = 1;
               screen_frame_n[top_bot][pos] += RP_IMAGE_FRAME_N_RANGE;
-              handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot], top_bot,
+              handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot], screen_upscaled[top_bot], top_bot,
                 screen_data_size[top_bot][pos][RP_SCREEN_SPLIT_LEFT], screen_data_size[top_bot][pos][RP_SCREEN_SPLIT_RIGHT],
                 screen_data_delay_between_packet[top_bot][pos][RP_SCREEN_SPLIT_LEFT], screen_data_delay_between_packet[top_bot][pos][RP_SCREEN_SPLIT_RIGHT]);
               // fprintf(stderr, "Displaying key frame: screen %d, frame_n = %d\n", top_bot, frame_n[top_bot]);
@@ -3329,7 +3370,7 @@ int handle_recv(uint8_t *buf, int size)
                     else if (debug_view_plane == 8)
                       render_greyscale_upscale_to_comp3(screen_decoded[top_bot], w_orig, h_orig, screen_buf[top_bot][i][V_COMP], ntr_downscale_uv ? DSX_DIM(w_orig, dsx) : w_orig, ntr_downscale_uv ? DSX_DIM(h_orig, dsx) : h_orig, screen_bpp_cur[V_COMP]);
                     screen_done[top_bot][i] = 1;
-                    handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot], top_bot,
+                    handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot], screen_upscaled[top_bot], top_bot,
                       screen_data_size[top_bot][pos][RP_SCREEN_SPLIT_LEFT], screen_data_size[top_bot][pos][RP_SCREEN_SPLIT_RIGHT],
                       screen_data_delay_between_packet[top_bot][pos][RP_SCREEN_SPLIT_LEFT], screen_data_delay_between_packet[top_bot][pos][RP_SCREEN_SPLIT_RIGHT]);
                     // fprintf(stderr, "Displaying p_frame: screen %d, frame_n = %d\n", top_bot, frame_n_next);
@@ -3545,6 +3586,10 @@ void *udp_recv_thread_func(void *)
 
 int main(int argc, char *argv[])
 {
+  CoInitializeEx(NULL, COINIT_MULTITHREADED);
+  if (sr_create() < 0)
+    return -1;
+
   /* GUI */
   struct nk_context *ctx;
   SDL_GLContext glContext;
@@ -3680,5 +3725,7 @@ int main(int argc, char *argv[])
   SDL_GL_DeleteContext(glContext);
   SDL_DestroyWindow(win);
   SDL_Quit();
+
+  sr_destroy();
   return 0;
 }
