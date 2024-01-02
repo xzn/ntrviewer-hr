@@ -1294,7 +1294,7 @@ int handle_recv(uint8_t *buf, int size)
     }
 
     recv_end[work] = 2;
-    int top_bot = !isTop;
+    int top_bot = !recv_hdr[work][1];
     if (handle_decode(screen_decoded[top_bot], recv_buf[work], recv_end_size[work], isTop ? 400 : 320, 240) != 0) {
       fprintf(stderr, "recv decode error\n");
       return 0;
