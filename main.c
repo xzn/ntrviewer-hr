@@ -1334,6 +1334,17 @@ void receive_from_socket(SOCKET s)
       continue;
     }
 
+    if (ip_octets[0] == 0 &&
+      ip_octets[1] == 0 &&
+      ip_octets[2] == 0 &&
+      ip_octets[3] == 0)
+    {
+      ip_octets[0] = remoteAddr.sin_addr.S_un.S_un_b.s_b1;
+      ip_octets[1] = remoteAddr.sin_addr.S_un.S_un_b.s_b2;
+      ip_octets[2] = remoteAddr.sin_addr.S_un.S_un_b.s_b3;
+      ip_octets[3] = remoteAddr.sin_addr.S_un.S_un_b.s_b4;
+    }
+
     if (handle_recv(buf, ret) < 0)
     {
       return;
