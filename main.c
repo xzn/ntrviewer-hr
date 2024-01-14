@@ -1177,20 +1177,79 @@ uint32_t recv_delay_between_packets[rp_work_count];
 uint32_t recv_last_packet_time[rp_work_count];
 uint8_t recv_work;
 
+void* rpMalloc(j_common_ptr cinfo, u32 size)
+{
+  void* ret = cinfo->alloc.buf + cinfo->alloc.stats.offset;
+  u32 totalSize = size;
+  if (totalSize % 32 != 0) {
+    totalSize += 32 - (totalSize % 32);
+  }
+  if (cinfo->alloc.stats.remaining < totalSize) {
+    u32 alloc_size = cinfo->alloc.stats.offset + cinfo->alloc.stats.remaining;
+    fprintf(stderr, "bad alloc, size: %d/%d\n", totalSize, alloc_size);
+    return 0;
+  }
+  cinfo->alloc.stats.offset += totalSize;
+  cinfo->alloc.stats.remaining -= totalSize;
+
+#if 0
+  if (cinfo->alloc.stats.offset > cinfo->alloc.max_offset) {
+    cinfo->alloc.max_offset = cinfo->alloc.stats.offset;
+    nsDbgPrint("cinfo %08x alloc.max_offset: %d\n", cinfo, cinfo->alloc.max_offset);
+  }
+#endif
+
+  return ret;
+}
+
+void rpFree(j_common_ptr, void*) {}
+
 void jpeg_error_exit(j_common_ptr cinfo)
 {
   /* Always display the message */
   (*cinfo->err->output_message) (cinfo);
 
   /* Let the memory manager delete any temp files before we die */
-  jpeg_destroy(cinfo);
+  // jpeg_destroy(cinfo);
+  cinfo->has_error = 1;
+}
+
+void jpeg_emit_message(j_common_ptr cinfo, int msg_level)
+{
+  struct jpeg_error_mgr *err = cinfo->err;
+
+  if (msg_level < 0) {
+    /* It's a warning message.  Since corrupt files may generate many warnings,
+     * the policy implemented here is to show only the first warning,
+     * unless trace_level >= 3.
+     */
+    if (err->num_warnings == 0 || err->trace_level >= 3)
+      (*err->output_message) (cinfo);
+    /* Always count warnings in num_warnings. */
+    err->num_warnings++;
+    cinfo->has_error = 1;
+  } else {
+    /* It's a trace message.  Show it if trace_level >= msg_level. */
+    if (err->trace_level >= msg_level)
+      (*err->output_message) (cinfo);
+  }
 }
 
 int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
   struct jpeg_decompress_struct cinfo;
+  cinfo.alloc.buf = malloc(400 * 240 * 3);
+  if (cinfo.alloc.buf) {
+    cinfo.alloc.stats.offset = 0;
+    cinfo.alloc.stats.remaining = 400 * 240 * 3;
+  } else {
+    return -1;
+  }
+
   struct jpeg_error_mgr jerr;
   cinfo.err = jpeg_std_error(&jerr);
   jerr.error_exit = jpeg_error_exit;
+  jerr.emit_message = jpeg_emit_message;
+
   jpeg_create_decompress(&cinfo);
   jpeg_mem_src(&cinfo, in, size);
   int ret = jpeg_read_header(&cinfo, TRUE);
@@ -1204,16 +1263,17 @@ int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
       }
       jpeg_finish_decompress(&cinfo);
       jpeg_destroy_decompress(&cinfo);
-      ret = 1;
+      ret = cinfo.has_error ? -1 : 0;
     } else {
       jpeg_destroy_decompress(&cinfo);
-      ret = 0;
+      ret = -1;
     }
   } else {
     jpeg_destroy_decompress(&cinfo);
-    ret = 0;
+    ret = -1;
   }
-  return ret == 1 ? 0 : -1;
+  free(cinfo.alloc.buf);
+  return ret;
 }
 
 int handle_recv(uint8_t *buf, int size)

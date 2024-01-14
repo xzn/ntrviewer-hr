@@ -33,10 +33,16 @@
  * You can remove those references if you want to compile without <stdio.h>.
  */
 
+#include <stdint.h>
 #include <stddef.h>
-#include <stdlib.h>
+// #include <stdlib.h>
+#define malloc(s) rpMalloc((j_common_ptr)cinfo, s)
+#define free(p) rpFree((j_common_ptr)cinfo, p)
+#define exit(code) ((void)code)
 #include <stdio.h>
 #include <string.h>
+#define NO_GETENV
+#define NO_PUTENV
 
 /*
  * These macros/inline functions facilitate using Microsoft's "safe string"

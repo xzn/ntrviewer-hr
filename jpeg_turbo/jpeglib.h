@@ -296,16 +296,29 @@ typedef enum {
   JDITHER_FS              /* Floyd-Steinberg error diffusion dither */
 } J_DITHER_MODE;
 
+struct rp_alloc_stats {
+  uint32_t offset;
+  uint32_t remaining;
+};
+
+struct rp_alloc_state {
+  uint8_t* buf;
+  struct rp_alloc_stats stats;
+  uint32_t max_offset;
+};
+
 
 /* Common fields between JPEG compression and decompression master structs. */
 
 #define jpeg_common_fields \
   struct jpeg_error_mgr *err;   /* Error handler module */ \
   struct jpeg_memory_mgr *mem;  /* Memory manager module */ \
+  struct rp_alloc_state alloc; \
   struct jpeg_progress_mgr *progress; /* Progress monitor, or NULL if none */ \
   void *client_data;            /* Available for use by application */ \
   boolean is_decompressor;      /* So common code can tell which is which */ \
-  int global_state              /* For checking call sequence validity */
+  int global_state;             /* For checking call sequence validity */ \
+  boolean has_error
 
 /* Routines that are to be used by both halves of the library are declared
  * to receive a pointer to this structure.  There are no actual instances of
@@ -323,6 +336,8 @@ typedef struct jpeg_common_struct *j_common_ptr;
 typedef struct jpeg_compress_struct *j_compress_ptr;
 typedef struct jpeg_decompress_struct *j_decompress_ptr;
 
+void* rpMalloc(j_common_ptr cinfo, uint32_t size);
+void rpFree(j_common_ptr, void*);
 
 /* Master record for a compression instance */
 
