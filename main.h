@@ -8,6 +8,7 @@
 #include <assert.h>
 #include <limits.h>
 #include <time.h>
+#include <setjmp.h>
 
 #include "glad/gles2.h"
 

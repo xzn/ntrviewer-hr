@@ -1204,6 +1204,8 @@ void* rpMalloc(j_common_ptr cinfo, u32 size)
 
 void rpFree(j_common_ptr, void*) {}
 
+jmp_buf jpeg_jmp;
+
 void jpeg_error_exit(j_common_ptr cinfo)
 {
   /* Always display the message */
@@ -1212,6 +1214,7 @@ void jpeg_error_exit(j_common_ptr cinfo)
   /* Let the memory manager delete any temp files before we die */
   // jpeg_destroy(cinfo);
   cinfo->has_error = 1;
+  longjmp(jpeg_jmp, 1);
 }
 
 void jpeg_emit_message(j_common_ptr cinfo, int msg_level)
@@ -1228,6 +1231,7 @@ void jpeg_emit_message(j_common_ptr cinfo, int msg_level)
     /* Always count warnings in num_warnings. */
     err->num_warnings++;
     cinfo->has_error = 1;
+    longjmp(jpeg_jmp, 1);
   } else {
     /* It's a trace message.  Show it if trace_level >= msg_level. */
     if (err->trace_level >= msg_level)
@@ -1250,29 +1254,35 @@ int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
   jerr.error_exit = jpeg_error_exit;
   jerr.emit_message = jpeg_emit_message;
 
-  jpeg_create_decompress(&cinfo);
-  jpeg_mem_src(&cinfo, in, size);
-  int ret = jpeg_read_header(&cinfo, TRUE);
-  if (ret == JPEG_HEADER_OK) {
-    jpeg_start_decompress(&cinfo);
-    // fprintf(stderr, "jpeg_read_header: %d %d (%d %d)\n", (int)cinfo.output_width, (int)cinfo.output_height, h, w);
-    if (!cinfo.has_error && (int)cinfo.output_width == h && (int)cinfo.output_height == w) {
-      while (cinfo.output_scanline < cinfo.output_height) {
-        uint8_t *buffer = out + cinfo.output_scanline * cinfo.output_width * 3;
-        jpeg_read_scanlines(&cinfo, &buffer, 1);
-        if (cinfo.has_error)
-          break;
+  int i = setjmp(jpeg_jmp);
+  int ret = 0;
+  if (i == 0) {
+    jpeg_create_decompress(&cinfo);
+    jpeg_mem_src(&cinfo, in, size);
+    ret = jpeg_read_header(&cinfo, TRUE);
+    if (ret == JPEG_HEADER_OK) {
+      jpeg_start_decompress(&cinfo);
+      // fprintf(stderr, "jpeg_read_header: %d %d (%d %d)\n", (int)cinfo.output_width, (int)cinfo.output_height, h, w);
+      if (!cinfo.has_error && (int)cinfo.output_width == h && (int)cinfo.output_height == w) {
+        while (cinfo.output_scanline < cinfo.output_height) {
+          uint8_t *buffer = out + cinfo.output_scanline * cinfo.output_width * 3;
+          jpeg_read_scanlines(&cinfo, &buffer, 1);
+          if (cinfo.has_error)
+            break;
+        }
+        if (!cinfo.has_error)
+          jpeg_finish_decompress(&cinfo);
+        // jpeg_destroy_decompress(&cinfo);
+        ret = cinfo.has_error ? -1 : 0;
+      } else {
+        // jpeg_destroy_decompress(&cinfo);
+        ret = -1;
       }
-      if (!cinfo.has_error)
-        jpeg_finish_decompress(&cinfo);
-      // jpeg_destroy_decompress(&cinfo);
-      ret = cinfo.has_error ? -1 : 0;
     } else {
       // jpeg_destroy_decompress(&cinfo);
       ret = -1;
     }
   } else {
-    // jpeg_destroy_decompress(&cinfo);
     ret = -1;
   }
   free(cinfo.alloc.buf);
