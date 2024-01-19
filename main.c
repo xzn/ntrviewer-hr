@@ -46,6 +46,8 @@ typedef int SOCKET;
 #define sock_errno() errno
 #endif
 
+#define RP_SOCKET_TIMEOUT (2000)
+
 int sock_startup(void)
 {
 #ifdef _WIN32
@@ -232,6 +234,9 @@ static int ntr_rp_priority_factor;
 static int ntr_rp_quality;
 static int ntr_rp_qos;
 
+static int ntr_rp_port = 8001;
+static int ntr_rp_port_changed;
+
 static nk_bool upscaling_filter;
 static nk_bool upscaling_filter_created;
 
@@ -324,7 +329,6 @@ int tcp_send_packet_header(SOCKET s, uint32_t seq, uint32_t type, uint32_t cmd, 
   return tcp_send(s, buf, size);
 }
 
-#define TCP_SOCKET_TIMEOUT 2000
 SOCKET tcp_connect(int port)
 {
   struct sockaddr_in servaddr = {0};
@@ -614,6 +618,124 @@ void rpConfigSetDefault(void)
   ntr_rp_qos = 16;
 }
 
+static char **autoIPs;
+static uint8_t **autoIPsOctets;
+static int autoIPsCount;
+
+static void freeAutoIPs(void) {
+  if(autoIPsCount) {
+    for (int i = 0; i < autoIPsCount; ++i) {
+      free(autoIPs[i]);
+      free(autoIPsOctets[i]);
+    }
+    free(autoIPs);
+    free(autoIPsOctets);
+    autoIPs = 0;
+    autoIPsOctets = 0;
+    autoIPsCount = 0;
+  }
+}
+
+static void allocAutoIPs(int count) {
+  if (count) {
+    autoIPs = malloc(sizeof(*autoIPs) * count);
+    autoIPsOctets = malloc(sizeof(*autoIPsOctets) * count);
+    for (int i = 0; i < count; ++i) {
+      autoIPs[i] = malloc(50);
+      autoIPsOctets[i] = malloc(4);
+    }
+    autoIPsCount = count;
+  }
+}
+
+static PMIB_IPNETTABLE ipNetBuf = 0;
+static ULONG ipNetBufSize = 0;
+
+static void getIPMapMAC(void) {
+  if (ipNetBuf)
+    free(ipNetBuf);
+
+  ipNetBufSize = 0;
+  if (GetIpNetTable(NULL, &ipNetBufSize, TRUE) == ERROR_INSUFFICIENT_BUFFER) {
+    ipNetBuf = malloc(ipNetBufSize);
+    ULONG ret = GetIpNetTable(ipNetBuf, &ipNetBufSize, TRUE);
+    if (ret == NO_ERROR) {
+      return;
+    } else {
+      free(ipNetBuf);
+      ipNetBuf = 0;
+      ipNetBufSize = 0;
+    }
+  } else {
+    ipNetBufSize = 0;
+  }
+}
+
+// taken from Boop's source code https://github.com/miltoncandelero/Boop
+static uint8_t const knownMACs[][3] = {
+  { 0x00, 0x09, 0xBF }, { 0x00, 0x16, 0x56 }, { 0x00, 0x17, 0xAB }, { 0x00, 0x19, 0x1D }, { 0x00, 0x19, 0xFD },
+  { 0x00, 0x1A, 0xE9 }, { 0x00, 0x1B, 0x7A }, { 0x00, 0x1B, 0xEA }, { 0x00, 0x1C, 0xBE }, { 0x00, 0x1D, 0xBC },
+  { 0x00, 0x1E, 0x35 }, { 0x00, 0x1E, 0xA9 }, { 0x00, 0x1F, 0x32 }, { 0x00, 0x1F, 0xC5 }, { 0x00, 0x21, 0x47 },
+  { 0x00, 0x21, 0xBD }, { 0x00, 0x22, 0x4C }, { 0x00, 0x22, 0xAA }, { 0x00, 0x22, 0xD7 }, { 0x00, 0x23, 0x31 },
+  { 0x00, 0x23, 0xCC }, { 0x00, 0x24, 0x1E }, { 0x00, 0x24, 0x44 }, { 0x00, 0x24, 0xF3 }, { 0x00, 0x25, 0xA0 },
+  { 0x00, 0x26, 0x59 }, { 0x00, 0x27, 0x09 }, { 0x04, 0x03, 0xD6 }, { 0x18, 0x2A, 0x7B }, { 0x2C, 0x10, 0xC1 },
+  { 0x34, 0xAF, 0x2C }, { 0x40, 0xD2, 0x8A }, { 0x40, 0xF4, 0x07 }, { 0x58, 0x2F, 0x40 }, { 0x58, 0xBD, 0xA3 },
+  { 0x5C, 0x52, 0x1E }, { 0x60, 0x6B, 0xFF }, { 0x64, 0xB5, 0xC6 }, { 0x78, 0xA2, 0xA0 }, { 0x7C, 0xBB, 0x8A },
+  { 0x8C, 0x56, 0xC5 }, { 0x8C, 0xCD, 0xE8 }, { 0x98, 0xB6, 0xE9 }, { 0x9C, 0xE6, 0x35 }, { 0xA4, 0x38, 0xCC },
+  { 0xA4, 0x5C, 0x27 }, { 0xA4, 0xC0, 0xE1 }, { 0xB8, 0x78, 0x26 }, { 0xB8, 0x8A, 0xEC }, { 0xB8, 0xAE, 0x6E },
+  { 0xCC, 0x9E, 0x00 }, { 0xCC, 0xFB, 0x65 }, { 0xD8, 0x6B, 0xF7 }, { 0xDC, 0x68, 0xEB }, { 0xE0, 0x0C, 0x7F },
+  { 0xE0, 0xE7, 0x51 }, { 0xE8, 0x4E, 0xCE }, { 0xEC, 0xC4, 0x0D }, { 0xE8, 0x4E, 0xCE }
+};
+
+static int matchMAC(UCHAR *mac) {
+  // fprintf(stderr, "%02x-%02x-%02x\n", (int)mac[0], (int)mac[1], (int)mac[2]);
+  for (unsigned i = 0; i < sizeof(knownMACs) / sizeof(*knownMACs); ++i) {
+    if (memcmp(mac, knownMACs[i], 3) == 0)
+      return 1;
+  }
+  return 0;
+}
+
+static int selectedIP = 0;
+static void detect3DSIP(void) {
+  getIPMapMAC();
+
+  int detectedIPsCount = 0;
+  int *mapIndex = 0;
+  if (ipNetBufSize) {
+    mapIndex = malloc(ipNetBuf->dwNumEntries * sizeof(*mapIndex));
+    for (unsigned i = 0; i < ipNetBuf->dwNumEntries; ++i) {
+      PMIB_IPNETROW entry = &ipNetBuf->table[i];
+      if (entry->dwType != MIB_IPNET_TYPE_INVALID) {
+        if (entry->dwPhysAddrLen == 6) {
+          if (matchMAC(entry->bPhysAddr)) {
+            mapIndex[detectedIPsCount] = i;
+            ++detectedIPsCount;
+          }
+        }
+      }
+    }
+  }
+
+  freeAutoIPs();
+  allocAutoIPs(detectedIPsCount + 1);
+
+  strcpy(autoIPs[0], "None Detected");
+  memset(autoIPsOctets[0], 0, 4);
+
+  for (int i = 0; i < detectedIPsCount; ++i) {
+    PMIB_IPNETROW entry = &ipNetBuf->table[mapIndex[i]];
+    uint8_t *octets = (uint8_t *)&entry->dwAddr;
+    sprintf(autoIPs[i + 1], "%d.%d.%d.%d", (int)octets[0], (int)octets[1], (int)octets[2], (int)octets[3]);
+    memcpy(autoIPsOctets[i + 1], &entry->dwAddr, 4);
+  }
+  free(mapIndex);
+
+  if (detectedIPsCount) {
+    selectedIP = 1;
+  }
+}
+
 int hide_windows = 0;
 static void guiMain(struct nk_context *ctx)
 {
@@ -648,7 +770,34 @@ static void guiMain(struct nk_context *ctx)
     {
       int ip_octet = ip_octets[i];
       nk_property_int(ctx, "#", 0, &ip_octet, 255, 1, 1);
-      ip_octets[i] = ip_octet;
+      if (ip_octet != ip_octets[i]) {
+        ip_octets[i] = ip_octet;
+        strcpy(autoIPs[0], "Manual");
+        selectedIP = 0;
+      }
+    }
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    if (nk_button_label(ctx, "Auto-Detect")) {
+      detect3DSIP();
+    }
+    static struct nk_vec2 comboIPsSize = {300, 200};
+    nk_combobox(ctx, (const char **)autoIPs, autoIPsCount, &selectedIP, 30, comboIPsSize);
+    if (selectedIP) {
+      for (int i = 0; i < 4; ++i) {
+        ip_octets[i] = autoIPsOctets[selectedIP][i];
+      }
+    }
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Viewer Port", NK_TEXT_CENTERED);
+    {
+      int port = ntr_rp_port;
+      nk_property_int(ctx, "#", 1024, &port, 65535, 1, 1);
+      if (port != ntr_rp_port) {
+        ntr_rp_port = port;
+        ntr_rp_port_changed = 1;
+      }
     }
 
     nk_layout_row_dynamic(ctx, 30, 2);
@@ -690,8 +839,11 @@ static void guiMain(struct nk_context *ctx)
     if (nk_checkbox_label(ctx, "", &upscaling_filter)) {
       if (upscaling_filter) {
         if (!upscaling_filter_created) {
-          sr_create();
-          upscaling_filter_created = 1;
+          if (sr_create() < 0) {
+            fprintf(stderr, "Failed to create NCNN instance for upscaling filter.\n");
+            upscaling_filter = 0;
+          } else
+            upscaling_filter_created = 1;
         }
       }
     }
@@ -1291,7 +1443,7 @@ int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
 
 int handle_recv(uint8_t *buf, int size)
 {
-  if (size < 4) {
+  if (size < rp_data_hdr_size) {
     fprintf(stderr, "recv header too small\n");
     return 0;
   }
@@ -1307,11 +1459,9 @@ int handle_recv(uint8_t *buf, int size)
   uint8_t end = 0;
   if (hdr[1] & 0x10) {
     end = 1;
-  } else {
-    if (size != rp_packet_data_size) {
-      fprintf(stderr, "recv incorrect size\n");
-      return 0;
-    }
+  } else if (size != rp_packet_data_size) {
+    fprintf(stderr, "recv incorrect size\n");
+    return 0;
   }
   hdr[1] &= 0x1;
   uint8_t isTop = hdr[1];
@@ -1385,7 +1535,7 @@ struct sockaddr_in remoteAddr;
 
 void receive_from_socket(SOCKET s)
 {
-  while (running)
+  while (running && !ntr_rp_port_changed)
   {
     socklen_t nAddrLen = sizeof(remoteAddr);
 
@@ -1425,6 +1575,10 @@ void receive_from_socket(SOCKET s)
   }
 }
 
+void socket_error_pause(void) {
+  Sleep(RP_SOCKET_TIMEOUT);
+}
+
 void *udp_recv_thread_func(void *)
 {
   SDL_GL_MakeCurrent(win, glThreadContext);
@@ -1447,21 +1601,27 @@ void *udp_recv_thread_func(void *)
     if (!SOCKET_VALID(s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)))
     {
       fprintf(stderr, "socket creation failed\n");
-      running = 0;
-      break;
+      // running = 0;
+      socket_error_pause();
+      continue;
     }
 
+    int port = ntr_rp_port;
     struct sockaddr_in si_other;
     si_other.sin_family = AF_INET;
-    si_other.sin_port = htons(8001);
+    si_other.sin_port = htons(port);
     si_other.sin_addr.s_addr = htonl(INADDR_ANY);
 
     if (bind(s, (struct sockaddr *)&si_other, sizeof(si_other)) == SOCKET_ERROR)
     {
-      fprintf(stderr, "socket bind failed\n");
-      running = 0;
-      break;
+      fprintf(stderr, "socket bind failed for port %d\n", port);
+      // running = 0;
+      socket_error_pause();
+      continue;
     }
+    fprintf(stderr, "port bound at %d\n", port);
+    ntr_rp_port_changed = 0;
+    ntr_rp_port = port;
 
     int buff_size = 6 * 1024 * 1024;
     socklen_t tmp = sizeof(buff_size);
@@ -1472,11 +1632,11 @@ void *udp_recv_thread_func(void *)
     if (ret)
     {
       fprintf(stderr, "setsockopt buf size failed\n");
-      running = 0;
-      break;
+      // running = 0;
+      socket_error_pause();
+      continue;
     }
 
-#define RP_SOCKET_TIMEOUT (2000)
 #ifdef _WIN32
     DWORD timeout = RP_SOCKET_TIMEOUT;
 #else
@@ -1488,8 +1648,9 @@ void *udp_recv_thread_func(void *)
     if (ret)
     {
       fprintf(stderr, "setsockopt timeout failed\n");
-      running = 0;
-      break;
+      // running = 0;
+      socket_error_pause();
+      continue;
     }
 
     receive_from_socket(s);
@@ -1600,6 +1761,7 @@ int main(int argc, char *argv[])
   gl_sampler_loc = glGetUniformLocation(gl_program, "s_texture");
 
   rpConfigSetDefault();
+  detect3DSIP();
 
   pthread_t udp_recv_thread;
   if ((ret = pthread_create(&udp_recv_thread, NULL, udp_recv_thread_func, NULL)))
