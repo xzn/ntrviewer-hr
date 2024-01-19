@@ -652,8 +652,11 @@ static PMIB_IPNETTABLE ipNetBuf = 0;
 static ULONG ipNetBufSize = 0;
 
 static void getIPMapMAC(void) {
-  if (ipNetBuf)
+  if (ipNetBuf) {
     free(ipNetBuf);
+    ipNetBuf = 0;
+    ipNetBufSize = 0;
+  }
 
   ipNetBufSize = 0;
   if (GetIpNetTable(NULL, &ipNetBufSize, TRUE) == ERROR_INSUFFICIENT_BUFFER) {
@@ -720,7 +723,11 @@ static void detect3DSIP(void) {
   freeAutoIPs();
   allocAutoIPs(detectedIPsCount + 1);
 
-  strcpy(autoIPs[0], "None Detected");
+  if (detectedIPsCount) {
+    strcpy(autoIPs[0], "");
+  } else {
+    strcpy(autoIPs[0], "None Detected");
+  }
   memset(autoIPsOctets[0], 0, 4);
 
   for (int i = 0; i < detectedIPsCount; ++i) {
@@ -731,8 +738,129 @@ static void detect3DSIP(void) {
   }
   free(mapIndex);
 
-  if (detectedIPsCount) {
-    selectedIP = 1;
+  selectedIP = detectedIPsCount ? 1 : 0;
+  memcpy(ip_octets, autoIPsOctets[selectedIP], 4);
+}
+
+static PIP_ADAPTER_INFO adapterInfos;
+static ULONG adaptorInfosSize;
+
+static char **adaptorIPs;
+static uint8_t **adaptorIPsOctets;
+static int adaptorIPsCount;
+
+static void freeAdaptorIPs(void) {
+  if(adaptorIPsCount) {
+    for (int i = 0; i < adaptorIPsCount; ++i) {
+      free(adaptorIPs[i]);
+      free(adaptorIPsOctets[i]);
+    }
+    free(adaptorIPs);
+    free(adaptorIPsOctets);
+    adaptorIPs = 0;
+    adaptorIPsOctets = 0;
+    adaptorIPsCount = 0;
+  }
+}
+
+static void allocAdaptorIPs(int count) {
+  if (count) {
+    adaptorIPs = malloc(sizeof(*adaptorIPs) * count);
+    adaptorIPsOctets = malloc(sizeof(*adaptorIPsOctets) * count);
+    for (int i = 0; i < count; ++i) {
+      adaptorIPs[i] = malloc(50);
+      adaptorIPsOctets[i] = malloc(4);
+    }
+    adaptorIPsCount = count;
+  }
+}
+
+static int selectedAdaptor;
+static void tryAutoSelectAdapterIP(void) {
+  selectedAdaptor = 0;
+  uint32_t count = 0;
+  for (int i = 1; i < adaptorIPsCount - 2; ++i) {
+    uint32_t bits = __builtin_bswap32(*(uint32_t *)ip_octets & *(uint32_t *)adaptorIPsOctets[i]);
+    if (/*(int)bits < 0 && */bits > count) {
+      count = bits;
+      selectedAdaptor = i;
+    }
+  }
+}
+
+static uint32_t parseIPAddress(const char *ip) {
+  return inet_addr(ip);
+}
+
+static int getAdaptorCount(void) {
+  int count = 0;
+  PIP_ADAPTER_INFO next = adapterInfos;
+  while (next) {
+    PIP_ADDR_STRING ip = &next->IpAddressList;
+    while (ip) {
+      if (parseIPAddress(ip->IpAddress.String) != 0)
+        ++count;
+      ip = ip->Next;
+    }
+    next = next->Next;
+  }
+  return count;
+}
+
+static void updateAdapterIPs(void) {
+  freeAdaptorIPs();
+
+  int count = getAdaptorCount();
+
+  allocAdaptorIPs(count + 3);
+
+  strcpy(adaptorIPs[0], "0.0.0.0 (Any)");
+  memset(adaptorIPsOctets[0], 0, 4);
+
+  PIP_ADAPTER_INFO next = adapterInfos;
+  for (int i = 0; i < count;) {
+    PIP_ADDR_STRING ip = &next->IpAddressList;
+    while (ip) {
+      int addr;
+      if ((addr = parseIPAddress(ip->IpAddress.String)) != 0) {
+        sprintf(adaptorIPs[i + 1], "%s", ip->IpAddress.String);
+        memcpy(adaptorIPsOctets[i + 1], &addr, 4);
+        ++i;
+      }
+      ip = ip->Next;
+    }
+    next = next->Next;
+  }
+
+  strcpy(adaptorIPs[1 + count], "Auto-Select");
+  memset(adaptorIPsOctets[1 + count], 0, 4);
+
+  strcpy(adaptorIPs[1 + count + 1], "Refresh List");
+  memset(adaptorIPsOctets[1 + count + 1], 0, 4);
+
+  tryAutoSelectAdapterIP();
+}
+
+static void getAdapterIPs(void) {
+  if (adapterInfos) {
+    free(adapterInfos);
+    adapterInfos = 0;
+    adaptorInfosSize = 0;
+  }
+
+  if (ERROR_BUFFER_OVERFLOW != GetAdaptersInfo(adapterInfos, &adaptorInfosSize)) {
+    adaptorInfosSize = 0;
+    return;
+  }
+
+  adapterInfos = malloc(adaptorInfosSize);
+  ULONG ret = GetAdaptersInfo(adapterInfos, &adaptorInfosSize);
+  if (ret == ERROR_SUCCESS) {
+    updateAdapterIPs();
+  } else {
+    free(adapterInfos);
+    adapterInfos = 0;
+    adaptorInfosSize = 0;
   }
 }
 
@@ -780,12 +908,29 @@ static void guiMain(struct nk_context *ctx)
     nk_layout_row_dynamic(ctx, 30, 2);
     if (nk_button_label(ctx, "Auto-Detect")) {
       detect3DSIP();
+      tryAutoSelectAdapterIP();
     }
     static struct nk_vec2 comboIPsSize = {300, 200};
-    nk_combobox(ctx, (const char **)autoIPs, autoIPsCount, &selectedIP, 30, comboIPsSize);
-    if (selectedIP) {
-      for (int i = 0; i < 4; ++i) {
-        ip_octets[i] = autoIPsOctets[selectedIP][i];
+    int selected = selectedIP;
+    nk_combobox(ctx, (const char **)autoIPs, autoIPsCount, &selected, 30, comboIPsSize);
+    if (selected != selectedIP) {
+      selectedIP = selected;
+      if (selectedIP) {
+        memcpy(ip_octets, autoIPsOctets[selectedIP], 4);
+        tryAutoSelectAdapterIP();
+      }
+    }
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Viewer IP", NK_TEXT_CENTERED);
+    selected = selectedAdaptor;
+    nk_combobox(ctx, (const char **)adaptorIPs, adaptorIPsCount, &selected, 30, comboIPsSize);
+    if (selected != selectedAdaptor) {
+      selectedAdaptor = selected;
+      if (selectedAdaptor == adaptorIPsCount - 2) {
+        tryAutoSelectAdapterIP();
+      } else if (selectedAdaptor == adaptorIPsCount - 1) {
+        getAdapterIPs();
       }
     }
 
@@ -796,7 +941,6 @@ static void guiMain(struct nk_context *ctx)
       nk_property_int(ctx, "#", 1024, &port, 65535, 1, 1);
       if (port != ntr_rp_port) {
         ntr_rp_port = port;
-        ntr_rp_port_changed = 1;
       }
     }
 
@@ -832,6 +976,7 @@ static void guiMain(struct nk_context *ctx)
         menu_work_state = CS_CONNECTING;
       }
       menu_remote_play = TRUE;
+      ntr_rp_port_changed = 1;
     }
 
     nk_layout_row_dynamic(ctx, 30, 2);
@@ -1610,7 +1755,7 @@ void *udp_recv_thread_func(void *)
     struct sockaddr_in si_other;
     si_other.sin_family = AF_INET;
     si_other.sin_port = htons(port);
-    si_other.sin_addr.s_addr = htonl(INADDR_ANY);
+    si_other.sin_addr.s_addr = *(uint32_t *)adaptorIPsOctets[selectedAdaptor];
 
     if (bind(s, (struct sockaddr *)&si_other, sizeof(si_other)) == SOCKET_ERROR)
     {
@@ -1619,7 +1764,8 @@ void *udp_recv_thread_func(void *)
       socket_error_pause();
       continue;
     }
-    fprintf(stderr, "port bound at %d\n", port);
+    uint8_t *octets = adaptorIPsOctets[selectedAdaptor];
+    fprintf(stderr, "port bound at %d.%d.%d.%d:%d\n", (int)octets[0], (int)octets[1], (int)octets[2], (int)octets[3], port);
     ntr_rp_port_changed = 0;
     ntr_rp_port = port;
 
@@ -1762,6 +1908,8 @@ int main(int argc, char *argv[])
 
   rpConfigSetDefault();
   detect3DSIP();
+  getAdapterIPs();
+  tryAutoSelectAdapterIP();
 
   pthread_t udp_recv_thread;
   if ((ret = pthread_create(&udp_recv_thread, NULL, udp_recv_thread_func, NULL)))
