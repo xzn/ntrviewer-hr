@@ -236,6 +236,7 @@ static int ntr_rp_qos;
 
 static int ntr_rp_port = 8001;
 static int ntr_rp_port_changed;
+static int ntr_rp_bound_port;
 
 static nk_bool upscaling_filter;
 static nk_bool upscaling_filter_created;
@@ -491,7 +492,10 @@ void *menu_tcp_thread_func(void *)
       {
         menu_remote_play = 0;
 
-        uint32_t args[] = {(ntr_rp_priority << 8) | ntr_rp_priority_factor, ntr_rp_quality, ntr_rp_qos * 128 * 1024};
+        uint32_t args[] = {
+          (ntr_rp_priority << 8) | ntr_rp_priority_factor, ntr_rp_quality, ntr_rp_qos * 128 * 1024,
+          1404036572 /* guarding magic */, ntr_rp_bound_port
+        };
 
         ret = tcp_send_packet_header(sockfd, packet_seq, 0, 901,
                                      args, sizeof(args) / sizeof(*args), 0);
@@ -892,7 +896,7 @@ static void guiMain(struct nk_context *ctx)
                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_TITLE))
   {
     nk_layout_row_dynamic(ctx, 30, 5);
-    nk_label(ctx, "IP", NK_TEXT_CENTERED);
+    nk_label(ctx, "3DS IP", NK_TEXT_CENTERED);
 
     for (int i = 0; i < 4; ++i)
     {
@@ -976,6 +980,7 @@ static void guiMain(struct nk_context *ctx)
         menu_work_state = CS_CONNECTING;
       }
       menu_remote_play = TRUE;
+      ntr_rp_bound_port = ntr_rp_port;
       ntr_rp_port_changed = 1;
     }
 
@@ -1751,23 +1756,23 @@ void *udp_recv_thread_func(void *)
       continue;
     }
 
-    int port = ntr_rp_port;
+    ntr_rp_bound_port = ntr_rp_port;
     struct sockaddr_in si_other;
     si_other.sin_family = AF_INET;
-    si_other.sin_port = htons(port);
+    si_other.sin_port = htons(ntr_rp_bound_port);
     si_other.sin_addr.s_addr = *(uint32_t *)adaptorIPsOctets[selectedAdaptor];
 
     if (bind(s, (struct sockaddr *)&si_other, sizeof(si_other)) == SOCKET_ERROR)
     {
-      fprintf(stderr, "socket bind failed for port %d\n", port);
+      fprintf(stderr, "socket bind failed for port %d\n", ntr_rp_bound_port);
       // running = 0;
       socket_error_pause();
       continue;
     }
     uint8_t *octets = adaptorIPsOctets[selectedAdaptor];
-    fprintf(stderr, "port bound at %d.%d.%d.%d:%d\n", (int)octets[0], (int)octets[1], (int)octets[2], (int)octets[3], port);
+    fprintf(stderr, "port bound at %d.%d.%d.%d:%d\n", (int)octets[0], (int)octets[1], (int)octets[2], (int)octets[3], ntr_rp_bound_port);
     ntr_rp_port_changed = 0;
-    ntr_rp_port = port;
+    ntr_rp_port = ntr_rp_bound_port;
 
     int buff_size = 6 * 1024 * 1024;
     socklen_t tmp = sizeof(buff_size);
