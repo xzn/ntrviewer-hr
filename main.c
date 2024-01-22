@@ -169,6 +169,8 @@ typedef int64_t		s64;
 
 #define WINDOW_WIDTH 800
 #define WINDOW_HEIGHT 960
+#define WINDOW_WIDTH2 640
+#define WINDOW_HEIGHT12 480
 
 #define MAX_VERTEX_MEMORY 512 * 1024
 #define MAX_ELEMENT_MEMORY 128 * 1024
@@ -202,10 +204,10 @@ struct {
 } delay_between_packet_tracker[SCREEN_COUNT] = {};
 
 /* Platform */
-SDL_Window *win;
-SDL_GLContext glThreadContext;
+SDL_Window *win[2];
+SDL_GLContext glContext[2];
 int running = nk_true;
-int win_width, win_height;
+int win_width[2], win_height[2];
 
 enum ConnectionState
 {
@@ -240,6 +242,13 @@ static int ntr_rp_bound_port;
 
 static nk_bool upscaling_filter;
 static nk_bool upscaling_filter_created;
+typedef enum {
+  VIEW_MODE_TOP_BOT,
+  VIEW_MODE_SEPARATE,
+  VIEW_MODE_TOP,
+  VIEW_MODE_BOT,
+} view_mode_t;
+static view_mode_t view_mode;
 
 static atomic_uint_fast8_t ip_octets[4];
 
@@ -868,13 +877,46 @@ static void getAdapterIPs(void) {
   }
 }
 
+static void updateViewMode(void) {
+  switch (view_mode) {
+    case VIEW_MODE_TOP_BOT:
+    case VIEW_MODE_TOP:
+    case VIEW_MODE_BOT:
+      SDL_HideWindow(win[1]);
+      break;
+
+    case VIEW_MODE_SEPARATE:
+      SDL_ShowWindow(win[1]);
+      break;
+  }
+
+  switch (view_mode) {
+    case VIEW_MODE_TOP_BOT:
+      SDL_SetWindowSize(win[0], WINDOW_WIDTH, WINDOW_HEIGHT);
+      break;
+
+    case VIEW_MODE_TOP:
+      SDL_SetWindowSize(win[0], WINDOW_WIDTH, WINDOW_HEIGHT12);
+      break;
+
+    case VIEW_MODE_BOT:
+      SDL_SetWindowSize(win[0], WINDOW_WIDTH2, WINDOW_HEIGHT12);
+      break;
+
+    case VIEW_MODE_SEPARATE:
+      SDL_SetWindowSize(win[0], WINDOW_WIDTH, WINDOW_HEIGHT12);
+      SDL_SetWindowSize(win[1], WINDOW_WIDTH2, WINDOW_HEIGHT12);
+      break;
+  }
+}
+
 int hide_windows = 0;
 static void guiMain(struct nk_context *ctx)
 {
   struct nk_style_item fixed_background = ctx->style.window.fixed_background;
   ctx->style.window.fixed_background = nk_style_item_hide();
   const char *background_wnd = "Background";
-  if (nk_begin(ctx, background_wnd, nk_rect(0, 0, win_width, win_height),
+  if (nk_begin(ctx, background_wnd, nk_rect(0, 0, win_width[0], win_height[0]),
                NK_WINDOW_BACKGROUND))
   {
     if (nk_window_is_hovered(ctx) && nk_window_is_active(ctx, background_wnd) &&
@@ -892,9 +934,39 @@ static void guiMain(struct nk_context *ctx)
 
   /* GUI */
   const char *remote_play_wnd = "Remote Play";
-  if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 50, 600, 400),
+  if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 450, 450),
                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_TITLE))
   {
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "View Mode", NK_TEXT_CENTERED);
+    int selected = view_mode;
+    static struct nk_vec2 comboIPsSize = {225, 200};
+    const char *view_mode_options[] = {
+      "Top and Bottom",
+      "Separate Windows",
+      "Top Only",
+      "Bottom Only"
+    };
+    nk_combobox(ctx, view_mode_options, sizeof(view_mode_options) / sizeof(*view_mode_options), &selected, 30, comboIPsSize);
+    if (selected != (int)view_mode) {
+      view_mode = selected;
+      updateViewMode();
+    }
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Upscaling Filter", NK_TEXT_CENTERED);
+    if (nk_checkbox_label(ctx, "", &upscaling_filter)) {
+      if (upscaling_filter) {
+        if (!upscaling_filter_created) {
+          if (sr_create() < 0) {
+            fprintf(stderr, "Failed to create NCNN instance for upscaling filter.\n");
+            upscaling_filter = 0;
+          } else
+            upscaling_filter_created = 1;
+        }
+      }
+    }
+
     nk_layout_row_dynamic(ctx, 30, 5);
     nk_label(ctx, "3DS IP", NK_TEXT_CENTERED);
 
@@ -914,8 +986,7 @@ static void guiMain(struct nk_context *ctx)
       detect3DSIP();
       tryAutoSelectAdapterIP();
     }
-    static struct nk_vec2 comboIPsSize = {300, 200};
-    int selected = selectedIP;
+    selected = selectedIP;
     nk_combobox(ctx, (const char **)autoIPs, autoIPsCount, &selected, 30, comboIPsSize);
     if (selected != selectedIP) {
       selectedIP = selected;
@@ -940,22 +1011,15 @@ static void guiMain(struct nk_context *ctx)
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Viewer Port", NK_TEXT_CENTERED);
-    {
-      int port = ntr_rp_port;
-      nk_property_int(ctx, "#", 1024, &port, 65535, 1, 1);
-      if (port != ntr_rp_port) {
-        ntr_rp_port = port;
-      }
-    }
+    nk_property_int(ctx, "#", 1024, &ntr_rp_port, 65535, 1, 1);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Prioritize Top Screen", NK_TEXT_CENTERED);
     nk_checkbox_label(ctx, "", &ntr_rp_priority);
 
     nk_layout_row_dynamic(ctx, 30, 2);
-    snprintf(msg_buf, sizeof(msg_buf), "Priority Screen Factor %d", ntr_rp_priority_factor);
-    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-    nk_slider_int(ctx, 0, &ntr_rp_priority_factor, 255, 1);
+    nk_label(ctx, "Priority Screen Factor", NK_TEXT_CENTERED);
+    nk_property_int(ctx, "#", 0, &ntr_rp_priority_factor, 255, 1, 1);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     snprintf(msg_buf, sizeof(msg_buf), "JPEG Quality %d", ntr_rp_quality);
@@ -983,26 +1047,12 @@ static void guiMain(struct nk_context *ctx)
       ntr_rp_bound_port = ntr_rp_port;
       ntr_rp_port_changed = 1;
     }
-
-    nk_layout_row_dynamic(ctx, 30, 2);
-    nk_label(ctx, "Upscaling Filter", NK_TEXT_CENTERED);
-    if (nk_checkbox_label(ctx, "", &upscaling_filter)) {
-      if (upscaling_filter) {
-        if (!upscaling_filter_created) {
-          if (sr_create() < 0) {
-            fprintf(stderr, "Failed to create NCNN instance for upscaling filter.\n");
-            upscaling_filter = 0;
-          } else
-            upscaling_filter_created = 1;
-        }
-      }
-    }
   }
   nk_end(ctx);
   nk_window_show(ctx, remote_play_wnd, show_window);
 
   const char *debug_msg_wnd = "Debug";
-  if (nk_begin(ctx, debug_msg_wnd, nk_rect(625, 50, 150, 250),
+  if (nk_begin(ctx, debug_msg_wnd, nk_rect(475, 10, 150, 250),
                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE))
   {
     nk_layout_row_dynamic(ctx, 30, 2);
@@ -1217,48 +1267,72 @@ int frame_buffer_context_next_free_index(int index, int skip_index)
   return next_index;
 }
 
-static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot)
+static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int height, int top_bot)
 {
-  if (ctx->updated == FBS_NOT_AVAIL)
-  {
-    return;
-  }
-
-  int ctx_height = (double)win_height / 2;
-  int ctx_width;
-  int ctx_left;
-  int ctx_top;
-  if ((double)win_width / width * height > ctx_height)
-  {
-    ctx_width = (double)ctx_height / height * width;
-    ctx_left = (double)(win_width - ctx_width) / 2;
-    ctx_top = 0;
-  }
-  else
-  {
-    ctx_height = (double)win_width / width * height;
-    ctx_left = 0;
-    ctx_width = win_width;
-    ctx_top = (double)win_height / 2 - ctx_height;
-  }
-
   double ctx_left_f;
   double ctx_top_f;
   double ctx_right_f;
   double ctx_bot_f;
-  if (top_bot == SCREEN_TOP)
-  {
-    ctx_left_f = (double)ctx_left / win_width * 2 - 1;
-    ctx_top_f = 1 - (double)ctx_top / win_height * 2;
+  if (view_mode == VIEW_MODE_TOP_BOT) {
+    int ctx_height = (double)win_height[0] / 2;
+    int ctx_width;
+    int ctx_left;
+    int ctx_top;
+    if ((double)win_width[0] / width * height > ctx_height)
+    {
+      ctx_width = (double)ctx_height / height * width;
+      ctx_left = (double)(win_width[0] - ctx_width) / 2;
+      ctx_top = 0;
+    }
+    else
+    {
+      ctx_height = (double)win_width[0] / width * height;
+      ctx_left = 0;
+      ctx_width = win_width[0];
+      ctx_top = (double)win_height[0] / 2 - ctx_height;
+    }
+
+    if (top_bot == SCREEN_TOP)
+    {
+      ctx_left_f = (double)ctx_left / win_width[0] * 2 - 1;
+      ctx_top_f = 1 - (double)ctx_top / win_height[0] * 2;
+      ctx_right_f = -ctx_left_f;
+      ctx_bot_f = 0;
+    }
+    else
+    {
+      ctx_left_f = (double)ctx_left / win_width[0] * 2 - 1;
+      ctx_top_f = 0;
+      ctx_right_f = -ctx_left_f;
+      ctx_bot_f = -1 + (double)ctx_top / win_height[0] * 2;
+    }
+  } else {
+    int tb = top_bot;
+    if (view_mode == VIEW_MODE_BOT)
+      tb = 0;
+
+    int ctx_height = (double)win_height[tb];
+    int ctx_width;
+    int ctx_left;
+    int ctx_top;
+    if ((double)win_width[tb] / width * height > ctx_height)
+    {
+      ctx_width = (double)ctx_height / height * width;
+      ctx_left = (double)(win_width[tb] - ctx_width) / 2;
+      ctx_top = 0;
+    }
+    else
+    {
+      ctx_height = (double)win_width[tb] / width * height;
+      ctx_left = 0;
+      ctx_width = win_width[tb];
+      ctx_top = ((double)win_height[tb] - ctx_height) / 2;
+    }
+
+    ctx_left_f = (double)ctx_left / win_width[tb] * 2 - 1;
+    ctx_top_f = 1 - (double)ctx_top / win_height[tb] * 2;
     ctx_right_f = -ctx_left_f;
-    ctx_bot_f = 0;
-  }
-  else
-  {
-    ctx_left_f = (double)ctx_left / win_width * 2 - 1;
-    ctx_top_f = 0;
-    ctx_right_f = -ctx_left_f;
-    ctx_bot_f = -1 + (double)ctx_top / win_height * 2;
+    ctx_bot_f = -ctx_top_f;
   }
   vVertices_pos[0][0] = ctx_left_f;
   vVertices_pos[0][1] = ctx_top_f;
@@ -1280,6 +1354,30 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int t
 
   glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id);
 
+  nk_bool upscaled = ctx->images_upscaled[index];
+  int scale = upscaled ? screen_upscale_factor : 1;
+  glTexImage2D(GL_TEXTURE_2D, 0,
+                GL_RGB, height * scale,
+                width * scale, 0,
+                GL_RGB, GL_UNSIGNED_BYTE,
+                ctx->images[index]);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glGenerateMipmap(GL_TEXTURE_2D);
+
+  glUniform1i(gl_sampler_loc, 0);
+  glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+}
+
+static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot, int force)
+{
+  if (ctx->updated == FBS_NOT_AVAIL)
+  {
+    return 0;
+  }
+
   pthread_mutex_lock(&ctx->gl_tex_mutex);
   int index = ctx->index;
   if (ctx->updated == FBS_UPDATED)
@@ -1291,18 +1389,7 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int t
 
     pthread_mutex_unlock(&ctx->gl_tex_mutex);
 
-    nk_bool upscaled = ctx->images_upscaled[index];
-    int scale = upscaled ? screen_upscale_factor : 1;
-    glTexImage2D(GL_TEXTURE_2D, 0,
-                 GL_RGB, height * scale,
-                 width * scale, 0,
-                 GL_RGB, GL_UNSIGNED_BYTE,
-                 ctx->images[index]);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glGenerateMipmap(GL_TEXTURE_2D);
+    do_hr_draw_screen(ctx, index, width, height, top_bot);
 
     int frame_stat_updated = 0;
     static uint32_t max_delay_between_packet[SCREEN_COUNT] = {};
@@ -1343,76 +1430,116 @@ static void hr_draw_screen(FrameBufferContext *ctx, int width, int height, int t
       }
     }
     if (frame_stat_updated) {
-      snprintf(window_title_with_fps, sizeof(window_title_with_fps), "NTR Viewer HR (FPS %03d %03d) (Size %06d | %06d) (Packet time %04d %04d)",
-        frame_rate_tracker[SCREEN_TOP].display, frame_rate_tracker[SCREEN_BOT].display,
-        frame_size_tracker[SCREEN_TOP].total / FRAME_STAT_EVERY_X_FRAMES,
-        frame_size_tracker[SCREEN_BOT].total / FRAME_STAT_EVERY_X_FRAMES,
-        max_delay_between_packet[SCREEN_TOP], max_delay_between_packet[SCREEN_BOT]);
-      SDL_SetWindowTitle(win, window_title_with_fps);
+      if (view_mode == VIEW_MODE_TOP_BOT) {
+        snprintf(window_title_with_fps, sizeof(window_title_with_fps), "NTR Viewer HR (FPS %03d %03d) (Size %06d | %06d) (Packet time %04d %04d)",
+          frame_rate_tracker[SCREEN_TOP].display, frame_rate_tracker[SCREEN_BOT].display,
+          frame_size_tracker[SCREEN_TOP].total / FRAME_STAT_EVERY_X_FRAMES,
+          frame_size_tracker[SCREEN_BOT].total / FRAME_STAT_EVERY_X_FRAMES,
+          max_delay_between_packet[SCREEN_TOP], max_delay_between_packet[SCREEN_BOT]);
+        SDL_SetWindowTitle(win[0], window_title_with_fps);
+      } else {
+        int tb = top_bot;
+        if (view_mode == VIEW_MODE_BOT)
+          tb = 0;
+        snprintf(window_title_with_fps, sizeof(window_title_with_fps), "NTR Viewer HR (FPS %03d) (Size %06d) (Packet time %04d)",
+          frame_rate_tracker[top_bot].display,
+          frame_size_tracker[top_bot].total / FRAME_STAT_EVERY_X_FRAMES,
+          max_delay_between_packet[top_bot]);
+        SDL_SetWindowTitle(win[tb], window_title_with_fps);
+      }
     }
+    return 1;
   }
   else
   {
     pthread_mutex_unlock(&ctx->gl_tex_mutex);
-  }
 
-  glUniform1i(gl_sampler_loc, 0);
-  glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+    if (force)
+      do_hr_draw_screen(ctx, index, width, height, top_bot);
+    return 0;
+  }
 }
 
 static void
 MainLoop(void *loopArg)
 {
-  struct nk_context *ctx = (struct nk_context *)loopArg;
-
-  /* Input */
-  SDL_Event evt;
-  nk_input_begin(ctx);
-  while (SDL_PollEvent(&evt))
-  {
-    if (evt.type == SDL_QUIT)
-      running = nk_false;
-    nk_sdl_handle_event(&evt);
-  }
-  nk_input_end(ctx);
-
-  guiMain(ctx);
-
   /* Draw */
+  int screen_count = SCREEN_COUNT;
+  if (view_mode == VIEW_MODE_TOP || view_mode == VIEW_MODE_BOT || view_mode == VIEW_MODE_TOP_BOT)
+    screen_count = 1;
+
+  for (int i = 0; i < screen_count; ++i)
   {
     float bg[4];
     nk_color_fv(bg, nk_rgb(28, 48, 62));
-    SDL_GetWindowSize(win, &win_width, &win_height);
-    glViewport(0, 0, win_width, win_height);
+    SDL_GetWindowSize(win[i], &win_width[i], &win_height[i]);
+
+    SDL_GL_MakeCurrent(win[i], glContext[i]);
+    glViewport(0, 0, win_width[i], win_height[i]);
     glClear(GL_COLOR_BUFFER_BIT);
     glClearColor(bg[0], bg[1], bg[2], bg[3]);
 
-    pthread_mutex_lock(&gl_updated_mutex);
-    while (!gl_updated) {
-      struct timespec to;
-      clock_gettime(CLOCK_REALTIME, &to);
-      if (hide_windows) {
-        to.tv_nsec += 100 * 1000 * 1000;
-      } else {
-        to.tv_nsec += 10 * 1000 * 1000;
-      }
-      if (ETIMEDOUT == pthread_cond_timedwait(&gl_updated_cond, &gl_updated_mutex, &to)) {
-        break;
-      }
-    }
-    gl_updated = 0;
-    pthread_mutex_unlock(&gl_updated_mutex);
+#define MIN_UPDATE_INTERVAL_MS (33)
 
-    hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400, 240, SCREEN_TOP);
-    hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT);
+    int force = 0;
+    if (i == 0) {
+      pthread_mutex_lock(&gl_updated_mutex);
+      while (!gl_updated) {
+        struct timespec to;
+        clock_gettime(CLOCK_REALTIME, &to);
+        to.tv_nsec += MIN_UPDATE_INTERVAL_MS * 1000 * 1000;
+        if (ETIMEDOUT == pthread_cond_timedwait(&gl_updated_cond, &gl_updated_mutex, &to)) {
+          force = 1;
+          break;
+        }
+      }
+      gl_updated = 0;
+      pthread_mutex_unlock(&gl_updated_mutex);
+    }
+
+    int updated = 0;
+    static uint64_t lastUpdated[2] = { 0 };
+    uint64_t nextUpdated = iclock64();
+    if (nextUpdated - lastUpdated[i] > MIN_UPDATE_INTERVAL_MS)
+      force = 1;
+
+    if (view_mode == VIEW_MODE_TOP_BOT) {
+      force = 1;
+      updated |= hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400, 240, SCREEN_TOP, force);
+      updated |= hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT, force);
+    } else if (view_mode == VIEW_MODE_BOT)
+      updated = hr_draw_screen(&buffer_ctx[1], 320, 240, 1, force);
+    else
+      updated = hr_draw_screen(&buffer_ctx[i], i == 0 ? 400 : 320, 240, i, force);
 
     /* IMPORTANT: `nk_sdl_render` modifies some global OpenGL state
      * with blending, scissor, face culling, depth test and viewport and
      * defaults everything back into a default state.
      * Make sure to either a.) save and restore or b.) reset your own state after
      * rendering the UI. */
-    nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
-    SDL_GL_SwapWindow(win);
+    if (updated || force) {
+      if (i == 0) {
+        struct nk_context *ctx = (struct nk_context *)loopArg;
+        /* Input */
+        SDL_Event evt;
+        nk_input_begin(ctx);
+        while (SDL_PollEvent(&evt))
+        {
+          if (
+            evt.type == SDL_QUIT ||
+            (evt.type == SDL_WINDOWEVENT && evt.window.event == SDL_WINDOWEVENT_CLOSE)
+          )
+            running = nk_false;
+          nk_sdl_handle_event(&evt);
+        }
+        nk_input_end(ctx);
+
+        guiMain(ctx);
+        nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
+      }
+      SDL_GL_SwapWindow(win[i]);
+      lastUpdated[i] = nextUpdated;
+    }
   }
 }
 
@@ -1731,7 +1858,6 @@ void socket_error_pause(void) {
 
 void *udp_recv_thread_func(void *)
 {
-  SDL_GL_MakeCurrent(win, glThreadContext);
   while (running)
   {
     // fprintf(stderr, "new connection\n");
@@ -1810,7 +1936,6 @@ void *udp_recv_thread_func(void *)
 
     // Sleep(250);
   }
-  SDL_GL_MakeCurrent(win, NULL);
 
   return 0;
 }
@@ -1828,7 +1953,6 @@ int main(int argc, char *argv[])
 
   /* GUI */
   struct nk_context *ctx;
-  SDL_GLContext glContext;
   int ret;
 
   NK_UNUSED(argc);
@@ -1843,16 +1967,26 @@ int main(int argc, char *argv[])
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-  win = SDL_CreateWindow("NTR Viewer",
+
+  win[0] = SDL_CreateWindow("NTR Viewer",
                          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                          WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
-  if (!win)
+  if (!win[0])
   {
     fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
     return -1;
   }
-  glContext = SDL_GL_CreateContext(win);
-  if (!glContext)
+  win[1] = SDL_CreateWindow("NTR Viewer",
+                         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                         WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
+  if (!win[1])
+  {
+    fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
+    return -1;
+  }
+
+  glContext[0] = SDL_GL_CreateContext(win[0]);
+  if (!glContext[0])
   {
     fprintf(stderr, "SDL_GL_CreateContext: %s\n", SDL_GetError());
     return -1;
@@ -1864,20 +1998,20 @@ int main(int argc, char *argv[])
     return -1;
   }
 
+  SDL_GL_MakeCurrent(win[0], glContext[0]);
+
   SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
-  glThreadContext = SDL_GL_CreateContext(win);
-  if (!glThreadContext)
+  glContext[1] = SDL_GL_CreateContext(win[1]);
+  if (!glContext[1])
   {
-    fprintf(stderr, "SDL_GL_CreateContext (2): %s\n", SDL_GetError());
+    fprintf(stderr, "SDL_GL_CreateContext: %s\n", SDL_GetError());
     return -1;
   }
-
-  SDL_GL_MakeCurrent(win, glContext);
 
   /* OpenGL setup */
   glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
 
-  ctx = nk_sdl_init(win);
+  ctx = nk_sdl_init(win[0]);
   /* Load Fonts: if none of these are loaded a default font will be used  */
   /* Load Cursor: if you uncomment cursor loading please hide the cursor */
   {
@@ -1959,9 +2093,10 @@ int main(int argc, char *argv[])
 
   sock_cleanup();
   nk_sdl_shutdown();
-  SDL_GL_DeleteContext(glThreadContext);
-  SDL_GL_DeleteContext(glContext);
-  SDL_DestroyWindow(win);
+  SDL_GL_DeleteContext(glContext[1]);
+  SDL_GL_DeleteContext(glContext[0]);
+  SDL_DestroyWindow(win[1]);
+  SDL_DestroyWindow(win[0]);
   SDL_Quit();
 
   if (upscaling_filter_created)

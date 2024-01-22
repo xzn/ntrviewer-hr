@@ -1,12 +1,13 @@
 CC := gcc
 CXX := g++
 CPPFLAGS := -Iinclude
-CFLAGS := -Og -g
+# CFLAGS := -Og -g
+CFLAGS := -Ofast
 LDLIBS := -Llib -lmingw32 -lSDL2main -lSDL2 -lvfw32 -Wl,-Bstatic -lws2_32 -lncnn -lole32 -fopenmp -liphlpapi -static-libgcc
 # LDLIBS := -static -Llib -lmingw32 -mwindows -lSDL2main -lSDL2 -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8
 # LDLIBS += -lvfw32 -lws2_32 -lncnn -fopenmp
 LDLIBS += -lOSDependent -lglslang -lMachineIndependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -lSPIRV-Tools-link
-LDFLAGS :=
+LDFLAGS := -s
 
 RM := rm
 
