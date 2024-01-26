@@ -249,6 +249,7 @@ typedef enum {
   VIEW_MODE_BOT,
 } view_mode_t;
 static view_mode_t view_mode;
+static int fullscreen;
 
 static atomic_uint_fast8_t ip_octets[4];
 
@@ -890,6 +891,9 @@ static void updateViewMode(void) {
       break;
   }
 
+  SDL_SetWindowFullscreen(win[0], 0);
+  SDL_SetWindowFullscreen(win[1], 0);
+  fullscreen = 0;
   switch (view_mode) {
     case VIEW_MODE_TOP_BOT:
       SDL_SetWindowSize(win[0], WINDOW_WIDTH, WINDOW_HEIGHT);
@@ -934,7 +938,7 @@ static void guiMain(struct nk_context *ctx)
 
   /* GUI */
   const char *remote_play_wnd = "Remote Play";
-  if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 450, 450),
+  if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 450, 465),
                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_TITLE))
   {
     nk_layout_row_dynamic(ctx, 30, 2);
@@ -1047,6 +1051,9 @@ static void guiMain(struct nk_context *ctx)
       ntr_rp_bound_port = ntr_rp_port;
       ntr_rp_port_changed = 1;
     }
+
+    nk_layout_row_dynamic(ctx, 30, 1);
+    nk_label(ctx, "Press \"F\" to toggle fullscreen.", NK_TEXT_CENTERED);
   }
   nk_end(ctx);
   nk_window_show(ctx, remote_play_wnd, show_window);
@@ -1530,7 +1537,24 @@ MainLoop(void *loopArg)
             (evt.type == SDL_WINDOWEVENT && evt.window.event == SDL_WINDOWEVENT_CLOSE)
           )
             running = nk_false;
-          nk_sdl_handle_event(&evt);
+          else if (
+            evt.type == SDL_KEYDOWN &&
+            evt.key.keysym.sym == SDLK_f
+          ) {
+            if (fullscreen) {
+              SDL_SetWindowFullscreen(win[0], 0);
+              if (view_mode == VIEW_MODE_SEPARATE)
+                SDL_SetWindowFullscreen(win[1], 0);
+              fullscreen = 0;
+            } else {
+              SDL_SetWindowFullscreen(win[0], SDL_WINDOW_FULLSCREEN_DESKTOP);
+              if (view_mode == VIEW_MODE_SEPARATE)
+                SDL_SetWindowFullscreen(win[1], SDL_WINDOW_FULLSCREEN_DESKTOP);
+              fullscreen = 1;
+            }
+          }
+          else
+            nk_sdl_handle_event(&evt);
         }
         nk_input_end(ctx);
 
