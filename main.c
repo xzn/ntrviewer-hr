@@ -231,6 +231,8 @@ const char *connection_msg[CS_MAX] = {
   ".",
 };
 
+#define TITLE "NTR Viewer HR"
+
 static nk_bool ntr_rp_priority;
 static int ntr_rp_priority_factor;
 static int ntr_rp_quality;
@@ -1438,7 +1440,7 @@ static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int to
     }
     if (frame_stat_updated) {
       if (view_mode == VIEW_MODE_TOP_BOT) {
-        snprintf(window_title_with_fps, sizeof(window_title_with_fps), "NTR Viewer HR (FPS %03d %03d) (Size %06d | %06d) (Packet time %04d %04d)",
+        snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (FPS %03d %03d) (Size %06d | %06d) (Packet time %04d %04d)",
           frame_rate_tracker[SCREEN_TOP].display, frame_rate_tracker[SCREEN_BOT].display,
           frame_size_tracker[SCREEN_TOP].total / FRAME_STAT_EVERY_X_FRAMES,
           frame_size_tracker[SCREEN_BOT].total / FRAME_STAT_EVERY_X_FRAMES,
@@ -1448,7 +1450,7 @@ static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int to
         int tb = top_bot;
         if (view_mode == VIEW_MODE_BOT)
           tb = 0;
-        snprintf(window_title_with_fps, sizeof(window_title_with_fps), "NTR Viewer HR (FPS %03d) (Size %06d) (Packet time %04d)",
+        snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (FPS %03d) (Size %06d) (Packet time %04d)",
           frame_rate_tracker[top_bot].display,
           frame_size_tracker[top_bot].total / FRAME_STAT_EVERY_X_FRAMES,
           max_delay_between_packet[top_bot]);
@@ -1625,6 +1627,7 @@ uint8_t recv_track[rp_work_count][MAX_PACKET_COUNT];
 uint8_t recv_hdr[rp_work_count][rp_data_hdr_id_size];
 uint8_t recv_end[rp_work_count];
 uint8_t recv_end_packet[rp_work_count];
+uint8_t recv_end_incomp[rp_work_count];
 uint32_t recv_end_size[rp_work_count];
 uint32_t recv_delay_between_packets[rp_work_count];
 uint32_t recv_last_packet_time[rp_work_count];
@@ -1779,6 +1782,7 @@ int handle_recv(uint8_t *buf, int size)
       recv_end[recv_work] = 0;
       recv_delay_between_packets[recv_work] = 0;
       recv_last_packet_time[recv_work] = iclock();
+      recv_end_incomp[recv_work] = 0;
     }
     work = !work;
   }
@@ -1812,7 +1816,10 @@ int handle_recv(uint8_t *buf, int size)
   if (recv_end[work] == 1) {
     for (int i = 0; i < recv_end_packet[work]; ++i) {
       if (!recv_track[work][i]) {
-        fprintf(stderr, "recv end packet incomplete\n");
+        if (!recv_end_incomp[work]) {
+          recv_end_incomp[work] = 1;
+          fprintf(stderr, "recv end packet incomplete\n");
+        }
         return 0;
       }
     }
@@ -1992,7 +1999,7 @@ int main(int argc, char *argv[])
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
-  win[0] = SDL_CreateWindow("NTR Viewer",
+  win[0] = SDL_CreateWindow(TITLE,
                          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                          WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
   if (!win[0])
@@ -2000,7 +2007,7 @@ int main(int argc, char *argv[])
     fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
     return -1;
   }
-  win[1] = SDL_CreateWindow("NTR Viewer",
+  win[1] = SDL_CreateWindow(TITLE,
                          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                          WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
   if (!win[1])
