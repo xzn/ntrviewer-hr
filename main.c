@@ -67,6 +67,17 @@ void Sleep(int milliseconds) {
 
 #endif
 
+#include <stdatomic.h>
+#include <pthread.h>
+#include "main.h"
+
+#define fprintf(s, f, ...) fprintf(s, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
+
+#include "jpeg_turbo/jpeglib.h"
+
+#define RP_MAX(a,b) ((a) > (b) ? (a) : (b))
+#define RP_MIN(a,b) ((a) > (b) ? (b) : (a))
+
 #define RP_SOCKET_TIMEOUT (2000)
 
 int sock_startup(void)
@@ -94,16 +105,18 @@ int sock_close(SOCKET sock)
 
 #ifdef _WIN32
   status = shutdown(sock, SD_BOTH);
-  if (status == 0)
+  if (status != 0)
   {
-    status = closesocket(sock);
+    fprintf(stderr, "socket shudown failed: %d\n", sock_errno());
   }
+  status = closesocket(sock);
 #else
   status = shutdown(sock, SHUT_RDWR);
-  if (status == 0)
+  if (status != 0)
   {
-    status = close(sock);
+    fprintf(stderr, "socket shudown failed: %d\n", sock_errno());
   }
+  status = close(sock);
 #endif
 
   return status;
@@ -157,17 +170,6 @@ static inline uint32_t iclock()
 {
   return (uint32_t)(iclock64() & 0xfffffffful);
 }
-
-#include <stdatomic.h>
-#include <pthread.h>
-#include "main.h"
-
-#define fprintf(s, f, ...) fprintf(s, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
-
-#include "jpeg_turbo/jpeglib.h"
-
-#define RP_MAX(a,b) ((a) > (b) ? (a) : (b))
-#define RP_MIN(a,b) ((a) > (b) ? (b) : (a))
 
 //! 8 bit unsigned integer.
 typedef uint8_t		byte;
@@ -1289,8 +1291,10 @@ static void guiMain(struct nk_context *ctx)
         menu_work_state = CS_CONNECTING;
       }
       menu_remote_play = TRUE;
-      ntr_rp_bound_port = ntr_rp_port;
-      ntr_rp_port_changed = 1;
+      if (ntr_rp_port != ntr_rp_bound_port) {
+        ntr_rp_bound_port = ntr_rp_port;
+        ntr_rp_port_changed = 1;
+      }
     }
 
     nk_layout_row_dynamic(ctx, 30, 1);
@@ -2204,7 +2208,7 @@ void *udp_recv_thread_func(void *)
 
     receive_from_socket(s);
 
-    sock_close(s);
+    closesocket(s);
 
     // Sleep(250);
   }
@@ -2243,6 +2247,7 @@ int main(int argc, char *argv[])
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+  SDL_GL_SetSwapInterval(1);
 
   win[0] = SDL_CreateWindow(TITLE,
                          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,

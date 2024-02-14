@@ -1,8 +1,8 @@
 CC := gcc
 CXX := g++
 CPPFLAGS := -Iinclude
-CFLAGS := -Og -g
-# CFLAGS := -Ofast
+# CFLAGS := -Og -g
+CFLAGS := -Ofast
 
 ifeq ($(OS),Windows_NT)
 	LDLIBS := -Llib -lmingw32 -lSDL2main -lSDL2 -lvfw32 -Wl,-Bstatic -lws2_32 -lncnn -lole32 -fopenmp -liphlpapi -static-libgcc
@@ -16,7 +16,7 @@ else
 
 	TARGET := ntrviewer
 endif
-LDFLAGS :=
+LDFLAGS := -s
 
 RM := rm
 
