@@ -3,6 +3,7 @@ CXX := g++
 CPPFLAGS := -Iinclude
 # CFLAGS := -Og -g
 CFLAGS := -Ofast
+EMBED_JPEG_TURBO := 1
 
 ifeq ($(OS),Windows_NT)
 	LDLIBS := -Llib -lmingw32 -lSDL2main -lSDL2 -lvfw32 -Wl,-Bstatic -lws2_32 -lncnn -lole32 -fopenmp -liphlpapi -static-libgcc
@@ -11,20 +12,33 @@ ifeq ($(OS),Windows_NT)
 	LDLIBS += -lOSDependent -lglslang -lMachineIndependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -lSPIRV-Tools-link
 
 	TARGET := ntrviewer.exe
+
+	NASM := -DWIN64 -fwin64
 else
-	LDLIBS := -lSDL2 -lncnn
+	LDLIBS := -lSDL2 -lncnn -ljpeg
 
 	TARGET := ntrviewer
+
+	NASM := -DELF -felf64
 endif
 LDFLAGS := -s
 
 RM := rm
 
-JT_SRC := $(wildcard jpeg_turbo/*.c) # jpeg_turbo/simd/x86_64/jsimd.c
+ifeq ($(EMBED_JPEG_TURBO),1)
+JT_SRC := $(wildcard jpeg_turbo/*.c) jpeg_turbo/simd/x86_64/jsimd.c
 JT_OBJ := $(JT_SRC:.c=.o)
 
-# JT_SRC_S := $(wildcard jpeg_turbo/simd/x86_64/*.asm)
-# JT_OBJ_S := $(JT_SRC_S:.asm=.o)
+JT_SRC_S := $(wildcard jpeg_turbo/simd/x86_64/*.asm)
+JT_OBJ_S := $(JT_SRC_S:.asm=.o)
+
+EMBED_JPEG_TURBO := -DEMBED_JPEG_TURBO
+else
+JT_OBJ :=
+JT_OBJ_S :=
+
+EMBED_JPEG_TURBO :=
+endif
 
 $(TARGET): main.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o libGLAD.o $(JT_OBJ) $(JT_OBJ_S)
 	$(CXX) $^ -o $@ $(CFLAGS) $(LDLIBS) $(LDFLAGS)
@@ -33,7 +47,7 @@ $(TARGET): main.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o libGLAD.o $(JT_
 	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS)
 
 %.o: %.asm
-	nasm $^ -o $@ -DWIN64 -D__x86_64__ -fwin64 -Ijpeg_turbo/simd/nasm -Ijpeg_turbo/simd/x86_64
+	nasm $^ -o $@ $(NASM) -D__x86_64__ -Ijpeg_turbo/simd/nasm -Ijpeg_turbo/simd/x86_64
 
 %.o: %.cpp
 	$(CXX) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS)
@@ -45,7 +59,7 @@ realcugan.o: realcugan-ncnn-vulkan/realcugan.cpp $(wildcard realcugan-ncnn-vulka
 	$(CXX) realcugan-ncnn-vulkan/realcugan.cpp -o $@ -c $(CFLAGS) $(CPPFLAGS) -I../ncnn-src/src -I../ncnn-build/src -Wno-attributes
 
 main.o: main.c
-	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wall -Wextra
+	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wall -Wextra $(EMBED_JPEG_TURBO)
 
 libNK.o: libNK.c
 	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -std=c89 -Wall -Wextra
