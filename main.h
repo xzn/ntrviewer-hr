@@ -30,4 +30,6 @@
 #include "nuklear.h"
 #include "nuklear_sdl_gles2.h"
 
+#ifdef _WIN32
 #include <iphlpapi.h>
+#endif

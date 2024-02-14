@@ -41,9 +41,30 @@ void realcugan_destroy();
 #define SOCKET_VALID(s) ((s) != INVALID_SOCKET)
 #define sock_errno() WSAGetLastError()
 #else
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <time.h>
 typedef int SOCKET;
 #define SOCKET_VALID(s) ((s) >= 0)
 #define sock_errno() errno
+#define WSAEWOULDBLOCK EWOULDBLOCK
+#define WSAETIMEDOUT ETIMEDOUT
+#define SOCKET_ERROR SO_ERROR
+#define INVALID_SOCKET (-1)
+#define closesocket close
+
+void Sleep(int milliseconds) {
+  struct timespec ts;
+  ts.tv_sec = milliseconds / 1000;
+  ts.tv_nsec = (milliseconds % 1000) * 1000000;
+  nanosleep(&ts, NULL);
+}
+
 #endif
 
 #define RP_SOCKET_TIMEOUT (2000)
@@ -352,11 +373,19 @@ SOCKET tcp_connect(int port)
     return INVALID_SOCKET;
   }
 
+#ifdef _WIN32
   u_long opt = 1;
   if (ioctlsocket(sockfd, FIONBIO, &opt)) {
     fprintf(stderr, "ioctlsocket FIONBIO failed: %d\n", sock_errno());
     return INVALID_SOCKET;
   }
+#else
+  int flags = fcntl(sockfd, F_GETFL, 0);
+  if (flags == -1) return INVALID_SOCKET;
+  flags = flags | O_NONBLOCK;
+  return (fcntl(sockfd, F_SETFL, flags) == 0);
+#endif
+
 
   servaddr.sin_family = AF_INET;
   snprintf(ip_addr_buf, sizeof(ip_addr_buf),
@@ -664,6 +693,67 @@ static void allocAutoIPs(int count) {
   }
 }
 
+// taken from Boop's source code https://github.com/miltoncandelero/Boop
+static uint8_t const knownMACs[][3] = {
+  { 0x00, 0x09, 0xBF }, { 0x00, 0x16, 0x56 }, { 0x00, 0x17, 0xAB }, { 0x00, 0x19, 0x1D }, { 0x00, 0x19, 0xFD },
+  { 0x00, 0x1A, 0xE9 }, { 0x00, 0x1B, 0x7A }, { 0x00, 0x1B, 0xEA }, { 0x00, 0x1C, 0xBE }, { 0x00, 0x1D, 0xBC },
+  { 0x00, 0x1E, 0x35 }, { 0x00, 0x1E, 0xA9 }, { 0x00, 0x1F, 0x32 }, { 0x00, 0x1F, 0xC5 }, { 0x00, 0x21, 0x47 },
+  { 0x00, 0x21, 0xBD }, { 0x00, 0x22, 0x4C }, { 0x00, 0x22, 0xAA }, { 0x00, 0x22, 0xD7 }, { 0x00, 0x23, 0x31 },
+  { 0x00, 0x23, 0xCC }, { 0x00, 0x24, 0x1E }, { 0x00, 0x24, 0x44 }, { 0x00, 0x24, 0xF3 }, { 0x00, 0x25, 0xA0 },
+  { 0x00, 0x26, 0x59 }, { 0x00, 0x27, 0x09 }, { 0x04, 0x03, 0xD6 }, { 0x18, 0x2A, 0x7B }, { 0x2C, 0x10, 0xC1 },
+  { 0x34, 0xAF, 0x2C }, { 0x40, 0xD2, 0x8A }, { 0x40, 0xF4, 0x07 }, { 0x58, 0x2F, 0x40 }, { 0x58, 0xBD, 0xA3 },
+  { 0x5C, 0x52, 0x1E }, { 0x60, 0x6B, 0xFF }, { 0x64, 0xB5, 0xC6 }, { 0x78, 0xA2, 0xA0 }, { 0x7C, 0xBB, 0x8A },
+  { 0x8C, 0x56, 0xC5 }, { 0x8C, 0xCD, 0xE8 }, { 0x98, 0xB6, 0xE9 }, { 0x9C, 0xE6, 0x35 }, { 0xA4, 0x38, 0xCC },
+  { 0xA4, 0x5C, 0x27 }, { 0xA4, 0xC0, 0xE1 }, { 0xB8, 0x78, 0x26 }, { 0xB8, 0x8A, 0xEC }, { 0xB8, 0xAE, 0x6E },
+  { 0xCC, 0x9E, 0x00 }, { 0xCC, 0xFB, 0x65 }, { 0xD8, 0x6B, 0xF7 }, { 0xDC, 0x68, 0xEB }, { 0xE0, 0x0C, 0x7F },
+  { 0xE0, 0xE7, 0x51 }, { 0xE8, 0x4E, 0xCE }, { 0xEC, 0xC4, 0x0D }, { 0xE8, 0x4E, 0xCE }
+};
+static int selectedIP = 0;
+static int selectedAdaptor;
+
+static char **adaptorIPs;
+static uint8_t **adaptorIPsOctets;
+static int adaptorIPsCount;
+
+static void freeAdaptorIPs(void) {
+  if(adaptorIPsCount) {
+    for (int i = 0; i < adaptorIPsCount; ++i) {
+      free(adaptorIPs[i]);
+      free(adaptorIPsOctets[i]);
+    }
+    free(adaptorIPs);
+    free(adaptorIPsOctets);
+    adaptorIPs = 0;
+    adaptorIPsOctets = 0;
+    adaptorIPsCount = 0;
+  }
+}
+
+static void allocAdaptorIPs(int count) {
+  if (count) {
+    adaptorIPs = malloc(sizeof(*adaptorIPs) * count);
+    adaptorIPsOctets = malloc(sizeof(*adaptorIPsOctets) * count);
+    for (int i = 0; i < count; ++i) {
+      adaptorIPs[i] = malloc(50);
+      adaptorIPsOctets[i] = malloc(4);
+    }
+    adaptorIPsCount = count;
+  }
+}
+
+static void tryAutoSelectAdapterIP(void) {
+  selectedAdaptor = 0;
+  uint32_t count = 0;
+  for (int i = 1; i < adaptorIPsCount - 2; ++i) {
+    uint32_t bits = __builtin_bswap32(*(uint32_t *)ip_octets & *(uint32_t *)adaptorIPsOctets[i]);
+    if (/*(int)bits < 0 && */bits > count) {
+      count = bits;
+      selectedAdaptor = i;
+    }
+  }
+}
+
+#ifdef _WIN32
 static PMIB_IPNETTABLE ipNetBuf = 0;
 static ULONG ipNetBufSize = 0;
 
@@ -690,22 +780,6 @@ static void getIPMapMAC(void) {
   }
 }
 
-// taken from Boop's source code https://github.com/miltoncandelero/Boop
-static uint8_t const knownMACs[][3] = {
-  { 0x00, 0x09, 0xBF }, { 0x00, 0x16, 0x56 }, { 0x00, 0x17, 0xAB }, { 0x00, 0x19, 0x1D }, { 0x00, 0x19, 0xFD },
-  { 0x00, 0x1A, 0xE9 }, { 0x00, 0x1B, 0x7A }, { 0x00, 0x1B, 0xEA }, { 0x00, 0x1C, 0xBE }, { 0x00, 0x1D, 0xBC },
-  { 0x00, 0x1E, 0x35 }, { 0x00, 0x1E, 0xA9 }, { 0x00, 0x1F, 0x32 }, { 0x00, 0x1F, 0xC5 }, { 0x00, 0x21, 0x47 },
-  { 0x00, 0x21, 0xBD }, { 0x00, 0x22, 0x4C }, { 0x00, 0x22, 0xAA }, { 0x00, 0x22, 0xD7 }, { 0x00, 0x23, 0x31 },
-  { 0x00, 0x23, 0xCC }, { 0x00, 0x24, 0x1E }, { 0x00, 0x24, 0x44 }, { 0x00, 0x24, 0xF3 }, { 0x00, 0x25, 0xA0 },
-  { 0x00, 0x26, 0x59 }, { 0x00, 0x27, 0x09 }, { 0x04, 0x03, 0xD6 }, { 0x18, 0x2A, 0x7B }, { 0x2C, 0x10, 0xC1 },
-  { 0x34, 0xAF, 0x2C }, { 0x40, 0xD2, 0x8A }, { 0x40, 0xF4, 0x07 }, { 0x58, 0x2F, 0x40 }, { 0x58, 0xBD, 0xA3 },
-  { 0x5C, 0x52, 0x1E }, { 0x60, 0x6B, 0xFF }, { 0x64, 0xB5, 0xC6 }, { 0x78, 0xA2, 0xA0 }, { 0x7C, 0xBB, 0x8A },
-  { 0x8C, 0x56, 0xC5 }, { 0x8C, 0xCD, 0xE8 }, { 0x98, 0xB6, 0xE9 }, { 0x9C, 0xE6, 0x35 }, { 0xA4, 0x38, 0xCC },
-  { 0xA4, 0x5C, 0x27 }, { 0xA4, 0xC0, 0xE1 }, { 0xB8, 0x78, 0x26 }, { 0xB8, 0x8A, 0xEC }, { 0xB8, 0xAE, 0x6E },
-  { 0xCC, 0x9E, 0x00 }, { 0xCC, 0xFB, 0x65 }, { 0xD8, 0x6B, 0xF7 }, { 0xDC, 0x68, 0xEB }, { 0xE0, 0x0C, 0x7F },
-  { 0xE0, 0xE7, 0x51 }, { 0xE8, 0x4E, 0xCE }, { 0xEC, 0xC4, 0x0D }, { 0xE8, 0x4E, 0xCE }
-};
-
 static int matchMAC(UCHAR *mac) {
   // fprintf(stderr, "%02x-%02x-%02x\n", (int)mac[0], (int)mac[1], (int)mac[2]);
   for (unsigned i = 0; i < sizeof(knownMACs) / sizeof(*knownMACs); ++i) {
@@ -715,7 +789,6 @@ static int matchMAC(UCHAR *mac) {
   return 0;
 }
 
-static int selectedIP = 0;
 static void detect3DSIP(void) {
   getIPMapMAC();
 
@@ -760,49 +833,6 @@ static void detect3DSIP(void) {
 
 static PIP_ADAPTER_INFO adapterInfos;
 static ULONG adaptorInfosSize;
-
-static char **adaptorIPs;
-static uint8_t **adaptorIPsOctets;
-static int adaptorIPsCount;
-
-static void freeAdaptorIPs(void) {
-  if(adaptorIPsCount) {
-    for (int i = 0; i < adaptorIPsCount; ++i) {
-      free(adaptorIPs[i]);
-      free(adaptorIPsOctets[i]);
-    }
-    free(adaptorIPs);
-    free(adaptorIPsOctets);
-    adaptorIPs = 0;
-    adaptorIPsOctets = 0;
-    adaptorIPsCount = 0;
-  }
-}
-
-static void allocAdaptorIPs(int count) {
-  if (count) {
-    adaptorIPs = malloc(sizeof(*adaptorIPs) * count);
-    adaptorIPsOctets = malloc(sizeof(*adaptorIPsOctets) * count);
-    for (int i = 0; i < count; ++i) {
-      adaptorIPs[i] = malloc(50);
-      adaptorIPsOctets[i] = malloc(4);
-    }
-    adaptorIPsCount = count;
-  }
-}
-
-static int selectedAdaptor;
-static void tryAutoSelectAdapterIP(void) {
-  selectedAdaptor = 0;
-  uint32_t count = 0;
-  for (int i = 1; i < adaptorIPsCount - 2; ++i) {
-    uint32_t bits = __builtin_bswap32(*(uint32_t *)ip_octets & *(uint32_t *)adaptorIPsOctets[i]);
-    if (/*(int)bits < 0 && */bits > count) {
-      count = bits;
-      selectedAdaptor = i;
-    }
-  }
-}
 
 static uint32_t parseIPAddress(const char *ip) {
   return inet_addr(ip);
@@ -879,6 +909,201 @@ static void getAdapterIPs(void) {
     adaptorInfosSize = 0;
   }
 }
+#else
+
+// Taken from stackexchange
+// https://codereview.stackexchange.com/a/58107
+#include <stdio.h>
+
+#define xstr(s) str(s)
+#define str(s) #s
+
+#define ARP_CACHE       "/proc/net/arp"
+#define ARP_STRING_LEN  1023
+#define ARP_BUFFER_LEN  (ARP_STRING_LEN + 1)
+#define ARP_LINE_FORMAT "%" xstr(ARP_STRING_LEN) "s %*s %*s " \
+                        "%" xstr(ARP_STRING_LEN) "s %*s " \
+                        "%" xstr(ARP_STRING_LEN) "s"
+
+struct IPMapMAC_t {
+  char IP_bytes[4];
+  char MAC_bytes[6];
+};
+
+static struct IPMapMAC_t *ipNetBuf = 0;
+static size_t ipNetBufCount = 0;
+
+static void getIPMapMAC(void) {
+  if (ipNetBuf) {
+    free(ipNetBuf);
+    ipNetBuf = 0;
+    ipNetBufCount = 0;
+  }
+
+  FILE *arpCache = fopen(ARP_CACHE, "r");
+  if (!arpCache)
+    return;
+
+  /* Ignore the first line, which contains the header */
+  char header[ARP_BUFFER_LEN];
+  if (!fgets(header, sizeof(header), arpCache))
+    goto final;
+
+  char ipAddr[ARP_BUFFER_LEN], hwAddr[ARP_BUFFER_LEN], device[ARP_BUFFER_LEN];
+  int count = 0;
+  while (3 == fscanf(arpCache, ARP_LINE_FORMAT, ipAddr, hwAddr, device))
+    ++count;
+
+  ipNetBuf = calloc(count, sizeof(struct IPMapMAC_t));
+  if (ipNetBuf) {
+    fseek(arpCache, 0, SEEK_SET);
+    int count = 0;
+    while (3 == fscanf(arpCache, ARP_LINE_FORMAT, ipAddr, hwAddr, device)) {
+      struct IPMapMAC_t *b = &ipNetBuf[count];
+      sscanf(ipAddr, "%hhd.%hhd.%hhd.%hhd",
+        &b->IP_bytes[0],
+        &b->IP_bytes[1],
+        &b->IP_bytes[2],
+        &b->IP_bytes[3]);
+      sscanf(hwAddr, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+        &b->MAC_bytes[0],
+        &b->MAC_bytes[1],
+        &b->MAC_bytes[2],
+        &b->MAC_bytes[3],
+        &b->MAC_bytes[4],
+        &b->MAC_bytes[5]);
+      ++count;
+    }
+    ipNetBufCount = count;
+  }
+
+final:
+  fclose(arpCache);
+  return;
+}
+
+static int matchMAC(char *mac) {
+  for (unsigned i = 0; i < sizeof(knownMACs) / sizeof(*knownMACs); ++i) {
+    if (memcmp(mac, knownMACs[i], 3) == 0)
+      return 1;
+  }
+  return 0;
+}
+
+static void detect3DSIP(void) {
+  getIPMapMAC();
+
+  unsigned detectedIPsCount = 0;
+  unsigned *mapIndex = 0;
+  if (ipNetBufCount) {
+    mapIndex = malloc(ipNetBufCount * sizeof(*mapIndex));
+    for (unsigned i = 0; i < ipNetBufCount; ++i) {
+      if (matchMAC(ipNetBuf[i].MAC_bytes)) {
+        mapIndex[detectedIPsCount] = i;
+        ++detectedIPsCount;
+      }
+    }
+  }
+
+  freeAutoIPs();
+  allocAutoIPs(detectedIPsCount + 1);
+
+  if (detectedIPsCount) {
+    strcpy(autoIPs[0], "");
+  } else {
+    strcpy(autoIPs[0], "None Detected");
+  }
+  memset(autoIPsOctets[0], 0, 4);
+
+  for (unsigned i = 0; i < detectedIPsCount; ++i) {
+    struct IPMapMAC_t *b = &ipNetBuf[mapIndex[i]];
+    sprintf(autoIPs[i + 1], "%d.%d.%d.%d",
+      (int)b->IP_bytes[0],
+      (int)b->IP_bytes[1],
+      (int)b->IP_bytes[2],
+      (int)b->IP_bytes[3]);
+    memcpy(autoIPsOctets[i + 1], b->IP_bytes, 4);
+  }
+  free(mapIndex);
+
+  selectedIP = detectedIPsCount ? 1 : 0;
+  memcpy(ip_octets, autoIPsOctets[selectedIP], 4);
+}
+
+// Taken from stackoverflow
+// https://stackoverflow.com/a/12131131
+#include <ifaddrs.h>
+#include <netdb.h>
+
+static void getAdapterIPs(void) {
+  freeAdaptorIPs();
+
+  int count = 0;
+
+  struct ifaddrs *ifaddr = 0, *ifa;
+  if (getifaddrs(&ifaddr) != -1) {
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+      if (ifa->ifa_addr == NULL)
+        continue;
+
+      ++count;
+    }
+  }
+
+  allocAdaptorIPs(count + 3);
+
+  strcpy(adaptorIPs[0], "0.0.0.0 (Any)");
+  memset(adaptorIPsOctets[0], 0, 4);
+
+  if (count) {
+    int i = 1;
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next, ++i) {
+      if (ifa->ifa_addr == NULL)
+        continue;
+
+      char host[NI_MAXHOST] = { 0 };
+      int s = getnameinfo(
+        ifa->ifa_addr,
+        sizeof(struct sockaddr_in),
+        host,
+        NI_MAXHOST,
+        NULL,
+        0,
+        NI_NUMERICHOST);
+
+      if (s == 0) {
+        sscanf(host, "%hhd.%hhd.%hhd.%hhd",
+          &adaptorIPsOctets[i][0],
+          &adaptorIPsOctets[i][1],
+          &adaptorIPsOctets[i][2],
+          &adaptorIPsOctets[i][3]);
+        sprintf(
+          adaptorIPs[i + 1],
+          "%d.%d.%d.%d",
+          (int)adaptorIPsOctets[i][0],
+          (int)adaptorIPsOctets[i][1],
+          (int)adaptorIPsOctets[i][2],
+          (int)adaptorIPsOctets[i][3]);
+      } else {
+        strcpy(adaptorIPs[i], "");
+        memset(adaptorIPsOctets[i], 0, 4);
+      }
+    }
+  }
+
+  if (ifaddr) {
+    freeifaddrs(ifaddr);
+  }
+
+  strcpy(adaptorIPs[1 + count], "Auto-Select");
+  memset(adaptorIPsOctets[1 + count], 0, 4);
+
+  strcpy(adaptorIPs[1 + count + 1], "Refresh List");
+  memset(adaptorIPsOctets[1 + count + 1], 0, 4);
+
+  tryAutoSelectAdapterIP();
+}
+#endif
 
 static void updateViewMode(void) {
   switch (view_mode) {
@@ -1865,6 +2090,7 @@ void receive_from_socket(SOCKET s)
       continue;
     }
 
+#ifdef _WIN32
     if (ip_octets[0] == 0 &&
       ip_octets[1] == 0 &&
       ip_octets[2] == 0 &&
@@ -1875,6 +2101,7 @@ void receive_from_socket(SOCKET s)
       ip_octets[2] = remoteAddr.sin_addr.S_un.S_un_b.s_b3;
       ip_octets[3] = remoteAddr.sin_addr.S_un.S_un_b.s_b4;
     }
+#endif
 
     if (handle_recv(buf, ret) < 0)
     {
@@ -1975,7 +2202,9 @@ void *udp_recv_thread_func(void *)
 
 int main(int argc, char *argv[])
 {
+#ifdef _WIN32
   CoInitializeEx(NULL, COINIT_MULTITHREADED);
+#endif
   if (upscaling_filter) {
     if (sr_create() < 0)
       return -1;
@@ -1991,7 +2220,9 @@ int main(int argc, char *argv[])
 
   /* SDL setup */
   SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "0");
+#ifdef _WIN32
   SDL_SetHint(SDL_HINT_OPENGL_ES_DRIVER, "1");
+#endif
   SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_EGL, 1);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
@@ -2100,7 +2331,9 @@ int main(int argc, char *argv[])
     return -1;
   }
 
+#ifdef _WIN32
   SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED | ES_DISPLAY_REQUIRED);
+#endif
 
 #if defined(__EMSCRIPTEN__)
 #include <emscripten.h>
@@ -2110,7 +2343,9 @@ int main(int argc, char *argv[])
     MainLoop((void *)ctx);
 #endif
 
+#ifdef _WIN32
   SetThreadExecutionState(ES_CONTINUOUS);
+#endif
 
   pthread_join(udp_recv_thread, NULL);
   pthread_join(menu_tcp_thread, NULL);

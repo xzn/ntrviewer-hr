@@ -6,9 +6,15 @@
 #include <string>
 
 // ncnn
+#ifdef _WIN32
 #include "net.h"
 #include "gpu.h"
 #include "layer.h"
+#else
+#include "ncnn/net.h"
+#include "ncnn/gpu.h"
+#include "ncnn/layer.h"
+#endif
 
 class FeatureCache;
 class RealCUGAN

@@ -7,7 +7,11 @@
 #include <map>
 
 // ncnn
+#ifdef _WIN32
 #include "cpu.h"
+#else
+#include "ncnn/cpu.h"
+#endif
 
 #include "realcugan_preproc.comp.hex.h"
 #include "realcugan_postproc.comp.hex.h"

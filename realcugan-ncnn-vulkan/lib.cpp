@@ -6,10 +6,15 @@
 #include <vector>
 #include <clocale>
 
-// ncnn
+#ifdef _WIN32
 #include "cpu.h"
 #include "gpu.h"
 #include "platform.h"
+#else
+#include "ncnn/cpu.h"
+#include "ncnn/gpu.h"
+#include "ncnn/platform.h"
+#endif
 
 #include "realcugan.h"
 
