@@ -50,7 +50,7 @@ void realcugan_destroy();
 #include <arpa/inet.h>
 #include <time.h>
 typedef int SOCKET;
-#define SOCKET_VALID(s) ((s) >= 0)
+#define SOCKET_VALID(s) ((int)(s) >= 0)
 #define sock_errno() errno
 #define WSAEWOULDBLOCK EWOULDBLOCK
 #define WSAETIMEDOUT ETIMEDOUT
@@ -161,6 +161,8 @@ static inline uint32_t iclock()
 #include <stdatomic.h>
 #include <pthread.h>
 #include "main.h"
+
+#define fprintf(s, f, ...) fprintf(s, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
 
 #include "jpeg_turbo/jpeglib.h"
 
@@ -383,7 +385,7 @@ SOCKET tcp_connect(int port)
   int flags = fcntl(sockfd, F_GETFL, 0);
   if (flags == -1) return INVALID_SOCKET;
   flags = flags | O_NONBLOCK;
-  return (fcntl(sockfd, F_SETFL, flags) == 0);
+  if (fcntl(sockfd, F_SETFL, flags) != 0) return INVALID_SOCKET;
 #endif
 
 
@@ -399,7 +401,7 @@ SOCKET tcp_connect(int port)
 
   fprintf(stderr, "connecting to %s:%d ...\n", ip_addr_buf, port);
   int ret = connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr));
-  if (ret != 0 && sock_errno() != WSAEWOULDBLOCK)
+  if (ret != 0 && sock_errno() != WSAEWOULDBLOCK && sock_errno() != EINPROGRESS)
   {
     fprintf(stderr, "connection failed: %d\n", sock_errno());
     sock_close(sockfd);
@@ -926,8 +928,8 @@ static void getAdapterIPs(void) {
                         "%" xstr(ARP_STRING_LEN) "s"
 
 struct IPMapMAC_t {
-  char IP_bytes[4];
-  char MAC_bytes[6];
+  uint8_t IP_bytes[4];
+  uint8_t MAC_bytes[6];
 };
 
 static struct IPMapMAC_t *ipNetBuf = 0;
@@ -949,6 +951,8 @@ static void getIPMapMAC(void) {
   if (!fgets(header, sizeof(header), arpCache))
     goto final;
 
+  int beg = ftell(arpCache);
+
   char ipAddr[ARP_BUFFER_LEN], hwAddr[ARP_BUFFER_LEN], device[ARP_BUFFER_LEN];
   int count = 0;
   while (3 == fscanf(arpCache, ARP_LINE_FORMAT, ipAddr, hwAddr, device))
@@ -956,11 +960,11 @@ static void getIPMapMAC(void) {
 
   ipNetBuf = calloc(count, sizeof(struct IPMapMAC_t));
   if (ipNetBuf) {
-    fseek(arpCache, 0, SEEK_SET);
+    fseek(arpCache, beg, SEEK_SET);
     int count = 0;
     while (3 == fscanf(arpCache, ARP_LINE_FORMAT, ipAddr, hwAddr, device)) {
       struct IPMapMAC_t *b = &ipNetBuf[count];
-      sscanf(ipAddr, "%hhd.%hhd.%hhd.%hhd",
+      sscanf(ipAddr, "%hhu.%hhu.%hhu.%hhu",
         &b->IP_bytes[0],
         &b->IP_bytes[1],
         &b->IP_bytes[2],
@@ -982,7 +986,7 @@ final:
   return;
 }
 
-static int matchMAC(char *mac) {
+static int matchMAC(uint8_t *mac) {
   for (unsigned i = 0; i < sizeof(knownMACs) / sizeof(*knownMACs); ++i) {
     if (memcmp(mac, knownMACs[i], 3) == 0)
       return 1;
@@ -1046,7 +1050,18 @@ static void getAdapterIPs(void) {
       if (ifa->ifa_addr == NULL)
         continue;
 
-      ++count;
+      char host[NI_MAXHOST] = { 0 };
+      int s = getnameinfo(
+        ifa->ifa_addr,
+        sizeof(struct sockaddr_in),
+        host,
+        NI_MAXHOST,
+        NULL,
+        0,
+        NI_NUMERICHOST);
+
+      if (s == 0)
+        ++count;
     }
   }
 
@@ -1057,7 +1072,7 @@ static void getAdapterIPs(void) {
 
   if (count) {
     int i = 1;
-    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next, ++i) {
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
       if (ifa->ifa_addr == NULL)
         continue;
 
@@ -1072,21 +1087,20 @@ static void getAdapterIPs(void) {
         NI_NUMERICHOST);
 
       if (s == 0) {
-        sscanf(host, "%hhd.%hhd.%hhd.%hhd",
+        sscanf(host, "%hhu.%hhu.%hhu.%hhu",
           &adaptorIPsOctets[i][0],
           &adaptorIPsOctets[i][1],
           &adaptorIPsOctets[i][2],
           &adaptorIPsOctets[i][3]);
         sprintf(
-          adaptorIPs[i + 1],
+          adaptorIPs[i],
           "%d.%d.%d.%d",
           (int)adaptorIPsOctets[i][0],
           (int)adaptorIPsOctets[i][1],
           (int)adaptorIPsOctets[i][2],
           (int)adaptorIPsOctets[i][3]);
-      } else {
-        strcpy(adaptorIPs[i], "");
-        memset(adaptorIPsOctets[i], 0, 4);
+
+        ++i;
       }
     }
   }
@@ -2080,7 +2094,7 @@ void receive_from_socket(SOCKET s)
     else if (ret < 0)
     {
       int err = sock_errno();
-      if (err != WSAETIMEDOUT)
+      if (err != WSAETIMEDOUT && err != WSAEWOULDBLOCK)
       {
         fprintf(stderr, "recvfrom failed: %d\n", err);
       }

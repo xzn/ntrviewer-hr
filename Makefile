@@ -20,11 +20,11 @@ LDFLAGS :=
 
 RM := rm
 
-JT_SRC := $(wildcard jpeg_turbo/*.c) jpeg_turbo/simd/x86_64/jsimd.c
+JT_SRC := $(wildcard jpeg_turbo/*.c) # jpeg_turbo/simd/x86_64/jsimd.c
 JT_OBJ := $(JT_SRC:.c=.o)
 
-JT_SRC_S := $(wildcard jpeg_turbo/simd/x86_64/*.asm)
-JT_OBJ_S := $(JT_SRC_S:.asm=.o)
+# JT_SRC_S := $(wildcard jpeg_turbo/simd/x86_64/*.asm)
+# JT_OBJ_S := $(JT_SRC_S:.asm=.o)
 
 $(TARGET): main.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o libGLAD.o $(JT_OBJ) $(JT_OBJ_S)
 	$(CXX) $^ -o $@ $(CFLAGS) $(LDLIBS) $(LDFLAGS)

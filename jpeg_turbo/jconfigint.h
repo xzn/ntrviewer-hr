@@ -51,6 +51,7 @@
  * JPEG standard, and the IJG code does not support anything else!
  */
 
+#if 0
 #ifndef BITS_IN_JSAMPLE
 #define BITS_IN_JSAMPLE  8      /* use 8 or 12 */
 #endif
@@ -70,4 +71,5 @@
 /* Use accelerated SIMD routines. */
 #define WITH_SIMD 1
 
+#endif
 #endif
