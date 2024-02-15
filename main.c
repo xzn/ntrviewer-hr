@@ -1730,7 +1730,8 @@ MainLoop(void *loopArg)
   {
     float bg[4];
     nk_color_fv(bg, nk_rgb(28, 48, 62));
-    SDL_GetWindowSize(win[i], &win_width[i], &win_height[i]);
+    // SDL_GetWindowSize(win[i], &win_width[i], &win_height[i]);
+    SDL_GL_GetDrawableSize(win[i], &win_width[i], &win_height[i]);
 
     SDL_GL_MakeCurrent(win[i], glContext[i]);
     glViewport(0, 0, win_width[i], win_height[i]);
