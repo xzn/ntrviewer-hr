@@ -36,6 +36,8 @@ void realcugan_destroy();
 #define HR_MIN(a, b) ((a) < (b) ? (a) : (b))
 
 #ifdef _WIN32
+#define WINVER _WIN32_WINNT_WINBLUE
+#define _WIN32_WINNT _WIN32_WINNT_WINBLUE
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #define SOCKET_VALID(s) ((s) != INVALID_SOCKET)
@@ -2238,6 +2240,8 @@ int main(int argc, char *argv[])
 
   /* SDL setup */
   SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "0");
+  SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+  SDL_SetHint(SDL_HINT_WINDOWS_DPI_SCALING, "1");
 #ifdef _WIN32
   SDL_SetHint(SDL_HINT_OPENGL_ES_DRIVER, "1");
 #endif
