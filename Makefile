@@ -8,14 +8,14 @@ EMBED_JPEG_TURBO := 0
 ifeq ($(OS),Windows_NT)
 	LDLIBS := -Llib -static -lmingw32 -lSDL2main -lSDL2
 	LDLIBS += -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8
-	LDLIBS += -ljpeg -lws2_32 -liphlpapi -lncnn -fopenmp
+	LDLIBS += -lws2_32 -liphlpapi -lncnn -fopenmp
 	LDLIBS += -lOSDependent -lglslang -lMachineIndependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools
 
 	TARGET := ntrviewer.exe
 
 	NASM := -DWIN64 -fwin64
 else
-	LDLIBS := -lSDL2 -lncnn -ljpeg
+	LDLIBS := -lSDL2 -lncnn
 
 	TARGET := ntrviewer
 
@@ -33,11 +33,13 @@ JT_SRC_S := $(wildcard jpeg_turbo/simd/x86_64/*.asm)
 JT_OBJ_S := $(JT_SRC_S:.asm=.o)
 
 EMBED_JPEG_TURBO := -DEMBED_JPEG_TURBO
+LDLIBS += -ljpeg
 else
 JT_OBJ :=
 JT_OBJ_S :=
 
 EMBED_JPEG_TURBO :=
+LDLIBS += -lturbojpeg
 endif
 
 $(TARGET): main.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o libGLAD.o $(JT_OBJ) $(JT_OBJ_S)

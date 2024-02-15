@@ -78,7 +78,7 @@ void Sleep(int milliseconds) {
 #ifdef EMBED_JPEG_TURBO
 #include "jpeg_turbo/jpeglib.h"
 #else
-#include "jpeglib.h"
+#include <turbojpeg.h>
 #endif
 
 #define RP_MAX(a,b) ((a) > (b) ? (a) : (b))
@@ -1296,7 +1296,7 @@ static void guiMain(struct nk_context *ctx)
       {
         menu_work_state = CS_CONNECTING;
       }
-      menu_remote_play = TRUE;
+      menu_remote_play = 1;
       if (ntr_rp_port != ntr_rp_bound_port) {
         ntr_rp_bound_port = ntr_rp_port;
         ntr_rp_port_changed = 1;
@@ -1910,7 +1910,6 @@ void* rpMalloc(j_common_ptr cinfo, u32 size)
 }
 
 void rpFree(j_common_ptr, void*) {}
-#endif
 
 jmp_buf jpeg_jmp;
 
@@ -1948,7 +1947,6 @@ void jpeg_emit_message(j_common_ptr cinfo, int msg_level)
 int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
   struct jpeg_decompress_struct cinfo;
 
-#ifdef EMBED_JPEG_TURBO
   cinfo.alloc.buf = malloc(400 * 240 * 3);
   if (cinfo.alloc.buf) {
     cinfo.alloc.stats.offset = 0;
@@ -1956,7 +1954,6 @@ int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
   } else {
     return -1;
   }
-#endif
 
   struct jpeg_error_mgr jerr;
   cinfo.err = jpeg_std_error(&jerr);
@@ -1991,11 +1988,44 @@ int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
   } else {
     ret = -1;
   }
-#ifdef EMBED_JPEG_TURBO
   free(cinfo.alloc.buf);
-#endif
   return ret;
 }
+#else
+int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
+  tjhandle tjInstance = NULL;
+  if ((tjInstance = tj3Init(TJINIT_DECOMPRESS)) == NULL) {
+    fprintf(stderr, "create turbo jpeg decompressor failed\n");
+    return -1;
+  }
+
+  int ret = -1;
+
+  if (tj3DecompressHeader(tjInstance, in, size) != 0 ) {
+    fprintf(stderr, "jpeg header error\n");
+    goto final;
+  }
+
+  if (
+    h != tj3Get(tjInstance, TJPARAM_JPEGWIDTH) ||
+    w != tj3Get(tjInstance, TJPARAM_JPEGHEIGHT)
+  ) {
+    fprintf(stderr, "jpeg unexpected dimensions\n");
+    goto final;
+  }
+
+  if (tj3Decompress8(tjInstance, in, size, out, h * 3, TJPF_RGB) != 0) {
+    fprintf(stderr, "jpeg decompression error\n");
+    goto final;
+  }
+
+  ret = 0;
+
+final:
+  tj3Destroy(tjInstance);
+  return ret;
+}
+#endif
 
 int handle_recv(uint8_t *buf, int size)
 {
