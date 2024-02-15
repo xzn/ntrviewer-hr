@@ -75,7 +75,11 @@ void Sleep(int milliseconds) {
 
 #define fprintf(s, f, ...) fprintf(s, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
 
+#ifdef EMBED_JPEG_TURBO
 #include "jpeg_turbo/jpeglib.h"
+#else
+#include "jpeglib.h"
+#endif
 
 #define RP_MAX(a,b) ((a) > (b) ? (a) : (b))
 #define RP_MIN(a,b) ((a) > (b) ? (b) : (a))
@@ -1878,6 +1882,7 @@ uint32_t recv_delay_between_packets[rp_work_count];
 uint32_t recv_last_packet_time[rp_work_count];
 uint8_t recv_work;
 
+#ifdef EMBED_JPEG_TURBO
 void* rpMalloc(j_common_ptr cinfo, u32 size)
 {
   void* ret = cinfo->alloc.buf + cinfo->alloc.stats.offset;
@@ -1904,6 +1909,7 @@ void* rpMalloc(j_common_ptr cinfo, u32 size)
 }
 
 void rpFree(j_common_ptr, void*) {}
+#endif
 
 jmp_buf jpeg_jmp;
 
@@ -1914,7 +1920,6 @@ void jpeg_error_exit(j_common_ptr cinfo)
 
   /* Let the memory manager delete any temp files before we die */
   // jpeg_destroy(cinfo);
-  cinfo->has_error = 1;
   longjmp(jpeg_jmp, 1);
 }
 
@@ -1931,7 +1936,6 @@ void jpeg_emit_message(j_common_ptr cinfo, int msg_level)
       (*err->output_message) (cinfo);
     /* Always count warnings in num_warnings. */
     err->num_warnings++;
-    cinfo->has_error = 1;
     longjmp(jpeg_jmp, 1);
   } else {
     /* It's a trace message.  Show it if trace_level >= msg_level. */
@@ -1942,6 +1946,8 @@ void jpeg_emit_message(j_common_ptr cinfo, int msg_level)
 
 int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
   struct jpeg_decompress_struct cinfo;
+
+#ifdef EMBED_JPEG_TURBO
   cinfo.alloc.buf = malloc(400 * 240 * 3);
   if (cinfo.alloc.buf) {
     cinfo.alloc.stats.offset = 0;
@@ -1949,6 +1955,7 @@ int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
   } else {
     return -1;
   }
+#endif
 
   struct jpeg_error_mgr jerr;
   cinfo.err = jpeg_std_error(&jerr);
@@ -1964,17 +1971,14 @@ int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
     if (ret == JPEG_HEADER_OK) {
       jpeg_start_decompress(&cinfo);
       // fprintf(stderr, "jpeg_read_header: %d %d (%d %d)\n", (int)cinfo.output_width, (int)cinfo.output_height, h, w);
-      if (!cinfo.has_error && (int)cinfo.output_width == h && (int)cinfo.output_height == w) {
+      if ((int)cinfo.output_width == h && (int)cinfo.output_height == w) {
         while (cinfo.output_scanline < cinfo.output_height) {
           uint8_t *buffer = out + cinfo.output_scanline * cinfo.output_width * 3;
           jpeg_read_scanlines(&cinfo, &buffer, 1);
-          if (cinfo.has_error)
-            break;
         }
-        if (!cinfo.has_error)
-          jpeg_finish_decompress(&cinfo);
+        jpeg_finish_decompress(&cinfo);
         // jpeg_destroy_decompress(&cinfo);
-        ret = cinfo.has_error ? -1 : 0;
+        ret = 0;
       } else {
         // jpeg_destroy_decompress(&cinfo);
         ret = -1;
@@ -1986,7 +1990,9 @@ int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
   } else {
     ret = -1;
   }
+#ifdef EMBED_JPEG_TURBO
   free(cinfo.alloc.buf);
+#endif
   return ret;
 }
 
