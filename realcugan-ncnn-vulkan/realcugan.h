@@ -6,7 +6,7 @@
 #include <string>
 
 // ncnn
-#ifdef _WIN32
+#if 0
 #include "net.h"
 #include "gpu.h"
 #include "layer.h"

@@ -3,12 +3,10 @@ CXX := g++
 CPPFLAGS := -Iinclude
 # CFLAGS := -Og -g
 CFLAGS := -Ofast
-EMBED_JPEG_TURBO := 1
+EMBED_JPEG_TURBO := 0
 
 ifeq ($(OS),Windows_NT)
-	LDLIBS := -Llib -lmingw32 -lSDL2main -lSDL2 -lvfw32 -Wl,-Bstatic -lws2_32 -lncnn -lole32 -fopenmp -liphlpapi -static-libgcc
-	# LDLIBS := -static -Llib -lmingw32 -mwindows -lSDL2main -lSDL2 -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8
-	# LDLIBS += -lvfw32 -lws2_32 -lncnn -fopenmp
+	LDLIBS := -Llib -lmingw32 -lSDL2main -lSDL2 -ljpeg -lncnn -lvfw32 -lws2_32 -lole32 -fopenmp -liphlpapi
 	LDLIBS += -lOSDependent -lglslang -lMachineIndependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -lSPIRV-Tools-link
 
 	TARGET := ntrviewer.exe
@@ -53,10 +51,10 @@ $(TARGET): main.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o libGLAD.o $(JT_
 	$(CXX) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS)
 
 realcugan_lib.o: realcugan-ncnn-vulkan/lib.cpp $(wildcard srmd-realcugan-vulkan/*.h)
-	$(CXX) realcugan-ncnn-vulkan/lib.cpp -o $@ -c $(CFLAGS) $(CPPFLAGS) -I../ncnn-src/src -I../ncnn-build/src -Wno-attributes
+	$(CXX) realcugan-ncnn-vulkan/lib.cpp -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-attributes
 
 realcugan.o: realcugan-ncnn-vulkan/realcugan.cpp $(wildcard realcugan-ncnn-vulkan/*.h)
-	$(CXX) realcugan-ncnn-vulkan/realcugan.cpp -o $@ -c $(CFLAGS) $(CPPFLAGS) -I../ncnn-src/src -I../ncnn-build/src -Wno-attributes
+	$(CXX) realcugan-ncnn-vulkan/realcugan.cpp -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-attributes
 
 main.o: main.c
 	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wall -Wextra $(EMBED_JPEG_TURBO)

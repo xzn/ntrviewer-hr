@@ -7,7 +7,7 @@
 #include <map>
 
 // ncnn
-#ifdef _WIN32
+#if 0
 #include "cpu.h"
 #else
 #include "ncnn/cpu.h"

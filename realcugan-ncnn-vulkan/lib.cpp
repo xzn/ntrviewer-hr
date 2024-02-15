@@ -6,7 +6,7 @@
 #include <vector>
 #include <clocale>
 
-#ifdef _WIN32
+#if 0
 #include "cpu.h"
 #include "gpu.h"
 #include "platform.h"
