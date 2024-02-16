@@ -211,12 +211,6 @@ typedef int64_t		s64;
 // #define MAX(a, b) ((a) < (b) ? (b) : (a))
 #define LEN(a) (sizeof(a) / sizeof(a)[0])
 
-enum {
-  SCREEN_TOP,
-  SCREEN_BOT,
-  SCREEN_COUNT,
-};
-
 #define FRAME_STAT_EVERY_X_FRAMES 24
 char window_title_with_fps[500];
 struct {
@@ -1531,9 +1525,10 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int
   double ctx_top_f;
   double ctx_right_f;
   double ctx_bot_f;
+  int ctx_width;
+  int ctx_height;
   if (view_mode == VIEW_MODE_TOP_BOT) {
-    int ctx_height = (double)win_height[0] / 2;
-    int ctx_width;
+    ctx_height = (double)win_height[0] / 2;
     int ctx_left;
     int ctx_top;
     if ((double)win_width[0] / width * height > ctx_height)
@@ -1569,8 +1564,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int
     if (view_mode == VIEW_MODE_BOT)
       tb = 0;
 
-    int ctx_height = (double)win_height[tb];
-    int ctx_width;
+    ctx_height = (double)win_height[tb];
     int ctx_left;
     int ctx_top;
     if ((double)win_width[tb] / width * height > ctx_height)
@@ -1601,17 +1595,8 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int
   vVertices_pos[3][0] = ctx_right_f;
   vVertices_pos[3][1] = ctx_top_f;
 
-  glUseProgram(gl_program);
-  glVertexAttribPointer(gl_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*vVertices_pos), vVertices_pos);
-  glVertexAttribPointer(gl_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*vVertices_tex_coord), vVertices_tex_coord);
-
-  glEnableVertexAttribArray(gl_position_loc);
-  glEnableVertexAttribArray(gl_tex_coord_loc);
-
   glActiveTexture(GL_TEXTURE0);
-
   glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id);
-
   nk_bool upscaled = ctx->images_upscaled[index];
   int scale = upscaled ? screen_upscale_factor : 1;
   glTexImage2D(GL_TEXTURE_2D, 0,
@@ -1619,14 +1604,55 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int
                 width * scale, 0,
                 GL_RGB, GL_UNSIGNED_BYTE,
                 ctx->images[index]);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  glGenerateMipmap(GL_TEXTURE_2D);
 
-  glUniform1i(gl_sampler_loc, 0);
-  glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+#ifdef USE_ANGLE
+  nk_bool use_fsr = 0;
+#else
+  nk_bool use_fsr = ctx_height > height * scale && ctx_width > width * scale && upscaled;
+#endif
+
+  if (use_fsr) {
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    GLuint out_tex = fsr_main(top_bot, ctx->gl_tex_id, height * scale, width * scale, ctx_height, ctx_width, 0.25f);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, out_tex);
+
+    glUseProgram(gl_program);
+    glVertexAttribPointer(gl_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*vVertices_pos), vVertices_pos);
+    glVertexAttribPointer(gl_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*vVertices_tex_coord), vVertices_tex_coord);
+
+    glEnableVertexAttribArray(gl_position_loc);
+    glEnableVertexAttribArray(gl_tex_coord_loc);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    glUniform1i(gl_sampler_loc, 0);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+  } else {
+    glUseProgram(gl_program);
+    glVertexAttribPointer(gl_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*vVertices_pos), vVertices_pos);
+    glVertexAttribPointer(gl_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*vVertices_tex_coord), vVertices_tex_coord);
+
+    glEnableVertexAttribArray(gl_position_loc);
+    glEnableVertexAttribArray(gl_tex_coord_loc);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    glUniform1i(gl_sampler_loc, 0);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+  }
 }
 
 static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot, int force)
@@ -2279,13 +2305,15 @@ int main(int argc, char *argv[])
   SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "0");
   SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
   SDL_SetHint(SDL_HINT_WINDOWS_DPI_SCALING, "1");
-#ifdef _WIN32
+#ifdef USE_ANGLE
   SDL_SetHint(SDL_HINT_OPENGL_ES_DRIVER, "1");
 #endif
   SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS);
+#ifdef USE_ANGLE
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_EGL, 1);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+#endif
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
   SDL_GL_SetSwapInterval(1);
@@ -2314,7 +2342,7 @@ int main(int argc, char *argv[])
     return -1;
   }
 
-  if (!gladLoadGLES2((GLADloadfunc)SDL_GL_GetProcAddress))
+  if (!gladLoadGLES2Loader((GLADloadproc)SDL_GL_GetProcAddress))
   {
     fprintf(stderr, "gladLoadGLES2 failed\n");
     return -1;

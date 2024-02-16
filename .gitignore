@@ -2,7 +2,7 @@
 *.exe
 *.dll
 *.zip
-include
+include/ncnn
 lib
 
 ntrviewer*

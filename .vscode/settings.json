@@ -1,11 +1,4 @@
 {
-    "files.associations": {
-        "*.css": "tailwindcss",
-        "main.h": "c",
-        "shellscalingapi.h": "c",
-        "stdlib.h": "c",
-        "stdio.h": "c"
-    },
     "C_Cpp.default.intelliSenseMode": "windows-gcc-x64",
     "C_Cpp.default.compilerPath": "/mingw64/bin/gcc",
     "C_Cpp.default.defines": [

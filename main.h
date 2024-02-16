@@ -10,7 +10,7 @@
 #include <time.h>
 #include <setjmp.h>
 
-#include "glad/gles2.h"
+#include "fsr/fsr_main.h"
 
 #if defined(_WIN32) && !defined(_WIN32_WCE) && !defined(__SCITECH_SNAP__)
     /* Win32 but not WinCE */

@@ -1,8 +1,8 @@
 CC := gcc
 CXX := g++
 CPPFLAGS := -Iinclude
-# CFLAGS := -Og -g
-CFLAGS := -Ofast
+CFLAGS := -Og -g
+# CFLAGS := -Ofast
 EMBED_JPEG_TURBO := 0
 
 ifeq ($(OS),Windows_NT)
@@ -21,7 +21,7 @@ else
 
 	NASM := -DELF -felf64
 endif
-LDFLAGS := -s
+# LDFLAGS := -s
 
 RM := rm
 
@@ -42,7 +42,7 @@ EMBED_JPEG_TURBO :=
 LDLIBS += -lturbojpeg
 endif
 
-$(TARGET): main.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o libGLAD.o $(JT_OBJ) $(JT_OBJ_S)
+$(TARGET): main.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o libGLAD.o fsr/fsr_main.o fsr/image_utils.o $(JT_OBJ) $(JT_OBJ_S)
 	$(CXX) $^ -o $@ $(CFLAGS) $(LDLIBS) $(LDFLAGS)
 
 %.o: %.c
@@ -67,4 +67,4 @@ libNK.o: libNK.c
 	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -std=c89 -Wall -Wextra
 
 clean:
-	$(RM) $(TARGET) *.o jpeg_turbo/*.o jpeg_turbo/simd/x86_64/*.o
+	$(RM) $(TARGET) *.o jpeg_turbo/*.o jpeg_turbo/simd/x86_64/*.o fsr/*.o
