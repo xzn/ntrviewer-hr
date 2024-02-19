@@ -61,11 +61,14 @@ void Sleep(int milliseconds) {
 #include <pthread.h>
 #include "main.h"
 // #define GL_DEBUG
+// #define USE_ANGLE
+// #define USE_OGL_ES
 
 #define GL_CHANNELS_N 4
 #define GL_FORMAT GL_RGBA
 #define GL_INT_FORMAT GL_RGBA8
 #define TJ_FORMAT TJPF_RGBA
+#define JCS_FORMAT JCS_EXT_RGBA
 
 int realcugan_create();
 GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata);
@@ -1358,7 +1361,11 @@ static GLbyte fShaderStr[] =
     " gl_FragColor = texture2D(s_texture, v_texCoord); \n"
     "} \n";
 
+#ifdef USE_OGL_ES
 #define GLSL_FBO_VERSION "#version 320 es\n"
+#else
+#define GLSL_FBO_VERSION "#version 430\n"
+#endif
 static GLbyte fbo_vShaderStr[] =
     GLSL_FBO_VERSION
     "in vec4 a_position; \n"
@@ -2088,6 +2095,7 @@ int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
     jpeg_mem_src(&cinfo, in, size);
     ret = jpeg_read_header(&cinfo, TRUE);
     if (ret == JPEG_HEADER_OK) {
+      cinfo.out_color_space = JCS_FORMAT;
       jpeg_start_decompress(&cinfo);
       // fprintf(stderr, "jpeg_read_header: %d %d (%d %d)\n", (int)cinfo.output_width, (int)cinfo.output_height, h, w);
       if ((int)cinfo.output_width == h && (int)cinfo.output_height == w) {
@@ -2416,6 +2424,7 @@ int main(int argc, char *argv[])
 #ifdef USE_ANGLE
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_EGL, 1);
 #endif
+#ifdef USE_OGL_ES
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
 #ifdef USE_ANGLE
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
@@ -2423,6 +2432,11 @@ int main(int argc, char *argv[])
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
 #endif
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+#else
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
+#endif
 #ifdef GL_DEBUG
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_DEBUG_FLAG);
 #endif
@@ -2463,6 +2477,8 @@ int main(int argc, char *argv[])
   glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
   glDebugMessageCallback(on_gl_error, NULL);
 #endif
+
+  fprintf(stderr, "ogl version: %s\n", glGetString(GL_VERSION));
 
   SDL_GL_MakeCurrent(win[0], glContext[0]);
 
