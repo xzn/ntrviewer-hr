@@ -1,15 +1,3 @@
-int realsr_create();
-void realsr_run(int w, int h, int c, const unsigned char *indata, unsigned char *outdata);
-void realsr_destroy();
-
-int srmd_create();
-void srmd_run(int w, int h, int c, const unsigned char *indata, unsigned char *outdata);
-void srmd_destroy();
-
-int realcugan_create();
-void realcugan_run(int w, int h, int c, const unsigned char *indata, unsigned char *outdata);
-void realcugan_destroy();
-
 #if 0
 #define screen_upscale_factor (4)
 #define sr_create realsr_create
@@ -72,6 +60,16 @@ void Sleep(int milliseconds) {
 #include <stdatomic.h>
 #include <pthread.h>
 #include "main.h"
+// #define GL_DEBUG
+
+#define GL_CHANNELS_N 4
+#define GL_FORMAT GL_RGBA
+#define GL_INT_FORMAT GL_RGBA8
+#define TJ_FORMAT TJPF_RGBA
+
+int realcugan_create();
+GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata);
+void realcugan_destroy();
 
 #define fprintf(s, f, ...) fprintf(s, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
 
@@ -1360,6 +1358,46 @@ static GLbyte fShaderStr[] =
     " gl_FragColor = texture2D(s_texture, v_texCoord); \n"
     "} \n";
 
+#define GLSL_FBO_VERSION "#version 320 es\n"
+static GLbyte fbo_vShaderStr[] =
+    GLSL_FBO_VERSION
+    "in vec4 a_position; \n"
+    "in vec2 a_texCoord; \n"
+    "out vec2 v_texCoord; \n"
+    "void main() \n"
+    "{ \n"
+    " gl_Position = a_position; \n"
+    " v_texCoord = a_texCoord; \n"
+    "} \n";
+
+static GLbyte fbo_fShaderStr[] =
+    GLSL_FBO_VERSION
+    "precision mediump float; \n"
+    "in vec2 v_texCoord; \n"
+    "uniform samplerBuffer mediump s_texture; \n"
+    "uniform int v_texSize; \n"
+    "out vec4 outColor; \n"
+    "void main() \n"
+    "{ \n"
+    " outColor = texelFetch(s_texture, int(v_texCoord.y) * v_texSize + int(v_texCoord.x)); \n"
+    "} \n";
+
+static GLfloat fbo_vVertices_pos[4][3] = {
+    { -1.f, -1.f, 0.0f }, // Position 1
+    { -1.f, 1.f, 0.0f },  // Position 0
+    { 1.f, -1.f, 0.0f },  // Position 2
+    { 1.f, 1.f, 0.0f },   // Position 3
+};
+
+static GLfloat fbo_vVertices_tex_coord[4][2] = {
+    { 1.0f, 0.0f }, // TexCoord 2
+    { 0.0f, 0.0f }, // TexCoord 1
+    { 0.0f, 1.0f }, // TexCoord 0
+    { 1.0f, 1.0f }, // TexCoord 3
+};
+static GLushort fbo_indices[] =
+    {0, 1, 2, 1, 2, 3};
+
 static GLfloat vVertices_pos[4][3] = {
     { -0.5f, 0.5f, 0.0f },  // Position 0
     { -0.5f, -0.5f, 0.0f }, // Position 1
@@ -1485,6 +1523,12 @@ GLint gl_position_loc;
 GLint gl_tex_coord_loc;
 GLint gl_sampler_loc;
 
+GLuint gl_fbo_program;
+GLint gl_fbo_position_loc;
+GLint gl_fbo_tex_coord_loc;
+GLint gl_fbo_sampler_loc;
+GLint gl_fbo_tex_size_loc;
+
 enum FrameBufferStatus
 {
   FBS_NOT_AVAIL,
@@ -1496,11 +1540,13 @@ typedef struct _FrameBufferContext
 {
   pthread_mutex_t gl_tex_mutex;
   uint8_t *images[3];
-  nk_bool images_upscaled[3];
   GLuint gl_tex_id;
   enum FrameBufferStatus updated;
   int index;
   int next_index;
+
+  GLuint gl_tex_upscaled;
+  GLuint gl_fbo_upscaled[SCREEN_COUNT];
 } FrameBufferContext;
 
 int gl_updated = 0;
@@ -1527,7 +1573,14 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int
   double ctx_bot_f;
   int ctx_width;
   int ctx_height;
+  int win_w;
+  int win_h;
+  int tb;
   if (view_mode == VIEW_MODE_TOP_BOT) {
+    tb = 0;
+    win_w = win_width[0];
+    win_h = win_height[0];
+
     ctx_height = (double)win_height[0] / 2;
     int ctx_left;
     int ctx_top;
@@ -1560,9 +1613,12 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int
       ctx_bot_f = -1 + (double)ctx_top / win_height[0] * 2;
     }
   } else {
-    int tb = top_bot;
+    tb = top_bot;
     if (view_mode == VIEW_MODE_BOT)
       tb = 0;
+
+    win_w = win_width[tb];
+    win_h = win_height[tb];
 
     ctx_height = (double)win_height[tb];
     int ctx_left;
@@ -1595,15 +1651,65 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int
   vVertices_pos[3][0] = ctx_right_f;
   vVertices_pos[3][1] = ctx_top_f;
 
-  glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id);
-  nk_bool upscaled = ctx->images_upscaled[index];
+  nk_bool upscaled = screen_upscale_factor > 1 && upscaling_filter && upscaling_filter_created;
   int scale = upscaled ? screen_upscale_factor : 1;
-  glTexImage2D(GL_TEXTURE_2D, 0,
-                GL_RGB, height * scale,
-                width * scale, 0,
-                GL_RGB, GL_UNSIGNED_BYTE,
-                ctx->images[index]);
+  GLuint tex = upscaled ? ctx->gl_tex_upscaled : ctx->gl_tex_id;
+
+  if (upscaled) {
+    GLuint tex_upscaled = sr_run(top_bot, height, width, GL_CHANNELS_N, ctx->images[index]);
+    if (!tex_upscaled) {
+      upscaled = 0;
+      upscaling_filter = 0;
+    }
+
+    scale = screen_upscale_factor;
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_BUFFER, tex_upscaled);
+
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, ctx->gl_fbo_upscaled[tb]);
+    glViewport(0, 0, height * scale, width * scale);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_DEPTH_TEST);
+
+    glUseProgram(gl_fbo_program);
+    fbo_vVertices_tex_coord[0][0] = 0.5;
+    fbo_vVertices_tex_coord[0][1] = 0.5;
+    fbo_vVertices_tex_coord[1][0] = 0.5;
+    fbo_vVertices_tex_coord[1][1] = width * scale - 0.5;
+    fbo_vVertices_tex_coord[2][0] = height * scale - 0.5;
+    fbo_vVertices_tex_coord[2][1] = 0.5;
+    fbo_vVertices_tex_coord[3][0] = height * scale - 0.5;
+    fbo_vVertices_tex_coord[3][1] = width * scale - 0.5;
+
+    glVertexAttribPointer(gl_fbo_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_pos), fbo_vVertices_pos);
+    glVertexAttribPointer(gl_fbo_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_tex_coord), fbo_vVertices_tex_coord);
+    glEnableVertexAttribArray(gl_fbo_position_loc);
+    glEnableVertexAttribArray(gl_fbo_tex_coord_loc);
+
+    glUniform1i(gl_fbo_sampler_loc, 0);
+    glUniform1i(gl_fbo_tex_size_loc, height * scale);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, fbo_indices);
+
+    glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled);
+    tex = ctx->gl_tex_upscaled;
+  }
+
+  if (!upscaled) {
+    scale = 1;
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id);
+    glTexImage2D(
+      GL_TEXTURE_2D, 0,
+      GL_INT_FORMAT, height,
+      width, 0,
+      GL_FORMAT, GL_UNSIGNED_BYTE,
+      ctx->images[index]);
+
+    tex = ctx->gl_tex_id;
+  }
+
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+  glViewport(0, 0, win_w, win_h);
 
 #ifdef USE_ANGLE
   nk_bool use_fsr = 0;
@@ -1617,7 +1723,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    GLuint out_tex = fsr_main(top_bot, ctx->gl_tex_id, height * scale, width * scale, ctx_height, ctx_width, 0.25f);
+    GLuint out_tex = fsr_main(top_bot, tex, height * scale, width * scale, ctx_height, ctx_width, 0.25f);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, out_tex);
 
@@ -1761,8 +1867,8 @@ MainLoop(void *loopArg)
 
     SDL_GL_MakeCurrent(win[i], glContext[i]);
     glViewport(0, 0, win_width[i], win_height[i]);
-    glClear(GL_COLOR_BUFFER_BIT);
     glClearColor(bg[0], bg[1], bg[2], bg[3]);
+    glClear(GL_COLOR_BUFFER_BIT);
 
 #define MIN_UPDATE_INTERVAL_MS (33)
 
@@ -1845,23 +1951,12 @@ MainLoop(void *loopArg)
   }
 }
 
-void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, uint8_t *rgb_upscaled, int top_bot, int frame_size, int delay_between_packet)
+void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int top_bot, int frame_size, int delay_between_packet)
 {
-#if (screen_upscale_factor > 1)
-  nk_bool upscaled = upscaling_filter && upscaling_filter_created;
-  if (upscaled)
-    sr_run(240, top_bot == 0 ? 400 : 320, 3, rgb, rgb_upscaled);
-  else
-    rgb_upscaled = rgb;
-#else
-  rgb_upscaled = rgb;
-#endif
-
   pthread_mutex_lock(&ctx->gl_tex_mutex);
   int next_index = frame_buffer_context_next_free_index(ctx->next_index, ctx->index);
   uint8_t **pimage = &ctx->images[next_index];
-  *pimage = rgb_upscaled;
-  ctx->images_upscaled[next_index] = upscaled;
+  *pimage = rgb;
   ctx->updated = FBS_UPDATED;
   ctx->next_index = next_index;
   pthread_mutex_unlock(&ctx->gl_tex_mutex);
@@ -1881,8 +1976,8 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, uint8_t *
   pthread_mutex_unlock(&gl_updated_mutex);
 }
 
-uint8_t screen_decoded[SCREEN_COUNT][400 * 240 * 3];
-uint8_t screen_upscaled[SCREEN_COUNT][400 * 240 * 3 * screen_upscale_factor * screen_upscale_factor];
+uint8_t screen_decoded[SCREEN_COUNT][400 * 240 * GL_CHANNELS_N];
+// uint8_t screen_upscaled[SCREEN_COUNT][400 * 240 * GL_CHANNELS_N * screen_upscale_factor * screen_upscale_factor];
 
 uint8_t upscaled_u_image[400 * 240];
 uint8_t upscaled_v_image[400 * 240];
@@ -1973,10 +2068,10 @@ void jpeg_emit_message(j_common_ptr cinfo, int msg_level)
 int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
   struct jpeg_decompress_struct cinfo;
 
-  cinfo.alloc.buf = malloc(400 * 240 * 3);
+  cinfo.alloc.buf = malloc(400 * 240 * GL_CHANNELS_N);
   if (cinfo.alloc.buf) {
     cinfo.alloc.stats.offset = 0;
-    cinfo.alloc.stats.remaining = 400 * 240 * 3;
+    cinfo.alloc.stats.remaining = 400 * 240 * GL_CHANNELS_N;
   } else {
     return -1;
   }
@@ -1997,7 +2092,7 @@ int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
       // fprintf(stderr, "jpeg_read_header: %d %d (%d %d)\n", (int)cinfo.output_width, (int)cinfo.output_height, h, w);
       if ((int)cinfo.output_width == h && (int)cinfo.output_height == w) {
         while (cinfo.output_scanline < cinfo.output_height) {
-          uint8_t *buffer = out + cinfo.output_scanline * cinfo.output_width * 3;
+          uint8_t *buffer = out + cinfo.output_scanline * cinfo.output_width * GL_CHANNELS_N;
           jpeg_read_scanlines(&cinfo, &buffer, 1);
         }
         jpeg_finish_decompress(&cinfo);
@@ -2040,7 +2135,7 @@ int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
     goto final;
   }
 
-  if (tj3Decompress8(tjInstance, in, size, out, h * 3, TJPF_RGB) != 0) {
+  if (tj3Decompress8(tjInstance, in, size, out, h * GL_CHANNELS_N, TJ_FORMAT) != 0) {
     fprintf(stderr, "jpeg decompression error\n");
     goto final;
   }
@@ -2139,7 +2234,7 @@ int handle_recv(uint8_t *buf, int size)
       return 0;
     }
 
-    handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot], screen_upscaled[top_bot], top_bot, recv_end_size[work], recv_delay_between_packets[work]);
+    handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot], top_bot, recv_end_size[work], recv_delay_between_packets[work]);
     recv_work = !work;
   }
 
@@ -2283,6 +2378,15 @@ void *udp_recv_thread_func(void *)
 
 #include "style.h"
 
+#ifdef GL_DEBUG
+static void on_gl_error(
+    GLenum source, GLenum type, GLuint id, GLenum severity,
+    GLsizei length, const GLchar *message, const void *)
+{
+  fprintf(stderr, "gl_error: %u:%u:%u:%u:%u: %s\n", source, type, id, severity, length, message);
+}
+#endif
+
 int main(int argc, char *argv[])
 {
 #ifdef _WIN32
@@ -2313,8 +2417,15 @@ int main(int argc, char *argv[])
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_EGL, 1);
 #endif
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+#ifdef USE_ANGLE
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
+#else
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+#endif
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+#ifdef GL_DEBUG
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_DEBUG_FLAG);
+#endif
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
   SDL_GL_SetSwapInterval(1);
 
@@ -2347,6 +2458,11 @@ int main(int argc, char *argv[])
     fprintf(stderr, "gladLoadGLES2 failed\n");
     return -1;
   }
+
+#ifdef GL_DEBUG
+  glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+  glDebugMessageCallback(on_gl_error, NULL);
+#endif
 
   SDL_GL_MakeCurrent(win[0], glContext[0]);
 
@@ -2388,12 +2504,51 @@ int main(int argc, char *argv[])
 
   for (int i = 0; i < SCREEN_COUNT; ++i) {
     glGenTextures(1, &buffer_ctx[i].gl_tex_id);
+
+    glGenTextures(1, &buffer_ctx[i].gl_tex_upscaled);
+    glActiveTexture(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, buffer_ctx[i].gl_tex_upscaled);
+    glTexImage2D(
+      GL_TEXTURE_2D, 0,
+      GL_INT_FORMAT, 240 * screen_upscale_factor,
+      (i == 0 ? 400 : 320) * screen_upscale_factor, 0,
+      GL_FORMAT, GL_UNSIGNED_BYTE,
+      0);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
     pthread_mutex_init(&buffer_ctx[i].gl_tex_mutex, NULL);
   }
+
+  for (int j = 0; j < SCREEN_COUNT; ++j) {
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      SDL_GL_MakeCurrent(win[j], glContext[j]);
+      glGenFramebuffers(1, &buffer_ctx[i].gl_fbo_upscaled[j]);
+      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, buffer_ctx[i].gl_fbo_upscaled[j]);
+      glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, buffer_ctx[i].gl_tex_upscaled, 0);
+      GLenum draw_buffer = GL_COLOR_ATTACHMENT0;
+      glDrawBuffers(1, &draw_buffer);
+      if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        fprintf(stderr, "fbo init error\n");
+        return -1;
+      }
+      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    }
+  }
+
   gl_program = LoadProgram((const char *)vShaderStr, (const char *)fShaderStr);
   gl_position_loc = glGetAttribLocation(gl_program, "a_position");
   gl_tex_coord_loc = glGetAttribLocation(gl_program, "a_texCoord");
   gl_sampler_loc = glGetUniformLocation(gl_program, "s_texture");
+
+  gl_fbo_program = LoadProgram((const char *)fbo_vShaderStr, (const char *)fbo_fShaderStr);
+  gl_fbo_position_loc = glGetAttribLocation(gl_fbo_program, "a_position");
+  gl_fbo_tex_coord_loc = glGetAttribLocation(gl_fbo_program, "a_texCoord");
+  gl_fbo_sampler_loc = glGetUniformLocation(gl_fbo_program, "s_texture");
+  gl_fbo_tex_size_loc = glGetUniformLocation(gl_fbo_program, "v_texSize");
 
   rpConfigSetDefault();
   detect3DSIP();
@@ -2439,10 +2594,15 @@ int main(int argc, char *argv[])
   pthread_join(menu_tcp_thread, NULL);
   pthread_join(nwm_tcp_thread, NULL);
 
+  glDeleteProgram(gl_fbo_program);
   glDeleteProgram(gl_program);
   for (int i = 0; i < SCREEN_COUNT; ++i) {
     pthread_mutex_destroy(&buffer_ctx[i].gl_tex_mutex);
     glDeleteTextures(1, &buffer_ctx[i].gl_tex_id);
+    for (int j = 0; j < SCREEN_COUNT; ++j) {
+      glDeleteFramebuffers(1, &buffer_ctx[i].gl_fbo_upscaled[j]);
+    }
+    glDeleteTextures(1, &buffer_ctx[i].gl_tex_upscaled);
   }
 
   sock_cleanup();

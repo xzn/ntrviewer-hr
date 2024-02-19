@@ -20,8 +20,9 @@
 
 #include "filesystem_utils.h"
 
-static std::vector<RealCUGAN*> realcugan;
-static int use_gpu_count;
+#define SCREEN_COUNT 2
+
+static RealCUGAN* realcugan[SCREEN_COUNT] = { 0 };
 static const int scale = 2;
 
 extern "C" int realcugan_create()
@@ -30,7 +31,8 @@ extern "C" int realcugan_create()
     std::vector<int> tilesize;
     path_t model = PATHSTR("models-se");
     std::vector<int> gpuid;
-    int syncgap = 3;
+    // int syncgap = 3;
+    int syncgap = 0;
     int tta_mode = 0;
 
     if (noise < -1 || noise > 3)
@@ -145,7 +147,7 @@ extern "C" int realcugan_create()
         gpuid.push_back(ncnn::get_default_gpu_index());
     }
 
-    use_gpu_count = (int)gpuid.size();
+    int use_gpu_count = (int)gpuid.size();
 
     if (tilesize.empty())
     {
@@ -164,7 +166,9 @@ extern "C" int realcugan_create()
         }
     }
 
-    for (int i=0; i<use_gpu_count; i++)
+    int i = 0;
+
+    for (; i<use_gpu_count; i++)
     {
         if (tilesize[i] != 0)
             continue;
@@ -221,41 +225,45 @@ extern "C" int realcugan_create()
                     tilesize[i] = 32;
             }
         }
+        break;
     }
 
-    realcugan.resize(use_gpu_count, nullptr);
+    if (i == use_gpu_count) {
+        fprintf(stderr, "no suitable gpu device\n");
 
-    for (int i=0; i<use_gpu_count; i++)
-    {
-        realcugan[i] = new RealCUGAN(gpuid[i], tta_mode);
+        ncnn::destroy_gpu_instance();
+        return -1;
+    }
 
-        realcugan[i]->load(paramfullpath, modelfullpath);
+    for (int s = 0; s < SCREEN_COUNT; ++s) {
+        realcugan[s] = new RealCUGAN(gpuid[i], tta_mode);
 
-        realcugan[i]->noise = noise;
-        realcugan[i]->scale = scale;
-        realcugan[i]->tilesize = tilesize[i];
-        realcugan[i]->prepadding = prepadding;
-        realcugan[i]->syncgap = syncgap;
+        realcugan[s]->load(paramfullpath, modelfullpath);
+
+        realcugan[s]->noise = noise;
+        realcugan[s]->scale = scale;
+        realcugan[s]->tilesize = tilesize[i];
+        realcugan[s]->prepadding = prepadding;
+        realcugan[s]->syncgap = syncgap;
     }
 
     return 0;
 }
 
-extern "C" void realcugan_run(int w, int h, int c, const unsigned char *indata, unsigned char *outdata)
+extern "C" GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata)
 {
     ncnn::Mat inimage = ncnn::Mat(w, h, (void*)indata, (size_t)c, c);
-    ncnn::Mat outimage = ncnn::Mat(w * scale, h * scale, (void*)outdata, (size_t)c, c);
-    realcugan[0]->process(inimage, outimage);
+    if (realcugan[top_bot]->process(inimage) != 0) {
+        return 0;
+    }
+    return realcugan[top_bot]->out_gpu->gl_texture;
 }
 
 extern "C" void realcugan_destroy()
 {
-    for (int i=0; i<use_gpu_count; i++)
-    {
-        delete realcugan[i];
+    for (int s = 0; s < SCREEN_COUNT; ++s) {
+        delete realcugan[s];
     }
-    use_gpu_count = 0;
-    realcugan.clear();
 
     ncnn::destroy_gpu_instance();
 }

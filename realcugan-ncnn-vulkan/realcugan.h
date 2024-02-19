@@ -16,7 +16,32 @@
 #include "ncnn/layer.h"
 #endif
 
+#include "glad/glad.h"
+
 class FeatureCache;
+
+class RealCUGAN;
+
+class OutVkMat : public ncnn::VkMat {
+public:
+    void create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, int _elempack, ncnn::VkAllocator* _allocator);
+    void create(const RealCUGAN* cugan, int _w, int _h, int _c, size_t _elemsize, int _elempack, ncnn::VkAllocator* _allocator);
+    void release(const RealCUGAN* cugan);
+
+    void create_handles(const RealCUGAN* cugan);
+    void release_handles();
+
+    size_t totalsize;
+#ifdef _WIN32
+    HANDLE memory;
+#else
+    int memory;
+#endif
+    GLuint gl_memory;
+    GLuint gl_buffer;
+    GLuint gl_texture;
+};
+
 class RealCUGAN
 {
 public:
@@ -29,7 +54,7 @@ public:
     int load(const std::string& parampath, const std::string& modelpath);
 #endif
 
-    int process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const;
+    int process(const ncnn::Mat& inimage) const;
 
     int process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const;
 
@@ -68,7 +93,7 @@ public:
     int prepadding;
     int syncgap;
 
-private:
+// private:
     ncnn::VulkanDevice* vkdev;
     ncnn::Net net;
     ncnn::Pipeline* realcugan_preproc;
@@ -78,6 +103,8 @@ private:
     ncnn::Layer* bicubic_3x;
     ncnn::Layer* bicubic_4x;
     bool tta_mode;
+
+    OutVkMat* out_gpu;
 };
 
 #endif // REALCUGAN_H

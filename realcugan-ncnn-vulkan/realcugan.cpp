@@ -20,6 +20,8 @@
 #include "realcugan_postproc_tta.comp.hex.h"
 #include "realcugan_4x_postproc_tta.comp.hex.h"
 
+#include <stdio.h>
+
 class FeatureCache
 {
 public:
@@ -72,6 +74,8 @@ RealCUGAN::RealCUGAN(int gpuid, bool _tta_mode, int num_threads)
     bicubic_3x = 0;
     bicubic_4x = 0;
     tta_mode = _tta_mode;
+
+    out_gpu = new OutVkMat();
 }
 
 RealCUGAN::~RealCUGAN()
@@ -90,6 +94,9 @@ RealCUGAN::~RealCUGAN()
 
     bicubic_4x->destroy_pipeline(net.opt);
     delete bicubic_4x;
+
+    out_gpu->release(this);
+    delete out_gpu;
 }
 
 #if _WIN32
@@ -243,12 +250,16 @@ int RealCUGAN::load(const std::string& parampath, const std::string& modelpath)
     return 0;
 }
 
-int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
+int RealCUGAN::process(const ncnn::Mat& inimage) const
 {
     bool syncgap_needed = tilesize < std::max(inimage.w, inimage.h);
 
     if (!vkdev)
     {
+        fprintf(stderr, "not a gpu vulkan device\n");
+        return -1;
+
+#if 0
         // cpu only
         if (syncgap_needed && syncgap)
         {
@@ -261,22 +272,30 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
         }
         else
             return process_cpu(inimage, outimage);
+#endif
     }
 
+#if 0
     if (noise == -1 && scale == 1)
     {
         outimage = inimage;
         return 0;
     }
+#endif
 
     if (syncgap_needed && syncgap)
     {
+        fprintf(stderr, "syncgap not supported\n");
+        return -1;
+
+#if 0
         if (syncgap == 1)
             return process_se(inimage, outimage);
         if (syncgap == 2)
             return process_se_rough(inimage, outimage);
         if (syncgap == 3)
             return process_se_very_rough(inimage, outimage);
+#endif
     }
 
     const unsigned char* pixeldata = (const unsigned char*)inimage.data;
@@ -361,14 +380,15 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
         int out_tile_y0 = std::max(yi * TILE_SIZE_Y, 0);
         int out_tile_y1 = std::min((yi + 1) * TILE_SIZE_Y, h);
 
-        ncnn::VkMat out_gpu;
+        OutVkMat& out_gpu = *this->out_gpu;
+
         if (opt.use_fp16_storage && opt.use_int8_storage)
         {
-            out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1, blob_vkallocator);
+            out_gpu.create(this, w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1, blob_vkallocator);
         }
         else
         {
-            out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1, blob_vkallocator);
+            out_gpu.create(this, w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1, blob_vkallocator);
         }
 
         for (int xi = 0; xi < xtiles; xi++)
@@ -703,7 +723,9 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
                 }
             }
 
+#if 0
             if (xtiles > 1)
+#endif
             {
                 cmd.submit_and_wait();
                 cmd.reset();
@@ -711,6 +733,7 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
         }
 
         // download
+#if 0
         {
             ncnn::Mat out;
 
@@ -743,6 +766,7 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
                 }
             }
         }
+#endif
     }
 
     vkdev->reclaim_blob_allocator(blob_vkallocator);
@@ -3845,4 +3869,223 @@ int RealCUGAN::process_cpu_se_very_rough_sync_gap(const ncnn::Mat& inimage, cons
     }
 
     return 0;
+}
+
+using namespace ncnn;
+
+void OutVkMat::release(const RealCUGAN* cugan)
+{
+    if (data) {
+        release_handles();
+
+        vkFreeMemory(cugan->vkdev->vkdevice(), data->memory, 0);
+        vkDestroyBuffer(cugan->vkdev->vkdevice(), data->buffer, 0);
+
+        delete data;
+        data = 0;
+    }
+
+    elemsize = 0;
+    elempack = 0;
+
+    dims = 0;
+    w = 0;
+    h = 0;
+    d = 0;
+    c = 0;
+
+    cstep = 0;
+}
+
+static VkBufferMemory* out_create(const RealCUGAN* cugan, size_t size) {
+    VkExternalMemoryBufferCreateInfo extMemInfo;
+    extMemInfo.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
+    extMemInfo.pNext = 0;
+#ifdef _WIN32
+    extMemInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+#else
+    extMemInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+#endif
+
+    VkBufferCreateInfo bufferCreateInfo;
+    bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferCreateInfo.pNext = &extMemInfo;
+    bufferCreateInfo.flags = 0;
+    bufferCreateInfo.size = size;
+    bufferCreateInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    bufferCreateInfo.queueFamilyIndexCount = 0;
+    bufferCreateInfo.pQueueFamilyIndices = 0;
+
+    VkBuffer buffer = 0;
+    VkResult ret = vkCreateBuffer(cugan->vkdev->vkdevice(), &bufferCreateInfo, 0, &buffer);
+    if (ret != VK_SUCCESS)
+    {
+        NCNN_LOGE("vkCreateBuffer failed %d", ret);
+        return 0;
+    }
+
+    VkMemoryRequirements memoryRequirements;
+    vkGetBufferMemoryRequirements(cugan->vkdev->vkdevice(), buffer, &memoryRequirements);
+
+    uint32_t buffer_memory_type_index;
+    buffer_memory_type_index = cugan->vkdev->find_memory_index(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+
+    VkExportMemoryAllocateInfo exportAllocInfo{
+        VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO, nullptr,
+        extMemInfo.handleTypes};
+
+    VkMemoryAllocateInfo memoryAllocateInfo;
+    memoryAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    memoryAllocateInfo.pNext = &exportAllocInfo;
+    memoryAllocateInfo.allocationSize = memoryRequirements.size;
+    memoryAllocateInfo.memoryTypeIndex = buffer_memory_type_index;
+
+    VkDeviceMemory memory = 0;
+    ret = vkAllocateMemory(cugan->vkdev->vkdevice(), &memoryAllocateInfo, 0, &memory);
+    if (ret != VK_SUCCESS)
+    {
+        NCNN_LOGE("vkAllocateMemory failed %d", ret);
+
+        vkDestroyBuffer(cugan->vkdev->vkdevice(), buffer, 0);
+        return 0;
+    }
+
+    vkBindBufferMemory(cugan->vkdev->vkdevice(), buffer, memory, 0);
+
+    VkBufferMemory* ptr = new VkBufferMemory;
+
+    ptr->buffer = buffer;
+    ptr->offset = 0;
+    ptr->memory = memory;
+    ptr->capacity = size;
+    ptr->mapped_ptr = 0;
+    ptr->access_flags = 0;
+    ptr->stage_flags = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+
+    return ptr;
+}
+
+void OutVkMat::create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, int _elempack, VkAllocator* _allocator) {
+    if (dims == 2 && w == _w && h == _h && elemsize == _elemsize && elempack == _elempack)
+        return;
+
+    release(cugan);
+
+    elemsize = _elemsize;
+    elempack = _elempack;
+
+    dims = 2;
+    w = _w;
+    h = _h;
+    d = 1;
+    c = 1;
+
+    cstep = w * h;
+
+    if (total() > 0)
+    {
+        totalsize = alignSize(total() * elemsize, 4);
+
+        data = out_create(cugan, totalsize);
+
+        create_handles(cugan);
+    }
+    else
+    {
+        release(cugan);
+    }
+}
+
+void OutVkMat::create(const RealCUGAN* cugan, int _w, int _h, int _c, size_t _elemsize, int _elempack, VkAllocator* _allocator) {
+    if (dims == 3 && w == _w && h == _h && c == _c && elemsize == _elemsize && elempack == _elempack)
+        return;
+
+    release(cugan);
+
+    elemsize = _elemsize;
+    elempack = _elempack;
+
+    dims = 3;
+    w = _w;
+    h = _h;
+    d = 1;
+    c = _c;
+
+    cstep = alignSize(w * h * elemsize, 16) / elemsize;
+
+    if (total() > 0)
+    {
+        totalsize = alignSize(total() * elemsize, 4);
+
+        data = out_create(cugan, totalsize);
+
+        create_handles(cugan);
+    }
+    else
+    {
+        release(cugan);
+    }
+}
+
+typedef struct VkMemoryGetWin32HandleInfoKHR
+{
+    VkStructureType sType;
+    const void *pNext;
+    VkDeviceMemory memory;
+    VkExternalMemoryHandleTypeFlagBits handleType;
+} VkMemoryGetWin32HandleInfoKHR;
+
+typedef VkResult (VKAPI_PTR *PFN_vkGetMemoryWin32HandleKHR)(VkDevice device, const VkMemoryGetWin32HandleInfoKHR* pGetWin32HandleInfo, HANDLE* pHandle);
+
+static PFN_vkGetMemoryWin32HandleKHR vkGetMemoryWin32HandleKHR;
+
+static const VkStructureType VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR = (VkStructureType)1000073003;
+
+void OutVkMat::create_handles(const RealCUGAN* cugan)
+{
+    memory = 0;
+    gl_memory = 0;
+
+    if (!vkGetMemoryWin32HandleKHR) {
+        VkInstance instance = get_gpu_instance();
+        vkGetMemoryWin32HandleKHR = (PFN_vkGetMemoryWin32HandleKHR)vkGetInstanceProcAddr(instance, "vkGetMemoryWin32HandleKHR");
+        if (!vkGetMemoryWin32HandleKHR) {
+            return;
+        }
+    }
+
+    VkMemoryGetWin32HandleInfoKHR memoryFdInfo{
+        VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR, nullptr,
+        data->memory,
+        VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT};
+
+    VkResult ret = vkGetMemoryWin32HandleKHR(cugan->vkdev->vkdevice(), &memoryFdInfo, &memory);
+    if (ret != VK_SUCCESS) {
+        memory = 0;
+        return;
+    }
+
+    glCreateMemoryObjectsEXT(1, &gl_memory);
+    glImportMemoryWin32HandleEXT(gl_memory, totalsize, GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, memory);
+
+    glGenBuffers(1, &gl_buffer);
+    glBindBuffer(GL_TEXTURE_BUFFER, gl_buffer);
+    glBufferStorageMemEXT(GL_TEXTURE_BUFFER, totalsize, gl_memory, 0);
+    glBindBuffer(GL_TEXTURE_BUFFER, 0);
+
+    glGenTextures(1, &gl_texture);
+    glBindTexture(GL_TEXTURE_BUFFER, gl_texture);
+
+    // TODO
+    // hard-coded for now..
+    glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA8, gl_buffer);
+    glBindTexture(GL_TEXTURE_BUFFER, 0);
+}
+
+void OutVkMat::release_handles() {
+    glDeleteTextures(1, &gl_texture);
+    glDeleteBuffers(1, &gl_buffer);
+    glDeleteMemoryObjectsEXT(1, &gl_memory);
+    CloseHandle(memory);
 }
