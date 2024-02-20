@@ -31,8 +31,8 @@ extern "C" int realcugan_create()
     std::vector<int> tilesize;
     path_t model = PATHSTR("models-se");
     std::vector<int> gpuid;
-    // int syncgap = 3;
-    int syncgap = 0;
+    int syncgap = 3;
+    // int syncgap = 0;
     int tta_mode = 0;
 
     if (noise < -1 || noise > 3)
@@ -250,10 +250,11 @@ extern "C" int realcugan_create()
     return 0;
 }
 
-extern "C" GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata)
+extern "C" GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata, unsigned char *outdata)
 {
     ncnn::Mat inimage = ncnn::Mat(w, h, (void*)indata, (size_t)c, c);
-    if (realcugan[top_bot]->process(inimage) != 0) {
+    ncnn::Mat outimage = ncnn::Mat(w * scale, h * scale, (void*)outdata, (size_t)c, c);
+    if (realcugan[top_bot]->process(inimage, outimage) != 0) {
         return 0;
     }
     // return realcugan[top_bot]->out_gpu->gl_texture;

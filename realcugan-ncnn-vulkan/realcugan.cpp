@@ -78,6 +78,9 @@ RealCUGAN::RealCUGAN(int gpuid, bool _tta_mode, int num_threads)
     // out_gpu = new OutVkMat();
     out_gpu_buf = new ncnn::VkMat();
     out_gpu_tex = new OutVkImageMat();
+
+    support_ext_mem = ncnn::support_VK_KHR_external_memory_capabilities &&
+        vkdev->info.support_VK_KHR_external_memory() && vkdev->info.support_VK_KHR_external_memory_win32();
 }
 
 RealCUGAN::~RealCUGAN()
@@ -257,16 +260,16 @@ int RealCUGAN::load(const std::string& parampath, const std::string& modelpath)
     return 0;
 }
 
-int RealCUGAN::process(const ncnn::Mat& inimage) const
+int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 {
     bool syncgap_needed = tilesize < std::max(inimage.w, inimage.h);
 
     if (!vkdev)
     {
+#if 0
         fprintf(stderr, "not a gpu vulkan device\n");
         return -1;
-
-#if 0
+#else
         // cpu only
         if (syncgap_needed && syncgap)
         {
@@ -282,7 +285,7 @@ int RealCUGAN::process(const ncnn::Mat& inimage) const
 #endif
     }
 
-#if 0
+#if 1
     if (noise == -1 && scale == 1)
     {
         outimage = inimage;
@@ -292,10 +295,10 @@ int RealCUGAN::process(const ncnn::Mat& inimage) const
 
     if (syncgap_needed && syncgap)
     {
+#if 0
         fprintf(stderr, "syncgap not supported\n");
         return -1;
-
-#if 0
+#else
         if (syncgap == 1)
             return process_se(inimage, outimage);
         if (syncgap == 2)
@@ -749,14 +752,15 @@ int RealCUGAN::process(const ncnn::Mat& inimage) const
             }
         }
 
-        {
+        if (support_ext_mem) {
             out_gpu_tex->create_like(this, out_gpu, opt);
             cmd.record_clone(out_gpu, *out_gpu_tex, opt);
             cmd.submit_and_wait();
         }
 
         // download
-#if 0
+#if 1
+        else
         {
             ncnn::Mat out;
 

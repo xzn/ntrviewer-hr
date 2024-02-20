@@ -82,7 +82,7 @@ public:
     int load(const std::string& parampath, const std::string& modelpath);
 #endif
 
-    int process(const ncnn::Mat& inimage) const;
+    int process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const;
 
     int process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const;
 
@@ -135,6 +135,7 @@ public:
     // OutVkMat* out_gpu;
     ncnn::VkMat* out_gpu_buf;
     OutVkImageMat* out_gpu_tex;
+    bool support_ext_mem;
 };
 
 #endif // REALCUGAN_H
