@@ -234,6 +234,7 @@ SDL_Window *win[2];
 SDL_GLContext glContext[2];
 int running = nk_true;
 int win_width[2], win_height[2];
+int ogl_version_major, ogl_version_minor;
 
 enum ConnectionState
 {
@@ -1741,6 +1742,11 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int
   nk_bool use_fsr = 0;
 #else
   nk_bool use_fsr = ctx_height > height * scale && ctx_width > width * scale && upscaled;
+#ifdef USE_OGL_ES
+  use_fsr = use_fsr && ogl_version_major >= 3 && ogl_version_minor >= 1;
+#else
+  use_fsr = use_fsr && ogl_version_major >= 4 && ogl_version_minor >= 3;
+#endif
 #endif
 
   if (use_fsr) {
@@ -2443,16 +2449,12 @@ int main(int argc, char *argv[])
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_EGL, 1);
 #endif
 #ifdef USE_OGL_ES
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-#ifdef USE_ANGLE
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
-#else
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
-#endif
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
 #else
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
 #endif
 #ifdef GL_DEBUG
@@ -2496,7 +2498,23 @@ int main(int argc, char *argv[])
   glDebugMessageCallback(on_gl_error, NULL);
 #endif
 
-  fprintf(stderr, "ogl version: %s\n", glGetString(GL_VERSION));
+  fprintf(stderr, "ogl version string: %s\n", glGetString(GL_VERSION));
+#if 0
+#ifdef USE_OGL_ES
+  if (sscanf((const char *)glGetString(GL_VERSION), "OpenGL ES %d.%d", &ogl_version_major, &ogl_version_minor) != 2) {
+    SDL_GL_GetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, &ogl_version_major);
+    SDL_GL_GetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, &ogl_version_minor);
+  }
+#else
+  if (sscanf((const char *)glGetString(GL_VERSION), "%d.%d", &ogl_version_major, &ogl_version_minor) != 2) {
+    SDL_GL_GetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, &ogl_version_major);
+    SDL_GL_GetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, &ogl_version_minor);
+  }
+#endif
+#endif
+  glGetIntegerv(GL_MAJOR_VERSION, &ogl_version_major);
+  glGetIntegerv(GL_MINOR_VERSION, &ogl_version_minor);
+  fprintf(stderr, "ogl version: %d.%d\n", ogl_version_major, ogl_version_minor);
 
   SDL_GL_MakeCurrent(win[0], glContext[0]);
 
@@ -2578,11 +2596,13 @@ int main(int argc, char *argv[])
   gl_tex_coord_loc = glGetAttribLocation(gl_program, "a_texCoord");
   gl_sampler_loc = glGetUniformLocation(gl_program, "s_texture");
 
-  gl_fbo_program = LoadProgram((const char *)fbo_vShaderStr, (const char *)fbo_fShaderStr);
-  gl_fbo_position_loc = glGetAttribLocation(gl_fbo_program, "a_position");
-  gl_fbo_tex_coord_loc = glGetAttribLocation(gl_fbo_program, "a_texCoord");
-  gl_fbo_sampler_loc = glGetUniformLocation(gl_fbo_program, "s_texture");
-  gl_fbo_tex_size_loc = glGetUniformLocation(gl_fbo_program, "v_texSize");
+  if (0) {
+    gl_fbo_program = LoadProgram((const char *)fbo_vShaderStr, (const char *)fbo_fShaderStr);
+    gl_fbo_position_loc = glGetAttribLocation(gl_fbo_program, "a_position");
+    gl_fbo_tex_coord_loc = glGetAttribLocation(gl_fbo_program, "a_texCoord");
+    gl_fbo_sampler_loc = glGetUniformLocation(gl_fbo_program, "s_texture");
+    gl_fbo_tex_size_loc = glGetUniformLocation(gl_fbo_program, "v_texSize");
+  }
 
   rpConfigSetDefault();
   detect3DSIP();

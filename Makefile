@@ -4,6 +4,9 @@ CPPFLAGS := -Iinclude
 CFLAGS := -Og -g
 # CFLAGS := -Ofast
 EMBED_JPEG_TURBO := 0
+USE_OGL_ES := 0
+USE_ANGLE := 0
+GL_DEBUG := 0
 
 ifeq ($(OS),Windows_NT)
 	LDLIBS := -Llib -static -lmingw32 -lSDL2main -lSDL2
@@ -32,14 +35,26 @@ JT_OBJ := $(JT_SRC:.c=.o)
 JT_SRC_S := $(wildcard jpeg_turbo/simd/x86_64/*.asm)
 JT_OBJ_S := $(JT_SRC_S:.asm=.o)
 
-EMBED_JPEG_TURBO := -DEMBED_JPEG_TURBO
+CPPFLAGS += -DEMBED_JPEG_TURBO
 LDLIBS += -ljpeg
 else
 JT_OBJ :=
 JT_OBJ_S :=
 
-EMBED_JPEG_TURBO :=
 LDLIBS += -lturbojpeg
+endif
+
+ifeq ($(USE_OGL_ES),1)
+CPPFLAGS += -DUSE_OGL_ES
+
+ifeq ($(USE_ANGLE),1)
+CPPFLAGS += -DUSE_ANGLE
+endif
+
+endif
+
+ifeq ($(GL_DEBUG),1)
+CPPFLAGS += -DGL_DEBUG
 endif
 
 $(TARGET): main.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o libGLAD.o fsr/fsr_main.o fsr/image_utils.o $(JT_OBJ) $(JT_OBJ_S)
@@ -61,7 +76,7 @@ realcugan.o: realcugan-ncnn-vulkan/realcugan.cpp $(wildcard realcugan-ncnn-vulka
 	$(CXX) realcugan-ncnn-vulkan/realcugan.cpp -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-attributes
 
 main.o: main.c
-	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wall -Wextra $(EMBED_JPEG_TURBO)
+	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wall -Wextra
 
 libNK.o: libNK.c
 	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -std=c89 -Wall -Wextra

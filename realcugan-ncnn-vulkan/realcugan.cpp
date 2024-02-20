@@ -80,7 +80,8 @@ RealCUGAN::RealCUGAN(int gpuid, bool _tta_mode, int num_threads)
     out_gpu_tex = new OutVkImageMat();
 
     support_ext_mem = ncnn::support_VK_KHR_external_memory_capabilities &&
-        vkdev->info.support_VK_KHR_external_memory() && vkdev->info.support_VK_KHR_external_memory_win32();
+        vkdev->info.support_VK_KHR_external_memory() && vkdev->info.support_VK_KHR_external_memory_win32() &&
+        GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_win32;
 }
 
 RealCUGAN::~RealCUGAN()
@@ -4075,6 +4076,8 @@ void OutVkMat::create_handles(const RealCUGAN* cugan)
 {
     release_handles();
 
+    if (!(GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_win32)) return;
+
     if (!vkGetMemoryWin32HandleKHR) {
         VkInstance instance = get_gpu_instance();
         vkGetMemoryWin32HandleKHR = (PFN_vkGetMemoryWin32HandleKHR)vkGetInstanceProcAddr(instance, "vkGetMemoryWin32HandleKHR");
@@ -4386,6 +4389,8 @@ void OutVkImageMat::release(const RealCUGAN* cugan)
 void OutVkImageMat::create_handles(const RealCUGAN* cugan)
 {
     release_handles();
+
+    if (!(GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_win32)) return;
 
     if (!vkGetMemoryWin32HandleKHR) {
         VkInstance instance = get_gpu_instance();

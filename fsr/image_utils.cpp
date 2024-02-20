@@ -12,7 +12,12 @@
 #include <memory>
 #include <sstream>
 
+// #define USE_OGL_ES
+#ifdef USE_OGL_ES
 #define GLSL_VERSION "#version 310 es"
+#else
+#define GLSL_VERSION "#version 430"
+#endif
 
 void prepareFSR(FSRConstants* fsrData, float rcasAttenuation)
 {
