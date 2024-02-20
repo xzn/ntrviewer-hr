@@ -24,8 +24,10 @@ class RealCUGAN;
 
 class OutVkMat : public ncnn::VkMat {
 public:
-    void create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, int _elempack, ncnn::VkAllocator* _allocator);
-    void create(const RealCUGAN* cugan, int _w, int _h, int _c, size_t _elemsize, int _elempack, ncnn::VkAllocator* _allocator);
+    OutVkMat() : ncnn::VkMat(), totalsize(0), memory(0), gl_memory(0), gl_buffer(0), gl_texture(0) {}
+
+    void create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, int _elempack);
+    void create(const RealCUGAN* cugan, int _w, int _h, int _c, size_t _elemsize, int _elempack);
     void release(const RealCUGAN* cugan);
 
     void create_handles(const RealCUGAN* cugan);
@@ -39,6 +41,32 @@ public:
 #endif
     GLuint gl_memory;
     GLuint gl_buffer;
+    GLuint gl_texture;
+};
+
+class OutVkImageMat : public ncnn::VkImageMat {
+public:
+    OutVkImageMat() : ncnn::VkImageMat(), totalsize(0), width(0), height(0), depth(0), memory(0), gl_memory(0), gl_texture(0) {}
+
+    void create_like(const RealCUGAN* cugan, const ncnn::VkMat& m, const ncnn::Option& opt);
+    void create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, int _elempack, const ncnn::Option& opt);
+    void create(const RealCUGAN* cugan, int _w, int _h, int _c, size_t _elemsize, int _elempack, const ncnn::Option& opt);
+    void release(const RealCUGAN* cugan);
+
+    void create_handles(const RealCUGAN* cugan);
+    void release_handles();
+
+    size_t totalsize;
+    uint32_t width;
+    uint32_t height;
+    uint32_t depth;
+
+#ifdef _WIN32
+    HANDLE memory;
+#else
+    int memory;
+#endif
+    GLuint gl_memory;
     GLuint gl_texture;
 };
 
@@ -104,7 +132,9 @@ public:
     ncnn::Layer* bicubic_4x;
     bool tta_mode;
 
-    OutVkMat* out_gpu;
+    // OutVkMat* out_gpu;
+    ncnn::VkMat* out_gpu_buf;
+    OutVkImageMat* out_gpu_tex;
 };
 
 #endif // REALCUGAN_H

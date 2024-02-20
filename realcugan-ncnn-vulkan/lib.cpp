@@ -256,7 +256,8 @@ extern "C" GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned
     if (realcugan[top_bot]->process(inimage) != 0) {
         return 0;
     }
-    return realcugan[top_bot]->out_gpu->gl_texture;
+    // return realcugan[top_bot]->out_gpu->gl_texture;
+    return realcugan[top_bot]->out_gpu_tex->gl_texture;
 }
 
 extern "C" void realcugan_destroy()

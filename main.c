@@ -1671,34 +1671,39 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int
 
     scale = screen_upscale_factor;
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_BUFFER, tex_upscaled);
 
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, ctx->gl_fbo_upscaled[tb]);
-    glViewport(0, 0, height * scale, width * scale);
-    glDisable(GL_CULL_FACE);
-    glDisable(GL_DEPTH_TEST);
+    if (0) {
+      glBindTexture(GL_TEXTURE_BUFFER, tex_upscaled);
+      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, ctx->gl_fbo_upscaled[tb]);
+      glViewport(0, 0, height * scale, width * scale);
+      glDisable(GL_CULL_FACE);
+      glDisable(GL_DEPTH_TEST);
 
-    glUseProgram(gl_fbo_program);
-    fbo_vVertices_tex_coord[0][0] = 0.5;
-    fbo_vVertices_tex_coord[0][1] = 0.5;
-    fbo_vVertices_tex_coord[1][0] = 0.5;
-    fbo_vVertices_tex_coord[1][1] = width * scale - 0.5;
-    fbo_vVertices_tex_coord[2][0] = height * scale - 0.5;
-    fbo_vVertices_tex_coord[2][1] = 0.5;
-    fbo_vVertices_tex_coord[3][0] = height * scale - 0.5;
-    fbo_vVertices_tex_coord[3][1] = width * scale - 0.5;
+      glUseProgram(gl_fbo_program);
+      fbo_vVertices_tex_coord[0][0] = 0.5;
+      fbo_vVertices_tex_coord[0][1] = 0.5;
+      fbo_vVertices_tex_coord[1][0] = 0.5;
+      fbo_vVertices_tex_coord[1][1] = width * scale - 0.5;
+      fbo_vVertices_tex_coord[2][0] = height * scale - 0.5;
+      fbo_vVertices_tex_coord[2][1] = 0.5;
+      fbo_vVertices_tex_coord[3][0] = height * scale - 0.5;
+      fbo_vVertices_tex_coord[3][1] = width * scale - 0.5;
 
-    glVertexAttribPointer(gl_fbo_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_pos), fbo_vVertices_pos);
-    glVertexAttribPointer(gl_fbo_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_tex_coord), fbo_vVertices_tex_coord);
-    glEnableVertexAttribArray(gl_fbo_position_loc);
-    glEnableVertexAttribArray(gl_fbo_tex_coord_loc);
+      glVertexAttribPointer(gl_fbo_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_pos), fbo_vVertices_pos);
+      glVertexAttribPointer(gl_fbo_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_tex_coord), fbo_vVertices_tex_coord);
+      glEnableVertexAttribArray(gl_fbo_position_loc);
+      glEnableVertexAttribArray(gl_fbo_tex_coord_loc);
 
-    glUniform1i(gl_fbo_sampler_loc, 0);
-    glUniform1i(gl_fbo_tex_size_loc, height * scale);
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, fbo_indices);
+      glUniform1i(gl_fbo_sampler_loc, 0);
+      glUniform1i(gl_fbo_tex_size_loc, height * scale);
+      glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, fbo_indices);
 
-    glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled);
-    tex = ctx->gl_tex_upscaled;
+      glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled);
+      tex = ctx->gl_tex_upscaled;
+    } else {
+      glBindTexture(GL_TEXTURE_2D, tex_upscaled);
+      tex = tex_upscaled;
+    }
   }
 
   if (!upscaled) {

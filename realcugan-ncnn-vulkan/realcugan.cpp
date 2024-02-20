@@ -75,7 +75,9 @@ RealCUGAN::RealCUGAN(int gpuid, bool _tta_mode, int num_threads)
     bicubic_4x = 0;
     tta_mode = _tta_mode;
 
-    out_gpu = new OutVkMat();
+    // out_gpu = new OutVkMat();
+    out_gpu_buf = new ncnn::VkMat();
+    out_gpu_tex = new OutVkImageMat();
 }
 
 RealCUGAN::~RealCUGAN()
@@ -95,8 +97,13 @@ RealCUGAN::~RealCUGAN()
     bicubic_4x->destroy_pipeline(net.opt);
     delete bicubic_4x;
 
-    out_gpu->release(this);
-    delete out_gpu;
+    out_gpu_tex->release(this);
+    delete out_gpu_tex;
+
+    delete out_gpu_buf;
+
+    // out_gpu->release(this);
+    // delete out_gpu;
 }
 
 #if _WIN32
@@ -380,16 +387,26 @@ int RealCUGAN::process(const ncnn::Mat& inimage) const
         int out_tile_y0 = std::max(yi * TILE_SIZE_Y, 0);
         int out_tile_y1 = std::min((yi + 1) * TILE_SIZE_Y, h);
 
-        OutVkMat& out_gpu = *this->out_gpu;
+        // OutVkMat& out_gpu = *this->out_gpu;
+        // if (opt.use_fp16_storage && opt.use_int8_storage)
+        // {
+        //     out_gpu.create(this, w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1);
+        // }
+        // else
+        // {
+        //     out_gpu.create(this, w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1);
+        // }
 
+        ncnn::VkMat& out_gpu = *this->out_gpu_buf;
         if (opt.use_fp16_storage && opt.use_int8_storage)
         {
-            out_gpu.create(this, w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1, blob_vkallocator);
+            out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1, opt.blob_vkallocator);
         }
         else
         {
-            out_gpu.create(this, w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1, blob_vkallocator);
+            out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1, opt.blob_vkallocator);
         }
+
 
         for (int xi = 0; xi < xtiles; xi++)
         {
@@ -723,13 +740,19 @@ int RealCUGAN::process(const ncnn::Mat& inimage) const
                 }
             }
 
-#if 0
+#if 1
             if (xtiles > 1)
 #endif
             {
                 cmd.submit_and_wait();
                 cmd.reset();
             }
+        }
+
+        {
+            out_gpu_tex->create_like(this, out_gpu, opt);
+            cmd.record_clone(out_gpu, *out_gpu_tex, opt);
+            cmd.submit_and_wait();
         }
 
         // download
@@ -3895,6 +3918,8 @@ void OutVkMat::release(const RealCUGAN* cugan)
     c = 0;
 
     cstep = 0;
+
+    totalsize = 0;
 }
 
 static VkBufferMemory* out_create(const RealCUGAN* cugan, size_t size) {
@@ -3966,7 +3991,7 @@ static VkBufferMemory* out_create(const RealCUGAN* cugan, size_t size) {
     return ptr;
 }
 
-void OutVkMat::create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, int _elempack, VkAllocator* _allocator) {
+void OutVkMat::create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, int _elempack) {
     if (dims == 2 && w == _w && h == _h && elemsize == _elemsize && elempack == _elempack)
         return;
 
@@ -3989,7 +4014,7 @@ void OutVkMat::create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, 
 
         data = out_create(cugan, totalsize);
 
-        create_handles(cugan);
+        if (data) create_handles(cugan);
     }
     else
     {
@@ -3997,7 +4022,7 @@ void OutVkMat::create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, 
     }
 }
 
-void OutVkMat::create(const RealCUGAN* cugan, int _w, int _h, int _c, size_t _elemsize, int _elempack, VkAllocator* _allocator) {
+void OutVkMat::create(const RealCUGAN* cugan, int _w, int _h, int _c, size_t _elemsize, int _elempack) {
     if (dims == 3 && w == _w && h == _h && c == _c && elemsize == _elemsize && elempack == _elempack)
         return;
 
@@ -4020,7 +4045,7 @@ void OutVkMat::create(const RealCUGAN* cugan, int _w, int _h, int _c, size_t _el
 
         data = out_create(cugan, totalsize);
 
-        create_handles(cugan);
+        if (data) create_handles(cugan);
     }
     else
     {
@@ -4044,8 +4069,7 @@ static const VkStructureType VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR 
 
 void OutVkMat::create_handles(const RealCUGAN* cugan)
 {
-    memory = 0;
-    gl_memory = 0;
+    release_handles();
 
     if (!vkGetMemoryWin32HandleKHR) {
         VkInstance instance = get_gpu_instance();
@@ -4084,8 +4108,331 @@ void OutVkMat::create_handles(const RealCUGAN* cugan)
 }
 
 void OutVkMat::release_handles() {
-    glDeleteTextures(1, &gl_texture);
-    glDeleteBuffers(1, &gl_buffer);
-    glDeleteMemoryObjectsEXT(1, &gl_memory);
-    CloseHandle(memory);
+    if (gl_texture) {
+        glDeleteTextures(1, &gl_texture);
+        gl_texture = 0;
+    }
+    if (gl_buffer) {
+        glDeleteBuffers(1, &gl_buffer);
+        gl_buffer = 0;
+    }
+    if (gl_memory) {
+        glDeleteMemoryObjectsEXT(1, &gl_memory);
+        gl_memory = 0;
+    }
+    if (memory) {
+        CloseHandle(memory);
+        memory = 0;
+    }
+}
+
+void OutVkImageMat::create_like(const RealCUGAN* cugan, const ncnn::VkMat& m, const ncnn::Option& opt) {
+    int _dims = m.dims;
+    if (_dims == 2)
+        create(cugan, m.w, m.h, m.elemsize, m.elempack, opt);
+    else if (_dims == 3)
+        create(cugan, m.w, m.h, m.c, m.elemsize, m.elempack, opt);
+    else
+        release(cugan);
+}
+
+static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, size_t elemsize, int elempack, size_t& totalsize) {
+    if (elempack != 1 && elempack != 4 && elempack != 8)
+    {
+        NCNN_LOGE("elempack must be 1 4 8");
+        return 0;
+    }
+
+    // resolve format
+    VkFormat format = VK_FORMAT_UNDEFINED;
+
+    if (c == 1 && elemsize / elempack == 4 && elempack == 1)
+    {
+        format = VK_FORMAT_R8G8B8A8_UNORM;
+    }
+    else
+    {
+        NCNN_LOGE("not supported params combination");
+        return 0;
+    }
+
+    // resolve image width height depth
+    int width = w;
+    int height = h;
+    int depth = c;
+
+    // large elempack spills on image w
+    if (elempack == 8) width *= 2;
+
+    if (width > (int)cugan->vkdev->info.max_image_dimension_3d() || height > (int)cugan->vkdev->info.max_image_dimension_3d() || depth > (int)cugan->vkdev->info.max_image_dimension_3d())
+    {
+        NCNN_LOGE("image dimension too large %d %d %d > %d", width, height, depth, (int)cugan->vkdev->info.max_image_dimension_3d());
+        return 0;
+    }
+
+    VkExternalMemoryImageCreateInfo extImageCreateInfo;
+    extImageCreateInfo.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
+    extImageCreateInfo.pNext = 0;
+#ifdef _WIN32
+    extImageCreateInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+#else
+    extImageCreateInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+#endif
+
+    VkImageCreateInfo imageCreateInfo;
+    VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL;
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    imageCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+    imageCreateInfo.pNext = &extImageCreateInfo;
+    imageCreateInfo.flags = 0;
+    imageCreateInfo.imageType = depth == 1 ? VK_IMAGE_TYPE_2D : VK_IMAGE_TYPE_3D;
+    imageCreateInfo.format = format;
+    imageCreateInfo.extent.width = width;
+    imageCreateInfo.extent.height = height;
+    imageCreateInfo.extent.depth = depth;
+    imageCreateInfo.mipLevels = 1;
+    imageCreateInfo.arrayLayers = 1;
+    imageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageCreateInfo.tiling = tiling;
+    imageCreateInfo.usage = usage;
+    imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageCreateInfo.queueFamilyIndexCount = 0;
+    imageCreateInfo.pQueueFamilyIndices = 0;
+    imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    VkImage image;
+    VkResult ret = vkCreateImage(cugan->vkdev->vkdevice(), &imageCreateInfo, 0, &image);
+    if (ret != VK_SUCCESS)
+    {
+        NCNN_LOGE("vkCreateImage failed %d %d %d %d %d %d %d", ret, width, height, depth, format, tiling, usage);
+        return 0;
+    }
+
+    VkMemoryRequirements memoryRequirements;
+    vkGetImageMemoryRequirements(cugan->vkdev->vkdevice(), image, &memoryRequirements);
+
+    const size_t size = memoryRequirements.size;
+    const size_t alignment = memoryRequirements.alignment;
+
+    size_t aligned_size = alignSize(size, alignment);
+
+    uint32_t image_memory_type_index = cugan->vkdev->find_memory_index(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+
+    VkExportMemoryAllocateInfo exportAllocInfo{
+        VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO, nullptr,
+        extImageCreateInfo.handleTypes};
+
+    VkMemoryAllocateInfo memoryAllocateInfo;
+    memoryAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    memoryAllocateInfo.pNext = &exportAllocInfo;
+    memoryAllocateInfo.allocationSize = aligned_size;
+    memoryAllocateInfo.memoryTypeIndex = image_memory_type_index;
+
+    VkDeviceMemory memory = 0;
+    ret = vkAllocateMemory(cugan->vkdev->vkdevice(), &memoryAllocateInfo, 0, &memory);
+    if (ret != VK_SUCCESS)
+    {
+        NCNN_LOGE("vkAllocateMemory failed %d", ret);
+        vkDestroyImage(cugan->vkdev->vkdevice(), image, 0);
+        return 0;
+    }
+
+    VkImageMemory* ptr = new VkImageMemory;
+
+    ptr->image = image;
+
+    ptr->width = width;
+    ptr->height = height;
+    ptr->depth = depth;
+    ptr->format = format;
+
+    ptr->memory = memory;
+    ptr->bind_offset = 0;
+    ptr->bind_capacity = aligned_size;
+
+    vkBindImageMemory(cugan->vkdev->vkdevice(), ptr->image, ptr->memory, ptr->bind_offset);
+
+    ptr->mapped_ptr = 0;
+
+    VkImageViewCreateInfo imageViewCreateInfo;
+    imageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    imageViewCreateInfo.pNext = 0;
+    imageViewCreateInfo.flags = 0;
+    imageViewCreateInfo.image = image;
+    imageViewCreateInfo.viewType = depth == 1 ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_3D;
+    imageViewCreateInfo.format = format;
+    imageViewCreateInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+    imageViewCreateInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+    imageViewCreateInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+    imageViewCreateInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+    imageViewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    imageViewCreateInfo.subresourceRange.baseMipLevel = 0;
+    imageViewCreateInfo.subresourceRange.levelCount = 1;
+    imageViewCreateInfo.subresourceRange.baseArrayLayer = 0;
+    imageViewCreateInfo.subresourceRange.layerCount = 1;
+
+    VkImageView imageview;
+    ret = vkCreateImageView(cugan->vkdev->vkdevice(), &imageViewCreateInfo, 0, &imageview);
+    if (ret != VK_SUCCESS)
+    {
+        NCNN_LOGE("vkCreateImageView failed %d", ret);
+        vkFreeMemory(cugan->vkdev->vkdevice(), memory, 0);
+        vkDestroyImage(cugan->vkdev->vkdevice(), image, 0);
+        return 0;
+    }
+
+    ptr->imageview = imageview;
+
+    ptr->access_flags = 0;
+    ptr->image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    ptr->stage_flags = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    ptr->command_refcount = 0;
+
+    totalsize = aligned_size;
+
+    return ptr;
+}
+
+void OutVkImageMat::create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, int _elempack, const ncnn::Option& opt)
+{
+    if (dims == 2 && w == _w && h == _h && elemsize == _elemsize && elempack == _elempack)
+        return;
+
+    release(cugan);
+
+    elemsize = _elemsize;
+    elempack = _elempack;
+    allocator = opt.blob_vkallocator;
+
+    dims = 2;
+    width = w = _w;
+    height = h = _h;
+    d = 1;
+    depth = c = 1;
+
+    if (total() > 0)
+    {
+        data = out_create(cugan, w, h, c, elemsize, elempack, totalsize);
+
+        if (data) create_handles(cugan);
+    }
+    else
+    {
+        release(cugan);
+    }
+}
+
+void OutVkImageMat::create(const RealCUGAN* cugan, int _w, int _h, int _c, size_t _elemsize, int _elempack, const ncnn::Option& opt)
+{
+    if (dims == 3 && w == _w && h == _h && c == _c && elemsize == _elemsize && elempack == _elempack)
+        return;
+
+    release(cugan);
+
+    elemsize = _elemsize;
+    elempack = _elempack;
+    allocator = opt.blob_vkallocator;
+
+    dims = 3;
+    width = w = _w;
+    height = h = _h;
+    d = 1;
+    depth = c = _c;
+
+    if (total() > 0)
+    {
+        data = out_create(cugan, w, h, c, elemsize, elempack, totalsize);
+
+        if (data) create_handles(cugan);
+    }
+    else
+    {
+        release(cugan);
+    }
+}
+
+void OutVkImageMat::release(const RealCUGAN* cugan)
+{
+    if (data)
+    {
+        release_handles();
+
+        vkDestroyImageView(cugan->vkdev->vkdevice(), data->imageview, 0);
+        vkFreeMemory(cugan->vkdev->vkdevice(), data->memory, 0);
+        vkDestroyImage(cugan->vkdev->vkdevice(), data->image, 0);
+
+        delete data;
+
+        data = 0;
+    }
+
+    elemsize = 0;
+    elempack = 0;
+
+    dims = 0;
+    w = 0;
+    h = 0;
+    d = 0;
+    c = 0;
+
+    totalsize = 0;
+    width = height = depth = 0;
+}
+
+void OutVkImageMat::create_handles(const RealCUGAN* cugan)
+{
+    release_handles();
+
+    if (!vkGetMemoryWin32HandleKHR) {
+        VkInstance instance = get_gpu_instance();
+        vkGetMemoryWin32HandleKHR = (PFN_vkGetMemoryWin32HandleKHR)vkGetInstanceProcAddr(instance, "vkGetMemoryWin32HandleKHR");
+        if (!vkGetMemoryWin32HandleKHR) {
+            return;
+        }
+    }
+
+    VkMemoryGetWin32HandleInfoKHR memoryFdInfo{
+        VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR, nullptr,
+        data->memory,
+        VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT};
+
+    VkResult ret = vkGetMemoryWin32HandleKHR(cugan->vkdev->vkdevice(), &memoryFdInfo, &memory);
+    if (ret != VK_SUCCESS) {
+        memory = 0;
+        return;
+    }
+
+    glCreateMemoryObjectsEXT(1, &gl_memory);
+    glImportMemoryWin32HandleEXT(gl_memory, totalsize, GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, memory);
+
+    glGenTextures(1, &gl_texture);
+    if (depth == 1) {
+        glBindTexture(GL_TEXTURE_2D, gl_texture);
+        glTextureStorageMem2DEXT(
+            gl_texture, 1, GL_RGBA8, width,
+            height, gl_memory, 0);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    } else {
+        glBindTexture(GL_TEXTURE_3D, gl_texture);
+        glTextureStorageMem3DEXT(
+            gl_texture, 1, GL_RGBA8, width,
+            height, depth, gl_memory, 0);
+        glBindTexture(GL_TEXTURE_3D, 0);
+    }
+}
+
+void OutVkImageMat::release_handles()
+{
+    if (gl_texture) {
+        glDeleteTextures(1, &gl_texture);
+        gl_texture = 0;
+    }
+    if (gl_memory) {
+        glDeleteMemoryObjectsEXT(1, &gl_memory);
+        gl_memory = 0;
+    }
+    if (memory) {
+        CloseHandle(memory);
+        memory = 0;
+    }
 }
