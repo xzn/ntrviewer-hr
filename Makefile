@@ -12,18 +12,18 @@ ifeq ($(OS),Windows_NT)
 	LDLIBS := -Llib -static -lmingw32 -lSDL2main -lSDL2
 	LDLIBS += -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8
 	LDLIBS += -lws2_32 -liphlpapi -lncnn -fopenmp
-	LDLIBS += -lOSDependent -lglslang -lMachineIndependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools
 
 	TARGET := ntrviewer.exe
 
 	NASM := -DWIN64 -fwin64
 else
-	LDLIBS := -lSDL2 -lncnn
+	LDLIBS := -static-libgcc -static-libstdc++ -Llib -Wl,-Bstatic -lSDL2 -lncnn -fopenmp
 
 	TARGET := ntrviewer
 
 	NASM := -DELF -felf64
 endif
+LDLIBS += -lglslang -lMachineIndependent -lOSDependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools
 # LDFLAGS := -s
 
 RM := rm
@@ -43,6 +43,8 @@ JT_OBJ_S :=
 
 LDLIBS += -lturbojpeg
 endif
+
+# LDLIBS += -Wl,-Bdynamic
 
 ifeq ($(USE_OGL_ES),1)
 CPPFLAGS += -DUSE_OGL_ES

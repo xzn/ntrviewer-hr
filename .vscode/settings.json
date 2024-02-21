@@ -3,5 +3,8 @@
     "C_Cpp.default.compilerPath": "/mingw64/bin/gcc",
     "C_Cpp.default.defines": [
         "_WIN32"
+    ],
+    "clangd.fallbackFlags": [
+        "-I${workspaceFolder}/include"
     ]
 }

@@ -1738,7 +1738,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
   glViewport(0, 0, win_w, win_h);
 
-#ifdef USE_ANGLE
+#if defined(USE_ANGLE) && defined(_WIN32)
   nk_bool use_fsr = 0;
 #else
   nk_bool use_fsr = ctx_height > height * scale && ctx_width > width * scale && upscaled;
@@ -2424,12 +2424,6 @@ int main(int argc, char *argv[])
 #ifdef _WIN32
   CoInitializeEx(NULL, COINIT_MULTITHREADED);
 #endif
-  if (upscaling_filter) {
-    if (sr_create() < 0)
-      return -1;
-    upscaling_filter_created = 1;
-  }
-
   /* GUI */
   struct nk_context *ctx;
   int ret;
@@ -2443,10 +2437,14 @@ int main(int argc, char *argv[])
   SDL_SetHint(SDL_HINT_WINDOWS_DPI_SCALING, "1");
 #ifdef USE_ANGLE
   SDL_SetHint(SDL_HINT_OPENGL_ES_DRIVER, "1");
+#else
+  SDL_SetHint(SDL_HINT_OPENGL_ES_DRIVER, "0");
 #endif
   SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS);
 #ifdef USE_ANGLE
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_EGL, 1);
+#else
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_EGL, 0);
 #endif
 #ifdef USE_OGL_ES
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
@@ -2487,11 +2485,19 @@ int main(int argc, char *argv[])
     return -1;
   }
 
+#ifdef USE_OGL_ES
   if (!gladLoadGLES2Loader((GLADloadproc)SDL_GL_GetProcAddress))
   {
     fprintf(stderr, "gladLoadGLES2 failed\n");
     return -1;
   }
+#else
+  if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress))
+  {
+    fprintf(stderr, "gladLoadGLLoader failed\n");
+    return -1;
+  }
+#endif
 
 #ifdef GL_DEBUG
   glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
@@ -2524,6 +2530,13 @@ int main(int argc, char *argv[])
   {
     fprintf(stderr, "SDL_GL_CreateContext: %s\n", SDL_GetError());
     return -1;
+  }
+
+  if (upscaling_filter) {
+    if (sr_create() < 0)
+      upscaling_filter = 0;
+    else
+      upscaling_filter_created = 1;
   }
 
   /* OpenGL setup */
@@ -2661,13 +2674,14 @@ int main(int argc, char *argv[])
 
   sock_cleanup();
   nk_sdl_shutdown();
+  if (upscaling_filter_created)
+    sr_destroy();
+
   SDL_GL_DeleteContext(glContext[1]);
   SDL_GL_DeleteContext(glContext[0]);
   SDL_DestroyWindow(win[1]);
   SDL_DestroyWindow(win[0]);
   SDL_Quit();
 
-  if (upscaling_filter_created)
-    sr_destroy();
   return 0;
 }

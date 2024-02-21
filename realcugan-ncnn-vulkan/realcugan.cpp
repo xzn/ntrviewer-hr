@@ -22,6 +22,11 @@
 
 #include <stdio.h>
 
+#if _WIN32
+#else
+#include <unistd.h>
+#endif
+
 class FeatureCache
 {
 public:
@@ -80,8 +85,13 @@ RealCUGAN::RealCUGAN(int gpuid, bool _tta_mode, int num_threads)
     out_gpu_tex = new OutVkImageMat();
 
     support_ext_mem = ncnn::support_VK_KHR_external_memory_capabilities &&
+#if _WIN32
         vkdev->info.support_VK_KHR_external_memory() && vkdev->info.support_VK_KHR_external_memory_win32() &&
         GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_win32;
+#else
+        vkdev->info.support_VK_KHR_external_memory() && vkdev->info.support_VK_KHR_external_memory_fd() &&
+        GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_fd;
+#endif
 }
 
 RealCUGAN::~RealCUGAN()
@@ -3992,13 +4002,16 @@ static VkBufferMemory* out_create(const RealCUGAN* cugan, size_t size) {
     ptr->mapped_ptr = 0;
     ptr->access_flags = 0;
     ptr->stage_flags = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    ptr->refcount = -1;
 
     return ptr;
 }
 
 void OutVkMat::create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, int _elempack) {
-    if (dims == 2 && w == _w && h == _h && elemsize == _elemsize && elempack == _elempack)
+    if (dims == 2 && w == _w && h == _h && elemsize == _elemsize && elempack == _elempack) {
+        data->refcount = -1;
         return;
+    }
 
     release(cugan);
 
@@ -4028,8 +4041,10 @@ void OutVkMat::create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, 
 }
 
 void OutVkMat::create(const RealCUGAN* cugan, int _w, int _h, int _c, size_t _elemsize, int _elempack) {
-    if (dims == 3 && w == _w && h == _h && c == _c && elemsize == _elemsize && elempack == _elempack)
+    if (dims == 3 && w == _w && h == _h && c == _c && elemsize == _elemsize && elempack == _elempack) {
+        data->refcount = -1;
         return;
+    }
 
     release(cugan);
 
@@ -4058,6 +4073,7 @@ void OutVkMat::create(const RealCUGAN* cugan, int _w, int _h, int _c, size_t _el
     }
 }
 
+#if _WIN32
 typedef struct VkMemoryGetWin32HandleInfoKHR
 {
     VkStructureType sType;
@@ -4071,11 +4087,27 @@ typedef VkResult (VKAPI_PTR *PFN_vkGetMemoryWin32HandleKHR)(VkDevice device, con
 static PFN_vkGetMemoryWin32HandleKHR vkGetMemoryWin32HandleKHR;
 
 static const VkStructureType VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR = (VkStructureType)1000073003;
+#else
+typedef struct VkMemoryGetFdInfoKHR
+{
+    VkStructureType sType;
+    const void *pNext;
+    VkDeviceMemory memory;
+    VkExternalMemoryHandleTypeFlagBits handleType;
+} VkMemoryGetFdInfoKHR;
+
+typedef VkResult (VKAPI_PTR *PFN_vkGetMemoryFdKHR)(VkDevice device, const VkMemoryGetFdInfoKHR* pGetWin32HandleInfo, int* pFd);
+
+static PFN_vkGetMemoryFdKHR vkGetMemoryFdKHR;
+
+static const VkStructureType VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR = (VkStructureType)1000074002;
+#endif
 
 void OutVkMat::create_handles(const RealCUGAN* cugan)
 {
     release_handles();
 
+#if _WIN32
     if (!(GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_win32)) return;
 
     if (!vkGetMemoryWin32HandleKHR) {
@@ -4096,9 +4128,35 @@ void OutVkMat::create_handles(const RealCUGAN* cugan)
         memory = 0;
         return;
     }
+#else
+    if (!(GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_fd)) return;
+
+    if (!vkGetMemoryFdKHR) {
+        VkInstance instance = get_gpu_instance();
+        vkGetMemoryFdKHR = (PFN_vkGetMemoryFdKHR)vkGetInstanceProcAddr(instance, "vkGetMemoryFdKHR");
+        if (!vkGetMemoryFdKHR) {
+            return;
+        }
+    }
+
+    VkMemoryGetFdInfoKHR memoryFdInfo{
+        VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR, nullptr,
+        data->memory,
+        VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT};
+
+    VkResult ret = vkGetMemoryFdKHR(cugan->vkdev->vkdevice(), &memoryFdInfo, &memory);
+    if (ret != VK_SUCCESS) {
+        memory = 0;
+        return;
+    }
+#endif
 
     glCreateMemoryObjectsEXT(1, &gl_memory);
+#if _WIN32
     glImportMemoryWin32HandleEXT(gl_memory, totalsize, GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, memory);
+#else
+    glImportMemoryFdEXT(gl_memory, totalsize, GL_HANDLE_TYPE_OPAQUE_FD_EXT, memory);
+#endif
 
     glGenBuffers(1, &gl_buffer);
     glBindBuffer(GL_TEXTURE_BUFFER, gl_buffer);
@@ -4109,7 +4167,7 @@ void OutVkMat::create_handles(const RealCUGAN* cugan)
     glBindTexture(GL_TEXTURE_BUFFER, gl_texture);
 
     // TODO
-    // hard-coded for now..
+    // may not be GL_RGBA8, hard-coded for now
     glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA8, gl_buffer);
     glBindTexture(GL_TEXTURE_BUFFER, 0);
 }
@@ -4128,7 +4186,11 @@ void OutVkMat::release_handles() {
         gl_memory = 0;
     }
     if (memory) {
+#if _WIN32
         CloseHandle(memory);
+#else
+        close(memory);
+#endif
         memory = 0;
     }
 }
@@ -4171,10 +4233,18 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
     // large elempack spills on image w
     if (elempack == 8) width *= 2;
 
-    if (width > (int)cugan->vkdev->info.max_image_dimension_3d() || height > (int)cugan->vkdev->info.max_image_dimension_3d() || depth > (int)cugan->vkdev->info.max_image_dimension_3d())
-    {
-        NCNN_LOGE("image dimension too large %d %d %d > %d", width, height, depth, (int)cugan->vkdev->info.max_image_dimension_3d());
-        return 0;
+    if (depth == 1) {
+        if (width > (int)cugan->vkdev->info.max_image_dimension_2d() || height > (int)cugan->vkdev->info.max_image_dimension_2d())
+        {
+            NCNN_LOGE("image dimension too large %d %d > %d", width, height, (int)cugan->vkdev->info.max_image_dimension_2d());
+            return 0;
+        }
+    } else {
+        if (width > (int)cugan->vkdev->info.max_image_dimension_3d() || height > (int)cugan->vkdev->info.max_image_dimension_3d() || depth > (int)cugan->vkdev->info.max_image_dimension_3d())
+        {
+            NCNN_LOGE("image dimension too large %d %d %d > %d", width, height, depth, (int)cugan->vkdev->info.max_image_dimension_3d());
+            return 0;
+        }
     }
 
     VkExternalMemoryImageCreateInfo extImageCreateInfo;
@@ -4294,6 +4364,7 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
     ptr->image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     ptr->stage_flags = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
     ptr->command_refcount = 0;
+    ptr->refcount = -1;
 
     totalsize = aligned_size;
 
@@ -4302,8 +4373,10 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
 
 void OutVkImageMat::create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, int _elempack, const ncnn::Option& opt)
 {
-    if (dims == 2 && w == _w && h == _h && elemsize == _elemsize && elempack == _elempack)
+    if (dims == 2 && w == _w && h == _h && elemsize == _elemsize && elempack == _elempack) {
+        data->refcount = -1;
         return;
+    }
 
     release(cugan);
 
@@ -4331,8 +4404,10 @@ void OutVkImageMat::create(const RealCUGAN* cugan, int _w, int _h, size_t _elems
 
 void OutVkImageMat::create(const RealCUGAN* cugan, int _w, int _h, int _c, size_t _elemsize, int _elempack, const ncnn::Option& opt)
 {
-    if (dims == 3 && w == _w && h == _h && c == _c && elemsize == _elemsize && elempack == _elempack)
+    if (dims == 3 && w == _w && h == _h && c == _c && elemsize == _elemsize && elempack == _elempack) {
+        data->refcount = -1;
         return;
+    }
 
     release(cugan);
 
@@ -4390,6 +4465,7 @@ void OutVkImageMat::create_handles(const RealCUGAN* cugan)
 {
     release_handles();
 
+#if _WIN32
     if (!(GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_win32)) return;
 
     if (!vkGetMemoryWin32HandleKHR) {
@@ -4410,9 +4486,35 @@ void OutVkImageMat::create_handles(const RealCUGAN* cugan)
         memory = 0;
         return;
     }
+#else
+    if (!(GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_fd)) return;
+
+    if (!vkGetMemoryFdKHR) {
+        VkInstance instance = get_gpu_instance();
+        vkGetMemoryFdKHR = (PFN_vkGetMemoryFdKHR)vkGetInstanceProcAddr(instance, "vkGetMemoryFdKHR");
+        if (!vkGetMemoryFdKHR) {
+            return;
+        }
+    }
+
+    VkMemoryGetFdInfoKHR memoryFdInfo{
+        VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR, nullptr,
+        data->memory,
+        VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT};
+
+    VkResult ret = vkGetMemoryFdKHR(cugan->vkdev->vkdevice(), &memoryFdInfo, &memory);
+    if (ret != VK_SUCCESS) {
+        memory = 0;
+        return;
+    }
+#endif
 
     glCreateMemoryObjectsEXT(1, &gl_memory);
+#if _WIN32
     glImportMemoryWin32HandleEXT(gl_memory, totalsize, GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, memory);
+#else
+    glImportMemoryFdEXT(gl_memory, totalsize, GL_HANDLE_TYPE_OPAQUE_FD_EXT, memory);
+#endif
 
     glGenTextures(1, &gl_texture);
     if (depth == 1) {
@@ -4424,7 +4526,7 @@ void OutVkImageMat::create_handles(const RealCUGAN* cugan)
     } else {
         glBindTexture(GL_TEXTURE_3D, gl_texture);
         glTextureStorageMem3DEXT(
-            gl_texture, 1, GL_RGBA8, width,
+            gl_texture, 1, GL_RGBA8, width, // TODO it's actually float something not GL_RGBA8
             height, depth, gl_memory, 0);
         glBindTexture(GL_TEXTURE_3D, 0);
     }
@@ -4441,7 +4543,11 @@ void OutVkImageMat::release_handles()
         gl_memory = 0;
     }
     if (memory) {
+#if _WIN32
         CloseHandle(memory);
+#else
+        close(memory);
+#endif
         memory = 0;
     }
 }

@@ -12,6 +12,8 @@
 #include <memory>
 #include <sstream>
 
+#include <cstring>
+
 // #define USE_OGL_ES
 #ifdef USE_OGL_ES
 #define GLSL_VERSION "#version 310 es"
