@@ -71,7 +71,7 @@ void Sleep(int milliseconds) {
 #define JCS_FORMAT JCS_EXT_RGBA
 
 int realcugan_create();
-GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata, unsigned char *outdata);
+GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, bool *dim3);
 void realcugan_destroy();
 
 #define fprintf(s, f, ...) fprintf(s, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
@@ -1343,7 +1343,13 @@ static void guiMain(struct nk_context *ctx)
   nk_window_show(ctx, debug_msg_wnd, show_window);
 }
 
+#ifdef USE_OGL_ES
+#define GLSL_VERSION "#version 100\n" "precision mediump float; \n"
+#else
+#define GLSL_VERSION "#version 110\n"
+#endif
 static GLbyte vShaderStr[] =
+    GLSL_VERSION
     "attribute vec4 a_position; \n"
     "attribute vec2 a_texCoord; \n"
     "varying vec2 v_texCoord; \n"
@@ -1354,7 +1360,7 @@ static GLbyte vShaderStr[] =
     "} \n";
 
 static GLbyte fShaderStr[] =
-    "precision mediump float; \n"
+    GLSL_VERSION
     "varying vec2 v_texCoord; \n"
     "uniform sampler2D s_texture; \n"
     "void main() \n"
@@ -1362,8 +1368,9 @@ static GLbyte fShaderStr[] =
     " gl_FragColor = texture2D(s_texture, v_texCoord); \n"
     "} \n";
 
+#if 0
 #ifdef USE_OGL_ES
-#define GLSL_FBO_VERSION "#version 320 es\n"
+#define GLSL_FBO_VERSION "#version 320 es\n" "precision mediump float; \n"
 #else
 #define GLSL_FBO_VERSION "#version 430\n"
 #endif
@@ -1380,7 +1387,6 @@ static GLbyte fbo_vShaderStr[] =
 
 static GLbyte fbo_fShaderStr[] =
     GLSL_FBO_VERSION
-    "precision mediump float; \n"
     "in vec2 v_texCoord; \n"
     "uniform samplerBuffer mediump s_texture; \n"
     "uniform int v_texSize; \n"
@@ -1389,6 +1395,37 @@ static GLbyte fbo_fShaderStr[] =
     "{ \n"
     " outColor = texelFetch(s_texture, int(v_texCoord.y) * v_texSize + int(v_texCoord.x)); \n"
     "} \n";
+#else
+#ifdef USE_OGL_ES
+#define GLSL_FBO_VERSION "#version 100 es\n" "precision mediump float; \n"
+#else
+#define GLSL_FBO_VERSION "#version 110\n"
+#endif
+static GLbyte fbo_vShaderStr[] =
+    GLSL_FBO_VERSION
+    "attribute vec4 a_position; \n"
+    "attribute vec2 a_texCoord; \n"
+    "varying vec2 v_texCoord; \n"
+    "void main() \n"
+    "{ \n"
+    " gl_Position = a_position; \n"
+    " v_texCoord = a_texCoord; \n"
+    "} \n";
+
+static GLbyte fbo_fShaderStr[] =
+    GLSL_FBO_VERSION
+    "varying vec2 v_texCoord; \n"
+    "uniform sampler3D s_texture; \n"
+    "void main() \n"
+    "{ \n"
+    " gl_FragColor = vec4("
+        "texture3D(s_texture, vec3(v_texCoord, 0.0)).x / 255.0,"
+        "texture3D(s_texture, vec3(v_texCoord, 1.0 / 3.0)).x / 255.0,"
+        "texture3D(s_texture, vec3(v_texCoord, 2.0 / 3.0)).x / 255.0,"
+        "texture3D(s_texture, vec3(v_texCoord, 1.0)).x / 255.0"
+        ");\n"
+    "} \n";
+#endif
 
 static GLfloat fbo_vVertices_pos[4][3] = {
     { -1.f, -1.f, 0.0f }, // Position 1
@@ -1663,10 +1700,11 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int
   nk_bool upscaled = screen_upscale_factor > 1 && upscaling_filter && upscaling_filter_created;
   int scale = upscaled ? screen_upscale_factor : 1;
   GLuint tex = upscaled ? ctx->gl_tex_upscaled : ctx->gl_tex_id;
+  bool dim3 = false;
 
   if (upscaled) {
     scale = screen_upscale_factor;
-    GLuint tex_upscaled = sr_run(top_bot, height, width, GL_CHANNELS_N, ctx->images[index], screen_upscaled);
+    GLuint tex_upscaled = sr_run(top_bot, height, width, GL_CHANNELS_N, ctx->images[index], screen_upscaled, &dim3);
     if (!tex_upscaled) {
 #if 0
       upscaled = 0;
@@ -1715,8 +1753,39 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int
         glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled);
         tex = ctx->gl_tex_upscaled;
       } else {
-        glBindTexture(GL_TEXTURE_2D, tex_upscaled);
-        tex = tex_upscaled;
+        if (dim3) {
+          glBindTexture(GL_TEXTURE_3D, tex_upscaled);
+          glBindFramebuffer(GL_DRAW_FRAMEBUFFER, ctx->gl_fbo_upscaled[tb]);
+          glViewport(0, 0, height * scale, width * scale);
+          glDisable(GL_CULL_FACE);
+          glDisable(GL_DEPTH_TEST);
+
+          glUseProgram(gl_fbo_program);
+          fbo_vVertices_tex_coord[0][0] = 0;
+          fbo_vVertices_tex_coord[0][1] = 0;
+          fbo_vVertices_tex_coord[1][0] = 0;
+          fbo_vVertices_tex_coord[1][1] = 1;
+          fbo_vVertices_tex_coord[2][0] = 1;
+          fbo_vVertices_tex_coord[2][1] = 0;
+          fbo_vVertices_tex_coord[3][0] = 1;
+          fbo_vVertices_tex_coord[3][1] = 1;
+
+          glVertexAttribPointer(gl_fbo_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_pos), fbo_vVertices_pos);
+          glVertexAttribPointer(gl_fbo_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_tex_coord), fbo_vVertices_tex_coord);
+          glEnableVertexAttribArray(gl_fbo_position_loc);
+          glEnableVertexAttribArray(gl_fbo_tex_coord_loc);
+
+          glUniform1i(gl_fbo_sampler_loc, 0);
+          if (0)
+            glUniform1i(gl_fbo_tex_size_loc, height * scale);
+          glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, fbo_indices);
+
+          glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled);
+          tex = ctx->gl_tex_upscaled;
+        } else {
+          glBindTexture(GL_TEXTURE_2D, tex_upscaled);
+          tex = tex_upscaled;
+        }
       }
     }
   }
@@ -2609,12 +2678,13 @@ int main(int argc, char *argv[])
   gl_tex_coord_loc = glGetAttribLocation(gl_program, "a_texCoord");
   gl_sampler_loc = glGetUniformLocation(gl_program, "s_texture");
 
-  if (0) {
+  if (1) {
     gl_fbo_program = LoadProgram((const char *)fbo_vShaderStr, (const char *)fbo_fShaderStr);
     gl_fbo_position_loc = glGetAttribLocation(gl_fbo_program, "a_position");
     gl_fbo_tex_coord_loc = glGetAttribLocation(gl_fbo_program, "a_texCoord");
     gl_fbo_sampler_loc = glGetUniformLocation(gl_fbo_program, "s_texture");
-    gl_fbo_tex_size_loc = glGetUniformLocation(gl_fbo_program, "v_texSize");
+    if (0)
+      gl_fbo_tex_size_loc = glGetUniformLocation(gl_fbo_program, "v_texSize");
   }
 
   rpConfigSetDefault();

@@ -127,11 +127,17 @@ int RealCUGAN::load(const std::string& parampath, const std::string& modelpath)
 #endif
 {
     net.opt.use_vulkan_compute = vkdev ? true : false;
+#if 1
     net.opt.use_fp16_packed = true;
     net.opt.use_fp16_storage = vkdev ? true : false;
     net.opt.use_fp16_arithmetic = false;
     net.opt.use_int8_storage = true;
-
+#else
+    net.opt.use_fp16_packed = false;
+    net.opt.use_fp16_storage = false;
+    net.opt.use_fp16_arithmetic = false;
+    net.opt.use_int8_storage = false;
+#endif
     net.set_vulkan_device(vkdev);
 
 #if _WIN32
@@ -4033,6 +4039,7 @@ void OutVkMat::create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, 
         data = out_create(cugan, totalsize);
 
         if (data) create_handles(cugan);
+        else release(cugan);
     }
     else
     {
@@ -4066,6 +4073,7 @@ void OutVkMat::create(const RealCUGAN* cugan, int _w, int _h, int _c, size_t _el
         data = out_create(cugan, totalsize);
 
         if (data) create_handles(cugan);
+        else release(cugan);
     }
     else
     {
@@ -4218,6 +4226,10 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
     if (c == 1 && elemsize / elempack == 4 && elempack == 1)
     {
         format = VK_FORMAT_R8G8B8A8_UNORM;
+    }
+    else if (c == 4 && elemsize / elempack == 4 && elempack == 1)
+    {
+        format = VK_FORMAT_R32_SFLOAT;
     }
     else
     {
@@ -4395,6 +4407,7 @@ void OutVkImageMat::create(const RealCUGAN* cugan, int _w, int _h, size_t _elems
         data = out_create(cugan, w, h, c, elemsize, elempack, totalsize);
 
         if (data) create_handles(cugan);
+        else release(cugan);
     }
     else
     {
@@ -4426,6 +4439,7 @@ void OutVkImageMat::create(const RealCUGAN* cugan, int _w, int _h, int _c, size_
         data = out_create(cugan, w, h, c, elemsize, elempack, totalsize);
 
         if (data) create_handles(cugan);
+        else release(cugan);
     }
     else
     {
@@ -4526,8 +4540,13 @@ void OutVkImageMat::create_handles(const RealCUGAN* cugan)
     } else {
         glBindTexture(GL_TEXTURE_3D, gl_texture);
         glTextureStorageMem3DEXT(
-            gl_texture, 1, GL_RGBA8, width, // TODO it's actually float something not GL_RGBA8
+            gl_texture, 1, GL_R32F, width,
             height, depth, gl_memory, 0);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
         glBindTexture(GL_TEXTURE_3D, 0);
     }
 }
