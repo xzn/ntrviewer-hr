@@ -664,7 +664,7 @@ void *nwm_tcp_thread_func(void *)
 void rpConfigSetDefault(void)
 {
   ntr_rp_priority = 1;
-  ntr_rp_priority_factor = 3;
+  ntr_rp_priority_factor = 2;
   ntr_rp_quality = 75;
   ntr_rp_qos = 16;
 }
