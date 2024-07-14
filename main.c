@@ -171,7 +171,7 @@ static inline int64_t iclock64(void)
   int64_t s, u;
   int64_t value;
   itimeofday(&s, &u);
-  value = ((int64_t)s) * 1000 + (u / 1000);
+  value = ((int64_t)s) * 1000000 + u;
   return value;
 }
 
@@ -214,7 +214,7 @@ typedef int64_t		s64;
 // #define MAX(a, b) ((a) < (b) ? (b) : (a))
 #define LEN(a) (sizeof(a) / sizeof(a)[0])
 
-#define FRAME_STAT_EVERY_X_FRAMES 24
+#define FRAME_STAT_EVERY_X_FRAMES 12
 char window_title_with_fps[500];
 struct {
   int display;
@@ -290,7 +290,13 @@ static atomic_uint_fast8_t ip_octets[4];
 #define TCP_MAGIC 0x12345678
 #define TCP_ARGS_COUNT 16
 #define RP_HDR_RELIABLE_STREAM_FLAG (1 << 14)
-static const int kcp_magic = RP_HDR_RELIABLE_STREAM_FLAG;
+#define RP_HDR_KCP_CONV_MASK (3)
+#define RP_HDR_KCP_CONV_SHIFT (10)
+
+#define RP_HDR_KCP_TEST(c) (((c) & ~(RP_HDR_KCP_CONV_MASK << RP_HDR_KCP_CONV_SHIFT)) == RP_HDR_RELIABLE_STREAM_FLAG)
+#define RP_HDR_KCP(c) (RP_HDR_RELIABLE_STREAM_FLAG | (((c) & RP_HDR_KCP_CONV_MASK) << RP_HDR_KCP_CONV_SHIFT))
+static int kcp_magic = RP_HDR_KCP(0);
+
 static int restart_kcp = 0;
 static int ntr_kcp = 1;
 static int ntr_is_kcp = 0;
@@ -1901,7 +1907,7 @@ static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int to
         if (frame_rate_tracker[i].last_tick != 0)
         {
           // fprintf(stderr, "%d ms for %d rendered frames\n", next_tick - frame_count_last_tick, FRAME_STAT_EVERY_X_FRAMES);
-          frame_rate_tracker[i].display = frame_counter_current * 1000 / (next_tick - frame_rate_tracker[i].last_tick);
+          frame_rate_tracker[i].display = frame_counter_current * 1000000 / (next_tick - frame_rate_tracker[i].last_tick);
         }
         frame_rate_tracker[i].last_tick = next_tick;
 
@@ -1978,7 +1984,7 @@ MainLoop(void *loopArg)
     glClearColor(bg[0], bg[1], bg[2], bg[3]);
     glClear(GL_COLOR_BUFFER_BIT);
 
-#define MIN_UPDATE_INTERVAL_MS (33)
+#define MIN_UPDATE_INTERVAL_NS (33333)
 
     int force = 0;
     if (i == 0) {
@@ -1986,7 +1992,7 @@ MainLoop(void *loopArg)
       while (!gl_updated) {
         struct timespec to;
         clock_gettime(CLOCK_REALTIME, &to);
-        to.tv_nsec += MIN_UPDATE_INTERVAL_MS * 1000 * 1000;
+        to.tv_nsec += MIN_UPDATE_INTERVAL_NS * 1000;
         if (ETIMEDOUT == pthread_cond_timedwait(&gl_updated_cond, &gl_updated_mutex, &to)) {
           force = 1;
           break;
@@ -1999,7 +2005,7 @@ MainLoop(void *loopArg)
     int updated = 0;
     static uint64_t lastUpdated[2] = { 0 };
     uint64_t nextUpdated = iclock64();
-    if (nextUpdated - lastUpdated[i] > MIN_UPDATE_INTERVAL_MS)
+    if (nextUpdated - lastUpdated[i] > MIN_UPDATE_INTERVAL_NS)
       force = 1;
 
     if (view_mode == VIEW_MODE_TOP_BOT) {
@@ -2400,8 +2406,14 @@ void receive_from_socket(SOCKET s)
       return;
     }
     // fprintf(stderr, "recvfrom: %d\n", ret);
-    if ((ntr_is_kcp = *(uint32_t *)buf == kcp_magic))
+    int magic = *(uint32_t *)buf;
+    if ((ntr_is_kcp = RP_HDR_KCP_TEST(magic)))
     {
+      if (kcp_magic != magic) {
+        kcp_magic = magic;
+        restart_kcp = 1;
+        return;
+      }
       if ((ret = ikcp_input(kcp, (const char *)buf, ret)) < 0)
       {
         fprintf(stderr, "ikcp_input failed: %d\n", ret);
@@ -2410,6 +2422,10 @@ void receive_from_socket(SOCKET s)
       }
 
       ikcp_update(kcp, iclock());
+      if ((int)kcp->state < 0) {
+        fprintf(stderr, "kcp state reset\n");
+        return;
+      }
 
       while ((ret = ikcp_recv(kcp, (char *)buf, sizeof(buf))) >= 0)
       {
@@ -2458,10 +2474,9 @@ void *udp_recv_thread_func(void *)
       continue;
     }
     kcp->output = kcp_udp_output;
-    ikcp_nodelay(kcp, 2, 0, 2, 0);
+    ikcp_nodelay(kcp, 2, 250, 2, 0);
     ikcp_setmtu(kcp, PACKET_SIZE);
-    ikcp_wndsize(kcp, 128, 128);
-    kcp->rx_minrto = 16;
+    ikcp_wndsize(kcp, 128, 256);
 
     // fprintf(stderr, "new connection\n");
     for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {

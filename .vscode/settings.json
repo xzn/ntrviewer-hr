@@ -9,6 +9,7 @@
     ],
     "files.associations": {
         "*.css": "tailwindcss",
-        "main.h": "c"
+        "main.h": "c",
+        "random": "c"
     }
 }
