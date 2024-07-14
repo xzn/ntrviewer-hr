@@ -2362,6 +2362,27 @@ SOCKET s;
 struct sockaddr_in remoteAddr;
 int received_from_remote;
 
+int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
+{
+  // fprintf(stderr, "udp_output: %d\n", len);
+  if (!received_from_remote)
+    return 0;
+  // fprintf(stderr, "remoteAddr: %d.%d.%d.%d:%d\n",
+  //   (int)remoteAddr.sin_addr.S_un.S_un_b.s_b1,
+  //   (int)remoteAddr.sin_addr.S_un.S_un_b.s_b2,
+  //   (int)remoteAddr.sin_addr.S_un.S_un_b.s_b3,
+  //   (int)remoteAddr.sin_addr.S_un.S_un_b.s_b4,
+  //   (int)ntohs(remoteAddr.sin_port));
+  return sendto(s, buf, len, 0, (struct sockaddr *)&remoteAddr, sizeof(remoteAddr));
+}
+
+void init_kcp(ikcpcb *kcp) {
+  kcp->output = kcp_udp_output;
+  ikcp_nodelay(kcp, 2, 250, 2, 0);
+  ikcp_setmtu(kcp, PACKET_SIZE);
+  ikcp_wndsize(kcp, 128, 256);
+}
+
 void receive_from_socket(SOCKET s)
 {
   while (running && !ntr_rp_port_changed && !restart_kcp)
@@ -2411,8 +2432,15 @@ void receive_from_socket(SOCKET s)
     {
       if (kcp_magic != magic) {
         kcp_magic = magic;
-        restart_kcp = 1;
-        return;
+
+        ikcp_release(kcp);
+
+        kcp = ikcp_create(kcp_magic, 0);
+        if (!kcp) {
+          restart_kcp = 1;
+          return;
+        }
+        init_kcp(kcp);
       }
       if ((ret = ikcp_input(kcp, (const char *)buf, ret)) < 0)
       {
@@ -2447,20 +2475,6 @@ void socket_error_pause(void) {
   Sleep(RP_SOCKET_TIMEOUT);
 }
 
-int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
-{
-  // fprintf(stderr, "udp_output: %d\n", len);
-  if (!received_from_remote)
-    return 0;
-  // fprintf(stderr, "remoteAddr: %d.%d.%d.%d:%d\n",
-  //   (int)remoteAddr.sin_addr.S_un.S_un_b.s_b1,
-  //   (int)remoteAddr.sin_addr.S_un.S_un_b.s_b2,
-  //   (int)remoteAddr.sin_addr.S_un.S_un_b.s_b3,
-  //   (int)remoteAddr.sin_addr.S_un.S_un_b.s_b4,
-  //   (int)ntohs(remoteAddr.sin_port));
-  return sendto(s, buf, len, 0, (struct sockaddr *)&remoteAddr, sizeof(remoteAddr));
-}
-
 void *udp_recv_thread_func(void *)
 {
   while (running)
@@ -2473,10 +2487,7 @@ void *udp_recv_thread_func(void *)
       Sleep(250);
       continue;
     }
-    kcp->output = kcp_udp_output;
-    ikcp_nodelay(kcp, 2, 250, 2, 0);
-    ikcp_setmtu(kcp, PACKET_SIZE);
-    ikcp_wndsize(kcp, 128, 256);
+    init_kcp(kcp);
 
     // fprintf(stderr, "new connection\n");
     for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
@@ -2554,7 +2565,10 @@ void *udp_recv_thread_func(void *)
 
     // Sleep(250);
 
-    ikcp_release(kcp);
+    if (kcp) {
+      ikcp_release(kcp);
+      kcp = 0;
+    }
   }
 
   return 0;
