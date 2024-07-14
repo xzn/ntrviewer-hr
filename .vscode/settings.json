@@ -6,5 +6,9 @@
     ],
     "clangd.fallbackFlags": [
         "-I${workspaceFolder}/include"
-    ]
+    ],
+    "files.associations": {
+        "*.css": "tailwindcss",
+        "main.h": "c"
+    }
 }

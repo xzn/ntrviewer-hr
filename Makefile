@@ -1,9 +1,9 @@
 CC := gcc
 CXX := g++
 CPPFLAGS := -Iinclude
-CFLAGS := -Og -g
-# CFLAGS := -Ofast
-EMBED_JPEG_TURBO := 0
+# CFLAGS := -Og -g
+CFLAGS := -Ofast
+EMBED_JPEG_TURBO := 1
 USE_OGL_ES := 0
 USE_ANGLE := 0
 GL_DEBUG := 0
@@ -59,7 +59,7 @@ ifeq ($(GL_DEBUG),1)
 CPPFLAGS += -DGL_DEBUG
 endif
 
-$(TARGET): main.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o libGLAD.o fsr/fsr_main.o fsr/image_utils.o $(JT_OBJ) $(JT_OBJ_S)
+$(TARGET): main.o ikcp.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o libGLAD.o fsr/fsr_main.o fsr/image_utils.o $(JT_OBJ) $(JT_OBJ_S)
 	$(CXX) $^ -o $@ $(CFLAGS) $(LDLIBS) $(LDFLAGS)
 
 %.o: %.c
@@ -82,6 +82,9 @@ main.o: main.c
 
 libNK.o: libNK.c
 	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -std=c89 -Wall -Wextra
+
+ikcp.o: ikcp.c
+	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS)
 
 clean:
 	$(RM) $(TARGET) *.o jpeg_turbo/*.o jpeg_turbo/simd/x86_64/*.o fsr/*.o

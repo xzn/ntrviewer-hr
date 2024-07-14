@@ -82,6 +82,8 @@ void realcugan_destroy();
 #include <turbojpeg.h>
 #endif
 
+#include "ikcp.h"
+
 #define RP_MAX(a,b) ((a) > (b) ? (a) : (b))
 #define RP_MIN(a,b) ((a) > (b) ? (b) : (a))
 
@@ -287,6 +289,11 @@ static atomic_uint_fast8_t ip_octets[4];
 
 #define TCP_MAGIC 0x12345678
 #define TCP_ARGS_COUNT 16
+#define RP_HDR_RELIABLE_STREAM_FLAG (1 << 14)
+static const int kcp_magic = RP_HDR_RELIABLE_STREAM_FLAG;
+static int restart_kcp = 0;
+static int ntr_kcp = 1;
+static int ntr_is_kcp = 0;
 typedef struct _TCPPacketHeader
 {
   uint32_t magic;
@@ -541,7 +548,7 @@ void *menu_tcp_thread_func(void *)
 
         uint32_t args[] = {
           (ntr_rp_priority << 8) | ntr_rp_priority_factor, ntr_rp_quality, ntr_rp_qos * 128 * 1024,
-          1404036572 /* guarding magic */, ntr_rp_bound_port
+          1404036572 /* guarding magic */, ntr_rp_bound_port | (ntr_kcp ? (1 << 30) : 0)
         };
 
         ret = tcp_send_packet_header(sockfd, packet_seq, 0, 901,
@@ -2084,16 +2091,19 @@ uint8_t upscaled_v_image[400 * 240];
 
 #define BUF_SIZE 2000
 uint8_t buf[BUF_SIZE];
+ikcpcb *kcp;
 
 #define PACKET_SIZE 1448
 #define rp_data_hdr_size (4)
-#define rp_packet_data_size (PACKET_SIZE - rp_data_hdr_size)
+// from ikcp.c
+#define IKCP_OVERHEAD (24)
+#define rp_packet_data_size (ntr_is_kcp ? PACKET_SIZE - IKCP_OVERHEAD - rp_data_hdr_size : PACKET_SIZE - rp_data_hdr_size)
 #define rp_data_hdr_id_size (2)
 
 #define MAX_PACKET_COUNT (128)
 
 #define rp_work_count (2)
-uint8_t recv_buf[rp_work_count][rp_packet_data_size * MAX_PACKET_COUNT];
+uint8_t recv_buf[rp_work_count][PACKET_SIZE * MAX_PACKET_COUNT];
 uint8_t recv_track[rp_work_count][MAX_PACKET_COUNT];
 uint8_t recv_hdr[rp_work_count][rp_data_hdr_id_size];
 uint8_t recv_end[rp_work_count];
@@ -2268,7 +2278,7 @@ int handle_recv(uint8_t *buf, int size)
   if (hdr[1] & 0x10) {
     end = 1;
   } else if (size != rp_packet_data_size) {
-    fprintf(stderr, "recv incorrect size\n");
+    fprintf(stderr, "recv incorrect size: %d\n", size);
     return 0;
   }
   hdr[1] &= 0x1;
@@ -2344,10 +2354,11 @@ int handle_recv(uint8_t *buf, int size)
 
 SOCKET s;
 struct sockaddr_in remoteAddr;
+int received_from_remote;
 
 void receive_from_socket(SOCKET s)
 {
-  while (running && !ntr_rp_port_changed)
+  while (running && !ntr_rp_port_changed && !restart_kcp)
   {
     socklen_t nAddrLen = sizeof(remoteAddr);
 
@@ -2382,7 +2393,34 @@ void receive_from_socket(SOCKET s)
     }
 #endif
 
-    if (handle_recv(buf, ret) < 0)
+    received_from_remote = 1;
+
+    if (ret < (int)sizeof(uint32_t))
+    {
+      return;
+    }
+    // fprintf(stderr, "recvfrom: %d\n", ret);
+    if ((ntr_is_kcp = *(uint32_t *)buf == kcp_magic))
+    {
+      if ((ret = ikcp_input(kcp, (const char *)buf, ret)) < 0)
+      {
+        fprintf(stderr, "ikcp_input failed: %d\n", ret);
+        restart_kcp = 1;
+        return;
+      }
+
+      ikcp_update(kcp, iclock());
+
+      while ((ret = ikcp_recv(kcp, (char *)buf, sizeof(buf))) >= 0)
+      {
+        // fprintf(stderr, "ikcp_recv: %d\n", ret);
+        if (handle_recv(buf, ret) < 0)
+        {
+          return;
+        }
+      }
+    }
+    else if (handle_recv(buf, ret) < 0)
     {
       return;
     }
@@ -2393,10 +2431,37 @@ void socket_error_pause(void) {
   Sleep(RP_SOCKET_TIMEOUT);
 }
 
+int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
+{
+  // fprintf(stderr, "udp_output: %d\n", len);
+  if (!received_from_remote)
+    return 0;
+  // fprintf(stderr, "remoteAddr: %d.%d.%d.%d:%d\n",
+  //   (int)remoteAddr.sin_addr.S_un.S_un_b.s_b1,
+  //   (int)remoteAddr.sin_addr.S_un.S_un_b.s_b2,
+  //   (int)remoteAddr.sin_addr.S_un.S_un_b.s_b3,
+  //   (int)remoteAddr.sin_addr.S_un.S_un_b.s_b4,
+  //   (int)ntohs(remoteAddr.sin_port));
+  return sendto(s, buf, len, 0, (struct sockaddr *)&remoteAddr, sizeof(remoteAddr));
+}
+
 void *udp_recv_thread_func(void *)
 {
   while (running)
   {
+    restart_kcp = 0;
+    received_from_remote = 0;
+
+    kcp = ikcp_create(kcp_magic, 0);
+    if (!kcp) {
+      Sleep(250);
+      continue;
+    }
+    kcp->output = kcp_udp_output;
+    ikcp_nodelay(kcp, 2, 1, 2, 0);
+    ikcp_setmtu(kcp, PACKET_SIZE);
+    ikcp_wndsize(kcp, 128, 128);
+
     // fprintf(stderr, "new connection\n");
     for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
       buffer_ctx[top_bot].updated = FBS_NOT_AVAIL;
@@ -2472,6 +2537,8 @@ void *udp_recv_thread_func(void *)
     closesocket(s);
 
     // Sleep(250);
+
+    ikcp_release(kcp);
   }
 
   return 0;
