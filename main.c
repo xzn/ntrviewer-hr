@@ -2458,9 +2458,10 @@ void *udp_recv_thread_func(void *)
       continue;
     }
     kcp->output = kcp_udp_output;
-    ikcp_nodelay(kcp, 2, 1, 2, 0);
+    ikcp_nodelay(kcp, 2, 0, 2, 0);
     ikcp_setmtu(kcp, PACKET_SIZE);
     ikcp_wndsize(kcp, 128, 128);
+    kcp->rx_minrto = 16;
 
     // fprintf(stderr, "new connection\n");
     for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
