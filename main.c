@@ -2444,7 +2444,7 @@ void init_kcp(ikcpcb *kcp) {
   kcp->output = kcp_udp_output;
   ikcp_nodelay(kcp, 2, 500, 2, 1);
   ikcp_setmtu(kcp, PACKET_SIZE);
-  ikcp_wndsize(kcp, 128, 256);
+  ikcp_wndsize(kcp, 128, 512);
 
   for (int i = 0; i < rp_work_count; ++i)
     recv_ends[i] = 0;
