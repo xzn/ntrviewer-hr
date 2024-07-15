@@ -2108,7 +2108,7 @@ ikcpcb *kcp;
 
 #define MAX_PACKET_COUNT (128)
 
-#define rp_work_count (2)
+#define rp_work_count (3)
 uint8_t recv_buf[rp_work_count][PACKET_SIZE * MAX_PACKET_COUNT];
 uint8_t recv_track[rp_work_count][MAX_PACKET_COUNT];
 uint8_t recv_hdr[rp_work_count][rp_data_hdr_id_size];
@@ -2310,25 +2310,37 @@ int handle_recv(uint8_t *buf, int size)
 
   uint8_t work = recv_work;
 
-  if (memcmp(recv_hdr[recv_work], hdr, rp_data_hdr_id_size) != 0) {
-    if (memcmp(recv_hdr[!recv_work], hdr, rp_data_hdr_id_size) != 0) {
-      recv_work = !recv_work;
-      memcpy(recv_hdr[recv_work], hdr, rp_data_hdr_id_size);
-      recv_delay_between_packets[recv_work] = 0;
-      recv_last_packet_time[recv_work] = iclock();
-
-      if (ntr_is_kcp) {
-        recv_ends[recv_work] = 0;
-      } else {
-        memset(recv_track[recv_work], 0, MAX_PACKET_COUNT);
-        if (recv_end[recv_work] != 2) {
-          fprintf(stderr, "recv incomplete skipping frame\n");
-        }
-        recv_end[recv_work] = 0;
-        recv_end_incomp[recv_work] = 0;
-      }
+  int i = 0;
+  int work_next = 0;
+  for (; i < rp_work_count; ++i) {
+    if (memcmp(recv_hdr[work], hdr, rp_data_hdr_id_size) != 0) {
+      work = (work + 1) % rp_work_count;
+    } else {
+      break;
     }
-    work = !work;
+  }
+  if (i == rp_work_count) {
+    work = (work + 1) % rp_work_count;
+    work_next = 1;
+  }
+
+  if (work_next) {
+    memcpy(recv_hdr[work], hdr, rp_data_hdr_id_size);
+    recv_delay_between_packets[work] = 0;
+    recv_last_packet_time[work] = iclock();
+
+    if (ntr_is_kcp) {
+      recv_ends[work] = 0;
+    } else {
+      memset(recv_track[work], 0, MAX_PACKET_COUNT);
+      if (recv_end[work] != 2) {
+        fprintf(stderr, "recv incomplete skipping frame\n");
+      }
+      recv_end[work] = 0;
+      recv_end_incomp[work] = 0;
+    }
+
+    recv_work = work;
   }
 
   uint8_t packet = hdr[3];
@@ -2401,7 +2413,7 @@ int handle_recv(uint8_t *buf, int size)
     }
 
     handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot], top_bot, recv_end_size[work], recv_delay_between_packets[work]);
-    recv_work = !work;
+    recv_work = (work + 1) % rp_core_count_max;
   }
 
   return 0;
