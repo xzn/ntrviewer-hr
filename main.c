@@ -2120,6 +2120,11 @@ uint32_t recv_delay_between_packets[rp_work_count];
 uint32_t recv_last_packet_time[rp_work_count];
 uint8_t recv_work;
 
+#define rp_core_count_max (3)
+uint8_t recv_bufs[rp_work_count][rp_core_count_max][PACKET_SIZE * MAX_PACKET_COUNT];
+uint8_t recv_ends[rp_work_count];
+uint32_t recv_ends_size[rp_work_count][rp_core_count_max];
+
 #ifdef EMBED_JPEG_TURBO
 void* rpMalloc(j_common_ptr cinfo, u32 size)
 {
@@ -2275,9 +2280,22 @@ int handle_recv(uint8_t *buf, int size)
   buf += rp_data_hdr_size;
   size -= rp_data_hdr_size;
 
-  if (hdr[2] != 2) {
-    fprintf(stderr, "recv invalid header\n");
-    return 0;
+  // fprintf(stderr, "%d %d %d %d (%d)\n", hdr[0], hdr[1], hdr[2], hdr[3], size);
+
+  int core_current = 0;
+  int core_total = 0;
+  if (ntr_is_kcp) {
+    core_current = hdr[2] & 0xf;
+    core_total = (hdr[2] >> 4) & 0xf;
+    if (core_total > rp_core_count_max || core_current > core_total) {
+      fprintf(stderr, "recv invalid core counts\n");
+      return 0;
+    }
+  } else {
+    if (hdr[2] != 2) {
+      fprintf(stderr, "recv invalid header\n");
+      return 0;
+    }
   }
 
   uint8_t end = 0;
@@ -2291,18 +2309,24 @@ int handle_recv(uint8_t *buf, int size)
   uint8_t isTop = hdr[1];
 
   uint8_t work = recv_work;
+
   if (memcmp(recv_hdr[recv_work], hdr, rp_data_hdr_id_size) != 0) {
     if (memcmp(recv_hdr[!recv_work], hdr, rp_data_hdr_id_size) != 0) {
       recv_work = !recv_work;
-      memset(recv_track[recv_work], 0, MAX_PACKET_COUNT);
       memcpy(recv_hdr[recv_work], hdr, rp_data_hdr_id_size);
-      if (recv_end[recv_work] != 2) {
-        fprintf(stderr, "recv incomplete skipping frame\n");
-      }
-      recv_end[recv_work] = 0;
       recv_delay_between_packets[recv_work] = 0;
       recv_last_packet_time[recv_work] = iclock();
-      recv_end_incomp[recv_work] = 0;
+
+      if (ntr_is_kcp) {
+        recv_ends[recv_work] = 0;
+      } else {
+        memset(recv_track[recv_work], 0, MAX_PACKET_COUNT);
+        if (recv_end[recv_work] != 2) {
+          fprintf(stderr, "recv incomplete skipping frame\n");
+        }
+        recv_end[recv_work] = 0;
+        recv_end_incomp[recv_work] = 0;
+      }
     }
     work = !work;
   }
@@ -2324,13 +2348,38 @@ int handle_recv(uint8_t *buf, int size)
 
   // fprintf(stderr, "%d %d %d %d (%d %d)\n", hdr[0], hdr[1], hdr[2], hdr[3], size, end);
 
-  memcpy(&recv_buf[work][rp_packet_data_size * packet], buf, size);
-  recv_track[work][packet] = 1;
-  if (end) {
-    recv_end[work] = 1;
-    recv_end_packet[work] = packet;
-    recv_end_size[work] = rp_packet_data_size * packet + size;
-    // fprintf(stderr, "size %d\n", recv_end_size[work]);
+  if (ntr_is_kcp) {
+    memcpy(&recv_bufs[work][core_current][rp_packet_data_size * packet], buf, size);
+    if (end) {
+      ++recv_ends[work];
+      recv_ends_size[work][core_current] = rp_packet_data_size * packet + size;
+
+      if (recv_ends[work] == core_total) {
+        int size = 0;
+        for (int i = 0; i < core_total; ++i) {
+          memcpy(&recv_buf[work][0] + size, &recv_bufs[work][i], recv_ends_size[work][i]);
+          size += recv_ends_size[work][i];
+        }
+        recv_ends[work] = 0;
+
+        int top_bot = !isTop;
+        if (handle_decode(screen_decoded[top_bot], recv_buf[work], size, top_bot == 0 ? 400 : 320, 240) != 0) {
+          fprintf(stderr, "recv decode error\n");
+          return 0;
+        }
+
+        handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot], top_bot, size, recv_delay_between_packets[work]);
+      }
+    }
+  } else {
+    memcpy(&recv_buf[work][rp_packet_data_size * packet], buf, size);
+    recv_track[work][packet] = 1;
+    if (end) {
+      recv_end[work] = 1;
+      recv_end_packet[work] = packet;
+      recv_end_size[work] = rp_packet_data_size * packet + size;
+      // fprintf(stderr, "size %d\n", recv_end_size[work]);
+    }
   }
 
   if (recv_end[work] == 1) {
@@ -2346,7 +2395,7 @@ int handle_recv(uint8_t *buf, int size)
 
     recv_end[work] = 2;
     int top_bot = !recv_hdr[work][1];
-    if (handle_decode(screen_decoded[top_bot], recv_buf[work], recv_end_size[work], isTop ? 400 : 320, 240) != 0) {
+    if (handle_decode(screen_decoded[top_bot], recv_buf[work], recv_end_size[work], top_bot == 0 ? 400 : 320, 240) != 0) {
       fprintf(stderr, "recv decode error\n");
       return 0;
     }
@@ -2365,6 +2414,9 @@ int received_from_remote;
 int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
 {
   // fprintf(stderr, "udp_output: %d\n", len);
+  // if (len >= (int)sizeof(uint32_t)) {
+  //   fprintf(stderr, "udp_output magic: %x\n", *(uint32_t *)buf);
+  // }
   if (!received_from_remote)
     return 0;
   // fprintf(stderr, "remoteAddr: %d.%d.%d.%d:%d\n",
@@ -2378,9 +2430,12 @@ int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
 
 void init_kcp(ikcpcb *kcp) {
   kcp->output = kcp_udp_output;
-  ikcp_nodelay(kcp, 2, 250, 2, 0);
+  ikcp_nodelay(kcp, 2, 500, 2, 1);
   ikcp_setmtu(kcp, PACKET_SIZE);
   ikcp_wndsize(kcp, 128, 256);
+
+  for (int i = 0; i < rp_work_count; ++i)
+    recv_ends[i] = 0;
 }
 
 void receive_from_socket(SOCKET s)
@@ -2428,6 +2483,7 @@ void receive_from_socket(SOCKET s)
     }
     // fprintf(stderr, "recvfrom: %d\n", ret);
     int magic = *(uint32_t *)buf;
+    // fprintf(stderr, "magic: 0x%x\n", magic);
     if ((ntr_is_kcp = RP_HDR_KCP_TEST(magic)))
     {
       if (kcp_magic != magic) {
