@@ -2413,7 +2413,7 @@ int handle_recv(uint8_t *buf, int size)
     }
 
     handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot], top_bot, recv_end_size[work], recv_delay_between_packets[work]);
-    recv_work = (work + 1) % rp_core_count_max;
+    recv_work = (work + 1) % rp_work_count;
   }
 
   return 0;
