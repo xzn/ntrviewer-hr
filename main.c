@@ -1196,7 +1196,7 @@ static void guiMain(struct nk_context *ctx)
 
   /* GUI */
   const char *remote_play_wnd = "Remote Play";
-  if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 450, 465),
+  if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 450, 495),
                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_TITLE))
   {
     nk_layout_row_dynamic(ctx, 30, 2);
@@ -1293,6 +1293,19 @@ static void guiMain(struct nk_context *ctx)
     snprintf(msg_buf, sizeof(msg_buf), "QoS %d.%d MBps", qos / 1024 / 1024, qos / 1024 % 1024 / 128 * 125);
     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
     nk_slider_int(ctx, 4, &ntr_rp_qos, 20, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    nk_label(ctx, "Reliable Stream", NK_TEXT_CENTERED);
+    selected = ntr_kcp;
+    struct nk_vec2 comboRSSize = {225, 100};
+    const char *reliable_stream_options[] = {
+      "Off",
+      "On",
+    };
+    nk_combobox(ctx, reliable_stream_options, sizeof(reliable_stream_options) / sizeof(*reliable_stream_options), &selected, 30, comboRSSize);
+    if (selected != (int)ntr_kcp) {
+      ntr_kcp = selected;
+    }
 
     nk_layout_row_dynamic(ctx, 30, 2);
     if (nk_button_label(ctx, "Default"))
