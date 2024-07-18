@@ -10,6 +10,7 @@
     "files.associations": {
         "*.css": "tailwindcss",
         "main.h": "c",
-        "random": "c"
+        "random": "c",
+        "chrono": "c"
     }
 }
