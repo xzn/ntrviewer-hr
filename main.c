@@ -63,6 +63,7 @@ void Sleep(int milliseconds) {
 // #define GL_DEBUG
 // #define USE_ANGLE
 // #define USE_OGL_ES
+// #define PRINT_PACKET_LOSS_INFO
 
 #define GL_CHANNELS_N 4
 #define GL_FORMAT GL_RGBA
@@ -2110,6 +2111,8 @@ uint32_t recv_end_size[rp_work_count];
 uint32_t recv_delay_between_packets[rp_work_count];
 uint32_t recv_last_packet_time[rp_work_count];
 uint8_t recv_work;
+uint8_t recv_last_frame_id[SCREEN_COUNT];
+uint8_t recv_last_packet_id[SCREEN_COUNT];
 
 #define rp_core_count_max (3)
 uint8_t recv_bufs[rp_work_count][rp_core_count_max][PACKET_SIZE * MAX_PACKET_COUNT];
@@ -2298,8 +2301,29 @@ int handle_recv(uint8_t *buf, int size)
   }
   hdr[1] &= 0x1;
   uint8_t isTop = hdr[1];
-
   uint8_t work = recv_work;
+
+#ifdef PRINT_PACKET_LOSS_INFO
+  uint8_t frame_id = hdr[0];
+  int frame_id_out_of_order = 0;
+  int top_bot = isTop ? 0 : 1;
+
+  if (frame_id != recv_last_frame_id[top_bot]) {
+    if ((uint8_t)(recv_last_frame_id[top_bot] + 1) == frame_id) {
+      recv_last_frame_id[top_bot] = frame_id;
+      recv_last_packet_id[top_bot] = 0;
+    } else if ((int8_t)(frame_id - recv_last_frame_id[top_bot]) > 0) {
+      fprintf(stderr, "recv frame id skipped: %d to %d\n", recv_last_frame_id[top_bot], frame_id);
+      recv_last_frame_id[top_bot] = frame_id;
+      recv_last_packet_id[top_bot] = 0;
+    } else {
+      frame_id_out_of_order = 1;
+      if ((int8_t)(frame_id - recv_last_frame_id[top_bot]) > -rp_work_count) {
+        fprintf(stderr, "recv frame id out of order: %d current %d\n", frame_id, recv_last_frame_id[top_bot]);
+      }
+    }
+  }
+#endif
 
   int i = 0;
   int work_next = 0;
@@ -2339,6 +2363,19 @@ int handle_recv(uint8_t *buf, int size)
     fprintf(stderr, "recv packet number too high\n");
     return 0;
   }
+
+#ifdef PRINT_PACKET_LOSS_INFO
+  if (!frame_id_out_of_order && packet != recv_last_packet_id[top_bot]) {
+    if ((uint8_t)(recv_last_packet_id[top_bot] + 1) == packet) {
+      recv_last_packet_id[top_bot] = packet;
+    } else if ((int8_t)(packet - recv_last_packet_id[top_bot]) > 0) {
+      fprintf(stderr, "recv packet skipped: %d to %d\n", recv_last_packet_id[top_bot], packet);
+      recv_last_packet_id[top_bot] = packet;
+    } else {
+      fprintf(stderr, "recv packet out of order: %d current %d\n", packet, recv_last_packet_id[top_bot]);
+    }
+  }
+#endif
 
   {
     uint32_t packet_time = iclock();
@@ -2540,6 +2577,11 @@ void *udp_recv_thread_func(void *)
   {
     restart_kcp = 0;
     received_from_remote = 0;
+
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      recv_last_frame_id[i] = 0;
+      recv_last_packet_id[i] = 0;
+    }
 
     kcp = ikcp_create(kcp_magic, 0);
     if (!kcp) {

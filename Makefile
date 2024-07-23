@@ -36,7 +36,7 @@ JT_SRC_S := $(wildcard jpeg_turbo/simd/x86_64/*.asm)
 JT_OBJ_S := $(JT_SRC_S:.asm=.o)
 
 CPPFLAGS += -DEMBED_JPEG_TURBO
-LDLIBS += -ljpeg
+# LDLIBS += -ljpeg
 else
 JT_OBJ :=
 JT_OBJ_S :=
