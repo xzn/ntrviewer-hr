@@ -63,7 +63,7 @@ void Sleep(int milliseconds) {
 // #define GL_DEBUG
 // #define USE_ANGLE
 // #define USE_OGL_ES
-// #define PRINT_PACKET_LOSS_INFO
+#define PRINT_PACKET_LOSS_INFO
 
 #define GL_CHANNELS_N 4
 #define GL_FORMAT GL_RGBA
@@ -2313,7 +2313,7 @@ int handle_recv(uint8_t *buf, int size)
       recv_last_frame_id[top_bot] = frame_id;
       recv_last_packet_id[top_bot] = 0;
     } else if ((int8_t)(frame_id - recv_last_frame_id[top_bot]) > 0) {
-      fprintf(stderr, "recv frame id skipped: %d to %d\n", recv_last_frame_id[top_bot], frame_id);
+      fprintf(stderr, "recv frame id skipped: %d to %d (%d)\n", recv_last_frame_id[top_bot], frame_id, top_bot);
       recv_last_frame_id[top_bot] = frame_id;
       recv_last_packet_id[top_bot] = 0;
     } else {
@@ -2349,7 +2349,9 @@ int handle_recv(uint8_t *buf, int size)
     } else {
       memset(recv_track[work], 0, MAX_PACKET_COUNT);
       if (recv_end[work] != 2) {
+#ifndef PRINT_PACKET_LOSS_INFO
         fprintf(stderr, "recv incomplete skipping frame\n");
+#endif
       }
       recv_end[work] = 0;
       recv_end_incomp[work] = 0;
@@ -2369,7 +2371,7 @@ int handle_recv(uint8_t *buf, int size)
     if ((uint8_t)(recv_last_packet_id[top_bot] + 1) == packet) {
       recv_last_packet_id[top_bot] = packet;
     } else if ((int8_t)(packet - recv_last_packet_id[top_bot]) > 0) {
-      fprintf(stderr, "recv packet skipped: %d to %d\n", recv_last_packet_id[top_bot], packet);
+      fprintf(stderr, "recv packet skipped: %d to %d (%d:%d)\n", recv_last_packet_id[top_bot], packet, top_bot, recv_last_frame_id[top_bot]);
       recv_last_packet_id[top_bot] = packet;
     } else {
       fprintf(stderr, "recv packet out of order: %d current %d\n", packet, recv_last_packet_id[top_bot]);
@@ -2427,7 +2429,9 @@ int handle_recv(uint8_t *buf, int size)
       if (!recv_track[work][i]) {
         if (!recv_end_incomp[work]) {
           recv_end_incomp[work] = 1;
+#ifndef PRINT_PACKET_LOSS_INFO
           fprintf(stderr, "recv end packet incomplete\n");
+#endif
         }
         return 0;
       }
