@@ -59,7 +59,7 @@ ifeq ($(GL_DEBUG),1)
 CPPFLAGS += -DGL_DEBUG
 endif
 
-$(TARGET): main.o ikcp.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o libGLAD.o fsr/fsr_main.o fsr/image_utils.o $(JT_OBJ) $(JT_OBJ_S)
+$(TARGET): main.o rp_syn.o ikcp.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o libGLAD.o fsr/fsr_main.o fsr/image_utils.o $(JT_OBJ) $(JT_OBJ_S)
 	$(CXX) $^ -o $@ $(CFLAGS) $(LDLIBS) $(LDFLAGS)
 
 %.o: %.c

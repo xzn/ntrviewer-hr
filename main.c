@@ -58,12 +58,19 @@ void Sleep(int milliseconds) {
 #endif
 
 #include <stdatomic.h>
+#include <semaphore.h>
 #include <pthread.h>
+#include <errno.h>
 #include "main.h"
+#include "rp_syn.h"
+
+rp_sem_t jpeg_recv_sem;
+struct rp_syn_comp_func_t jpeg_decode_queue;
+
 // #define GL_DEBUG
 // #define USE_ANGLE
 // #define USE_OGL_ES
-#define PRINT_PACKET_LOSS_INFO
+// #define PRINT_PACKET_LOSS_INFO
 
 #define GL_CHANNELS_N 4
 #define GL_FORMAT GL_RGBA
@@ -2100,7 +2107,8 @@ ikcpcb *kcp;
 
 #define MAX_PACKET_COUNT (128)
 
-#define rp_work_count (3)
+#define rp_work_queue_count (2)
+#define rp_work_count (rp_work_queue_count + 1)
 uint8_t recv_buf[rp_work_count][PACKET_SIZE * MAX_PACKET_COUNT];
 uint8_t recv_track[rp_work_count][MAX_PACKET_COUNT];
 uint8_t recv_hdr[rp_work_count][rp_data_hdr_id_size];
@@ -2111,6 +2119,7 @@ uint32_t recv_end_size[rp_work_count];
 uint32_t recv_delay_between_packets[rp_work_count];
 uint32_t recv_last_packet_time[rp_work_count];
 uint8_t recv_work;
+bool recv_has_last_frame_id[SCREEN_COUNT];
 uint8_t recv_last_frame_id[SCREEN_COUNT];
 uint8_t recv_last_packet_id[SCREEN_COUNT];
 
@@ -2264,6 +2273,27 @@ final:
 }
 #endif
 
+struct DecodeInfo {
+  uint8_t *out;
+  uint8_t *in;
+  uint32_t in_size;
+  int top_bot;
+  FrameBufferContext *ctx;
+  uint32_t in_delay;
+} decode_info[rp_work_count];
+
+struct DecodeInfo *decode_ptr[rp_work_count];
+
+int queue_decode(void) {
+  struct DecodeInfo *ptr = &decode_info[recv_work];
+  if (rp_syn_rel(&jpeg_decode_queue, ptr) != 0) {
+    running = 0;
+    return -1;
+  }
+  return 0;
+}
+
+
 int handle_recv(uint8_t *buf, int size)
 {
   if (size < rp_data_hdr_size) {
@@ -2276,20 +2306,9 @@ int handle_recv(uint8_t *buf, int size)
 
   // fprintf(stderr, "%d %d %d %d (%d)\n", hdr[0], hdr[1], hdr[2], hdr[3], size);
 
-  int core_current = 0;
-  int core_total = 0;
-  if (ntr_is_kcp) {
-    core_current = hdr[2] & 0xf;
-    core_total = (hdr[2] >> 4) & 0xf;
-    if (core_total > rp_core_count_max || core_current > core_total) {
-      fprintf(stderr, "recv invalid core counts\n");
-      return 0;
-    }
-  } else {
-    if (hdr[2] != 2) {
-      fprintf(stderr, "recv invalid header\n");
-      return 0;
-    }
+  if (hdr[2] != 2) {
+    fprintf(stderr, "recv invalid header\n");
+    return 0;
   }
 
   uint8_t end = 0;
@@ -2300,62 +2319,72 @@ int handle_recv(uint8_t *buf, int size)
     return 0;
   }
   hdr[1] &= 0x1;
-  uint8_t isTop = hdr[1];
   uint8_t work = recv_work;
 
 #ifdef PRINT_PACKET_LOSS_INFO
   uint8_t frame_id = hdr[0];
   int frame_id_out_of_order = 0;
+  uint8_t isTop = hdr[1];
   int top_bot = isTop ? 0 : 1;
 
   if (frame_id != recv_last_frame_id[top_bot]) {
     if ((uint8_t)(recv_last_frame_id[top_bot] + 1) == frame_id) {
+      recv_has_last_frame_id[top_bot] = 1;
       recv_last_frame_id[top_bot] = frame_id;
       recv_last_packet_id[top_bot] = 0;
-    } else if ((int8_t)(frame_id - recv_last_frame_id[top_bot]) > 0) {
-      fprintf(stderr, "recv frame id skipped: %d to %d (%d)\n", recv_last_frame_id[top_bot], frame_id, top_bot);
-      recv_last_frame_id[top_bot] = frame_id;
-      recv_last_packet_id[top_bot] = 0;
-    } else {
-      frame_id_out_of_order = 1;
-      if ((int8_t)(frame_id - recv_last_frame_id[top_bot]) > -rp_work_count) {
-        fprintf(stderr, "recv frame id out of order: %d current %d\n", frame_id, recv_last_frame_id[top_bot]);
+    } else if (recv_has_last_frame_id[top_bot]) {
+      if ((int8_t)(frame_id - recv_last_frame_id[top_bot]) > 0) {
+        fprintf(stderr, "recv frame id skipped: %d to %d (%d)\n", recv_last_frame_id[top_bot], frame_id, top_bot);
+        recv_last_frame_id[top_bot] = frame_id;
+        recv_last_packet_id[top_bot] = 0;
+      } else {
+        frame_id_out_of_order = 1;
+        if ((int8_t)(frame_id - recv_last_frame_id[top_bot]) > -rp_work_count) {
+          fprintf(stderr, "recv frame id out of order: %d current %d\n", frame_id, recv_last_frame_id[top_bot]);
+        }
       }
     }
   }
 #endif
 
-  int i = 0;
   int work_next = 0;
-  for (; i < rp_work_count; ++i) {
-    if (memcmp(recv_hdr[work], hdr, rp_data_hdr_id_size) != 0) {
-      work = (work + 1) % rp_work_count;
-    } else {
-      break;
-    }
-  }
-  if (i == rp_work_count) {
+  if (memcmp(recv_hdr[work], hdr, rp_data_hdr_id_size) != 0) {
     work = (work + 1) % rp_work_count;
     work_next = 1;
   }
 
   if (work_next) {
+    if (queue_decode() != 0)
+      return -1;
+
+    struct timespec ts = {0, NWM_THREAD_WAIT_NS};
+    while (1) {
+      if (!running)
+        return -1;
+      int res = rp_sem_wait(jpeg_recv_sem, &ts);
+      if (res == 0)
+        break;
+      if (res != ETIMEDOUT) {
+        running = 0;
+        fprintf(stderr, "jpeg_recv_sem wait error\n");
+        return -1;
+      }
+    }
+
+    decode_info[work] = (struct DecodeInfo) {0};
+
     memcpy(recv_hdr[work], hdr, rp_data_hdr_id_size);
     recv_delay_between_packets[work] = 0;
     recv_last_packet_time[work] = iclock();
 
-    if (ntr_is_kcp) {
-      recv_ends[work] = 0;
-    } else {
-      memset(recv_track[work], 0, MAX_PACKET_COUNT);
-      if (recv_end[work] != 2) {
+    memset(recv_track[work], 0, MAX_PACKET_COUNT);
+    if (recv_end[work] != 2) {
 #ifndef PRINT_PACKET_LOSS_INFO
-        fprintf(stderr, "recv incomplete skipping frame\n");
+      fprintf(stderr, "recv incomplete skipping frame\n");
 #endif
-      }
-      recv_end[work] = 0;
-      recv_end_incomp[work] = 0;
     }
+    recv_end[work] = 0;
+    recv_end_incomp[work] = 0;
 
     recv_work = work;
   }
@@ -2367,7 +2396,7 @@ int handle_recv(uint8_t *buf, int size)
   }
 
 #ifdef PRINT_PACKET_LOSS_INFO
-  if (!frame_id_out_of_order && packet != recv_last_packet_id[top_bot]) {
+  if (recv_has_last_frame_id[top_bot] && !frame_id_out_of_order && packet != recv_last_packet_id[top_bot]) {
     if ((uint8_t)(recv_last_packet_id[top_bot] + 1) == packet) {
       recv_last_packet_id[top_bot] = packet;
     } else if ((int8_t)(packet - recv_last_packet_id[top_bot]) > 0) {
@@ -2390,38 +2419,13 @@ int handle_recv(uint8_t *buf, int size)
 
   // fprintf(stderr, "%d %d %d %d (%d %d)\n", hdr[0], hdr[1], hdr[2], hdr[3], size, end);
 
-  if (ntr_is_kcp) {
-    memcpy(&recv_bufs[work][core_current][rp_packet_data_size * packet], buf, size);
-    if (end) {
-      ++recv_ends[work];
-      recv_ends_size[work][core_current] = rp_packet_data_size * packet + size;
-
-      if (recv_ends[work] == core_total) {
-        int size = 0;
-        for (int i = 0; i < core_total; ++i) {
-          memcpy(&recv_buf[work][0] + size, &recv_bufs[work][i], recv_ends_size[work][i]);
-          size += recv_ends_size[work][i];
-        }
-        recv_ends[work] = 0;
-
-        int top_bot = !isTop;
-        if (handle_decode(screen_decoded[top_bot], recv_buf[work], size, top_bot == 0 ? 400 : 320, 240) != 0) {
-          fprintf(stderr, "recv decode error\n");
-          return 0;
-        }
-
-        handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot], top_bot, size, recv_delay_between_packets[work]);
-      }
-    }
-  } else {
-    memcpy(&recv_buf[work][rp_packet_data_size * packet], buf, size);
-    recv_track[work][packet] = 1;
-    if (end) {
-      recv_end[work] = 1;
-      recv_end_packet[work] = packet;
-      recv_end_size[work] = rp_packet_data_size * packet + size;
-      // fprintf(stderr, "size %d\n", recv_end_size[work]);
-    }
+  memcpy(&recv_buf[work][rp_packet_data_size * packet], buf, size);
+  recv_track[work][packet] = 1;
+  if (end) {
+    recv_end[work] = 1;
+    recv_end_packet[work] = packet;
+    recv_end_size[work] = rp_packet_data_size * packet + size;
+    // fprintf(stderr, "size %d\n", recv_end_size[work]);
   }
 
   if (recv_end[work] == 1) {
@@ -2439,13 +2443,15 @@ int handle_recv(uint8_t *buf, int size)
 
     recv_end[work] = 2;
     int top_bot = !recv_hdr[work][1];
-    if (handle_decode(screen_decoded[top_bot], recv_buf[work], recv_end_size[work], top_bot == 0 ? 400 : 320, 240) != 0) {
-      fprintf(stderr, "recv decode error\n");
-      return 0;
-    }
 
-    handle_decode_frame_screen(&buffer_ctx[top_bot], screen_decoded[top_bot], top_bot, recv_end_size[work], recv_delay_between_packets[work]);
-    recv_work = (work + 1) % rp_work_count;
+    decode_info[work] = (struct DecodeInfo) {
+      .ctx = &buffer_ctx[top_bot],
+      .out = screen_decoded[top_bot],
+      .in = recv_buf[work],
+      .in_delay = recv_delay_between_packets[work],
+      .in_size = recv_end_size[work],
+      .top_bot = top_bot,
+    };
   }
 
   return 0;
@@ -2583,6 +2589,7 @@ void *udp_recv_thread_func(void *)
     received_from_remote = 0;
 
     for (int i = 0; i < SCREEN_COUNT; ++i) {
+      recv_has_last_frame_id[i] = 0;
       recv_last_frame_id[i] = 0;
       recv_last_packet_id[i] = 0;
     }
@@ -2676,6 +2683,35 @@ void *udp_recv_thread_func(void *)
     }
   }
 
+  return 0;
+}
+
+void *jpeg_decode_thread_func(void *)
+{
+  while (running) {
+    struct DecodeInfo *ptr;
+    while (1) {
+      if (!running)
+        return 0;
+      int res = rp_syn_acq(&jpeg_decode_queue, NWM_THREAD_WAIT_NS, (void **)&ptr);
+      if (res == 0)
+        break;
+      if (res != ETIMEDOUT) {
+        running = 0;
+        return 0;
+      }
+    }
+
+    if (ptr->out && ptr->in && ptr->ctx) {
+      if (handle_decode(ptr->out, ptr->in, ptr->in_size, ptr->top_bot == 0 ? 400 : 320, 240) != 0) {
+        fprintf(stderr, "recv decode error\n");
+      } else {
+        handle_decode_frame_screen(ptr->ctx, ptr->out, ptr->top_bot, ptr->in_size, ptr->in_delay);
+      }
+    }
+
+    rp_sem_rel(jpeg_recv_sem);
+  }
   return 0;
 }
 
@@ -2894,22 +2930,37 @@ int main(int argc, char *argv[])
   getAdapterIPs();
   tryAutoSelectAdapterIP();
 
+  if (rp_sem_init(jpeg_recv_sem, rp_work_queue_count) != 0) {
+    fprintf(stderr, "jpeg_recv_sem init failed\n");
+    return -1;
+  }
+  if (rp_syn_init1(&jpeg_decode_queue, 0, 0, 0, rp_work_count, (void **)decode_ptr) != 0) {
+    fprintf(stderr, "jpeg_decode_queue init failed\n");
+    return -1;
+  }
+
   pthread_t udp_recv_thread;
   if ((ret = pthread_create(&udp_recv_thread, NULL, udp_recv_thread_func, NULL)))
   {
-    fprintf(stderr, "pthread_create failed\n");
+    fprintf(stderr, "udp_recv_thread create failed\n");
+    return -1;
+  }
+  pthread_t jpeg_decode_thread;
+  if ((ret = pthread_create(&jpeg_decode_thread, NULL, jpeg_decode_thread_func, NULL)))
+  {
+    fprintf(stderr, "jpeg_decode_thread create failed\n");
     return -1;
   }
   pthread_t menu_tcp_thread;
   if ((ret = pthread_create(&menu_tcp_thread, NULL, menu_tcp_thread_func, NULL)))
   {
-    fprintf(stderr, "pthread_create failed\n");
+    fprintf(stderr, "menu_tcp_thread create failed\n");
     return -1;
   }
   pthread_t nwm_tcp_thread;
   if ((ret = pthread_create(&nwm_tcp_thread, NULL, nwm_tcp_thread_func, NULL)))
   {
-    fprintf(stderr, "pthread_create failed\n");
+    fprintf(stderr, "nwm_tcp_thread create failed\n");
     return -1;
   }
 
@@ -2929,9 +2980,13 @@ int main(int argc, char *argv[])
   SetThreadExecutionState(ES_CONTINUOUS);
 #endif
 
+  pthread_join(jpeg_decode_thread, NULL);
   pthread_join(udp_recv_thread, NULL);
   pthread_join(menu_tcp_thread, NULL);
   pthread_join(nwm_tcp_thread, NULL);
+
+  rp_syn_close1(&jpeg_decode_queue);
+  rp_sem_close(jpeg_recv_sem);
 
   glDeleteProgram(gl_fbo_program);
   glDeleteProgram(gl_program);
