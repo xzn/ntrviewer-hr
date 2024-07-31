@@ -2284,8 +2284,8 @@ struct DecodeInfo {
 
 struct DecodeInfo *decode_ptr[rp_work_count];
 
-int queue_decode(void) {
-  struct DecodeInfo *ptr = &decode_info[recv_work];
+int queue_decode(int work) {
+  struct DecodeInfo *ptr = &decode_info[work];
   if (rp_syn_rel(&jpeg_decode_queue, ptr) != 0) {
     running = 0;
     return -1;
@@ -2349,14 +2349,19 @@ int handle_recv(uint8_t *buf, int size)
 
   int work_next = 0;
   if (memcmp(recv_hdr[work], hdr, rp_data_hdr_id_size) != 0) {
+    // If no decode_info is set at this point, it means network receive has skipped frame.
+    // Queue empty info to keep in sync.
+    if (!decode_info[work].ctx && !decode_info[work].in && !decode_info[work].out) {
+      if (queue_decode(work) != 0) {
+        return -1;
+      }
+    }
+
     work = (work + 1) % rp_work_count;
     work_next = 1;
   }
 
   if (work_next) {
-    if (queue_decode() != 0)
-      return -1;
-
     struct timespec ts = {0, NWM_THREAD_WAIT_NS};
     while (1) {
       if (!running)
@@ -2452,6 +2457,8 @@ int handle_recv(uint8_t *buf, int size)
       .in_size = recv_end_size[work],
       .top_bot = top_bot,
     };
+    if (queue_decode(work) != 0)
+      return -1;
   }
 
   return 0;
