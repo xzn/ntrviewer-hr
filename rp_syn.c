@@ -1,6 +1,7 @@
-#include "rp_syn.h"
 #include <errno.h>
 #include <stdio.h>
+#include <time.h>
+#include "rp_syn.h"
 
 unsigned rp_atomic_fetch_addb_wrap(unsigned *p, unsigned a, unsigned factor) {
 	unsigned v, v_new;

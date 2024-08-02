@@ -58,8 +58,6 @@ void Sleep(int milliseconds) {
 #endif
 
 #include <stdatomic.h>
-#include <semaphore.h>
-#include <pthread.h>
 #include <errno.h>
 #include "main.h"
 #include "rp_syn.h"
