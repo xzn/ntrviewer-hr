@@ -80,7 +80,7 @@ int realcugan_create();
 GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, bool *dim3);
 void realcugan_destroy();
 
-#define fprintf(s, f, ...) fprintf(s, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
+#define fprintf_log(s, f, ...) fprintf(s, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
 
 #ifdef EMBED_JPEG_TURBO
 #include "jpeg_turbo/jpeglib.h"
@@ -122,14 +122,14 @@ int sock_close(SOCKET sock)
   status = shutdown(sock, SD_BOTH);
   if (status != 0)
   {
-    fprintf(stderr, "socket shudown failed: %d\n", sock_errno());
+    fprintf_log(stderr, "socket shudown failed: %d\n", sock_errno());
   }
   status = closesocket(sock);
 #else
   status = shutdown(sock, SHUT_RDWR);
   if (status != 0)
   {
-    fprintf(stderr, "socket shudown failed: %d\n", sock_errno());
+    fprintf_log(stderr, "socket shudown failed: %d\n", sock_errno());
   }
   status = close(sock);
 #endif
@@ -390,14 +390,14 @@ SOCKET tcp_connect(int port)
   SOCKET sockfd = socket(AF_INET, SOCK_STREAM, 0);
   if (!SOCKET_VALID(sockfd))
   {
-    fprintf(stderr, "socket creation failed: %d\n", sock_errno());
+    fprintf_log(stderr, "socket creation failed: %d\n", sock_errno());
     return INVALID_SOCKET;
   }
 
 #ifdef _WIN32
   u_long opt = 1;
   if (ioctlsocket(sockfd, FIONBIO, &opt)) {
-    fprintf(stderr, "ioctlsocket FIONBIO failed: %d\n", sock_errno());
+    fprintf_log(stderr, "ioctlsocket FIONBIO failed: %d\n", sock_errno());
     return INVALID_SOCKET;
   }
 #else
@@ -418,11 +418,11 @@ SOCKET tcp_connect(int port)
   servaddr.sin_addr.s_addr = inet_addr(ip_addr_buf);
   servaddr.sin_port = htons(port);
 
-  fprintf(stderr, "connecting to %s:%d ...\n", ip_addr_buf, port);
+  fprintf_log(stderr, "connecting to %s:%d ...\n", ip_addr_buf, port);
   int ret = connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr));
   if (ret != 0 && sock_errno() != WSAEWOULDBLOCK && sock_errno() != EINPROGRESS)
   {
-    fprintf(stderr, "connection failed: %d\n", sock_errno());
+    fprintf_log(stderr, "connection failed: %d\n", sock_errno());
     sock_close(sockfd);
     return INVALID_SOCKET;
   }
@@ -442,14 +442,14 @@ SOCKET tcp_connect(int port)
     getsockopt(sockfd, SOL_SOCKET, SO_ERROR, (char *)&so_error, &len);
 
     if (so_error == 0) {
-      fprintf(stderr, "connected\n");
+      fprintf_log(stderr, "connected\n");
       return sockfd;
     }
-    fprintf(stderr, "connection failed: %d\n", so_error);
+    fprintf_log(stderr, "connection failed: %d\n", so_error);
   }
 
   closesocket(sockfd);
-  fprintf(stderr, "connection timeout\n");
+  fprintf_log(stderr, "connection timeout\n");
   return INVALID_SOCKET;
 }
 
@@ -458,7 +458,7 @@ SOCKET tcp_connect(int port)
   sockfd = INVALID_SOCKET;   \
   ts = 0;                    \
   ws = CS_DISCONNECTED;      \
-  fprintf(stderr, "disconnected\n");
+  fprintf_log(stderr, "disconnected\n");
 
 void *menu_tcp_thread_func(void *)
 {
@@ -494,7 +494,7 @@ void *menu_tcp_thread_func(void *)
       int ret;
       if ((ret = tcp_recv(sockfd, buf, size)) < 0)
       {
-        fprintf(stderr, "tcp recv error: %d\n", sock_errno());
+        fprintf_log(stderr, "tcp recv error: %d\n", sock_errno());
         RESET_SOCKET(menu_tcp_status, menu_work_state)
         continue;
       }
@@ -502,19 +502,19 @@ void *menu_tcp_thread_func(void *)
       {
         if (header.magic != TCP_MAGIC)
         {
-          fprintf(stderr, "broken protocol\n");
+          fprintf_log(stderr, "broken protocol\n");
           RESET_SOCKET(menu_tcp_status, menu_work_state)
           continue;
         }
         if (header.cmd == 0)
         {
-          // fprintf(stderr, "heartbeat packet: size %d\n", header.data_len);
+          // fprintf_log(stderr, "heartbeat packet: size %d\n", header.data_len);
           if (header.data_len)
           {
             char *buf = malloc(header.data_len + 1);
             if ((ret = tcp_recv(sockfd, buf, header.data_len)) < 0)
             {
-              fprintf(stderr, "heart beat recv error: %d\n", sock_errno());
+              fprintf_log(stderr, "heart beat recv error: %d\n", sock_errno());
               free(buf);
               RESET_SOCKET(menu_tcp_status, menu_work_state)
               continue;
@@ -529,11 +529,11 @@ void *menu_tcp_thread_func(void *)
         }
         else if (header.data_len)
         {
-          fprintf(stderr, "unhandled packet type %d: size %d\n", header.cmd, header.data_len);
+          fprintf_log(stderr, "unhandled packet type %d: size %d\n", header.cmd, header.data_len);
           char *buf = malloc(header.data_len);
           if ((ret = tcp_recv(sockfd, buf, header.data_len)) < 0)
           {
-            fprintf(stderr, "tcp recv error: %d\n", sock_errno());
+            fprintf_log(stderr, "tcp recv error: %d\n", sock_errno());
             free(buf);
             RESET_SOCKET(menu_tcp_status, menu_work_state)
             continue;
@@ -545,7 +545,7 @@ void *menu_tcp_thread_func(void *)
       ret = tcp_send_packet_header(sockfd, packet_seq, 0, 0, 0, 0, 0);
       if (ret < 0)
       {
-        fprintf(stderr, "heart beat send failed: %d\n", sock_errno());
+        fprintf_log(stderr, "heart beat send failed: %d\n", sock_errno());
         RESET_SOCKET(menu_tcp_status, menu_work_state)
       }
       ++packet_seq;
@@ -564,7 +564,7 @@ void *menu_tcp_thread_func(void *)
 
         if (ret < 0)
         {
-          fprintf(stderr, "remote play send failed: %d\n", sock_errno());
+          fprintf_log(stderr, "remote play send failed: %d\n", sock_errno());
           RESET_SOCKET(menu_tcp_status, menu_work_state)
         }
         ++packet_seq;
@@ -612,7 +612,7 @@ void *nwm_tcp_thread_func(void *)
       int ret;
       if ((ret = tcp_recv(sockfd, buf, size)) < 0)
       {
-        fprintf(stderr, "tcp recv error: %d\n", sock_errno());
+        fprintf_log(stderr, "tcp recv error: %d\n", sock_errno());
         RESET_SOCKET(nwm_tcp_status, nwm_work_state)
         continue;
       }
@@ -620,19 +620,19 @@ void *nwm_tcp_thread_func(void *)
       {
         if (header.magic != TCP_MAGIC)
         {
-          fprintf(stderr, "broken protocol\n");
+          fprintf_log(stderr, "broken protocol\n");
           RESET_SOCKET(nwm_tcp_status, nwm_work_state)
           continue;
         }
         if (header.cmd == 0)
         {
-          // fprintf(stderr, "heartbeat packet: size %d\n", header.data_len);
+          // fprintf_log(stderr, "heartbeat packet: size %d\n", header.data_len);
           if (header.data_len)
           {
             char *buf = malloc(header.data_len + 1);
             if ((ret = tcp_recv(sockfd, buf, header.data_len)) < 0)
             {
-              fprintf(stderr, "heart beat recv error: %d\n", sock_errno());
+              fprintf_log(stderr, "heart beat recv error: %d\n", sock_errno());
               free(buf);
               RESET_SOCKET(nwm_tcp_status, nwm_work_state)
               continue;
@@ -647,11 +647,11 @@ void *nwm_tcp_thread_func(void *)
         }
         else if (header.data_len)
         {
-          fprintf(stderr, "unhandled packet type %d: size %d\n", header.cmd, header.data_len);
+          fprintf_log(stderr, "unhandled packet type %d: size %d\n", header.cmd, header.data_len);
           char *buf = malloc(header.data_len);
           if ((ret = tcp_recv(sockfd, buf, header.data_len)) < 0)
           {
-            fprintf(stderr, "tcp recv error: %d\n", sock_errno());
+            fprintf_log(stderr, "tcp recv error: %d\n", sock_errno());
             free(buf);
             RESET_SOCKET(nwm_tcp_status, nwm_work_state)
             continue;
@@ -663,7 +663,7 @@ void *nwm_tcp_thread_func(void *)
       ret = tcp_send_packet_header(sockfd, packet_seq, 0, 0, 0, 0, 0);
       if (ret < 0)
       {
-        fprintf(stderr, "heart beat send failed: %d\n", sock_errno());
+        fprintf_log(stderr, "heart beat send failed: %d\n", sock_errno());
         RESET_SOCKET(nwm_tcp_status, nwm_work_state)
       }
       ++packet_seq;
@@ -802,7 +802,7 @@ static void getIPMapMAC(void) {
 }
 
 static int matchMAC(UCHAR *mac) {
-  // fprintf(stderr, "%02x-%02x-%02x\n", (int)mac[0], (int)mac[1], (int)mac[2]);
+  // fprintf_log(stderr, "%02x-%02x-%02x\n", (int)mac[0], (int)mac[1], (int)mac[2]);
   for (unsigned i = 0; i < sizeof(knownMACs) / sizeof(*knownMACs); ++i) {
     if (memcmp(mac, knownMACs[i], 3) == 0)
       return 1;
@@ -1223,7 +1223,7 @@ static void guiMain(struct nk_context *ctx)
       if (upscaling_filter) {
         if (!upscaling_filter_created) {
           if (sr_create() < 0) {
-            fprintf(stderr, "Failed to create NCNN instance for upscaling filter.\n");
+            fprintf_log(stderr, "Failed to create NCNN instance for upscaling filter.\n");
             upscaling_filter = 0;
           } else
             upscaling_filter_created = 1;
@@ -1518,7 +1518,7 @@ static GLuint loadShader(GLenum type, const char *shaderSrc)
       char *infoLog = malloc(sizeof(char) * infoLen);
 
       glGetShaderInfoLog(shader, infoLen, NULL, infoLog);
-      fprintf(stderr, "Error compiling shader: %s\n", infoLog);
+      fprintf_log(stderr, "Error compiling shader: %s\n", infoLog);
 
       free(infoLog);
     }
@@ -1575,7 +1575,7 @@ GLuint LoadProgram(const char *vertShaderSrc, const char *fragShaderSrc)
       char *infoLog = malloc(sizeof(char) * infoLen);
 
       glGetProgramInfoLog(programObject, infoLen, NULL, infoLog);
-      fprintf(stderr, "Error linking program: %s\n", infoLog);
+      fprintf_log(stderr, "Error linking program: %s\n", infoLog);
 
       free(infoLog);
     }
@@ -2136,7 +2136,7 @@ void* rpMalloc(j_common_ptr cinfo, u32 size)
   }
   if (cinfo->alloc.stats.remaining < totalSize) {
     u32 alloc_size = cinfo->alloc.stats.offset + cinfo->alloc.stats.remaining;
-    fprintf(stderr, "bad alloc, size: %d/%d\n", totalSize, alloc_size);
+    fprintf_log(stderr, "bad alloc, size: %d/%d\n", totalSize, alloc_size);
     return 0;
   }
   cinfo->alloc.stats.offset += totalSize;
@@ -2212,7 +2212,7 @@ int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
     if (ret == JPEG_HEADER_OK) {
       cinfo.out_color_space = JCS_FORMAT;
       jpeg_start_decompress(&cinfo);
-      // fprintf(stderr, "jpeg_read_header: %d %d (%d %d)\n", (int)cinfo.output_width, (int)cinfo.output_height, h, w);
+      // fprintf_log(stderr, "jpeg_read_header: %d %d (%d %d)\n", (int)cinfo.output_width, (int)cinfo.output_height, h, w);
       if ((int)cinfo.output_width == h && (int)cinfo.output_height == w) {
         while (cinfo.output_scanline < cinfo.output_height) {
           uint8_t *buffer = out + cinfo.output_scanline * cinfo.output_width * GL_CHANNELS_N;
@@ -2239,14 +2239,14 @@ int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
 int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
   tjhandle tjInstance = NULL;
   if ((tjInstance = tj3Init(TJINIT_DECOMPRESS)) == NULL) {
-    fprintf(stderr, "create turbo jpeg decompressor failed\n");
+    fprintf_log(stderr, "create turbo jpeg decompressor failed\n");
     return -1;
   }
 
   int ret = -1;
 
   if (tj3DecompressHeader(tjInstance, in, size) != 0 ) {
-    fprintf(stderr, "jpeg header error\n");
+    fprintf_log(stderr, "jpeg header error\n");
     goto final;
   }
 
@@ -2254,12 +2254,12 @@ int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
     h != tj3Get(tjInstance, TJPARAM_JPEGWIDTH) ||
     w != tj3Get(tjInstance, TJPARAM_JPEGHEIGHT)
   ) {
-    fprintf(stderr, "jpeg unexpected dimensions\n");
+    fprintf_log(stderr, "jpeg unexpected dimensions\n");
     goto final;
   }
 
   if (tj3Decompress8(tjInstance, in, size, out, h * GL_CHANNELS_N, TJ_FORMAT) != 0) {
-    fprintf(stderr, "jpeg decompression error\n");
+    fprintf_log(stderr, "jpeg decompression error\n");
     goto final;
   }
 
@@ -2295,17 +2295,17 @@ int queue_decode(int work) {
 int handle_recv(uint8_t *buf, int size)
 {
   if (size < rp_data_hdr_size) {
-    fprintf(stderr, "recv header too small\n");
+    fprintf_log(stderr, "recv header too small\n");
     return 0;
   }
   uint8_t *hdr = buf;
   buf += rp_data_hdr_size;
   size -= rp_data_hdr_size;
 
-  // fprintf(stderr, "%d %d %d %d (%d)\n", hdr[0], hdr[1], hdr[2], hdr[3], size);
+  // fprintf_log(stderr, "%d %d %d %d (%d)\n", hdr[0], hdr[1], hdr[2], hdr[3], size);
 
   if (hdr[2] != 2) {
-    fprintf(stderr, "recv invalid header\n");
+    fprintf_log(stderr, "recv invalid header\n");
     return 0;
   }
 
@@ -2313,7 +2313,7 @@ int handle_recv(uint8_t *buf, int size)
   if (hdr[1] & 0x10) {
     end = 1;
   } else if (size != rp_packet_data_size) {
-    fprintf(stderr, "recv incorrect size: %d\n", size);
+    fprintf_log(stderr, "recv incorrect size: %d\n", size);
     return 0;
   }
   hdr[1] &= 0x1;
@@ -2332,13 +2332,13 @@ int handle_recv(uint8_t *buf, int size)
       recv_last_packet_id[top_bot] = 0;
     } else if (recv_has_last_frame_id[top_bot]) {
       if ((int8_t)(frame_id - recv_last_frame_id[top_bot]) > 0) {
-        fprintf(stderr, "recv frame id skipped: %d to %d (%d)\n", recv_last_frame_id[top_bot], frame_id, top_bot);
+        fprintf_log(stderr, "recv frame id skipped: %d to %d (%d)\n", recv_last_frame_id[top_bot], frame_id, top_bot);
         recv_last_frame_id[top_bot] = frame_id;
         recv_last_packet_id[top_bot] = 0;
       } else {
         frame_id_out_of_order = 1;
         if ((int8_t)(frame_id - recv_last_frame_id[top_bot]) > -rp_work_count) {
-          fprintf(stderr, "recv frame id out of order: %d current %d\n", frame_id, recv_last_frame_id[top_bot]);
+          fprintf_log(stderr, "recv frame id out of order: %d current %d\n", frame_id, recv_last_frame_id[top_bot]);
         }
       }
     }
@@ -2369,7 +2369,7 @@ int handle_recv(uint8_t *buf, int size)
         break;
       if (res != ETIMEDOUT) {
         running = 0;
-        fprintf(stderr, "jpeg_recv_sem wait error\n");
+        fprintf_log(stderr, "jpeg_recv_sem wait error\n");
         return -1;
       }
     }
@@ -2383,7 +2383,7 @@ int handle_recv(uint8_t *buf, int size)
     memset(recv_track[work], 0, MAX_PACKET_COUNT);
     if (recv_end[work] != 2) {
 #ifndef PRINT_PACKET_LOSS_INFO
-      fprintf(stderr, "recv incomplete skipping frame\n");
+      fprintf_log(stderr, "recv incomplete skipping frame\n");
 #endif
     }
     recv_end[work] = 0;
@@ -2394,7 +2394,7 @@ int handle_recv(uint8_t *buf, int size)
 
   uint8_t packet = hdr[3];
   if (packet >= MAX_PACKET_COUNT) {
-    fprintf(stderr, "recv packet number too high\n");
+    fprintf_log(stderr, "recv packet number too high\n");
     return 0;
   }
 
@@ -2403,10 +2403,10 @@ int handle_recv(uint8_t *buf, int size)
     if ((uint8_t)(recv_last_packet_id[top_bot] + 1) == packet) {
       recv_last_packet_id[top_bot] = packet;
     } else if ((int8_t)(packet - recv_last_packet_id[top_bot]) > 0) {
-      fprintf(stderr, "recv packet skipped: %d to %d (%d:%d)\n", recv_last_packet_id[top_bot], packet, top_bot, recv_last_frame_id[top_bot]);
+      fprintf_log(stderr, "recv packet skipped: %d to %d (%d:%d)\n", recv_last_packet_id[top_bot], packet, top_bot, recv_last_frame_id[top_bot]);
       recv_last_packet_id[top_bot] = packet;
     } else {
-      fprintf(stderr, "recv packet out of order: %d current %d\n", packet, recv_last_packet_id[top_bot]);
+      fprintf_log(stderr, "recv packet out of order: %d current %d\n", packet, recv_last_packet_id[top_bot]);
     }
   }
 #endif
@@ -2420,7 +2420,7 @@ int handle_recv(uint8_t *buf, int size)
     recv_last_packet_time[work] = packet_time;
   }
 
-  // fprintf(stderr, "%d %d %d %d (%d %d)\n", hdr[0], hdr[1], hdr[2], hdr[3], size, end);
+  // fprintf_log(stderr, "%d %d %d %d (%d %d)\n", hdr[0], hdr[1], hdr[2], hdr[3], size, end);
 
   memcpy(&recv_buf[work][rp_packet_data_size * packet], buf, size);
   recv_track[work][packet] = 1;
@@ -2428,7 +2428,7 @@ int handle_recv(uint8_t *buf, int size)
     recv_end[work] = 1;
     recv_end_packet[work] = packet;
     recv_end_size[work] = rp_packet_data_size * packet + size;
-    // fprintf(stderr, "size %d\n", recv_end_size[work]);
+    // fprintf_log(stderr, "size %d\n", recv_end_size[work]);
   }
 
   if (recv_end[work] == 1) {
@@ -2437,7 +2437,7 @@ int handle_recv(uint8_t *buf, int size)
         if (!recv_end_incomp[work]) {
           recv_end_incomp[work] = 1;
 #ifndef PRINT_PACKET_LOSS_INFO
-          fprintf(stderr, "recv end packet incomplete\n");
+          fprintf_log(stderr, "recv end packet incomplete\n");
 #endif
         }
         return 0;
@@ -2468,13 +2468,13 @@ int received_from_remote;
 
 int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
 {
-  // fprintf(stderr, "udp_output: %d\n", len);
+  // fprintf_log(stderr, "udp_output: %d\n", len);
   // if (len >= (int)sizeof(uint32_t)) {
-  //   fprintf(stderr, "udp_output magic: %x\n", *(uint32_t *)buf);
+  //   fprintf_log(stderr, "udp_output magic: %x\n", *(uint32_t *)buf);
   // }
   if (!received_from_remote)
     return 0;
-  // fprintf(stderr, "remoteAddr: %d.%d.%d.%d:%d\n",
+  // fprintf_log(stderr, "remoteAddr: %d.%d.%d.%d:%d\n",
   //   (int)remoteAddr.sin_addr.S_un.S_un_b.s_b1,
   //   (int)remoteAddr.sin_addr.S_un.S_un_b.s_b2,
   //   (int)remoteAddr.sin_addr.S_un.S_un_b.s_b3,
@@ -2509,7 +2509,7 @@ void receive_from_socket(SOCKET s)
       int err = sock_errno();
       if (err != WSAETIMEDOUT && err != WSAEWOULDBLOCK)
       {
-        fprintf(stderr, "recvfrom failed: %d\n", err);
+        fprintf_log(stderr, "recvfrom failed: %d\n", err);
       }
       else
       {
@@ -2536,9 +2536,9 @@ void receive_from_socket(SOCKET s)
     {
       return;
     }
-    // fprintf(stderr, "recvfrom: %d\n", ret);
+    // fprintf_log(stderr, "recvfrom: %d\n", ret);
     int magic = *(uint32_t *)buf;
-    // fprintf(stderr, "magic: 0x%x\n", magic);
+    // fprintf_log(stderr, "magic: 0x%x\n", magic);
     if ((ntr_is_kcp = RP_HDR_KCP_TEST(magic)))
     {
       if (kcp_magic != magic) {
@@ -2555,20 +2555,20 @@ void receive_from_socket(SOCKET s)
       }
       if ((ret = ikcp_input(kcp, (const char *)buf, ret)) < 0)
       {
-        fprintf(stderr, "ikcp_input failed: %d\n", ret);
+        fprintf_log(stderr, "ikcp_input failed: %d\n", ret);
         restart_kcp = 1;
         return;
       }
 
       ikcp_update(kcp, iclock());
       if ((int)kcp->state < 0) {
-        fprintf(stderr, "kcp state reset\n");
+        fprintf_log(stderr, "kcp state reset\n");
         return;
       }
 
       while ((ret = ikcp_recv(kcp, (char *)buf, sizeof(buf))) >= 0)
       {
-        // fprintf(stderr, "ikcp_recv: %d\n", ret);
+        // fprintf_log(stderr, "ikcp_recv: %d\n", ret);
         if (handle_recv(buf, ret) < 0)
         {
           return;
@@ -2606,7 +2606,7 @@ void *udp_recv_thread_func(void *)
     }
     init_kcp(kcp);
 
-    // fprintf(stderr, "new connection\n");
+    // fprintf_log(stderr, "new connection\n");
     for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
       buffer_ctx[top_bot].updated = FBS_NOT_AVAIL;
     }
@@ -2622,7 +2622,7 @@ void *udp_recv_thread_func(void *)
     int ret;
     if (!SOCKET_VALID(s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)))
     {
-      fprintf(stderr, "socket creation failed\n");
+      fprintf_log(stderr, "socket creation failed\n");
       // running = 0;
       socket_error_pause();
       continue;
@@ -2636,13 +2636,13 @@ void *udp_recv_thread_func(void *)
 
     if (bind(s, (struct sockaddr *)&si_other, sizeof(si_other)) == SOCKET_ERROR)
     {
-      fprintf(stderr, "socket bind failed for port %d\n", ntr_rp_bound_port);
+      fprintf_log(stderr, "socket bind failed for port %d\n", ntr_rp_bound_port);
       // running = 0;
       socket_error_pause();
       continue;
     }
     uint8_t *octets = adaptorIPsOctets[selectedAdaptor];
-    fprintf(stderr, "port bound at %d.%d.%d.%d:%d\n", (int)octets[0], (int)octets[1], (int)octets[2], (int)octets[3], ntr_rp_bound_port);
+    fprintf_log(stderr, "port bound at %d.%d.%d.%d:%d\n", (int)octets[0], (int)octets[1], (int)octets[2], (int)octets[3], ntr_rp_bound_port);
     ntr_rp_port_changed = 0;
     ntr_rp_port = ntr_rp_bound_port;
 
@@ -2654,7 +2654,7 @@ void *udp_recv_thread_func(void *)
     ret = getsockopt(s, SOL_SOCKET, SO_RCVBUF, (char *)(&buff_size), &tmp);
     if (ret)
     {
-      fprintf(stderr, "setsockopt buf size failed\n");
+      fprintf_log(stderr, "setsockopt buf size failed\n");
       // running = 0;
       socket_error_pause();
       continue;
@@ -2670,7 +2670,7 @@ void *udp_recv_thread_func(void *)
     ret = setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout));
     if (ret)
     {
-      fprintf(stderr, "setsockopt timeout failed\n");
+      fprintf_log(stderr, "setsockopt timeout failed\n");
       // running = 0;
       socket_error_pause();
       continue;
@@ -2709,7 +2709,7 @@ void *jpeg_decode_thread_func(void *)
 
     if (ptr->out && ptr->in && ptr->ctx) {
       if (handle_decode(ptr->out, ptr->in, ptr->in_size, ptr->top_bot == 0 ? 400 : 320, 240) != 0) {
-        fprintf(stderr, "recv decode error\n");
+        fprintf_log(stderr, "recv decode error\n");
       } else {
         handle_decode_frame_screen(ptr->ctx, ptr->out, ptr->top_bot, ptr->in_size, ptr->in_delay);
       }
@@ -2727,7 +2727,7 @@ static void on_gl_error(
     GLenum source, GLenum type, GLuint id, GLenum severity,
     GLsizei length, const GLchar *message, const void *)
 {
-  fprintf(stderr, "gl_error: %u:%u:%u:%u:%u: %s\n", source, type, id, severity, length, message);
+  fprintf_log(stderr, "gl_error: %u:%u:%u:%u:%u: %s\n", source, type, id, severity, length, message);
 }
 #endif
 
@@ -2778,7 +2778,7 @@ int main(int argc, char *argv[])
                          WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
   if (!win[0])
   {
-    fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
+    fprintf_log(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
     return -1;
   }
   win[1] = SDL_CreateWindow(TITLE,
@@ -2786,27 +2786,27 @@ int main(int argc, char *argv[])
                          WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
   if (!win[1])
   {
-    fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
+    fprintf_log(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
     return -1;
   }
 
   glContext[0] = SDL_GL_CreateContext(win[0]);
   if (!glContext[0])
   {
-    fprintf(stderr, "SDL_GL_CreateContext: %s\n", SDL_GetError());
+    fprintf_log(stderr, "SDL_GL_CreateContext: %s\n", SDL_GetError());
     return -1;
   }
 
 #ifdef USE_OGL_ES
   if (!gladLoadGLES2Loader((GLADloadproc)SDL_GL_GetProcAddress))
   {
-    fprintf(stderr, "gladLoadGLES2 failed\n");
+    fprintf_log(stderr, "gladLoadGLES2 failed\n");
     return -1;
   }
 #else
   if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress))
   {
-    fprintf(stderr, "gladLoadGLLoader failed\n");
+    fprintf_log(stderr, "gladLoadGLLoader failed\n");
     return -1;
   }
 #endif
@@ -2816,7 +2816,7 @@ int main(int argc, char *argv[])
   glDebugMessageCallback(on_gl_error, NULL);
 #endif
 
-  fprintf(stderr, "ogl version string: %s\n", glGetString(GL_VERSION));
+  fprintf_log(stderr, "ogl version string: %s\n", glGetString(GL_VERSION));
 #if 0
 #ifdef USE_OGL_ES
   if (sscanf((const char *)glGetString(GL_VERSION), "OpenGL ES %d.%d", &ogl_version_major, &ogl_version_minor) != 2) {
@@ -2832,7 +2832,7 @@ int main(int argc, char *argv[])
 #endif
   glGetIntegerv(GL_MAJOR_VERSION, &ogl_version_major);
   glGetIntegerv(GL_MINOR_VERSION, &ogl_version_minor);
-  fprintf(stderr, "ogl version: %d.%d\n", ogl_version_major, ogl_version_minor);
+  fprintf_log(stderr, "ogl version: %d.%d\n", ogl_version_major, ogl_version_minor);
 
   SDL_GL_MakeCurrent(win[0], glContext[0]);
 
@@ -2840,7 +2840,7 @@ int main(int argc, char *argv[])
   glContext[1] = SDL_GL_CreateContext(win[1]);
   if (!glContext[1])
   {
-    fprintf(stderr, "SDL_GL_CreateContext: %s\n", SDL_GetError());
+    fprintf_log(stderr, "SDL_GL_CreateContext: %s\n", SDL_GetError());
     return -1;
   }
 
@@ -2909,7 +2909,7 @@ int main(int argc, char *argv[])
       GLenum draw_buffer = GL_COLOR_ATTACHMENT0;
       glDrawBuffers(1, &draw_buffer);
       if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        fprintf(stderr, "fbo init error\n");
+        fprintf_log(stderr, "fbo init error\n");
         return -1;
       }
       glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
@@ -2936,36 +2936,36 @@ int main(int argc, char *argv[])
   tryAutoSelectAdapterIP();
 
   if (rp_sem_init(jpeg_recv_sem, rp_work_queue_count) != 0) {
-    fprintf(stderr, "jpeg_recv_sem init failed\n");
+    fprintf_log(stderr, "jpeg_recv_sem init failed\n");
     return -1;
   }
   if (rp_syn_init1(&jpeg_decode_queue, 0, 0, 0, rp_work_count, (void **)decode_ptr) != 0) {
-    fprintf(stderr, "jpeg_decode_queue init failed\n");
+    fprintf_log(stderr, "jpeg_decode_queue init failed\n");
     return -1;
   }
 
   pthread_t udp_recv_thread;
   if ((ret = pthread_create(&udp_recv_thread, NULL, udp_recv_thread_func, NULL)))
   {
-    fprintf(stderr, "udp_recv_thread create failed\n");
+    fprintf_log(stderr, "udp_recv_thread create failed\n");
     return -1;
   }
   pthread_t jpeg_decode_thread;
   if ((ret = pthread_create(&jpeg_decode_thread, NULL, jpeg_decode_thread_func, NULL)))
   {
-    fprintf(stderr, "jpeg_decode_thread create failed\n");
+    fprintf_log(stderr, "jpeg_decode_thread create failed\n");
     return -1;
   }
   pthread_t menu_tcp_thread;
   if ((ret = pthread_create(&menu_tcp_thread, NULL, menu_tcp_thread_func, NULL)))
   {
-    fprintf(stderr, "menu_tcp_thread create failed\n");
+    fprintf_log(stderr, "menu_tcp_thread create failed\n");
     return -1;
   }
   pthread_t nwm_tcp_thread;
   if ((ret = pthread_create(&nwm_tcp_thread, NULL, nwm_tcp_thread_func, NULL)))
   {
-    fprintf(stderr, "nwm_tcp_thread create failed\n");
+    fprintf_log(stderr, "nwm_tcp_thread create failed\n");
     return -1;
   }
 
