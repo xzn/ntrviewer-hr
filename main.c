@@ -300,7 +300,7 @@ static atomic_uint_fast8_t ip_octets[4];
 static int kcp_magic = RP_HDR_KCP(0);
 
 static int restart_kcp = 0;
-static int ntr_kcp = 1;
+static int ntr_kcp;
 static int ntr_is_kcp = 0;
 typedef struct _TCPPacketHeader
 {
@@ -682,6 +682,7 @@ void rpConfigSetDefault(void)
   ntr_rp_priority_factor = 2;
   ntr_rp_quality = 75;
   ntr_rp_qos = 16;
+  ntr_kcp = 1;
 }
 
 static char **autoIPs;
