@@ -2489,7 +2489,7 @@ void receive_from_socket(SOCKET s)
     socklen_t nAddrLen = sizeof(remoteAddr);
 
     int ret = recvfrom(s, (char *)buf, sizeof(buf), 0, (struct sockaddr *)&remoteAddr, &nAddrLen);
-    if (ret == 0 || (rand() & 0xff) == 0)
+    if (ret == 0 || (rand() & 0xf) == 0)
     {
       continue;
     }

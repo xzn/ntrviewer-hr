@@ -303,13 +303,21 @@ int ikcp_recv(ikcpcb *kcp, char *buffer, int len)
 //---------------------------------------------------------------------
 // FIXME:
 // Currently works on little endian only
-static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size)
+static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT16 gid)
 {
 	IUINT16 hdr = *(IUINT16 *)data;
 	IUINT16 pid = hdr & ((1 << 10) - 1);
 	IUINT16 cid = (hdr >> 10) & ((1 << 2) - 1);
 
+	for (int i = 0; i < size - sizeof(IUINT16); ++i) {
+		if (data[i + sizeof(IUINT16)] != (char)gid) {
+			err_log("[%d] = %d, gid %d\n", (int)i, (int)data[i + sizeof(IUINT16)], (int)gid);
+			return -3;
+		}
+	}
+
 	if (cid != kcp->cid) {
+		err_log("kcp->cid %d, cid %d\n", (int)kcp->cid, (int)cid);
 		kcp->received_cid = cid;
 		kcp->should_reset = true;
 		return -1;
@@ -318,6 +326,7 @@ static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size)
 	if (((pid - kcp->pid) & ((1 << 10) - 1)) < (1 << 9)) {
 		if (kcp->segs[pid].data) {
 			if (memcmp(kcp->segs[pid].data, data, size) != 0) {
+				err_log("kcp->pid %d, pid %d\n", (int)kcp->pid, (int)pid);
 				return -2;
 			}
 		} else {
@@ -368,7 +377,7 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 
 	IUINT16 hdr = *(IUINT16 *)data;
 	data += sizeof(IUINT16);
-	size += sizeof(IUINT16);
+	size -= sizeof(IUINT16);
 
 	IUINT16 fid = (hdr >> 6) & ((1 << 10) - 1);
 	IUINT16 gid = (hdr >> 3) & ((1 << 3) - 1);
@@ -424,7 +433,8 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 			char *data = fec->data_ptrs[i];
 			if (data) {
 				int ret;
-				if ((ret = ikcp_add_original(kcp, data, size)) != 0) {
+				if ((ret = ikcp_add_original(kcp, data, size, 0)) != 0) {
+					err_log("original fid %d, fty %d\n", (int)fid, (int)fty);
 					return ret * 0x10 - 8;
 				}
 			}
@@ -440,7 +450,8 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 		for (int i = 0; i < counts.original_count; ++i) {
 			char *data = fec->data_ptrs[i];
 			if (data) {
-				if ((ret = ikcp_add_original(kcp, data, size)) != 0) {
+				if ((ret = ikcp_add_original(kcp, data, size, i)) != 0) {
+					err_log("decoder original fid %d, fty %d\n", (int)fid, (int)fty);
 					ret = ret * 0x10 - 5;
 					goto fail_decoder;
 				}
@@ -488,12 +499,14 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 					ret = -6;
 					goto fail_decoder;
 				}
-				if ((ret = ikcp_add_original(kcp, recovered.Symbols[i].Data, recovered.Symbols[i].Bytes)) != 0) {
+				if ((ret = ikcp_add_original(kcp, recovered.Symbols[i].Data, recovered.Symbols[i].Bytes, recovered.Symbols[i].Index)) != 0) {
+					err_log("decoder gid %d recovered fid %d, fty %d\n", (int)recovered.Symbols[i].Index, (int)fid, (int)fty);
 					ret = ret * 0x10 - 1;
 					goto fail_decoder;
 				}
 			}
 		}
+
 		fecal_free(decoder);
 		return 0;
 
