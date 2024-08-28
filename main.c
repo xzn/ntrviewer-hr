@@ -291,17 +291,11 @@ static atomic_uint_fast8_t ip_octets[4];
 
 #define TCP_MAGIC 0x12345678
 #define TCP_ARGS_COUNT 16
-#define RP_HDR_RELIABLE_STREAM_FLAG (1 << 14)
-#define RP_HDR_KCP_CONV_MASK (3)
-#define RP_HDR_KCP_CONV_SHIFT (10)
-
-#define RP_HDR_KCP_TEST(c) (((c) & ~(RP_HDR_KCP_CONV_MASK << RP_HDR_KCP_CONV_SHIFT)) == RP_HDR_RELIABLE_STREAM_FLAG)
-#define RP_HDR_KCP(c) (RP_HDR_RELIABLE_STREAM_FLAG | (((c) & RP_HDR_KCP_CONV_MASK) << RP_HDR_KCP_CONV_SHIFT))
-static int kcp_magic = RP_HDR_KCP(0);
 
 static int restart_kcp = 0;
 static int ntr_kcp;
-static int ntr_is_kcp = 0;
+static int kcp_active = 0;
+static int kcp_cid;
 typedef struct _TCPPacketHeader
 {
   uint32_t magic;
@@ -2099,9 +2093,7 @@ ikcpcb *kcp;
 
 #define PACKET_SIZE 1448
 #define rp_data_hdr_size (4)
-// from ikcp.c
-#define IKCP_OVERHEAD (24)
-#define rp_packet_data_size (ntr_is_kcp ? PACKET_SIZE - IKCP_OVERHEAD - rp_data_hdr_size : PACKET_SIZE - rp_data_hdr_size)
+#define rp_packet_data_size (PACKET_SIZE - rp_data_hdr_size)
 #define rp_data_hdr_id_size (2)
 
 #define MAX_PACKET_COUNT (128)
@@ -2123,9 +2115,6 @@ uint8_t recv_last_frame_id[SCREEN_COUNT];
 uint8_t recv_last_packet_id[SCREEN_COUNT];
 
 #define rp_core_count_max (3)
-uint8_t recv_bufs[rp_work_count][rp_core_count_max][PACKET_SIZE * MAX_PACKET_COUNT];
-uint8_t recv_ends[rp_work_count];
-uint32_t recv_ends_size[rp_work_count][rp_core_count_max];
 
 #ifdef EMBED_JPEG_TURBO
 void* rpMalloc(j_common_ptr cinfo, u32 size)
@@ -2486,12 +2475,11 @@ int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
 
 void init_kcp(ikcpcb *kcp) {
   kcp->output = kcp_udp_output;
-  ikcp_nodelay(kcp, 2, 500, 2, 1);
   ikcp_setmtu(kcp, PACKET_SIZE);
-  ikcp_wndsize(kcp, 128, 512);
+}
 
-  for (int i = 0; i < rp_work_count; ++i)
-    recv_ends[i] = 0;
+static int test_kcp_magic(int magic) {
+  return !((magic & (~0x00001100 & 0x0000ff00)) == 0 && (magic & 0x00ff0000) == 0x00020000);
 }
 
 void receive_from_socket(SOCKET s)
@@ -2501,7 +2489,7 @@ void receive_from_socket(SOCKET s)
     socklen_t nAddrLen = sizeof(remoteAddr);
 
     int ret = recvfrom(s, (char *)buf, sizeof(buf), 0, (struct sockaddr *)&remoteAddr, &nAddrLen);
-    if (ret == 0)
+    if (ret == 0 || (rand() & 0xff) == 0)
     {
       continue;
     }
@@ -2540,40 +2528,39 @@ void receive_from_socket(SOCKET s)
     // fprintf_log(stderr, "recvfrom: %d\n", ret);
     int magic = *(uint32_t *)buf;
     // fprintf_log(stderr, "magic: 0x%x\n", magic);
-    if ((ntr_is_kcp = RP_HDR_KCP_TEST(magic)))
+    int ntr_is_kcp_test = test_kcp_magic(magic);
+    if (ntr_is_kcp_test) {
+      kcp_active = 1;
+    }
+    if (kcp_active)
     {
-      if (kcp_magic != magic) {
-        kcp_magic = magic;
-
-        ikcp_release(kcp);
-
-        kcp = ikcp_create(kcp_magic, 0);
-        if (!kcp) {
-          restart_kcp = 1;
-          return;
-        }
-        init_kcp(kcp);
-      }
       if ((ret = ikcp_input(kcp, (const char *)buf, ret)) < 0)
       {
-        fprintf_log(stderr, "ikcp_input failed: %d\n", ret);
+        restart_kcp = 1;
+        if (kcp->should_reset) {
+          ikcp_reset(kcp);
+          kcp_cid = kcp->received_cid;
+        } else {
+          fprintf_log(stderr, "ikcp_input failed: %d\n", ret);
+        }
+        return;
+      }
+      if ((ret = ikcp_reply(kcp)) < 0)
+      {
+        fprintf_log(stderr, "ikcp_reply failed: %d\n", ret);
         restart_kcp = 1;
         return;
       }
-
-      ikcp_update(kcp, iclock());
-      if ((int)kcp->state < 0) {
-        fprintf_log(stderr, "kcp state reset\n");
-        return;
-      }
-
-      while ((ret = ikcp_recv(kcp, (char *)buf, sizeof(buf))) >= 0)
+      while ((ret = ikcp_recv(kcp, (char *)buf, sizeof(buf))) > 0)
       {
         // fprintf_log(stderr, "ikcp_recv: %d\n", ret);
-        if (handle_recv(buf, ret) < 0)
-        {
-          return;
-        }
+        // TODO handle_recv_kcp
+      }
+      if (ret < 0)
+      {
+        fprintf_log(stderr, "ikcp_recv failed: %d\n", ret);
+        restart_kcp = 1;
+        return;
       }
     }
     else if (handle_recv(buf, ret) < 0)
@@ -2600,12 +2587,13 @@ void *udp_recv_thread_func(void *)
       recv_last_packet_id[i] = 0;
     }
 
-    kcp = ikcp_create(kcp_magic, 0);
+    kcp = ikcp_create(kcp_cid, 0);
     if (!kcp) {
       Sleep(250);
       continue;
     }
     init_kcp(kcp);
+    kcp_active = 0;
 
     // fprintf_log(stderr, "new connection\n");
     for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {

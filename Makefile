@@ -1,8 +1,8 @@
 CC := gcc
 CXX := g++
 CPPFLAGS := -Iinclude
-# CFLAGS := -Og -g
-CFLAGS := -Ofast
+CFLAGS := -Og -g
+# CFLAGS := -Ofast
 EMBED_JPEG_TURBO := 1
 USE_OGL_ES := 0
 USE_ANGLE := 0
@@ -59,7 +59,10 @@ ifeq ($(GL_DEBUG),1)
 CPPFLAGS += -DGL_DEBUG
 endif
 
-$(TARGET): main.o rp_syn.o ikcp.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o libGLAD.o fsr/fsr_main.o fsr/image_utils.o $(JT_OBJ) $(JT_OBJ_S)
+FEC_SRC := $(wildcard fecal/*.cpp)
+FEC_OBJ := $(FEC_SRC:.cpp=.o)
+
+$(TARGET): main.o rp_syn.o ikcp.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o libGLAD.o fsr/fsr_main.o fsr/image_utils.o $(JT_OBJ) $(JT_OBJ_S) $(FEC_OBJ)
 	$(CXX) $^ -o $@ $(CFLAGS) $(LDLIBS) $(LDFLAGS)
 
 %.o: %.c
@@ -70,6 +73,9 @@ $(TARGET): main.o rp_syn.o ikcp.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o
 
 %.o: %.cpp
 	$(CXX) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS)
+
+fecal/gf256.o: fecal/gf256.cpp
+	$(CXX) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -mssse3 -mavx2
 
 realcugan_lib.o: realcugan-ncnn-vulkan/lib.cpp $(wildcard srmd-realcugan-vulkan/*.h)
 	$(CXX) realcugan-ncnn-vulkan/lib.cpp -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-attributes
@@ -87,4 +93,4 @@ ikcp.o: ikcp.c
 	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS)
 
 clean:
-	$(RM) $(TARGET) *.o jpeg_turbo/*.o jpeg_turbo/simd/x86_64/*.o fsr/*.o
+	$(RM) $(TARGET) *.o jpeg_turbo/*.o jpeg_turbo/simd/x86_64/*.o fsr/*.o fecal/*.o
