@@ -378,10 +378,6 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 		gid &= ((1 << 2) - 1);
 	}
 
-	if (((fid - kcp->fid) & ((1 << 10) - 1)) >= (1 << 9)) {
-		return -9;
-	}
-
 	kcp->fid = fid;
 	kcp->gid = gid;
 
