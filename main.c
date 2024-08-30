@@ -2538,6 +2538,7 @@ void receive_from_socket(SOCKET s)
       {
         restart_kcp = 1;
         if (kcp->should_reset) {
+          // fprintf_log(stderr, "ikcp_reset: %d\n", kcp_cid);
           ikcp_reset(kcp);
           kcp_cid = kcp->received_cid;
         } else {

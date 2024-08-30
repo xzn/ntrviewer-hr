@@ -343,13 +343,9 @@ static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT1
 }
 
 
-static int ikcp_remove_fec(ikcpcb *kcp, IUINT16 fid)
+static int ikcp_remove_fec_for(ikcpcb *kcp, IUINT16 fid)
 {
-	if (((fid - kcp->received_fid) & ((1 << 10) - 1)) >= (1 << 9)) {
-		return 0;
-	}
-
-	for (int j = kcp->received_fid; j != fid; ++j, j &= ((1 << 10) - 1)) {
+	for (int j = fid, fid_end = (fid - (1 << 8)) & ((1 << 10) - 1); j != fid_end; ++j, j &= ((1 << 10) - 1)) {
 		struct IKCPFEC *fec = &kcp->fecs[j];
 		if (fec->data_ptrs) {
 			for (int i = 0; i < fec->data_ptrs_count; ++i) {
@@ -361,7 +357,6 @@ static int ikcp_remove_fec(ikcpcb *kcp, IUINT16 fid)
 			fec->data_ptrs = 0;
 		}
 	}
-	kcp->received_fid = fid;
 
 	return 0;
 }
@@ -390,7 +385,7 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 	kcp->fid = fid;
 	kcp->gid = gid;
 
-	if (ikcp_remove_fec(kcp, (IUINT16)(fid - (1 << 9)) & ((1 << 10) - 1)) != 0) {
+	if (ikcp_remove_fec_for(kcp, fid) != 0) {
 		return -7;
 	}
 
@@ -447,7 +442,7 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 			return -5;
 		}
 
-		void *recovered_data[count] = {};
+		void *recovered_data[counts.recovery_count] = {};
 		int recovered_data_count = 0;
 
 		for (int i = 0; i < counts.original_count; ++i) {

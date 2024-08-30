@@ -3,6 +3,7 @@ CXX := g++
 CPPFLAGS := -Iinclude
 CFLAGS := -Og -g
 # CFLAGS := -Ofast
+CFLAGS += -mssse3 -mavx2
 EMBED_JPEG_TURBO := 1
 USE_OGL_ES := 0
 USE_ANGLE := 0
@@ -72,7 +73,7 @@ $(TARGET): main.o rp_syn.o ikcp.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o
 	nasm $^ -o $@ $(NASM) -D__x86_64__ -Ijpeg_turbo/simd/nasm -Ijpeg_turbo/simd/x86_64
 
 %.o: %.cpp
-	$(CXX) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -mssse3 -mavx2
+	$(CXX) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS)
 
 realcugan_lib.o: realcugan-ncnn-vulkan/lib.cpp $(wildcard srmd-realcugan-vulkan/*.h)
 	$(CXX) realcugan-ncnn-vulkan/lib.cpp -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-attributes

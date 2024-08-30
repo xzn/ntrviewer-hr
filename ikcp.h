@@ -289,7 +289,7 @@ struct IKCPCB
 	struct IKCPSEG *segs;
 	struct IKCPFEC *fecs;
 
-	IUINT16 received_cid, received_fid;
+	IUINT16 received_cid;
 	bool should_reset;
 	bool session_established;
 
