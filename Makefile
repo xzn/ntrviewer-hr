@@ -72,9 +72,6 @@ $(TARGET): main.o rp_syn.o ikcp.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o
 	nasm $^ -o $@ $(NASM) -D__x86_64__ -Ijpeg_turbo/simd/nasm -Ijpeg_turbo/simd/x86_64
 
 %.o: %.cpp
-	$(CXX) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS)
-
-fecal/gf256.o: fecal/gf256.cpp
 	$(CXX) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -mssse3 -mavx2
 
 realcugan_lib.o: realcugan-ncnn-vulkan/lib.cpp $(wildcard srmd-realcugan-vulkan/*.h)
