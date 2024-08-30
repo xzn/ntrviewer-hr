@@ -202,6 +202,8 @@ ikcpcb* ikcp_create(IUINT16 cid, void *user)
 	kcp->cid = cid;
 	kcp->user = user;
 
+	kcp->input_pid = kcp->recv_pid = (IUINT16)-1 & ((1 << 10) - 1);
+
 	kcp->segs = ikcp_malloc((1 << 10) * sizeof(*kcp->segs));
 	if (!kcp->segs) {
 		goto error_kcp;
@@ -286,14 +288,15 @@ int ikcp_recv(ikcpcb *kcp, char *buffer, int len)
 		return -1;
 	}
 
-	if (!kcp->segs[kcp->pid].data) {
+	IUINT16 recv_pid = (kcp->recv_pid + 1) & ((1 << 10) - 1);
+
+	if (!kcp->segs[recv_pid].data) {
 		return 0;
 	}
 
-	memcpy(buffer, kcp->segs[kcp->pid].data, kcp_seg_data_len);
-	ikcp_remove_original(kcp, kcp->pid);
-	++kcp->pid;
-	kcp->pid &= ((1 << 10) - 1);
+	memcpy(buffer, kcp->segs[recv_pid].data, kcp_seg_data_len);
+	ikcp_remove_original(kcp, recv_pid);
+	kcp->recv_pid = recv_pid;
 	return kcp_seg_data_len;
 }
 
@@ -316,27 +319,31 @@ static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT1
 		}
 	}
 
+	kcp->input_cid = cid;
 	if (cid != kcp->cid) {
 		err_log("kcp->cid %d, cid %d\n", (int)kcp->cid, (int)cid);
-		kcp->received_cid = cid;
 		kcp->should_reset = true;
 		return -1;
 	}
 
-	if (((pid - kcp->pid) & ((1 << 10) - 1)) < (1 << 9)) {
+	// err_log("kcp->recv_pid %d, pid %d, kcp->input_pid %d\n", (int)kcp->recv_pid, (int)pid, (int)kcp->input_pid);
+	if (((pid - kcp->recv_pid) & ((1 << 10) - 1)) <= ((kcp->input_pid - kcp->recv_pid) & ((1 << 10) - 1))) {
 		if (kcp->segs[pid].data) {
 			if (memcmp(kcp->segs[pid].data, data, size) != 0) {
-				err_log("kcp->pid %d, pid %d\n", (int)kcp->pid, (int)pid);
+				err_log("kcp->recv_pid %d, pid %d, kcp->input_pid %d\n", (int)kcp->recv_pid, (int)pid, (int)kcp->input_pid);
 				return -2;
 			}
 		} else {
 			kcp->segs[pid].data = ikcp_malloc(size);
 			memcpy(kcp->segs[pid].data, data, size);
-
-			if (((pid - kcp->pid) & ((1 << 10) - 1)) - ((kcp->received_pid - kcp->pid) & ((1 << 10) - 1)) < (1 << 9)) {
-				kcp->received_pid = pid;
-			}
 		}
+	} else if (((pid - kcp->input_pid) & ((1 << 10) - 1)) < (1 << 9)) {
+		for (IUINT16 i = pid; i != kcp->input_pid; --i, i &= ((1 << 10) - 1)) {
+			ikcp_remove_original(kcp, i);
+		}
+		kcp->segs[pid].data = ikcp_malloc(size);
+		memcpy(kcp->segs[pid].data, data, size);
+		kcp->input_pid = pid;
 	}
 
 	return 0;
@@ -345,7 +352,7 @@ static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT1
 
 static int ikcp_remove_fec_for(ikcpcb *kcp, IUINT16 fid)
 {
-	for (int j = fid, fid_end = (fid - (1 << 8)) & ((1 << 10) - 1); j != fid_end; ++j, j &= ((1 << 10) - 1)) {
+	for (int j = (fid + (1 << 8)) & ((1 << 10) - 1), fid_end = (fid - (1 << 8)) & ((1 << 10) - 1); j != fid_end; ++j, j &= ((1 << 10) - 1)) {
 		struct IKCPFEC *fec = &kcp->fecs[j];
 		if (fec->data_ptrs) {
 			for (int i = 0; i < fec->data_ptrs_count; ++i) {
@@ -535,9 +542,9 @@ fail_decoder:
 
 // FIXME:
 // Currently works on little endian only
-int ikcp_reset(ikcpcb *kcp)
+int ikcp_reset(ikcpcb *kcp, IUINT16 cid)
 {
-	IUINT16 hdr = ((kcp->fid & ((1 << 10) - 1)) << 6) | ((kcp->gid & ((1 << 3) - 1)) << 3) | ((kcp->cid & ((1 << 2) - 1)) << 1) | 1;
+	IUINT16 hdr = ((kcp->fid & ((1 << 10) - 1)) << 6) | ((kcp->gid & ((1 << 3) - 1)) << 3) | ((cid & ((1 << 2) - 1)) << 1) | 1;
 	return kcp->output((const char *)&hdr, sizeof(hdr), kcp, kcp->user);
 }
 
@@ -554,9 +561,9 @@ int ikcp_reply(ikcpcb *kcp)
 	ptr += sizeof(IUINT16);
 	size += sizeof(IUINT16);
 
-	IUINT16 pid = kcp->pid - 1;
+	IUINT16 pid = kcp->recv_pid;
 	pid &= ((1 << 10) - 1);
-	while (pid != kcp->received_pid) {
+	while (pid != kcp->input_pid) {
 		++pid;
 		pid &= ((1 << 10) - 1);
 
@@ -568,7 +575,7 @@ int ikcp_reply(ikcpcb *kcp)
 				++pid;
 				pid &= ((1 << 10) - 1);
 
-				if (pid == kcp->received_pid) {
+				if (pid == kcp->input_pid) {
 					break;
 				}
 
@@ -579,6 +586,7 @@ int ikcp_reply(ikcpcb *kcp)
 				++nack_count_0;
 
 				if (nack_count_0 == (1 << 6)) {
+					// err_log("%d %d\n", nack_start, nack_count_0);
 					IUINT16 nack = ((nack_start & ((1 << 10) - 1)) << 6) | ((1 << 6) - 1);
 
 					*(IUINT16 *)ptr = nack;
@@ -590,6 +598,7 @@ int ikcp_reply(ikcpcb *kcp)
 				}
 			}
 
+			// err_log("%d %d\n", nack_start, nack_count_0);
 			IUINT16 nack = ((nack_start & ((1 << 10) - 1)) << 6) | (nack_count_0 & ((1 << 6) - 1));
 
 			*(IUINT16 *)ptr = nack;
@@ -597,6 +606,13 @@ int ikcp_reply(ikcpcb *kcp)
 			size += sizeof(IUINT16);
 		}
 	}
+
+	++pid;
+	pid &= ((1 << 10) - 1);
+	// err_log("%d %d\n", pid, (1 << 9) - 1);
+	*(IUINT16 *)ptr = ((pid & ((1 << 10) - 1)) << 6);
+	ptr += sizeof(IUINT16);
+	size += sizeof(IUINT16);
 
 	return kcp->output(buf, size, kcp, kcp->user);
 }

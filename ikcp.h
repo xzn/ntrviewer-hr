@@ -283,17 +283,17 @@ struct IKCPFEC
 //---------------------------------------------------------------------
 struct IKCPCB
 {
-	IUINT16 cid, pid, mtu, nsnd;
+	IUINT16 cid, recv_pid, mtu, nsnd;
 	void *user;
 	int (*output)(const char *buf, int len, struct IKCPCB *kcp, void *user);
 	struct IKCPSEG *segs;
 	struct IKCPFEC *fecs;
 
-	IUINT16 received_cid;
+	IUINT16 input_cid;
 	bool should_reset;
 	bool session_established;
 
-	IUINT16 fid, gid, received_pid;
+	IUINT16 fid, gid, input_pid;
 };
 
 
@@ -326,7 +326,7 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size);
 int ikcp_recv(ikcpcb *kcp, char *buffer, int len);
 
 // user/upper level send, returns below zero for error
-int ikcp_reset(ikcpcb *kcp);
+int ikcp_reset(ikcpcb *kcp, IUINT16 cid);
 int ikcp_reply(ikcpcb *kcp);
 
 int ikcp_setmtu(ikcpcb *kcp, int mtu);

@@ -286,7 +286,8 @@ static int fullscreen;
 
 static atomic_uint_fast8_t ip_octets[4];
 
-#define HEART_BEAT_EVERY_MS 250
+// #define HEART_BEAT_EVERY_MS 250
+#define HEART_BEAT_EVERY_MS 25
 #define REST_EVERY_MS 100
 
 #define TCP_MAGIC 0x12345678
@@ -296,6 +297,7 @@ static int restart_kcp = 0;
 static int ntr_kcp;
 static int kcp_active = 0;
 static int kcp_cid;
+static int kcp_reset_cid = (IUINT16)-1 & ((1 << 2) - 1);
 typedef struct _TCPPacketHeader
 {
   uint32_t magic;
@@ -2537,15 +2539,22 @@ void receive_from_socket(SOCKET s)
       if ((ret = ikcp_input(kcp, (const char *)buf, ret)) < 0)
       {
         restart_kcp = 1;
-        if (kcp->should_reset) {
-          // fprintf_log(stderr, "ikcp_reset: %d\n", kcp_cid);
-          ikcp_reset(kcp);
-          kcp_cid = kcp->received_cid;
+        if (kcp->input_cid == kcp_reset_cid) {
+          ikcp_reset(kcp, kcp->input_cid);
+        } else if (kcp->should_reset) {
+          fprintf_log(stderr, "ikcp_reset: %d\n", kcp_cid);
+          ikcp_reset(kcp, kcp->cid);
+          kcp_reset_cid = kcp->cid;
+          kcp_cid = kcp->input_cid;
         } else {
           fprintf_log(stderr, "ikcp_input failed: %d\n", ret);
+          ikcp_reset(kcp, kcp->cid);
+          kcp_reset_cid = kcp_cid;
+          kcp_cid = (kcp_cid + 1) & ((1 << 2) - 1);
         }
         return;
       }
+      Sleep(1);
       if ((ret = ikcp_reply(kcp)) < 0)
       {
         fprintf_log(stderr, "ikcp_reply failed: %d\n", ret);
