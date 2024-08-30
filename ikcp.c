@@ -474,7 +474,7 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 		for (int i = 0; i < counts.recovery_count; ++i) {
 			char *data = fec->data_ptrs[counts.original_count + i];
 			if (data) {
-				recovered_data[recovered_data_count] = malloc(size);
+				recovered_data[recovered_data_count] = ikcp_malloc(size);
 				if (!recovered_data[recovered_data_count]) {
 					ret = -10;
 					goto fail_decoder;
@@ -498,7 +498,7 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 		if (ret == Fecal_NeedMoreData) {
 			fecal_free(decoder);
 			for (int i = 0; i < recovered_data_count; ++i) {
-				free(recovered_data[i]);
+				ikcp_free(recovered_data[i]);
 			}
 			return 1;
 		} else if (ret) {
@@ -522,14 +522,14 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 
 		fecal_free(decoder);
 		for (int i = 0; i < recovered_data_count; ++i) {
-			free(recovered_data[i]);
+			ikcp_free(recovered_data[i]);
 		}
 		return 0;
 
 fail_decoder:
 		fecal_free(decoder);
 		for (int i = 0; i < recovered_data_count; ++i) {
-			free(recovered_data[i]);
+			ikcp_free(recovered_data[i]);
 		}
 		return ret * 0x10 - 6;
 	} else {
