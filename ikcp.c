@@ -436,6 +436,10 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 		}
 	}
 
+	if (!kcp->session_established) {
+		return 4;
+	}
+
 	kcp->fid = fid;
 	kcp->gid = gid;
 
