@@ -457,6 +457,8 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 		return 3;
 	}
 
+	__atomic_add_fetch(&kcp->input_count, 1, __ATOMIC_RELAXED);
+
 	struct IKCPFEC *fec = &kcp->fecs[fid];
 
 	struct fec_counts_t counts = FEC_COUNTS[fty];
