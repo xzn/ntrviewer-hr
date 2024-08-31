@@ -322,10 +322,10 @@ int tcp_recv(SOCKET sockfd, char *buf, int size)
       {
         if (sock_errno() == WSAEWOULDBLOCK)
         {
-          if (pos)
+          // if (pos)
             continue;
-          else
-            return 0;
+          // else
+          //   return 0;
         }
       }
       return ret;
@@ -547,6 +547,8 @@ void *tcp_thread_func(void *arg)
           }
           free(buf);
         }
+      } else {
+        continue;
       }
 
       ret = tcp_send_packet_header(sockfd, packet_seq, 0, 0, 0, 0, 0);
