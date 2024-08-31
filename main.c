@@ -2540,17 +2540,23 @@ void receive_from_socket(SOCKET s)
 
     received_from_remote = 1;
 
-    if (ret < (int)sizeof(uint32_t))
-    {
-      return;
+    int ntr_is_kcp_test = 0;
+    if (ret == (int)sizeof(uint16_t)) {
+      ntr_is_kcp_test = 1;
+    } else {
+      if (ret < (int)sizeof(uint32_t))
+      {
+        return;
+      }
+      int magic = *(uint32_t *)buf;
+      // fprintf_log(stderr, "magic: 0x%x\n", magic);
+      ntr_is_kcp_test = test_kcp_magic(magic);
     }
     // fprintf_log(stderr, "recvfrom: %d\n", ret);
-    int magic = *(uint32_t *)buf;
-    // fprintf_log(stderr, "magic: 0x%x\n", magic);
-    int ntr_is_kcp_test = test_kcp_magic(magic);
     if (ntr_is_kcp_test) {
       kcp_active = 1;
     }
+
     if (kcp_active)
     {
       if ((ret = ikcp_input(kcp, (const char *)buf, ret)) < 0)
