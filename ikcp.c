@@ -407,29 +407,33 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 	IUINT16 gid = (hdr >> FTY_NBITS) & ((1 << GID_NBITS) - 1);
 	IUINT16 fty = hdr & ((1 << FTY_NBITS) - 1);
 
-	if (fty == 0 && gid == ((IUINT16)-1 & ((1 << GID_NBITS) - 1)) && (fid & ~((1 << CID_NBITS) - 1)) == 0) {
-		IUINT16 cid = fid;
+	if (size == 0) {
+		if (fty == 0 && gid == ((IUINT16)-1 & ((1 << GID_NBITS) - 1)) && (fid & ~((1 << CID_NBITS) - 1)) == 0) {
+			IUINT16 cid = fid;
 
-		if (cid != kcp->cid) {
-			kcp->input_cid = cid;
-			kcp->should_reset = true;
-			return -8;
+			if (cid != kcp->cid) {
+				kcp->input_cid = cid;
+				kcp->should_reset = true;
+				return -8;
+			}
+
+			if (!kcp->session_established) {
+				kcp->session_established = true;
+			}
+
+			IUINT16 hdr =
+				((0 & ((1 << FID_NBITS) - 1)) << (GID_NBITS + CID_NBITS + 1)) |
+				(((IUINT16)-1 & ((1 << GID_NBITS) - 1)) << (CID_NBITS + 1)) |
+				((kcp->cid & ((1 << CID_NBITS) - 1)) << 1);
+
+			int ret = kcp->output((char *)&hdr, sizeof(IUINT16), kcp, kcp->user);
+			if (ret < 0) {
+				return ret * 0x1000 - 9;
+			}
+			return 0;
+		} else {
+			return -9;
 		}
-
-		if (!kcp->session_established) {
-			kcp->session_established = true;
-		}
-
-		IUINT16 hdr =
-			((0 & ((1 << FID_NBITS) - 1)) << (GID_NBITS + CID_NBITS + 1)) |
-			(((IUINT16)-1 & ((1 << GID_NBITS) - 1)) << (CID_NBITS + 1)) |
-			((kcp->cid & ((1 << CID_NBITS) - 1)) << 1);
-
-		int ret = kcp->output((char *)&hdr, sizeof(IUINT16), kcp, kcp->user);
-		if (ret < 0) {
-			return ret * 0x1000 - 9;
-		}
-		return 0;
 	}
 
 	kcp->fid = fid;
