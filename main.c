@@ -322,10 +322,10 @@ int tcp_recv(SOCKET sockfd, char *buf, int size)
       {
         if (sock_errno() == WSAEWOULDBLOCK)
         {
-          // if (pos)
+          if (pos)
             continue;
-          // else
-          //   return 0;
+          else
+            return 0;
         }
       }
       return ret;
@@ -449,12 +449,13 @@ SOCKET tcp_connect(int port)
   return INVALID_SOCKET;
 }
 
-#define RESET_SOCKET(ts, ws) \
-  sock_close(sockfd);        \
-  sockfd = INVALID_SOCKET;   \
-  ts = 0;                    \
-  ws = CS_DISCONNECTED;      \
-  fprintf_log(stderr, "disconnected\n");
+#define RESET_SOCKET(ts, ws) do { \
+  sock_close(sockfd); \
+  sockfd = INVALID_SOCKET; \
+  ts = 0; \
+  ws = CS_DISCONNECTED; \
+  fprintf_log(stderr, "disconnected\n"); \
+} while (0)
 
 struct tcp_thread_arg {
   atomic_int *work_state;
@@ -489,7 +490,7 @@ void *tcp_thread_func(void *arg)
     }
     else if (tcp_status && *(t->work_state) == CS_DISCONNECTING)
     {
-      RESET_SOCKET(tcp_status, *(t->work_state))
+      RESET_SOCKET(tcp_status, *(t->work_state));
     }
     else if (tcp_status)
     {
@@ -502,7 +503,7 @@ void *tcp_thread_func(void *arg)
       if ((ret = tcp_recv(sockfd, buf, size)) < 0)
       {
         fprintf_log(stderr, "tcp recv error: %d\n", sock_errno());
-        RESET_SOCKET(tcp_status, *(t->work_state))
+        RESET_SOCKET(tcp_status, *(t->work_state));
         continue;
       }
       if (ret)
@@ -510,7 +511,7 @@ void *tcp_thread_func(void *arg)
         if (header.magic != TCP_MAGIC)
         {
           fprintf_log(stderr, "broken protocol\n");
-          RESET_SOCKET(tcp_status, *(t->work_state))
+          RESET_SOCKET(tcp_status, *(t->work_state));
           continue;
         }
         if (header.cmd == 0)
@@ -523,7 +524,7 @@ void *tcp_thread_func(void *arg)
             {
               fprintf_log(stderr, "heart beat recv error: %d\n", sock_errno());
               free(buf);
-              RESET_SOCKET(tcp_status, *(t->work_state))
+              RESET_SOCKET(tcp_status, *(t->work_state));
               continue;
             }
             if (ret)
@@ -542,7 +543,7 @@ void *tcp_thread_func(void *arg)
           {
             fprintf_log(stderr, "tcp recv error: %d\n", sock_errno());
             free(buf);
-            RESET_SOCKET(tcp_status, *(t->work_state))
+            RESET_SOCKET(tcp_status, *(t->work_state));
             continue;
           }
           free(buf);
@@ -555,7 +556,7 @@ void *tcp_thread_func(void *arg)
       if (ret < 0)
       {
         fprintf_log(stderr, "heart beat send failed: %d\n", sock_errno());
-        RESET_SOCKET(tcp_status, *(t->work_state))
+        RESET_SOCKET(tcp_status, *(t->work_state));
       }
       ++packet_seq;
 
@@ -574,7 +575,7 @@ void *tcp_thread_func(void *arg)
         if (ret < 0)
         {
           fprintf_log(stderr, "remote play send failed: %d\n", sock_errno());
-          RESET_SOCKET(tcp_status, *(t->work_state))
+          RESET_SOCKET(tcp_status, *(t->work_state));
         }
         ++packet_seq;
       }
