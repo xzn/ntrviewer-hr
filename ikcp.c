@@ -20,6 +20,39 @@
 #define err_log(f, ...) fprintf(stderr, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
 // #define err_log(f, ...) ((void)0)
 
+#define FID_NBITS (12)
+#define FTY_NBITS (2)
+#define GID_NBITS (2)
+
+#define PID_NBITS (12)
+#define CID_NBITS (1)
+
+enum FEC_TYPE {
+	FEC_TYPE_1_1,
+	FEC_TYPE_1_2,
+	FEC_TYPE_1_3,
+	FEC_TYPE_2_3,
+	FEC_TYPE_COUNT,
+};
+
+
+_Static_assert(FEC_TYPE_COUNT <= (1 << FTY_NBITS));
+
+struct fec_counts_t {
+	IUINT8 original_count, recovery_count;
+};
+
+static const struct fec_counts_t FEC_COUNTS[] = {
+	{1, 0},
+	{1, 1},
+	{1, 2},
+	{2, 1},
+};
+
+_Static_assert(sizeof(FEC_COUNTS) / sizeof(*FEC_COUNTS) == FEC_TYPE_COUNT);
+
+
+
 //=====================================================================
 // KCP BASIC
 //=====================================================================
@@ -120,43 +153,6 @@ static inline long _itimediff(IUINT32 later, IUINT32 earlier)
 //---------------------------------------------------------------------
 // manage segment
 //---------------------------------------------------------------------
-enum FEC_TYPE {
-	FEC_TYPE_1_1,
-	FEC_TYPE_4_5,
-	FEC_TYPE_3_4,
-	FEC_TYPE_2_3,
-	FEC_TYPE_3_5,
-	FEC_TYPE_2_4,
-	FEC_TYPE_2_5,
-	FEC_TYPE_1_3,
-	FEC_TYPE_MAX = FEC_TYPE_1_3,
-	// coded as FEC_TYPE_1_1 with top bit in group id set to differentiate
-	FEC_TYPE_1_2,
-	FEC_TYPE_COUNT,
-};
-
-#define FEC_TYPE_BITS_COUNT (3)
-
-_Static_assert(FEC_TYPE_MAX < (1 << FEC_TYPE_BITS_COUNT));
-
-struct fec_counts_t {
-	IUINT8 original_count, recovery_count;
-};
-
-static const struct fec_counts_t FEC_COUNTS[] = {
-	{1, 0},
-	{4, 1},
-	{3, 1},
-	{2, 1},
-	{3, 2},
-	{2, 2},
-	{2, 3},
-	{1, 2},
-	{1, 1},
-};
-
-_Static_assert(sizeof(FEC_COUNTS) / sizeof(*FEC_COUNTS) == FEC_TYPE_COUNT);
-
 
 static void* (*ikcp_malloc_hook)(size_t) = NULL;
 static void (*ikcp_free_hook)(void *) = NULL;
@@ -202,19 +198,19 @@ ikcpcb* ikcp_create(IUINT16 cid, void *user)
 	kcp->cid = cid;
 	kcp->user = user;
 
-	kcp->input_fid = kcp->recv_fid = kcp->input_pid = kcp->recv_pid = (IUINT16)-1 & ((1 << 10) - 1);
+	kcp->input_fid = kcp->recv_fid = kcp->input_pid = kcp->recv_pid = (IUINT16)-1 & ((1 << PID_NBITS) - 1);
 
-	kcp->segs = ikcp_malloc((1 << 10) * sizeof(*kcp->segs));
+	kcp->segs = ikcp_malloc((1 << PID_NBITS) * sizeof(*kcp->segs));
 	if (!kcp->segs) {
 		goto error_kcp;
 	}
-	memset(kcp->segs, 0, (1 << 10) * sizeof(*kcp->segs));
+	memset(kcp->segs, 0, (1 << PID_NBITS) * sizeof(*kcp->segs));
 
-	kcp->fecs = ikcp_malloc((1 << 10) * sizeof(*kcp->fecs));
+	kcp->fecs = ikcp_malloc((1 << FID_NBITS) * sizeof(*kcp->fecs));
 	if (!kcp->fecs) {
 		goto error_segs;
 	}
-	memset(kcp->fecs, 0, (1 << 10) * sizeof(*kcp->fecs));
+	memset(kcp->fecs, 0, (1 << FID_NBITS) * sizeof(*kcp->fecs));
 
 	return kcp;
 
@@ -233,7 +229,7 @@ void ikcp_release(ikcpcb *kcp)
 {
 	if (kcp) {
 		if (kcp->fecs) {
-			for (int i = 0; i < (1 << 10); ++i) {
+			for (int i = 0; i < (1 << FID_NBITS); ++i) {
 				if (kcp->fecs[i].data_ptrs) {
 					for (int j = 0; j < kcp->fecs[i].data_ptrs_count; ++j) {
 						if (kcp->fecs[i].data_ptrs[j]) {
@@ -246,7 +242,7 @@ void ikcp_release(ikcpcb *kcp)
 			ikcp_free(kcp->fecs);
 		}
 		if (kcp->segs) {
-			for (int i = 0; i < (1 << 10); ++i) {
+			for (int i = 0; i < (1 << PID_NBITS); ++i) {
 				if (kcp->segs[i].data) {
 					ikcp_free(kcp->segs[i].data);
 				}
@@ -288,7 +284,7 @@ int ikcp_recv(ikcpcb *kcp, char *buffer, int len)
 		return -1;
 	}
 
-	IUINT16 recv_pid = (kcp->recv_pid + 1) & ((1 << 10) - 1);
+	IUINT16 recv_pid = (kcp->recv_pid + 1) & ((1 << PID_NBITS) - 1);
 
 	if (!kcp->segs[recv_pid].data) {
 		return 0;
@@ -310,8 +306,8 @@ int ikcp_recv(ikcpcb *kcp, char *buffer, int len)
 static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT16 gid)
 {
 	IUINT16 hdr = *(IUINT16 *)data;
-	IUINT16 pid = hdr & ((1 << 10) - 1);
-	IUINT16 cid = (hdr >> 10) & ((1 << 2) - 1);
+	IUINT16 pid = hdr & ((1 << PID_NBITS) - 1);
+	IUINT16 cid = (hdr >> PID_NBITS) & ((1 << CID_NBITS) - 1);
 
 	for (int i = 0; i < size - sizeof(IUINT16); ++i) {
 		if (data[i + sizeof(IUINT16)] != (char)gid) {
@@ -328,7 +324,7 @@ static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT1
 	}
 
 	// err_log("kcp->recv_pid %d, pid %d, kcp->input_pid %d\n", (int)kcp->recv_pid, (int)pid, (int)kcp->input_pid);
-	if (((pid - kcp->recv_pid) & ((1 << 10) - 1)) <= ((kcp->input_pid - kcp->recv_pid) & ((1 << 10) - 1))) {
+	if (((pid - kcp->recv_pid) & ((1 << PID_NBITS) - 1)) <= ((kcp->input_pid - kcp->recv_pid) & ((1 << PID_NBITS) - 1))) {
 		if (kcp->segs[pid].data) {
 			if (memcmp(kcp->segs[pid].data, data, size) != 0) {
 				err_log("mismatch kcp->recv_pid %d, pid %d, kcp->input_pid %d\n", (int)kcp->recv_pid, (int)pid, (int)kcp->input_pid);
@@ -340,10 +336,10 @@ static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT1
 			__atomic_add_fetch(&kcp->input_pid_count, 1, __ATOMIC_RELAXED);
 		}
 	} else if (
-		((pid - kcp->input_pid) & ((1 << 10) - 1)) < (1 << 9)
-		&& ((pid - kcp->recv_pid) & ((1 << 10) - 1)) < (1 << 9)
+		((pid - kcp->input_pid) & ((1 << PID_NBITS) - 1)) < (1 << (PID_NBITS - 1))
+		&& ((pid - kcp->recv_pid) & ((1 << PID_NBITS) - 1)) < (1 << (PID_NBITS - 1))
 	) {
-		for (IUINT16 i = pid; i != kcp->input_pid; --i, i &= ((1 << 10) - 1)) {
+		for (IUINT16 i = pid; i != kcp->input_pid; --i, i &= ((1 << PID_NBITS) - 1)) {
 			ikcp_remove_original(kcp, i);
 		}
 		kcp->segs[pid].data = ikcp_malloc(size);
@@ -371,17 +367,17 @@ static void ikcp_remove_fec(ikcpcb *kcp, IUINT16 fid) {
 static int ikcp_remove_fec_for(ikcpcb *kcp, IUINT16 fid)
 {
 	if (
-		((fid - kcp->recv_fid) & ((1 << 10) - 1)) > ((kcp->input_fid - kcp->recv_fid) & ((1 << 10) - 1)) &&
-		((fid - kcp->input_fid) & ((1 << 10) - 1)) < (1 << 9)
+		((fid - kcp->recv_fid) & ((1 << FID_NBITS) - 1)) > ((kcp->input_fid - kcp->recv_fid) & ((1 << FID_NBITS) - 1)) &&
+		((fid - kcp->input_fid) & ((1 << FID_NBITS) - 1)) < (1 << (FID_NBITS - 1))
 	) {
 		for (IUINT16 i = kcp->input_fid; i != fid;) {
-			++i, i &= ((1 << 10) - 1);
+			++i, i &= ((1 << FID_NBITS) - 1);
 			ikcp_remove_fec(kcp, i);
 		}
 		kcp->input_fid = fid;
-		if (((kcp->input_fid - kcp->recv_fid) & ((1 << 10) - 1)) > (1 << 9)) {
-			fid = (kcp->input_fid - (1 << 9)) & ((1 << 10) - 1);
-			for (IUINT16 i = kcp->recv_fid; i != fid; ++i, i &= ((1 << 10) - 1)) {
+		if (((kcp->input_fid - kcp->recv_fid) & ((1 << FID_NBITS) - 1)) > (1 << (FID_NBITS - 1))) {
+			fid = (kcp->input_fid - (1 << (FID_NBITS - 1))) & ((1 << FID_NBITS) - 1);
+			for (IUINT16 i = kcp->recv_fid; i != fid; ++i, i &= ((1 << FID_NBITS) - 1)) {
 				ikcp_remove_fec(kcp, i);
 			}
 			kcp->recv_fid = fid;
@@ -404,13 +400,9 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 	data += sizeof(IUINT16);
 	size -= sizeof(IUINT16);
 
-	IUINT16 fid = (hdr >> 6) & ((1 << 10) - 1);
-	IUINT16 gid = (hdr >> 3) & ((1 << 3) - 1);
-	IUINT16 fty = hdr & ((1 << 3) - 1);
-	if (fty == 0 && (gid & (1 << 2))) {
-		fty = FEC_TYPE_1_2;
-		gid &= ((1 << 2) - 1);
-	}
+	IUINT16 fid = (hdr >> (GID_NBITS + FTY_NBITS)) & ((1 << FID_NBITS) - 1);
+	IUINT16 gid = (hdr >> FTY_NBITS) & ((1 << GID_NBITS) - 1);
+	IUINT16 fty = hdr & ((1 << FTY_NBITS) - 1);
 
 	kcp->fid = fid;
 	kcp->gid = gid;
@@ -571,17 +563,19 @@ fail_decoder:
 // Currently works on little endian only
 int ikcp_reset(ikcpcb *kcp, IUINT16 cid)
 {
-	IUINT16 hdr = ((kcp->fid & ((1 << 10) - 1)) << 6) | ((kcp->gid & ((1 << 3) - 1)) << 3) | ((cid & ((1 << 2) - 1)) << 1) | 1;
+	IUINT16 hdr = ((kcp->fid & ((1 << FID_NBITS) - 1)) << (GID_NBITS + CID_NBITS + 1)) | ((kcp->gid & ((1 << GID_NBITS) - 1)) << (CID_NBITS + 1)) | ((cid & ((1 << CID_NBITS) - 1)) << 1) | 1;
 	return kcp->output((const char *)&hdr, sizeof(hdr), kcp, kcp->user);
 }
 
 
 // FIXME:
 // Currently works on little endian only
+
+#define count_nbits (sizeof(IUINT16) * 8 - PID_NBITS)
 int ikcp_reply(ikcpcb *kcp)
 {
 	char buf[kcp->mtu];
-	IUINT16 hdr = ((kcp->fid & ((1 << 10) - 1)) << 6) | ((kcp->gid & ((1 << 3) - 1)) << 3) | ((kcp->cid & ((1 << 2) - 1)) << 1);
+	IUINT16 hdr = ((kcp->fid & ((1 << FID_NBITS) - 1)) << (GID_NBITS + CID_NBITS + 1)) | ((kcp->gid & ((1 << GID_NBITS) - 1)) << (CID_NBITS + 1)) | ((kcp->cid & ((1 << CID_NBITS) - 1)) << 1);
 	char *ptr = buf;
 	int size = 0;
 	*(IUINT16 *)ptr = hdr;
@@ -589,10 +583,10 @@ int ikcp_reply(ikcpcb *kcp)
 	size += sizeof(IUINT16);
 
 	IUINT16 pid = kcp->recv_pid;
-	pid &= ((1 << 10) - 1);
+	pid &= ((1 << PID_NBITS) - 1);
 	while (pid != kcp->input_pid) {
 		++pid;
-		pid &= ((1 << 10) - 1);
+		pid &= ((1 << PID_NBITS) - 1);
 
 		if (!kcp->segs[pid].data) {
 			int nack_start = pid;
@@ -600,7 +594,7 @@ int ikcp_reply(ikcpcb *kcp)
 
 			while (1) {
 				++pid;
-				pid &= ((1 << 10) - 1);
+				pid &= ((1 << PID_NBITS) - 1);
 
 				if (pid == kcp->input_pid) {
 					break;
@@ -612,9 +606,9 @@ int ikcp_reply(ikcpcb *kcp)
 
 				++nack_count_0;
 
-				if (nack_count_0 == (1 << 6)) {
+				if (nack_count_0 == (1 << count_nbits)) {
 					// err_log("%d %d\n", nack_start, nack_count_0);
-					IUINT16 nack = ((nack_start & ((1 << 10) - 1)) << 6) | ((1 << 6) - 1);
+					IUINT16 nack = ((nack_start & ((1 << PID_NBITS) - 1)) << count_nbits) | ((1 << count_nbits) - 1);
 
 					*(IUINT16 *)ptr = nack;
 					ptr += sizeof(IUINT16);
@@ -626,7 +620,7 @@ int ikcp_reply(ikcpcb *kcp)
 			}
 
 			// err_log("%d %d\n", nack_start, nack_count_0);
-			IUINT16 nack = ((nack_start & ((1 << 10) - 1)) << 6) | (nack_count_0 & ((1 << 6) - 1));
+			IUINT16 nack = ((nack_start & ((1 << PID_NBITS) - 1)) << count_nbits) | (nack_count_0 & ((1 << count_nbits) - 1));
 
 			*(IUINT16 *)ptr = nack;
 			ptr += sizeof(IUINT16);
@@ -635,9 +629,9 @@ int ikcp_reply(ikcpcb *kcp)
 	}
 
 	++pid;
-	pid &= ((1 << 10) - 1);
-	// err_log("%d %d\n", pid, (1 << 9) - 1);
-	*(IUINT16 *)ptr = ((pid & ((1 << 10) - 1)) << 6);
+	pid &= ((1 << PID_NBITS) - 1);
+	// err_log("%d %d\n", pid, (1 << (PID_NBITS - 2)) - 1);
+	*(IUINT16 *)ptr = ((pid & ((1 << PID_NBITS) - 1)) << count_nbits);
 	ptr += sizeof(IUINT16);
 	size += sizeof(IUINT16);
 
