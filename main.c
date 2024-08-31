@@ -286,8 +286,8 @@ static int fullscreen;
 
 static atomic_uint_fast8_t ip_octets[4];
 
-// #define HEART_BEAT_EVERY_MS 250
-#define HEART_BEAT_EVERY_MS 25
+#define HEART_BEAT_EVERY_MS 250
+// #define HEART_BEAT_EVERY_MS 25
 #define REST_EVERY_MS 100
 
 #define TCP_MAGIC 0x12345678

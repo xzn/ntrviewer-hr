@@ -294,6 +294,7 @@ struct IKCPCB
 	bool session_established;
 
 	IUINT16 fid, gid, input_pid;
+	IUINT16 recv_fid, input_fid;
 };
 
 

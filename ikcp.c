@@ -202,7 +202,7 @@ ikcpcb* ikcp_create(IUINT16 cid, void *user)
 	kcp->cid = cid;
 	kcp->user = user;
 
-	kcp->input_pid = kcp->recv_pid = (IUINT16)-1 & ((1 << 10) - 1);
+	kcp->input_fid = kcp->recv_fid = kcp->input_pid = kcp->recv_pid = (IUINT16)-1 & ((1 << 10) - 1);
 
 	kcp->segs = ikcp_malloc((1 << 10) * sizeof(*kcp->segs));
 	if (!kcp->segs) {
@@ -326,11 +326,11 @@ static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT1
 		return -1;
 	}
 
-	// err_log("kcp->recv_pid %d, pid %d, kcp->input_pid %d\n", (int)kcp->recv_pid, (int)pid, (int)kcp->input_pid);
+	err_log("kcp->recv_pid %d, pid %d, kcp->input_pid %d\n", (int)kcp->recv_pid, (int)pid, (int)kcp->input_pid);
 	if (((pid - kcp->recv_pid) & ((1 << 10) - 1)) <= ((kcp->input_pid - kcp->recv_pid) & ((1 << 10) - 1))) {
 		if (kcp->segs[pid].data) {
 			if (memcmp(kcp->segs[pid].data, data, size) != 0) {
-				err_log("kcp->recv_pid %d, pid %d, kcp->input_pid %d\n", (int)kcp->recv_pid, (int)pid, (int)kcp->input_pid);
+				err_log("mismatch kcp->recv_pid %d, pid %d, kcp->input_pid %d\n", (int)kcp->recv_pid, (int)pid, (int)kcp->input_pid);
 				return -2;
 			}
 		} else {
@@ -349,19 +349,36 @@ static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT1
 	return 0;
 }
 
+static void ikcp_remove_fec(ikcpcb *kcp, IUINT16 fid) {
+	struct IKCPFEC *fec = &kcp->fecs[fid];
+	if (fec->data_ptrs) {
+		for (int i = 0; i < fec->data_ptrs_count; ++i) {
+			if (fec->data_ptrs[i]) {
+				ikcp_free(fec->data_ptrs[i]);
+			}
+		}
+		ikcp_free(fec->data_ptrs);
+		fec->data_ptrs = 0;
+	}
+}
 
 static int ikcp_remove_fec_for(ikcpcb *kcp, IUINT16 fid)
 {
-	for (int j = (fid + (1 << 8)) & ((1 << 10) - 1), fid_end = (fid - (1 << 8)) & ((1 << 10) - 1); j != fid_end; ++j, j &= ((1 << 10) - 1)) {
-		struct IKCPFEC *fec = &kcp->fecs[j];
-		if (fec->data_ptrs) {
-			for (int i = 0; i < fec->data_ptrs_count; ++i) {
-				if (fec->data_ptrs[i]) {
-					ikcp_free(fec->data_ptrs[i]);
-				}
+	if (
+		((fid - kcp->recv_fid) & ((1 << 10) - 1)) > ((kcp->input_fid - kcp->recv_fid) & ((1 << 10) - 1)) &&
+		((fid - kcp->input_fid) & ((1 << 10) - 1)) < (1 << 9)
+	) {
+		for (IUINT16 i = kcp->input_fid; i != fid;) {
+			++i, i &= ((1 << 10) - 1);
+			ikcp_remove_fec(kcp, i);
+		}
+		kcp->input_fid = fid;
+		if (((kcp->input_fid - kcp->recv_fid) & ((1 << 10) - 1)) > (1 << 9)) {
+			fid = (kcp->input_fid - (1 << 9)) & ((1 << 10) - 1);
+			for (IUINT16 i = kcp->recv_fid; i != fid; ++i, i &= ((1 << 10) - 1)) {
+				ikcp_remove_fec(kcp, i);
 			}
-			ikcp_free(fec->data_ptrs);
-			fec->data_ptrs = 0;
+			kcp->recv_fid = fid;
 		}
 	}
 
@@ -409,6 +426,8 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 			return -2;
 		}
 	} else {
+		err_log("fid %d fty %d\n", (int)fid, (int)fty);
+
 		fec->data_ptrs = ikcp_malloc(count * sizeof(*fec->data_ptrs));
 		memset(fec->data_ptrs, 0, count * sizeof(*fec->data_ptrs));
 		fec->data_ptrs_count = count;
@@ -417,6 +436,7 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 
 	if (fec->data_ptrs[gid]) {
 		if (memcmp(fec->data_ptrs[gid], data, size) != 0) {
+			err_log("mismatch fid %d fty %d gid %d\n", (int)fid, (int)fty, (int)gid);
 			return -4;
 		}
 	} else {
