@@ -1322,6 +1322,7 @@ static void guiMain(struct nk_context *ctx)
         ntr_rp_bound_port = ntr_rp_port;
         ntr_rp_port_changed = 1;
       }
+      restart_kcp = 1;
     }
 
     nk_layout_row_dynamic(ctx, 30, 1);
@@ -2578,22 +2579,30 @@ void receive_from_socket(SOCKET s)
         return;
       }
       // Sleep(1);
-      while ((ret = ikcp_recv(kcp, (char *)buf, sizeof(buf))) > 0)
-      {
-        // fprintf_log(stderr, "ikcp_recv: %d\n", ret);
-        // TODO handle_recv_kcp
-      }
-      if (ret < 0)
-      {
-        fprintf_log(stderr, "ikcp_recv failed: %d\n", ret);
-        restart_kcp = 1;
-        return;
-      }
-      if ((ret = ikcp_reply(kcp)) < 0)
-      {
-        fprintf_log(stderr, "ikcp_reply failed: %d\n", ret);
-        restart_kcp = 1;
-        return;
+      if (kcp->session_just_established) {
+        kcp->session_just_established = false;
+        if (!kcp->session_established) {
+          fprintf_log(stderr, "kcp session_established\n");
+          kcp->session_established = true;
+        }
+      } else {
+        while ((ret = ikcp_recv(kcp, (char *)buf, sizeof(buf))) > 0)
+        {
+          // fprintf_log(stderr, "ikcp_recv: %d\n", ret);
+          // TODO handle_recv_kcp
+        }
+        if (ret < 0)
+        {
+          fprintf_log(stderr, "ikcp_recv failed: %d\n", ret);
+          restart_kcp = 1;
+          return;
+        }
+        if ((ret = ikcp_reply(kcp)) < 0)
+        {
+          fprintf_log(stderr, "ikcp_reply failed: %d\n", ret);
+          restart_kcp = 1;
+          return;
+        }
       }
     }
     else if (handle_recv(buf, ret) < 0)

@@ -395,8 +395,8 @@ static int ikcp_remove_fec_for(ikcpcb *kcp, IUINT16 fid)
 // Currently works on little endian only
 int ikcp_input(ikcpcb *kcp, const char *data, long size)
 {
-	if (size != kcp->mtu) {
-		return -1;
+	if (size < sizeof(IUINT16)) {
+		return -10;
 	}
 
 	IUINT16 hdr = *(IUINT16 *)data;
@@ -417,10 +417,6 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 				return -8;
 			}
 
-			if (!kcp->session_established) {
-				kcp->session_established = true;
-			}
-
 			IUINT16 hdr =
 				((0 & ((1 << FID_NBITS) - 1)) << (GID_NBITS + CID_NBITS + 1)) |
 				(((IUINT16)-1 & ((1 << GID_NBITS) - 1)) << (CID_NBITS + 1)) |
@@ -430,6 +426,8 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 			if (ret < 0) {
 				return ret * 0x1000 - 9;
 			}
+
+			kcp->session_just_established = true;
 			return 0;
 		} else {
 			return -9;
@@ -438,6 +436,10 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 
 	if (!kcp->session_established) {
 		return 4;
+	}
+
+	if (size != kcp->mtu - sizeof(IUINT16)) {
+		return -1;
 	}
 
 	kcp->fid = fid;
