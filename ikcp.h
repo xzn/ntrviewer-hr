@@ -295,6 +295,8 @@ struct IKCPCB
 
 	IUINT16 fid, gid, input_pid;
 	IUINT16 recv_fid, input_fid;
+
+	IUINT16 input_fid_count, recv_pid_count, input_pid_count;
 };
 
 

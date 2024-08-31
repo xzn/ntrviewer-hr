@@ -297,6 +297,7 @@ int ikcp_recv(ikcpcb *kcp, char *buffer, int len)
 	memcpy(buffer, kcp->segs[recv_pid].data, kcp_seg_data_len);
 	ikcp_remove_original(kcp, recv_pid);
 	kcp->recv_pid = recv_pid;
+	__atomic_add_fetch(&kcp->recv_pid_count, 1, __ATOMIC_RELAXED);
 	return kcp_seg_data_len;
 }
 
@@ -336,13 +337,18 @@ static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT1
 		} else {
 			kcp->segs[pid].data = ikcp_malloc(size);
 			memcpy(kcp->segs[pid].data, data, size);
+			__atomic_add_fetch(&kcp->input_pid_count, 1, __ATOMIC_RELAXED);
 		}
-	} else if (((pid - kcp->input_pid) & ((1 << 10) - 1)) < (1 << 9)) {
+	} else if (
+		((pid - kcp->input_pid) & ((1 << 10) - 1)) < (1 << 9)
+		&& ((pid - kcp->recv_pid) & ((1 << 10) - 1)) < (1 << 9)
+	) {
 		for (IUINT16 i = pid; i != kcp->input_pid; --i, i &= ((1 << 10) - 1)) {
 			ikcp_remove_original(kcp, i);
 		}
 		kcp->segs[pid].data = ikcp_malloc(size);
 		memcpy(kcp->segs[pid].data, data, size);
+		__atomic_add_fetch(&kcp->input_pid_count, 1, __ATOMIC_RELAXED);
 		kcp->input_pid = pid;
 	}
 
@@ -432,6 +438,7 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 		memset(fec->data_ptrs, 0, count * sizeof(*fec->data_ptrs));
 		fec->data_ptrs_count = count;
 		fec->fty = fty;
+		__atomic_add_fetch(&kcp->input_fid_count, 1, __ATOMIC_RELAXED);
 	}
 
 	if (fec->data_ptrs[gid]) {

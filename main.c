@@ -2508,6 +2508,20 @@ void receive_from_socket(SOCKET s)
       continue;
     }
 
+    uint64_t next_tick = iclock64();
+    uint64_t tick_diff = next_tick - window_title_last_tick;
+    if (tick_diff >= FRAME_STAT_EVERY_X_TICKS) {
+      snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (Counter %d | %d | %d)",
+          __atomic_load_n(&kcp->input_fid_count, __ATOMIC_RELAXED),
+          __atomic_load_n(&kcp->input_pid_count, __ATOMIC_RELAXED),
+          __atomic_load_n(&kcp->recv_pid_count, __ATOMIC_RELAXED));
+        SDL_SetWindowTitle(win[0], window_title_with_fps);
+      __atomic_store_n(&kcp->input_fid_count, 0, __ATOMIC_RELAXED);
+      __atomic_store_n(&kcp->input_pid_count, 0, __ATOMIC_RELAXED);
+      __atomic_store_n(&kcp->recv_pid_count, 0, __ATOMIC_RELAXED);
+      window_title_last_tick = next_tick;
+    }
+
 #ifdef _WIN32
     if (ip_octets[0] == 0 &&
       ip_octets[1] == 0 &&
