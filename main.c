@@ -2478,6 +2478,9 @@ int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
 void init_kcp(ikcpcb *kcp) {
   kcp->output = kcp_udp_output;
   ikcp_setmtu(kcp, PACKET_SIZE);
+
+  kcp_active = 0;
+  restart_kcp = 0;
 }
 
 static int test_kcp_magic(int magic) {
@@ -2500,7 +2503,7 @@ void receive_from_socket(SOCKET s)
       int err = sock_errno();
       if (err != WSAETIMEDOUT && err != WSAEWOULDBLOCK)
       {
-        fprintf_log(stderr, "recvfrom failed: %d\n", err);
+        // fprintf_log(stderr, "recvfrom failed: %d\n", err);
       }
       else
       {
@@ -2594,15 +2597,9 @@ void receive_from_socket(SOCKET s)
   }
 }
 
-void socket_error_pause(void) {
-  Sleep(RP_SOCKET_TIMEOUT);
-}
-
-void *udp_recv_thread_func(void *)
+void receive_from_socket_loop(SOCKET s)
 {
-  while (running)
-  {
-    restart_kcp = 0;
+  while (running && !ntr_rp_port_changed) {
     received_from_remote = 0;
 
     for (int i = 0; i < SCREEN_COUNT; ++i) {
@@ -2613,11 +2610,11 @@ void *udp_recv_thread_func(void *)
 
     kcp = ikcp_create(kcp_cid, 0);
     if (!kcp) {
+      fprintf_log(stderr, "ikcp_create failed\n");
       Sleep(250);
       continue;
     }
     init_kcp(kcp);
-    kcp_active = 0;
 
     // fprintf_log(stderr, "new connection\n");
     for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
@@ -2631,6 +2628,24 @@ void *udp_recv_thread_func(void *)
     memset(frame_size_tracker, 0, sizeof(frame_size_tracker));
     memset(delay_between_packet_tracker, 0, sizeof(delay_between_packet_tracker));
 
+    receive_from_socket(s);
+    // Sleep(250);
+
+    if (kcp) {
+      ikcp_release(kcp);
+      kcp = 0;
+    }
+  }
+}
+
+void socket_error_pause(void) {
+  Sleep(RP_SOCKET_TIMEOUT);
+}
+
+void *udp_recv_thread_func(void *)
+{
+  while (running)
+  {
     s = 0;
     int ret;
     if (!SOCKET_VALID(s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)))
@@ -2689,16 +2704,9 @@ void *udp_recv_thread_func(void *)
       continue;
     }
 
-    receive_from_socket(s);
+    receive_from_socket_loop(s);
 
     closesocket(s);
-
-    // Sleep(250);
-
-    if (kcp) {
-      ikcp_release(kcp);
-      kcp = 0;
-    }
   }
 
   return 0;
