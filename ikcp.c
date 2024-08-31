@@ -291,7 +291,7 @@ int ikcp_recv(ikcpcb *kcp, char *buffer, int len)
 	}
 
 	memcpy(buffer, kcp->segs[recv_pid].data, kcp_seg_data_len);
-	ikcp_remove_original(kcp, recv_pid);
+	ikcp_remove_original(kcp, kcp->recv_pid);
 	kcp->recv_pid = recv_pid;
 	__atomic_add_fetch(&kcp->recv_pid_count, 1, __ATOMIC_RELAXED);
 	return kcp_seg_data_len;
@@ -337,7 +337,7 @@ static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT1
 		}
 	} else if (
 		((pid - kcp->input_pid) & ((1 << PID_NBITS) - 1)) < (1 << (PID_NBITS - 1))
-		&& ((pid - kcp->recv_pid) & ((1 << PID_NBITS) - 1)) < (1 << (PID_NBITS - 1))
+		// && ((pid - kcp->recv_pid) & ((1 << PID_NBITS) - 1)) < (1 << (PID_NBITS - 1))
 	) {
 		for (IUINT16 i = pid; i != kcp->input_pid; --i, i &= ((1 << PID_NBITS) - 1)) {
 			ikcp_remove_original(kcp, i);
@@ -367,8 +367,8 @@ static void ikcp_remove_fec(ikcpcb *kcp, IUINT16 fid) {
 static int ikcp_remove_fec_for(ikcpcb *kcp, IUINT16 fid)
 {
 	if (
-		((fid - kcp->recv_fid) & ((1 << FID_NBITS) - 1)) > ((kcp->input_fid - kcp->recv_fid) & ((1 << FID_NBITS) - 1)) &&
-		((fid - kcp->input_fid) & ((1 << FID_NBITS) - 1)) < (1 << (FID_NBITS - 1))
+		((fid - kcp->recv_fid) & ((1 << FID_NBITS) - 1)) > ((kcp->input_fid - kcp->recv_fid) & ((1 << FID_NBITS) - 1))
+		&& ((fid - kcp->input_fid) & ((1 << FID_NBITS) - 1)) < (1 << (FID_NBITS - 1))
 	) {
 		for (IUINT16 i = kcp->input_fid; i != fid;) {
 			++i, i &= ((1 << FID_NBITS) - 1);
