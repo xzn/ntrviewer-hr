@@ -2461,6 +2461,9 @@ int received_from_remote;
 
 int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
 {
+  // if (len == sizeof(IUINT16)) {
+  //   fprintf_log(stderr, "%x\n", (int)*(IUINT16 *)buf);
+  // }
   // fprintf_log(stderr, "udp_output: %d\n", len);
   // if (len >= (int)sizeof(uint32_t)) {
   //   fprintf_log(stderr, "udp_output magic: %x\n", *(uint32_t *)buf);
@@ -2560,7 +2563,7 @@ void receive_from_socket(SOCKET s)
 
     if (kcp_active)
     {
-      if ((ret = ikcp_input(kcp, (const char *)buf, ret)) < 0)
+      if ((ret = ikcp_input(kcp, (const char *)buf, ret)) != 0)
       {
         restart_kcp = 1;
         if (kcp->input_cid == kcp_reset_cid) {
@@ -2571,7 +2574,9 @@ void receive_from_socket(SOCKET s)
           kcp_reset_cid = kcp->cid;
           kcp_cid = kcp->input_cid;
         } else {
-          fprintf_log(stderr, "ikcp_input failed: %d\n", ret);
+          if (ret < 0) {
+            fprintf_log(stderr, "ikcp_input failed: %d\n", ret);
+          }
           ikcp_reset(kcp, kcp->cid);
           kcp_reset_cid = kcp->cid;
           kcp_cid = kcp->cid + 1;

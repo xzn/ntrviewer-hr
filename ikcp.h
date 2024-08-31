@@ -293,6 +293,7 @@ struct IKCPCB
 	bool should_reset;
 	bool session_established;
 	bool session_just_established;
+	bool session_data_received;
 
 	IUINT16 fid, gid, input_pid;
 	IUINT16 recv_fid, input_fid;

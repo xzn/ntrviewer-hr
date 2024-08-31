@@ -195,7 +195,7 @@ ikcpcb* ikcp_create(IUINT16 cid, void *user)
 	ikcpcb *kcp = (ikcpcb*)ikcp_malloc(sizeof(struct IKCPCB));
 	if (kcp == NULL) return NULL;
 	*kcp = (ikcpcb){ 0 };
-	kcp->cid = cid & ((1 << CID_NBITS) - 1);
+	kcp->input_cid = kcp->cid = cid & ((1 << CID_NBITS) - 1);
 	kcp->user = user;
 
 	kcp->input_fid = kcp->recv_fid = kcp->input_pid = kcp->recv_pid = (IUINT16)-1 & ((1 << PID_NBITS) - 1);
@@ -370,7 +370,7 @@ static int ikcp_remove_fec_for(ikcpcb *kcp, IUINT16 fid)
 		((fid - kcp->recv_fid) & ((1 << FID_NBITS) - 1)) > ((kcp->input_fid - kcp->recv_fid) & ((1 << FID_NBITS) - 1))
 	) {
 		if (((fid - kcp->input_fid) & ((1 << FID_NBITS) - 1)) >= (1 << (FID_NBITS - 1))) {
-			return 1;
+			return 0;
 		}
 
 		for (IUINT16 i = kcp->input_fid; i != fid;) {
@@ -408,6 +408,9 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 	IUINT16 fty = hdr & ((1 << FTY_NBITS) - 1);
 
 	if (size == 0) {
+		if (kcp->session_data_received) {
+			return 12;
+		}
 		if (fty == 0 && gid == ((IUINT16)-1 & ((1 << GID_NBITS) - 1)) && (fid & ~((1 << CID_NBITS) - 1)) == 0) {
 			IUINT16 cid = fid;
 
@@ -435,12 +438,14 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 	}
 
 	if (!kcp->session_established) {
-		return 4;
+		return 11;
 	}
 
 	if (size != kcp->mtu - sizeof(IUINT16)) {
 		return -1;
 	}
+
+	kcp->session_data_received = true;
 
 	kcp->fid = fid;
 	kcp->gid = gid;
@@ -562,7 +567,7 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 			for (int i = 0; i < recovered_data_count; ++i) {
 				ikcp_free(recovered_data[i]);
 			}
-			return 1;
+			return 0;
 		} else if (ret) {
 			ret = ret * 0x10 - 2;
 			goto fail_decoder;
@@ -595,7 +600,7 @@ fail_decoder:
 		}
 		return ret * 0x10 - 6;
 	} else {
-		return 2;
+		return 0;
 	}
 }
 
