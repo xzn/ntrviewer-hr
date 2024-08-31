@@ -456,31 +456,42 @@ SOCKET tcp_connect(int port)
   ws = CS_DISCONNECTED;      \
   fprintf_log(stderr, "disconnected\n");
 
-void *menu_tcp_thread_func(void *)
+struct tcp_thread_arg {
+  atomic_int *work_state;
+  atomic_bool *remote_play;
+  short port;
+};
+
+void *tcp_thread_func(void *arg)
 {
-  int menu_tcp_status = 0;
+  struct tcp_thread_arg *t = (struct tcp_thread_arg *)arg;
+
+  int tcp_status = 0;
   SOCKET sockfd = INVALID_SOCKET;
   int packet_seq = 0;
   while (running)
   {
-    if (!menu_tcp_status && menu_work_state == CS_CONNECTING)
+    if (!tcp_status && *(t->work_state) == CS_CONNECTING)
     {
-      sockfd = tcp_connect(8000);
+      sockfd = tcp_connect(t->port);
       if (!SOCKET_VALID(sockfd))
       {
-        menu_work_state = CS_DISCONNECTED;
+        *(t->work_state) = CS_DISCONNECTED;
+        if (t->remote_play) {
+          *(t->remote_play) = 0;
+        }
         continue;
       }
 
       packet_seq = 0;
-      menu_tcp_status = 1;
-      menu_work_state = CS_CONNECTED;
+      tcp_status = 1;
+      *(t->work_state) = CS_CONNECTED;
     }
-    else if (menu_tcp_status && menu_work_state == CS_DISCONNECTING)
+    else if (tcp_status && *(t->work_state) == CS_DISCONNECTING)
     {
-      RESET_SOCKET(menu_tcp_status, menu_work_state)
+      RESET_SOCKET(tcp_status, *(t->work_state))
     }
-    else if (menu_tcp_status)
+    else if (tcp_status)
     {
       Sleep(HEART_BEAT_EVERY_MS);
 
@@ -491,7 +502,7 @@ void *menu_tcp_thread_func(void *)
       if ((ret = tcp_recv(sockfd, buf, size)) < 0)
       {
         fprintf_log(stderr, "tcp recv error: %d\n", sock_errno());
-        RESET_SOCKET(menu_tcp_status, menu_work_state)
+        RESET_SOCKET(tcp_status, *(t->work_state))
         continue;
       }
       if (ret)
@@ -499,7 +510,7 @@ void *menu_tcp_thread_func(void *)
         if (header.magic != TCP_MAGIC)
         {
           fprintf_log(stderr, "broken protocol\n");
-          RESET_SOCKET(menu_tcp_status, menu_work_state)
+          RESET_SOCKET(tcp_status, *(t->work_state))
           continue;
         }
         if (header.cmd == 0)
@@ -512,7 +523,7 @@ void *menu_tcp_thread_func(void *)
             {
               fprintf_log(stderr, "heart beat recv error: %d\n", sock_errno());
               free(buf);
-              RESET_SOCKET(menu_tcp_status, menu_work_state)
+              RESET_SOCKET(tcp_status, *(t->work_state))
               continue;
             }
             if (ret)
@@ -531,7 +542,7 @@ void *menu_tcp_thread_func(void *)
           {
             fprintf_log(stderr, "tcp recv error: %d\n", sock_errno());
             free(buf);
-            RESET_SOCKET(menu_tcp_status, menu_work_state)
+            RESET_SOCKET(tcp_status, *(t->work_state))
             continue;
           }
           free(buf);
@@ -542,13 +553,13 @@ void *menu_tcp_thread_func(void *)
       if (ret < 0)
       {
         fprintf_log(stderr, "heart beat send failed: %d\n", sock_errno());
-        RESET_SOCKET(menu_tcp_status, menu_work_state)
+        RESET_SOCKET(tcp_status, *(t->work_state))
       }
       ++packet_seq;
 
-      if (menu_remote_play)
+      if (t->remote_play && *(t->remote_play))
       {
-        menu_remote_play = 0;
+        *(t->remote_play) = 0;
 
         uint32_t args[] = {
           (ntr_rp_priority << 8) | ntr_rp_priority_factor, ntr_rp_quality, ntr_rp_qos * 128 * 1024,
@@ -561,108 +572,10 @@ void *menu_tcp_thread_func(void *)
         if (ret < 0)
         {
           fprintf_log(stderr, "remote play send failed: %d\n", sock_errno());
-          RESET_SOCKET(menu_tcp_status, menu_work_state)
+          RESET_SOCKET(tcp_status, *(t->work_state))
         }
         ++packet_seq;
       }
-    }
-    else
-    {
-      Sleep(REST_EVERY_MS);
-    }
-  }
-  return 0;
-}
-
-void *nwm_tcp_thread_func(void *)
-{
-  int nwm_tcp_status = 0;
-  SOCKET sockfd = INVALID_SOCKET;
-  int packet_seq = 0;
-  while (running)
-  {
-    if (!nwm_tcp_status && nwm_work_state == CS_CONNECTING)
-    {
-      sockfd = tcp_connect(5000 + 0x1a);
-      if (!SOCKET_VALID(sockfd))
-      {
-        nwm_work_state = CS_DISCONNECTED;
-        continue;
-      }
-
-      packet_seq = 0;
-      nwm_tcp_status = 1;
-      nwm_work_state = CS_CONNECTED;
-    }
-    else if (nwm_tcp_status && nwm_work_state == CS_DISCONNECTING)
-    {
-      RESET_SOCKET(nwm_tcp_status, nwm_work_state)
-    }
-    else if (nwm_tcp_status)
-    {
-      Sleep(HEART_BEAT_EVERY_MS);
-
-      TCPPacketHeader header = {0};
-      char *buf = (char *)&header;
-      int size = sizeof(header);
-      int ret;
-      if ((ret = tcp_recv(sockfd, buf, size)) < 0)
-      {
-        fprintf_log(stderr, "tcp recv error: %d\n", sock_errno());
-        RESET_SOCKET(nwm_tcp_status, nwm_work_state)
-        continue;
-      }
-      if (ret)
-      {
-        if (header.magic != TCP_MAGIC)
-        {
-          fprintf_log(stderr, "broken protocol\n");
-          RESET_SOCKET(nwm_tcp_status, nwm_work_state)
-          continue;
-        }
-        if (header.cmd == 0)
-        {
-          // fprintf_log(stderr, "heartbeat packet: size %d\n", header.data_len);
-          if (header.data_len)
-          {
-            char *buf = malloc(header.data_len + 1);
-            if ((ret = tcp_recv(sockfd, buf, header.data_len)) < 0)
-            {
-              fprintf_log(stderr, "heart beat recv error: %d\n", sock_errno());
-              free(buf);
-              RESET_SOCKET(nwm_tcp_status, nwm_work_state)
-              continue;
-            }
-            if (ret)
-            {
-              buf[header.data_len] = 0;
-              fprintf(stderr, "%s", buf);
-            }
-            free(buf);
-          }
-        }
-        else if (header.data_len)
-        {
-          fprintf_log(stderr, "unhandled packet type %d: size %d\n", header.cmd, header.data_len);
-          char *buf = malloc(header.data_len);
-          if ((ret = tcp_recv(sockfd, buf, header.data_len)) < 0)
-          {
-            fprintf_log(stderr, "tcp recv error: %d\n", sock_errno());
-            free(buf);
-            RESET_SOCKET(nwm_tcp_status, nwm_work_state)
-            continue;
-          }
-          free(buf);
-        }
-      }
-
-      ret = tcp_send_packet_header(sockfd, packet_seq, 0, 0, 0, 0, 0);
-      if (ret < 0)
-      {
-        fprintf_log(stderr, "heart beat send failed: %d\n", sock_errno());
-        RESET_SOCKET(nwm_tcp_status, nwm_work_state)
-      }
-      ++packet_seq;
     }
     else
     {
@@ -3014,13 +2927,23 @@ int main(int argc, char *argv[])
     return -1;
   }
   pthread_t menu_tcp_thread;
-  if ((ret = pthread_create(&menu_tcp_thread, NULL, menu_tcp_thread_func, NULL)))
+  struct tcp_thread_arg menu_tcp_thread_arg = {
+    &menu_work_state,
+    &menu_remote_play,
+    8000,
+  };
+  if ((ret = pthread_create(&menu_tcp_thread, NULL, tcp_thread_func, &menu_tcp_thread_arg)))
   {
     fprintf_log(stderr, "menu_tcp_thread create failed\n");
     return -1;
   }
   pthread_t nwm_tcp_thread;
-  if ((ret = pthread_create(&nwm_tcp_thread, NULL, nwm_tcp_thread_func, NULL)))
+  struct tcp_thread_arg nwm_tcp_thread_arg = {
+    &nwm_work_state,
+    NULL,
+    5000 + 0x1a,
+  };
+  if ((ret = pthread_create(&nwm_tcp_thread, NULL, tcp_thread_func, &nwm_tcp_thread_arg)))
   {
     fprintf_log(stderr, "nwm_tcp_thread create failed\n");
     return -1;
