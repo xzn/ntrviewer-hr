@@ -326,7 +326,7 @@ static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT1
 		return -1;
 	}
 
-	err_log("kcp->recv_pid %d, pid %d, kcp->input_pid %d\n", (int)kcp->recv_pid, (int)pid, (int)kcp->input_pid);
+	// err_log("kcp->recv_pid %d, pid %d, kcp->input_pid %d\n", (int)kcp->recv_pid, (int)pid, (int)kcp->input_pid);
 	if (((pid - kcp->recv_pid) & ((1 << 10) - 1)) <= ((kcp->input_pid - kcp->recv_pid) & ((1 << 10) - 1))) {
 		if (kcp->segs[pid].data) {
 			if (memcmp(kcp->segs[pid].data, data, size) != 0) {
@@ -426,7 +426,7 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 			return -2;
 		}
 	} else {
-		err_log("fid %d fty %d\n", (int)fid, (int)fty);
+		// err_log("fid %d fty %d\n", (int)fid, (int)fty);
 
 		fec->data_ptrs = ikcp_malloc(count * sizeof(*fec->data_ptrs));
 		memset(fec->data_ptrs, 0, count * sizeof(*fec->data_ptrs));

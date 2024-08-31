@@ -2540,21 +2540,21 @@ void receive_from_socket(SOCKET s)
       {
         restart_kcp = 1;
         if (kcp->input_cid == kcp_reset_cid) {
-          ikcp_reset(kcp, kcp->input_cid);
+          ikcp_reset(kcp, kcp_reset_cid);
         } else if (kcp->should_reset) {
-          fprintf_log(stderr, "ikcp_reset: %d\n", kcp_cid);
+          fprintf_log(stderr, "ikcp_reset: %d\n", kcp->cid);
           ikcp_reset(kcp, kcp->cid);
           kcp_reset_cid = kcp->cid;
           kcp_cid = kcp->input_cid;
         } else {
           fprintf_log(stderr, "ikcp_input failed: %d\n", ret);
           ikcp_reset(kcp, kcp->cid);
-          kcp_reset_cid = kcp_cid;
-          kcp_cid = (kcp_cid + 1) & ((1 << 2) - 1);
+          kcp_reset_cid = kcp->cid;
+          kcp_cid = (kcp->cid + 1) & ((1 << 2) - 1);
         }
         return;
       }
-      Sleep(1);
+      // Sleep(1);
       if ((ret = ikcp_reply(kcp)) < 0)
       {
         fprintf_log(stderr, "ikcp_reply failed: %d\n", ret);
