@@ -2564,7 +2564,7 @@ void receive_from_socket(SOCKET s)
           fprintf_log(stderr, "ikcp_input failed: %d\n", ret);
           ikcp_reset(kcp, kcp->cid);
           kcp_reset_cid = kcp->cid;
-          kcp_cid = (kcp->cid + 1) & ((1 << 2) - 1);
+          kcp_cid = kcp->cid + 1;
         }
         return;
       }

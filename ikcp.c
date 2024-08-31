@@ -195,7 +195,7 @@ ikcpcb* ikcp_create(IUINT16 cid, void *user)
 	ikcpcb *kcp = (ikcpcb*)ikcp_malloc(sizeof(struct IKCPCB));
 	if (kcp == NULL) return NULL;
 	*kcp = (ikcpcb){ 0 };
-	kcp->cid = cid;
+	kcp->cid = cid & ((1 << CID_NBITS) - 1);
 	kcp->user = user;
 
 	kcp->input_fid = kcp->recv_fid = kcp->input_pid = kcp->recv_pid = (IUINT16)-1 & ((1 << PID_NBITS) - 1);
