@@ -309,10 +309,14 @@ static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT1
 	IUINT16 pid = hdr & ((1 << PID_NBITS) - 1);
 	IUINT16 cid = (hdr >> PID_NBITS) & ((1 << CID_NBITS) - 1);
 
-	for (int i = 0; i < size - sizeof(IUINT16); ++i) {
-		if (data[i + sizeof(IUINT16)] != (char)gid) {
-			err_log("[%d] = %d, gid %d\n", (int)i, (int)data[i + sizeof(IUINT16)], (int)gid);
-			return -3;
+	const int data_counter_loc = sizeof(IUINT16) + 1;
+	if (data_counter_loc < size) {
+		const char data_counter = data[data_counter_loc];
+		for (int i = data_counter_loc; i < size; ++i) {
+			if (data[i] != data_counter) {
+				err_log("[%d] = %d, %d\n", (int)i, (int)data[i], (int)data_counter);
+				return -3;
+			}
 		}
 	}
 
