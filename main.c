@@ -2498,7 +2498,10 @@ void receive_from_socket(SOCKET s)
     socklen_t nAddrLen = sizeof(remoteAddr);
 
     int ret = recvfrom(s, (char *)buf, sizeof(buf), 0, (struct sockaddr *)&remoteAddr, &nAddrLen);
-    if (ret == 0 || (rand() & 0xf) == 0)
+    if (
+      ret == 0
+      // || (rand() & 0xf) == 0
+    )
     {
       continue;
     }
@@ -2622,14 +2625,6 @@ void receive_from_socket(SOCKET s)
 void receive_from_socket_loop(SOCKET s)
 {
   while (running && !ntr_rp_port_changed) {
-    received_from_remote = 0;
-
-    for (int i = 0; i < SCREEN_COUNT; ++i) {
-      recv_has_last_frame_id[i] = 0;
-      recv_last_frame_id[i] = 0;
-      recv_last_packet_id[i] = 0;
-    }
-
     kcp = ikcp_create(kcp_cid, 0);
     if (!kcp) {
       fprintf_log(stderr, "ikcp_create failed\n");
@@ -2637,6 +2632,14 @@ void receive_from_socket_loop(SOCKET s)
       continue;
     }
     init_kcp(kcp);
+
+    received_from_remote = 0;
+
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      recv_has_last_frame_id[i] = 0;
+      recv_last_frame_id[i] = 0;
+      recv_last_packet_id[i] = 0;
+    }
 
     // fprintf_log(stderr, "new connection\n");
     for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
