@@ -2569,12 +2569,6 @@ void receive_from_socket(SOCKET s)
         return;
       }
       // Sleep(1);
-      if ((ret = ikcp_reply(kcp)) < 0)
-      {
-        fprintf_log(stderr, "ikcp_reply failed: %d\n", ret);
-        restart_kcp = 1;
-        return;
-      }
       while ((ret = ikcp_recv(kcp, (char *)buf, sizeof(buf))) > 0)
       {
         // fprintf_log(stderr, "ikcp_recv: %d\n", ret);
@@ -2583,6 +2577,12 @@ void receive_from_socket(SOCKET s)
       if (ret < 0)
       {
         fprintf_log(stderr, "ikcp_recv failed: %d\n", ret);
+        restart_kcp = 1;
+        return;
+      }
+      if ((ret = ikcp_reply(kcp)) < 0)
+      {
+        fprintf_log(stderr, "ikcp_reply failed: %d\n", ret);
         restart_kcp = 1;
         return;
       }

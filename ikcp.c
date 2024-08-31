@@ -368,8 +368,11 @@ static int ikcp_remove_fec_for(ikcpcb *kcp, IUINT16 fid)
 {
 	if (
 		((fid - kcp->recv_fid) & ((1 << FID_NBITS) - 1)) > ((kcp->input_fid - kcp->recv_fid) & ((1 << FID_NBITS) - 1))
-		&& ((fid - kcp->input_fid) & ((1 << FID_NBITS) - 1)) < (1 << (FID_NBITS - 1))
 	) {
+		if (((fid - kcp->input_fid) & ((1 << FID_NBITS) - 1)) >= (1 << (FID_NBITS - 1))) {
+			return 1;
+		}
+
 		for (IUINT16 i = kcp->input_fid; i != fid;) {
 			++i, i &= ((1 << FID_NBITS) - 1);
 			ikcp_remove_fec(kcp, i);
@@ -407,8 +410,11 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 	kcp->fid = fid;
 	kcp->gid = gid;
 
-	if (ikcp_remove_fec_for(kcp, fid) != 0) {
+	int ret = ikcp_remove_fec_for(kcp, fid);
+	if (ret < 0) {
 		return -7;
+	} else if (ret > 0) {
+		return 3;
 	}
 
 	struct IKCPFEC *fec = &kcp->fecs[fid];
