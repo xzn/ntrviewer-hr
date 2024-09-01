@@ -311,7 +311,7 @@ static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT1
 
 	const int data_counter_loc = sizeof(IUINT16) + 1;
 	if (data_counter_loc < size) {
-		const char data_counter = data[data_counter_loc];
+		const char data_counter = pid;
 		for (int i = data_counter_loc; i < size; ++i) {
 			if (data[i] != data_counter) {
 				err_log("[%d] = %d, %d\n", (int)i, (int)data[i], (int)data_counter);
