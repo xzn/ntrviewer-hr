@@ -93,7 +93,7 @@ void realcugan_destroy();
 #define RP_MAX(a,b) ((a) > (b) ? (a) : (b))
 #define RP_MIN(a,b) ((a) > (b) ? (b) : (a))
 
-#define RP_SOCKET_TIMEOUT (2000)
+#define RP_SOCKET_INTERVAL (250)
 
 int sock_startup(void)
 {
@@ -2544,7 +2544,7 @@ void receive_from_socket(SOCKET s)
             .events = POLLIN,
             .revents = 0,
           };
-          int res = WSAPoll(&pollfd, 1, RP_SOCKET_TIMEOUT);
+          int res = WSAPoll(&pollfd, 1, RP_SOCKET_INTERVAL);
           if (res < 0) {
             fprintf_log(stderr, "socket poll failed: %d\n", WSAGetLastError());
             return;
@@ -2622,7 +2622,7 @@ void receive_from_socket_loop(SOCKET s)
 }
 
 void socket_error_pause(void) {
-  Sleep(RP_SOCKET_TIMEOUT);
+  Sleep(RP_SOCKET_INTERVAL);
 }
 
 void *udp_recv_thread_func(void *)
@@ -2672,11 +2672,11 @@ void *udp_recv_thread_func(void *)
     }
 
 #ifdef _WIN32
-    DWORD timeout = RP_SOCKET_TIMEOUT;
+    DWORD timeout = RP_SOCKET_INTERVAL;
 #else
     struct timeval timeout;
-    timeout.tv_sec = RP_SOCKET_TIMEOUT / 1000;
-    timeout.tv_usec = (RP_SOCKET_TIMEOUT % 1000) * 1000;
+    timeout.tv_sec = RP_SOCKET_INTERVAL / 1000;
+    timeout.tv_usec = (RP_SOCKET_INTERVAL % 1000) * 1000;
 #endif
     ret = setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout));
     if (ret)
