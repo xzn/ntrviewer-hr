@@ -2432,6 +2432,86 @@ static int test_kcp_magic(int magic) {
   return !((magic & (~0x00001100 & 0x0000ff00)) == 0 && (magic & 0x00ff0000) == 0x00020000);
 }
 
+void socket_action(int ret) {
+  int ntr_is_kcp_test = 0;
+  if (ret == (int)sizeof(uint16_t)) {
+    ntr_is_kcp_test = 1;
+  } else {
+    if (ret < (int)sizeof(uint32_t))
+    {
+      return;
+    }
+    int magic = *(uint32_t *)buf;
+    // fprintf_log(stderr, "magic: 0x%x\n", magic);
+    ntr_is_kcp_test = test_kcp_magic(magic);
+  }
+  // fprintf_log(stderr, "recvfrom: %d\n", ret);
+  if (ntr_is_kcp_test) {
+    kcp_active = 1;
+  }
+
+  if (kcp_active)
+  {
+    if ((ret = ikcp_input(kcp, (const char *)buf, ret)) != 0)
+    {
+      restart_kcp = 1;
+      if (kcp->input_cid == kcp_reset_cid) {
+        ikcp_reset(kcp, kcp_reset_cid);
+      } else if (kcp->should_reset) {
+        fprintf_log(stderr, "ikcp_reset: %d\n", kcp->cid);
+        ikcp_reset(kcp, kcp->cid);
+        kcp_reset_cid = kcp->cid;
+        kcp_cid = kcp->input_cid;
+      } else {
+        if (ret < 0) {
+          fprintf_log(stderr, "ikcp_input failed: %d\n", ret);
+        }
+        ikcp_reset(kcp, kcp->cid);
+        kcp_reset_cid = kcp->cid;
+        kcp_cid = kcp->cid + 1;
+      }
+      return;
+    }
+    // Sleep(1);
+    if (kcp->session_just_established) {
+      kcp->session_just_established = false;
+      if (!kcp->session_established) {
+        fprintf_log(stderr, "kcp session_established\n");
+        kcp->session_established = true;
+      }
+    }
+  }
+  else if (handle_recv(buf, ret) < 0)
+  {
+    return;
+  }
+}
+
+void socket_reply(void) {
+  if (kcp_active) {
+    if (!kcp->session_just_established) {
+      int ret;
+      while ((ret = ikcp_recv(kcp, (char *)buf, sizeof(buf))) > 0)
+      {
+        // fprintf_log(stderr, "ikcp_recv: %d\n", ret);
+        // TODO handle_recv_kcp
+      }
+      if (ret < 0)
+      {
+        fprintf_log(stderr, "ikcp_recv failed: %d\n", ret);
+        restart_kcp = 1;
+        return;
+      }
+      if ((ret = ikcp_reply(kcp)) < 0)
+      {
+        fprintf_log(stderr, "ikcp_reply failed: %d\n", ret);
+        restart_kcp = 1;
+        return;
+      }
+    }
+  }
+}
+
 void receive_from_socket(SOCKET s)
 {
   while (running && !ntr_rp_port_changed && !restart_kcp)
@@ -2452,9 +2532,31 @@ void receive_from_socket(SOCKET s)
       if (err != WSAETIMEDOUT && err != WSAEWOULDBLOCK)
       {
         // fprintf_log(stderr, "recvfrom failed: %d\n", err);
+        // return;
       }
-      else
+      else if (err == WSAEWOULDBLOCK)
       {
+        socket_reply();
+        while (running) {
+#ifdef _WIN32
+          WSAPOLLFD pollfd = {
+            .fd = s,
+            .events = POLLIN,
+            .revents = 0,
+          };
+          int res = WSAPoll(&pollfd, 1, RP_SOCKET_TIMEOUT);
+          if (res < 0) {
+            fprintf_log(stderr, "socket poll failed: %d\n", WSAGetLastError());
+            return;
+          } else if (res > 0) {
+            if (pollfd.revents & POLLIN) {
+              break;
+            }
+          }
+#else
+#error TODO
+#endif
+        }
       }
       continue;
     }
@@ -2474,76 +2576,7 @@ void receive_from_socket(SOCKET s)
 
     received_from_remote = 1;
 
-    int ntr_is_kcp_test = 0;
-    if (ret == (int)sizeof(uint16_t)) {
-      ntr_is_kcp_test = 1;
-    } else {
-      if (ret < (int)sizeof(uint32_t))
-      {
-        return;
-      }
-      int magic = *(uint32_t *)buf;
-      // fprintf_log(stderr, "magic: 0x%x\n", magic);
-      ntr_is_kcp_test = test_kcp_magic(magic);
-    }
-    // fprintf_log(stderr, "recvfrom: %d\n", ret);
-    if (ntr_is_kcp_test) {
-      kcp_active = 1;
-    }
-
-    if (kcp_active)
-    {
-      if ((ret = ikcp_input(kcp, (const char *)buf, ret)) != 0)
-      {
-        restart_kcp = 1;
-        if (kcp->input_cid == kcp_reset_cid) {
-          ikcp_reset(kcp, kcp_reset_cid);
-        } else if (kcp->should_reset) {
-          fprintf_log(stderr, "ikcp_reset: %d\n", kcp->cid);
-          ikcp_reset(kcp, kcp->cid);
-          kcp_reset_cid = kcp->cid;
-          kcp_cid = kcp->input_cid;
-        } else {
-          if (ret < 0) {
-            fprintf_log(stderr, "ikcp_input failed: %d\n", ret);
-          }
-          ikcp_reset(kcp, kcp->cid);
-          kcp_reset_cid = kcp->cid;
-          kcp_cid = kcp->cid + 1;
-        }
-        return;
-      }
-      // Sleep(1);
-      if (kcp->session_just_established) {
-        kcp->session_just_established = false;
-        if (!kcp->session_established) {
-          fprintf_log(stderr, "kcp session_established\n");
-          kcp->session_established = true;
-        }
-      } else {
-        while ((ret = ikcp_recv(kcp, (char *)buf, sizeof(buf))) > 0)
-        {
-          // fprintf_log(stderr, "ikcp_recv: %d\n", ret);
-          // TODO handle_recv_kcp
-        }
-        if (ret < 0)
-        {
-          fprintf_log(stderr, "ikcp_recv failed: %d\n", ret);
-          restart_kcp = 1;
-          return;
-        }
-        if ((ret = ikcp_reply(kcp)) < 0)
-        {
-          fprintf_log(stderr, "ikcp_reply failed: %d\n", ret);
-          restart_kcp = 1;
-          return;
-        }
-      }
-    }
-    else if (handle_recv(buf, ret) < 0)
-    {
-      return;
-    }
+    socket_action(ret);
   }
 }
 
@@ -2653,6 +2686,20 @@ void *udp_recv_thread_func(void *)
       socket_error_pause();
       continue;
     }
+
+#ifdef _WIN32
+    u_long val = 1;
+    ret = ioctlsocket(s, FIONBIO, &val);
+    if (ret)
+    {
+      fprintf_log(stderr, "ioctlsocket FIONBIO failed, %d\n", WSAGetLastError());
+      // running = 0;
+      socket_error_pause();
+      continue;
+    }
+#else
+#error TODO
+#endif
 
     receive_from_socket_loop(s);
 
