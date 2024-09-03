@@ -277,6 +277,12 @@ struct IKCPFEC
 	char **data_ptrs;
 };
 
+#define FID_NBITS (12)
+#define FTY_NBITS (2)
+#define GID_NBITS (2)
+
+#define PID_NBITS (12)
+#define CID_NBITS (1)
 
 //---------------------------------------------------------------------
 // IKCPCB

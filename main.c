@@ -2420,12 +2420,41 @@ int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
   return sendto(s, buf, len, 0, (struct sockaddr *)&remoteAddr, sizeof(remoteAddr));
 }
 
+#define rp_kcp_work_count (2)
+#define RP_KCP_HDR_W_NBITS (1)
+#define RP_KCP_HDR_T_NBITS (2)
+#define RP_KCP_HDR_QUALITY_NBITS (7)
+#define RP_KCP_HDR_SIZE_NBITS (11)
+#define RP_KCP_HDR_RC_NBITS (5)
+
+static struct KcpRecv {
+  u8 buf[MAX_PACKET_COUNT][PACKET_SIZE - sizeof(IUINT16) - sizeof(u16)];
+  u8 count; // packet count including term
+  u16 term_size; // term packet size
+} kcp_recv[rp_kcp_work_count][rp_core_count_max];
+
+static struct KcpRecvInfo {
+  bool is_top;
+  u16 jpeg_quality;
+  u8 core_count;
+  u16 v_adjusted;
+  u16 v_last_adjusted;
+  u16 term_sizes[rp_core_count_max];
+  u8 term_count; // term count
+
+  u8 last_term; // term being saved
+  u8 last_term_size; // size saved so far
+} kcp_recv_info[rp_kcp_work_count];
+
 void init_kcp(ikcpcb *kcp) {
   kcp->output = kcp_udp_output;
   ikcp_setmtu(kcp, PACKET_SIZE);
 
   kcp_active = 0;
   restart_kcp = 0;
+
+  memset(kcp_recv, 0, sizeof(kcp_recv));
+  memset(kcp_recv_info, 0, sizeof(kcp_recv_info));
 }
 
 static int test_kcp_magic(int magic) {
@@ -2487,6 +2516,85 @@ void socket_action(int ret) {
   }
 }
 
+int handle_recv_kcp(uint8_t *buf, int size)
+{
+  if (size < (int)sizeof(u16)) {
+    return -1;
+  }
+  u16 hdr = *(u16 *)buf;
+  buf += sizeof(u16);
+  size -= sizeof(u16);
+
+  u16 w = (hdr >> (PID_NBITS + CID_NBITS)) & ((1 << RP_KCP_HDR_W_NBITS) - 1);
+  u16 t = (hdr >> (PID_NBITS + CID_NBITS + RP_KCP_HDR_W_NBITS)) & ((1 << RP_KCP_HDR_T_NBITS) - 1);
+
+  if (t < rp_core_count_max) {
+    if (size != PACKET_SIZE - sizeof(IUINT16) - sizeof(u16)) {
+      return -2;
+    }
+    struct KcpRecv *recv = &kcp_recv[w][t];
+    if (recv->count < MAX_PACKET_COUNT) {
+      memcpy(recv->buf[recv->count], buf, size);
+      ++recv->count;
+    } else {
+      return -4;
+    }
+  } else { // t == rp_core_count_max
+    struct KcpRecvInfo *info = &kcp_recv_info[w];
+    if (info->term_count == 0) {
+      if (size < (int)sizeof(u16)) {
+        return -3;
+      }
+      hdr = *(u16 *)buf;
+      buf += sizeof(u16);
+      size -= sizeof(u16);
+
+      u16 jpeg_quality = hdr & ((1 << RP_KCP_HDR_QUALITY_NBITS) - 1);
+      u16 core_count = (hdr >> RP_KCP_HDR_QUALITY_NBITS) & ((1 << RP_KCP_HDR_T_NBITS) - 1);
+      bool is_top = (hdr >> (RP_KCP_HDR_QUALITY_NBITS + RP_KCP_HDR_T_NBITS)) & ((1 << 1) - 1);
+
+      if (core_count == 0) {
+        // ignore core_count == 0 for future extension
+        return 0;
+      }
+
+      info->jpeg_quality = jpeg_quality;
+      info->core_count = core_count;
+      info->is_top = is_top;
+
+      for (int t = 0; t < core_count; ++t) {
+        if (size < (int)sizeof(u16)) {
+          return -6;
+        }
+        hdr = *(u16 *)buf;
+        buf += sizeof(u16);
+        size -= sizeof(u16);
+
+        u16 v_adjusted = (hdr >> RP_KCP_HDR_SIZE_NBITS) & ((1 << RP_KCP_HDR_RC_NBITS) - 1);
+        u16 term_size = hdr & ((1 << RP_KCP_HDR_SIZE_NBITS) - 1);
+
+        info->term_sizes[t] = term_size;
+        if (t == core_count - 1) {
+          if (v_adjusted > info->v_adjusted) {
+            return -8;
+          }
+          info->v_last_adjusted = v_adjusted;
+        } else if (t == 0) {
+          info->v_adjusted = v_adjusted;
+        } else if (info->v_adjusted != v_adjusted) {
+          return -7;
+        }
+      }
+    }
+
+    // TODO finish this
+
+    ++info->term_count;
+  }
+
+  return 0;
+}
+
 void socket_reply(void) {
   if (kcp_active) {
     if (!kcp->session_just_established) {
@@ -2494,7 +2602,14 @@ void socket_reply(void) {
       while ((ret = ikcp_recv(kcp, (char *)buf, sizeof(buf))) > 0)
       {
         // fprintf_log(stderr, "ikcp_recv: %d\n", ret);
-        // TODO handle_recv_kcp
+        if ((ret = handle_recv_kcp(buf, ret)) != 0) {
+          fprintf_log(stderr, "handle_recv_kcp failed: %d\n", ret);
+          restart_kcp = 1;
+          ikcp_reset(kcp, kcp->cid);
+          kcp_reset_cid = kcp->cid;
+          kcp_cid = kcp->cid + 1;
+          return;
+        }
       }
       if (ret < 0)
       {

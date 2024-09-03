@@ -20,13 +20,6 @@
 #define err_log(f, ...) fprintf(stderr, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
 // #define err_log(f, ...) ((void)0)
 
-#define FID_NBITS (12)
-#define FTY_NBITS (2)
-#define GID_NBITS (2)
-
-#define PID_NBITS (12)
-#define CID_NBITS (1)
-
 enum FEC_TYPE {
 	FEC_TYPE_1_1,
 	FEC_TYPE_1_2,
