@@ -309,16 +309,18 @@ static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT1
 	IUINT16 pid = hdr & ((1 << PID_NBITS) - 1);
 	IUINT16 cid = (hdr >> PID_NBITS) & ((1 << CID_NBITS) - 1);
 
-	// const int data_counter_loc = sizeof(IUINT16);
-	// if (data_counter_loc < size) {
-	// 	const char data_counter = data[data_counter_loc];
-	// 	for (int i = data_counter_loc + 1; i < size; ++i) {
-	// 		if (data[i] != data_counter) {
-	// 			err_log("[%d] = %d, %d\n", (int)i, (int)data[i], (int)data_counter);
-	// 			return -3;
-	// 		}
-	// 	}
-	// }
+#if 0
+	const int data_counter_loc = sizeof(IUINT16);
+	if (data_counter_loc < size) {
+		const char data_counter = data[data_counter_loc];
+		for (int i = data_counter_loc + 1; i < size; ++i) {
+			if (data[i] != data_counter) {
+				err_log("[%d] = %d, %d\n", (int)i, (int)data[i], (int)data_counter);
+				return -3;
+			}
+		}
+	}
+#endif
 
 	kcp->input_cid = cid;
 	if (cid != kcp->cid) {
@@ -351,6 +353,10 @@ static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT1
 		__atomic_add_fetch(&kcp_input_pid_count, 1, __ATOMIC_RELAXED);
 		kcp->input_pid = pid;
 	}
+	else if (((kcp->recv_pid - pid) & ((1 << PID_NBITS) - 1)) > (1 << (PID_NBITS - 2))) {
+		err_log("bad kcp->recv_pid %d, pid %d, kcp->input_pid %d\n", (int)kcp->recv_pid, (int)pid, (int)kcp->input_pid);
+		return -3;
+	}
 
 	return 0;
 }
@@ -374,7 +380,8 @@ static int ikcp_remove_fec_for(ikcpcb *kcp, IUINT16 fid)
 		((fid - kcp->recv_fid) & ((1 << FID_NBITS) - 1)) > ((kcp->input_fid - kcp->recv_fid) & ((1 << FID_NBITS) - 1))
 	) {
 		if (((fid - kcp->input_fid) & ((1 << FID_NBITS) - 1)) >= (1 << (FID_NBITS - 1))) {
-			return 0;
+			err_log("bad kcp->recv_fid %d, fid %d, kcp->input_fid %d\n", (int)kcp->recv_fid, (int)fid, (int)kcp->input_fid);
+			return -1;
 		}
 
 		for (IUINT16 i = kcp->input_fid; i != fid;) {
