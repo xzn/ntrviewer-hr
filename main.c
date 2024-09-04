@@ -2740,7 +2740,7 @@ static int handle_recv_kcp(uint8_t *buf, int size)
 
   if (t < rp_core_count_max) {
     if (kcp_recv_info[w][queue_w].term_count != 0) {
-      err_log("%d %d %d %d\n",
+      err_log("%d %d %d %d %d %d\n", w, queue_w,
         (int)kcp_recv_info[w][queue_w].term_count,
         (int)kcp_recv_info[w][queue_w].last_term,
         (int)kcp_recv_info[w][queue_w].last_term_size,
@@ -2758,6 +2758,8 @@ static int handle_recv_kcp(uint8_t *buf, int size)
       return -4;
     }
   } else { // t == rp_core_count_max
+    // err_log("%d %d\n", w, queue_w);
+
     struct KcpRecvInfo *info = &kcp_recv_info[w][queue_w];
     if (info->term_count == 0) {
       if (size < (int)sizeof(u16)) {
@@ -2809,7 +2811,7 @@ static int handle_recv_kcp(uint8_t *buf, int size)
       }
     }
 
-    while (size) {
+    while (1) {
       struct KcpRecv *recv = &kcp_recv[w][queue_w][info->last_term];
       u16 left_size = info->term_sizes[info->last_term] - info->last_term_size;
       // err_log("left size %d size %d last term %d last term size %d\n",
@@ -2832,6 +2834,9 @@ static int handle_recv_kcp(uint8_t *buf, int size)
 
         continue;
       }
+
+      if (!size)
+        break;
 
       left_size = left_size <= size ? left_size : size;
       memcpy(recv->buf[recv->count] + info->last_term_size, buf, left_size);
@@ -2965,11 +2970,13 @@ void *jpeg_decode_thread_func(void *)
 
     int ret;
     if (ptr->is_kcp) {
+      // err_log("%d %d\n", ptr->kcp_w, ptr->kcp_queue_w);
       if ((ret = handle_decode_kcp(ptr->out, ptr->kcp_w, ptr->kcp_queue_w)) != 0) {
         err_log("kcp recv decode error: %d\n", ret);
         decoding = 0;
         restart_kcp = 1;
       } else {
+        // err_log("%d\n", kcp_recv_info[ptr->kcp_w][ptr->kcp_queue_w].term_count);
         handle_decode_frame_screen(ptr->ctx, ptr->out, ptr->top_bot, 0, ptr->in_delay);
       }
     } else {
