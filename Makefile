@@ -1,10 +1,10 @@
 CC := gcc
 CXX := g++
 CPPFLAGS := -Iinclude
-CFLAGS := -Og -g
-# CFLAGS := -Ofast
+# CFLAGS := -Og -g
+CFLAGS := -Ofast
 CFLAGS += -mssse3 -mavx2
-EMBED_JPEG_TURBO := 1
+EMBED_JPEG_TURBO := 0
 USE_OGL_ES := 0
 USE_ANGLE := 0
 GL_DEBUG := 0

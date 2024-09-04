@@ -3025,14 +3025,6 @@ void receive_from_socket_loop(SOCKET s)
     memset(frame_size_tracker, 0, sizeof(frame_size_tracker));
     memset(delay_between_packet_tracker, 0, sizeof(delay_between_packet_tracker));
 
-    pthread_t jpeg_decode_thread;
-    decoding = 1;
-    int ret;
-    if ((ret = pthread_create(&jpeg_decode_thread, NULL, jpeg_decode_thread_func, NULL)))
-    {
-      err_log("jpeg_decode_thread create failed\n");
-      break;
-    }
     if (jpeg_recv_sem) {
       if (rp_sem_close(jpeg_recv_sem) != 0) {
         err_log("jpeg_recv_sem close failed\n");
@@ -3046,6 +3038,15 @@ void receive_from_socket_loop(SOCKET s)
     memset(decode_ptr, 0, sizeof(decode_ptr));
     if (rp_syn_init1(&jpeg_decode_queue, 0, 0, 0, rp_work_count, (void **)decode_ptr) != 0) {
       err_log("jpeg_decode_queue init failed\n");
+      break;
+    }
+
+    pthread_t jpeg_decode_thread;
+    decoding = 1;
+    int ret;
+    if ((ret = pthread_create(&jpeg_decode_thread, NULL, jpeg_decode_thread_func, NULL)))
+    {
+      err_log("jpeg_decode_thread create failed\n");
       break;
     }
 
