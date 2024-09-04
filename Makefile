@@ -30,11 +30,20 @@ LDLIBS += -lglslang -lMachineIndependent -lOSDependent -lGenericCodeGen -lglslan
 RM := rm
 
 ifeq ($(EMBED_JPEG_TURBO),1)
-JT_SRC := $(wildcard jpeg_turbo/*.c) jpeg_turbo/simd/x86_64/jsimd.c
-JT_OBJ := $(JT_SRC:.c=.o)
+JT16_SRC := $(wildcard jpeg_turbo/jpeg16/*.c)
+JT16_OBJ := $(JT16_SRC:.c=.o)
+
+JT12_SRC := $(wildcard jpeg_turbo/jpeg12/*.c)
+JT12_OBJ := $(JT12_SRC:.c=.o) $(subst jpeg16,jpeg12,$(JT16_OBJ))
+
+JT8_SRC := $(wildcard jpeg_turbo/jpeg8/*.c)
+JT8_OBJ := $(JT8_SRC:.c=.o) $(subst jpeg12,jpeg8,$(JT12_OBJ))
 
 JT_SRC_S := $(wildcard jpeg_turbo/simd/x86_64/*.asm)
 JT_OBJ_S := $(JT_SRC_S:.asm=.o)
+
+JT_SRC := $(wildcard jpeg_turbo/*.c) jpeg_turbo/simd/x86_64/jsimd.c
+JT_OBJ := $(JT_SRC:.c=.o) $(JT16_OBJ) $(JT12_OBJ) $(JT8_OBJ)
 
 CPPFLAGS += -DEMBED_JPEG_TURBO
 # LDLIBS += -ljpeg
@@ -67,7 +76,25 @@ $(TARGET): main.o rp_syn.o ikcp.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o
 	$(CXX) $^ -o $@ $(CFLAGS) $(LDLIBS) $(LDFLAGS)
 
 %.o: %.c
-	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS)
+	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo
+
+jpeg_turbo/jpeg8/%.o: jpeg_turbo/jpeg8/%.c
+	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo
+
+jpeg_turbo/jpeg8/%.o: jpeg_turbo/jpeg12/%.c
+	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo
+
+jpeg_turbo/jpeg8/%.o: jpeg_turbo/jpeg16/%.c
+	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo
+
+jpeg_turbo/jpeg12/%.o: jpeg_turbo/jpeg12/%.c
+	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo -DBITS_IN_JSAMPLE=12
+
+jpeg_turbo/jpeg12/%.o: jpeg_turbo/jpeg16/%.c
+	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo -DBITS_IN_JSAMPLE=12
+
+jpeg_turbo/jpeg16/%.o: jpeg_turbo/jpeg16/%.c
+	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo -DBITS_IN_JSAMPLE=16
 
 %.o: %.asm
 	nasm $^ -o $@ $(NASM) -D__x86_64__ -Ijpeg_turbo/simd/nasm -Ijpeg_turbo/simd/x86_64
@@ -91,4 +118,4 @@ ikcp.o: ikcp.c
 	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS)
 
 clean:
-	$(RM) $(TARGET) *.o jpeg_turbo/*.o jpeg_turbo/simd/x86_64/*.o fsr/*.o fecal/*.o
+	$(RM) $(TARGET) *.o jpeg_turbo/jpeg8/*.o jpeg_turbo/jpeg12/*.o jpeg_turbo/jpeg16/*.o jpeg_turbo/*.o jpeg_turbo/simd/x86_64/*.o fsr/*.o fecal/*.o

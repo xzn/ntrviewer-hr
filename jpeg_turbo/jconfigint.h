@@ -43,6 +43,11 @@
 #define FALLTHROUGH
 #endif
 
+#define BMP_SUPPORTED
+#define GIF_SUPPORTED
+#define PPM_SUPPORTED
+#define TARGA_SUPPORTED
+
 /*
  * Define BITS_IN_JSAMPLE as either
  *   8   for 8-bit sample values (the usual setting)
@@ -51,7 +56,7 @@
  * JPEG standard, and the IJG code does not support anything else!
  */
 
-#if 0
+#if 1
 #ifndef BITS_IN_JSAMPLE
 #define BITS_IN_JSAMPLE  8      /* use 8 or 12 */
 #endif

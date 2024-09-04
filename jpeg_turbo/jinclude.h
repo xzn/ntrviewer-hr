@@ -35,10 +35,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
-// #include <stdlib.h>
-#define malloc(s) rpMalloc((j_common_ptr)cinfo, s)
-#define free(p) rpFree((j_common_ptr)cinfo, p)
-#define exit(code) ((void)code)
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #define NO_GETENV

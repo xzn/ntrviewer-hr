@@ -80,13 +80,12 @@ int realcugan_create();
 GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, bool *dim3);
 void realcugan_destroy();
 
-#define fprintf_log(s, f, ...) fprintf(s, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
+#define err_log(f, ...) fprintf(stderr, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
 
 #ifdef EMBED_JPEG_TURBO
 #include "jpeg_turbo/jpeglib.h"
-#else
-#include <turbojpeg.h>
 #endif
+#include <turbojpeg.h>
 
 #include "ikcp.h"
 
@@ -122,14 +121,14 @@ int sock_close(SOCKET sock)
   status = shutdown(sock, SD_BOTH);
   if (status != 0)
   {
-    fprintf_log(stderr, "socket shudown failed: %d\n", sock_errno());
+    err_log("socket shudown failed: %d\n", sock_errno());
   }
   status = closesocket(sock);
 #else
   status = shutdown(sock, SHUT_RDWR);
   if (status != 0)
   {
-    fprintf_log(stderr, "socket shudown failed: %d\n", sock_errno());
+    err_log("socket shudown failed: %d\n", sock_errno());
   }
   status = close(sock);
 #endif
@@ -386,14 +385,14 @@ SOCKET tcp_connect(int port)
   SOCKET sockfd = socket(AF_INET, SOCK_STREAM, 0);
   if (!SOCKET_VALID(sockfd))
   {
-    fprintf_log(stderr, "socket creation failed: %d\n", sock_errno());
+    err_log("socket creation failed: %d\n", sock_errno());
     return INVALID_SOCKET;
   }
 
 #ifdef _WIN32
   u_long opt = 1;
   if (ioctlsocket(sockfd, FIONBIO, &opt)) {
-    fprintf_log(stderr, "ioctlsocket FIONBIO failed: %d\n", sock_errno());
+    err_log("ioctlsocket FIONBIO failed: %d\n", sock_errno());
     return INVALID_SOCKET;
   }
 #else
@@ -414,11 +413,11 @@ SOCKET tcp_connect(int port)
   servaddr.sin_addr.s_addr = inet_addr(ip_addr_buf);
   servaddr.sin_port = htons(port);
 
-  fprintf_log(stderr, "connecting to %s:%d ...\n", ip_addr_buf, port);
+  err_log("connecting to %s:%d ...\n", ip_addr_buf, port);
   int ret = connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr));
   if (ret != 0 && sock_errno() != WSAEWOULDBLOCK && sock_errno() != EINPROGRESS)
   {
-    fprintf_log(stderr, "connection failed: %d\n", sock_errno());
+    err_log("connection failed: %d\n", sock_errno());
     sock_close(sockfd);
     return INVALID_SOCKET;
   }
@@ -438,14 +437,14 @@ SOCKET tcp_connect(int port)
     getsockopt(sockfd, SOL_SOCKET, SO_ERROR, (char *)&so_error, &len);
 
     if (so_error == 0) {
-      fprintf_log(stderr, "connected\n");
+      err_log("connected\n");
       return sockfd;
     }
-    fprintf_log(stderr, "connection failed: %d\n", so_error);
+    err_log("connection failed: %d\n", so_error);
   }
 
   closesocket(sockfd);
-  fprintf_log(stderr, "connection timeout\n");
+  err_log("connection timeout\n");
   return INVALID_SOCKET;
 }
 
@@ -454,7 +453,7 @@ SOCKET tcp_connect(int port)
   sockfd = INVALID_SOCKET; \
   ts = 0; \
   ws = CS_DISCONNECTED; \
-  fprintf_log(stderr, "disconnected\n"); \
+  err_log("disconnected\n"); \
 } while (0)
 
 struct tcp_thread_arg {
@@ -502,7 +501,7 @@ void *tcp_thread_func(void *arg)
       int ret;
       if ((ret = tcp_recv(sockfd, buf, size)) < 0)
       {
-        fprintf_log(stderr, "tcp recv error: %d\n", sock_errno());
+        err_log("tcp recv error: %d\n", sock_errno());
         RESET_SOCKET(tcp_status, *(t->work_state));
         continue;
       }
@@ -510,19 +509,19 @@ void *tcp_thread_func(void *arg)
       {
         if (header.magic != TCP_MAGIC)
         {
-          fprintf_log(stderr, "broken protocol\n");
+          err_log("broken protocol\n");
           RESET_SOCKET(tcp_status, *(t->work_state));
           continue;
         }
         if (header.cmd == 0)
         {
-          // fprintf_log(stderr, "heartbeat packet: size %d\n", header.data_len);
+          // err_log("heartbeat packet: size %d\n", header.data_len);
           if (header.data_len)
           {
             char *buf = malloc(header.data_len + 1);
             if ((ret = tcp_recv(sockfd, buf, header.data_len)) < 0)
             {
-              fprintf_log(stderr, "heart beat recv error: %d\n", sock_errno());
+              err_log("heart beat recv error: %d\n", sock_errno());
               free(buf);
               RESET_SOCKET(tcp_status, *(t->work_state));
               continue;
@@ -537,11 +536,11 @@ void *tcp_thread_func(void *arg)
         }
         else if (header.data_len)
         {
-          fprintf_log(stderr, "unhandled packet type %d: size %d\n", header.cmd, header.data_len);
+          err_log("unhandled packet type %d: size %d\n", header.cmd, header.data_len);
           char *buf = malloc(header.data_len);
           if ((ret = tcp_recv(sockfd, buf, header.data_len)) < 0)
           {
-            fprintf_log(stderr, "tcp recv error: %d\n", sock_errno());
+            err_log("tcp recv error: %d\n", sock_errno());
             free(buf);
             RESET_SOCKET(tcp_status, *(t->work_state));
             continue;
@@ -553,7 +552,7 @@ void *tcp_thread_func(void *arg)
       ret = tcp_send_packet_header(sockfd, packet_seq, 0, 0, 0, 0, 0);
       if (ret < 0)
       {
-        fprintf_log(stderr, "heart beat send failed: %d\n", sock_errno());
+        err_log("heart beat send failed: %d\n", sock_errno());
         RESET_SOCKET(tcp_status, *(t->work_state));
       }
       ++packet_seq;
@@ -572,7 +571,7 @@ void *tcp_thread_func(void *arg)
 
         if (ret < 0)
         {
-          fprintf_log(stderr, "remote play send failed: %d\n", sock_errno());
+          err_log("remote play send failed: %d\n", sock_errno());
           RESET_SOCKET(tcp_status, *(t->work_state));
         }
         ++packet_seq;
@@ -713,7 +712,7 @@ static void getIPMapMAC(void) {
 }
 
 static int matchMAC(UCHAR *mac) {
-  // fprintf_log(stderr, "%02x-%02x-%02x\n", (int)mac[0], (int)mac[1], (int)mac[2]);
+  // err_log("%02x-%02x-%02x\n", (int)mac[0], (int)mac[1], (int)mac[2]);
   for (unsigned i = 0; i < sizeof(knownMACs) / sizeof(*knownMACs); ++i) {
     if (memcmp(mac, knownMACs[i], 3) == 0)
       return 1;
@@ -1134,7 +1133,7 @@ static void guiMain(struct nk_context *ctx)
       if (upscaling_filter) {
         if (!upscaling_filter_created) {
           if (sr_create() < 0) {
-            fprintf_log(stderr, "Failed to create NCNN instance for upscaling filter.\n");
+            err_log("Failed to create NCNN instance for upscaling filter.\n");
             upscaling_filter = 0;
           } else
             upscaling_filter_created = 1;
@@ -1430,7 +1429,7 @@ static GLuint loadShader(GLenum type, const char *shaderSrc)
       char *infoLog = malloc(sizeof(char) * infoLen);
 
       glGetShaderInfoLog(shader, infoLen, NULL, infoLog);
-      fprintf_log(stderr, "Error compiling shader: %s\n", infoLog);
+      err_log("Error compiling shader: %s\n", infoLog);
 
       free(infoLog);
     }
@@ -1487,7 +1486,7 @@ GLuint LoadProgram(const char *vertShaderSrc, const char *fragShaderSrc)
       char *infoLog = malloc(sizeof(char) * infoLen);
 
       glGetProgramInfoLog(programObject, infoLen, NULL, infoLog);
-      fprintf_log(stderr, "Error linking program: %s\n", infoLog);
+      err_log("Error linking program: %s\n", infoLog);
 
       free(infoLog);
     }
@@ -1834,14 +1833,28 @@ static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int to
   }
 }
 
-static void kcpUpdateWindowsTitles(SDL_Window *win)
+static void kcpUpdateWindowTitle(SDL_Window *win, int tick_diff)
 {
-  snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (Counter %d | %d | %d | %d)",
-      __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED),
-      __atomic_load_n(&kcp_input_fid_count, __ATOMIC_RELAXED),
-      __atomic_load_n(&kcp_input_pid_count, __ATOMIC_RELAXED),
-      __atomic_load_n(&kcp_recv_pid_count, __ATOMIC_RELAXED));
-    SDL_SetWindowTitle(win, window_title_with_fps);
+  snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (FPS %03d %03d) (Counter %d | %d | %d | %d)",
+    __atomic_load_n(&frame_rate_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_TICKS / (int)tick_diff,
+    __atomic_load_n(&frame_rate_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_TICKS / (int)tick_diff,
+    __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED),
+    __atomic_load_n(&kcp_input_fid_count, __ATOMIC_RELAXED),
+    __atomic_load_n(&kcp_input_pid_count, __ATOMIC_RELAXED),
+    __atomic_load_n(&kcp_recv_pid_count, __ATOMIC_RELAXED));
+  SDL_SetWindowTitle(win, window_title_with_fps);
+}
+
+static void kcpUpdateWindowsTitles(int tb, int top_bot, int tick_diff)
+{
+  snprintf(window_title_with_fps, sizeof(window_title_with_fps),
+    tb == 0 ? TITLE " (FPS %03d) (Counter %d | %d | %d | %d)" : TITLE " (FPS %03d)",
+    __atomic_load_n(&frame_rate_tracker[top_bot].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_TICKS / tick_diff,
+    __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED),
+    __atomic_load_n(&kcp_input_fid_count, __ATOMIC_RELAXED),
+    __atomic_load_n(&kcp_input_pid_count, __ATOMIC_RELAXED),
+    __atomic_load_n(&kcp_recv_pid_count, __ATOMIC_RELAXED));
+  SDL_SetWindowTitle(win[tb], window_title_with_fps);
 }
 
 static void updateWindowsTitles(void)
@@ -1853,7 +1866,7 @@ static void updateWindowsTitles(void)
 
     if (my_view == VIEW_MODE_TOP_BOT) {
       if (kcp_active) {
-        kcpUpdateWindowsTitles(win[0]);
+        kcpUpdateWindowTitle(win[0], (int)tick_diff);
       } else {
         snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (FPS %03d %03d) (Size %06d | %06d) (Packet time %04d %04d)",
           __atomic_load_n(&frame_rate_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_TICKS / (int)tick_diff,
@@ -1872,7 +1885,7 @@ static void updateWindowsTitles(void)
           top_bot = SCREEN_BOT;
         }
         if (kcp_active) {
-          kcpUpdateWindowsTitles(win[tb]);
+          kcpUpdateWindowsTitles(tb, top_bot, (int)tick_diff);
         } else {
           snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (FPS %03d) (Size %06d) (Packet time %04d)",
             __atomic_load_n(&frame_rate_tracker[top_bot].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_TICKS / (int)tick_diff,
@@ -2061,36 +2074,36 @@ uint8_t recv_last_packet_id[SCREEN_COUNT];
 #define rp_core_count_max (3)
 
 #ifdef EMBED_JPEG_TURBO
-void* rpMalloc(j_common_ptr cinfo, u32 size)
-{
-  void* ret = cinfo->alloc.buf + cinfo->alloc.stats.offset;
-  u32 totalSize = size;
-  if (totalSize % 32 != 0) {
-    totalSize += 32 - (totalSize % 32);
-  }
-  if (cinfo->alloc.stats.remaining < totalSize) {
-    u32 alloc_size = cinfo->alloc.stats.offset + cinfo->alloc.stats.remaining;
-    fprintf_log(stderr, "bad alloc, size: %d/%d\n", totalSize, alloc_size);
-    return 0;
-  }
-  cinfo->alloc.stats.offset += totalSize;
-  cinfo->alloc.stats.remaining -= totalSize;
+// void* rpMalloc(j_common_ptr cinfo, u32 size)
+// {
+//   void* ret = cinfo->alloc.buf + cinfo->alloc.stats.offset;
+//   u32 totalSize = size;
+//   if (totalSize % 32 != 0) {
+//     totalSize += 32 - (totalSize % 32);
+//   }
+//   if (cinfo->alloc.stats.remaining < totalSize) {
+//     u32 alloc_size = cinfo->alloc.stats.offset + cinfo->alloc.stats.remaining;
+//     err_log("bad alloc, size: %d/%d\n", totalSize, alloc_size);
+//     return 0;
+//   }
+//   cinfo->alloc.stats.offset += totalSize;
+//   cinfo->alloc.stats.remaining -= totalSize;
 
-#if 0
-  if (cinfo->alloc.stats.offset > cinfo->alloc.max_offset) {
-    cinfo->alloc.max_offset = cinfo->alloc.stats.offset;
-    nsDbgPrint("cinfo %08x alloc.max_offset: %d\n", cinfo, cinfo->alloc.max_offset);
-  }
-#endif
+// #if 0
+//   if (cinfo->alloc.stats.offset > cinfo->alloc.max_offset) {
+//     cinfo->alloc.max_offset = cinfo->alloc.stats.offset;
+//     nsDbgPrint("cinfo %08x alloc.max_offset: %d\n", cinfo, cinfo->alloc.max_offset);
+//   }
+// #endif
 
-  return ret;
-}
+//   return ret;
+// }
 
-void rpFree(j_common_ptr, void*) {}
+// void rpFree(j_common_ptr, void*) {}
 
 jmp_buf jpeg_jmp;
 
-void jpeg_error_exit(j_common_ptr cinfo)
+static void jpeg_error_exit(j_common_ptr cinfo)
 {
   /* Always display the message */
   (*cinfo->err->output_message) (cinfo);
@@ -2100,7 +2113,7 @@ void jpeg_error_exit(j_common_ptr cinfo)
   longjmp(jpeg_jmp, 1);
 }
 
-void jpeg_emit_message(j_common_ptr cinfo, int msg_level)
+static void jpeg_emit_message(j_common_ptr cinfo, int msg_level)
 {
   struct jpeg_error_mgr *err = cinfo->err;
 
@@ -2113,7 +2126,7 @@ void jpeg_emit_message(j_common_ptr cinfo, int msg_level)
       (*err->output_message) (cinfo);
     /* Always count warnings in num_warnings. */
     err->num_warnings++;
-    longjmp(jpeg_jmp, 1);
+    // longjmp(jpeg_jmp, 1);
   } else {
     /* It's a trace message.  Show it if trace_level >= msg_level. */
     if (err->trace_level >= msg_level)
@@ -2121,16 +2134,16 @@ void jpeg_emit_message(j_common_ptr cinfo, int msg_level)
   }
 }
 
-int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
+static int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
   struct jpeg_decompress_struct cinfo;
 
-  cinfo.alloc.buf = malloc(400 * 240 * GL_CHANNELS_N);
-  if (cinfo.alloc.buf) {
-    cinfo.alloc.stats.offset = 0;
-    cinfo.alloc.stats.remaining = 400 * 240 * GL_CHANNELS_N;
-  } else {
-    return -1;
-  }
+  // cinfo.alloc.buf = malloc(400 * 240 * GL_CHANNELS_N);
+  // if (cinfo.alloc.buf) {
+  //   cinfo.alloc.stats.offset = 0;
+  //   cinfo.alloc.stats.remaining = 400 * 240 * GL_CHANNELS_N;
+  // } else {
+  //   return -1;
+  // }
 
   struct jpeg_error_mgr jerr;
   cinfo.err = jpeg_std_error(&jerr);
@@ -2146,7 +2159,7 @@ int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
     if (ret == JPEG_HEADER_OK) {
       cinfo.out_color_space = JCS_FORMAT;
       jpeg_start_decompress(&cinfo);
-      // fprintf_log(stderr, "jpeg_read_header: %d %d (%d %d)\n", (int)cinfo.output_width, (int)cinfo.output_height, h, w);
+      // err_log("jpeg_read_header: %d %d (%d %d)\n", (int)cinfo.output_width, (int)cinfo.output_height, h, w);
       if ((int)cinfo.output_width == h && (int)cinfo.output_height == w) {
         while (cinfo.output_scanline < cinfo.output_height) {
           uint8_t *buffer = out + cinfo.output_scanline * cinfo.output_width * GL_CHANNELS_N;
@@ -2166,21 +2179,25 @@ int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
   } else {
     ret = -1;
   }
-  free(cinfo.alloc.buf);
+  // free(cinfo.alloc.buf);
   return ret;
 }
 #else
-int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
+static int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
   tjhandle tjInstance = NULL;
   if ((tjInstance = tj3Init(TJINIT_DECOMPRESS)) == NULL) {
-    fprintf_log(stderr, "create turbo jpeg decompressor failed\n");
+    err_log("create turbo jpeg decompressor failed\n");
     return -1;
   }
 
   int ret = -1;
 
+  if (tj3Set(tjInstance, TJPARAM_STOPONWARNING, 1) != 0) {
+    goto final;
+  }
+
   if (tj3DecompressHeader(tjInstance, in, size) != 0 ) {
-    fprintf_log(stderr, "jpeg header error\n");
+    err_log("jpeg header error\n");
     goto final;
   }
 
@@ -2188,12 +2205,12 @@ int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
     h != tj3Get(tjInstance, TJPARAM_JPEGWIDTH) ||
     w != tj3Get(tjInstance, TJPARAM_JPEGHEIGHT)
   ) {
-    fprintf_log(stderr, "jpeg unexpected dimensions\n");
+    err_log("jpeg unexpected dimensions\n");
     goto final;
   }
 
   if (tj3Decompress8(tjInstance, in, size, out, h * GL_CHANNELS_N, TJ_FORMAT) != 0) {
-    fprintf_log(stderr, "jpeg decompression error\n");
+    err_log("jpeg decompression error\n");
     goto final;
   }
 
@@ -2206,17 +2223,29 @@ final:
 #endif
 
 struct DecodeInfo {
-  uint8_t *out;
-  uint8_t *in;
-  uint32_t in_size;
   int top_bot;
+  uint8_t *out;
   FrameBufferContext *ctx;
   uint32_t in_delay;
+
+  union {
+    struct {
+      uint8_t *in;
+      uint32_t in_size;
+    };
+
+    struct {
+      int kcp_w;
+      int kcp_queue_w;
+    };
+  };
+
+  bool is_kcp;
 } decode_info[rp_work_count];
 
 struct DecodeInfo *decode_ptr[rp_work_count];
 
-int queue_decode(int work) {
+static int queue_decode(int work) {
   struct DecodeInfo *ptr = &decode_info[work];
   if (rp_syn_rel(&jpeg_decode_queue, ptr) != 0) {
     running = 0;
@@ -2225,21 +2254,36 @@ int queue_decode(int work) {
   return 0;
 }
 
+static int acquire_decode(void) {
+  struct timespec ts = {0, NWM_THREAD_WAIT_NS};
+  while (1) {
+    if (!running)
+      return -1;
+    int res = rp_sem_wait(jpeg_recv_sem, &ts);
+    if (res == 0)
+      return 0;
+    if (res != ETIMEDOUT) {
+      running = 0;
+      err_log("jpeg_recv_sem wait error\n");
+      return -1;
+    }
+  }
+}
 
-int handle_recv(uint8_t *buf, int size)
+static int handle_recv(uint8_t *buf, int size)
 {
   if (size < rp_data_hdr_size) {
-    fprintf_log(stderr, "recv header too small\n");
+    err_log("recv header too small\n");
     return 0;
   }
   uint8_t *hdr = buf;
   buf += rp_data_hdr_size;
   size -= rp_data_hdr_size;
 
-  // fprintf_log(stderr, "%d %d %d %d (%d)\n", hdr[0], hdr[1], hdr[2], hdr[3], size);
+  // err_log("%d %d %d %d (%d)\n", hdr[0], hdr[1], hdr[2], hdr[3], size);
 
   if (hdr[2] != 2) {
-    fprintf_log(stderr, "recv invalid header\n");
+    err_log("recv invalid header\n");
     return 0;
   }
 
@@ -2247,7 +2291,7 @@ int handle_recv(uint8_t *buf, int size)
   if (hdr[1] & 0x10) {
     end = 1;
   } else if (size != rp_packet_data_size) {
-    fprintf_log(stderr, "recv incorrect size: %d\n", size);
+    err_log("recv incorrect size: %d\n", size);
     return 0;
   }
   hdr[1] &= 0x1;
@@ -2266,13 +2310,13 @@ int handle_recv(uint8_t *buf, int size)
       recv_last_packet_id[top_bot] = 0;
     } else if (recv_has_last_frame_id[top_bot]) {
       if ((int8_t)(frame_id - recv_last_frame_id[top_bot]) > 0) {
-        fprintf_log(stderr, "recv frame id skipped: %d to %d (%d)\n", recv_last_frame_id[top_bot], frame_id, top_bot);
+        err_log("recv frame id skipped: %d to %d (%d)\n", recv_last_frame_id[top_bot], frame_id, top_bot);
         recv_last_frame_id[top_bot] = frame_id;
         recv_last_packet_id[top_bot] = 0;
       } else {
         frame_id_out_of_order = 1;
         if ((int8_t)(frame_id - recv_last_frame_id[top_bot]) > -rp_work_count) {
-          fprintf_log(stderr, "recv frame id out of order: %d current %d\n", frame_id, recv_last_frame_id[top_bot]);
+          err_log("recv frame id out of order: %d current %d\n", frame_id, recv_last_frame_id[top_bot]);
         }
       }
     }
@@ -2294,18 +2338,8 @@ int handle_recv(uint8_t *buf, int size)
   }
 
   if (work_next) {
-    struct timespec ts = {0, NWM_THREAD_WAIT_NS};
-    while (1) {
-      if (!running)
-        return -1;
-      int res = rp_sem_wait(jpeg_recv_sem, &ts);
-      if (res == 0)
-        break;
-      if (res != ETIMEDOUT) {
-        running = 0;
-        fprintf_log(stderr, "jpeg_recv_sem wait error\n");
-        return -1;
-      }
+    if (acquire_decode() != 0) {
+      return -1;
     }
 
     decode_info[work] = (struct DecodeInfo) {0};
@@ -2317,7 +2351,7 @@ int handle_recv(uint8_t *buf, int size)
     memset(recv_track[work], 0, MAX_PACKET_COUNT);
     if (recv_end[work] != 2) {
 #ifndef PRINT_PACKET_LOSS_INFO
-      fprintf_log(stderr, "recv incomplete skipping frame\n");
+      err_log("recv incomplete skipping frame\n");
 #endif
     }
     recv_end[work] = 0;
@@ -2328,7 +2362,7 @@ int handle_recv(uint8_t *buf, int size)
 
   uint8_t packet = hdr[3];
   if (packet >= MAX_PACKET_COUNT) {
-    fprintf_log(stderr, "recv packet number too high\n");
+    err_log("recv packet number too high\n");
     return 0;
   }
 
@@ -2337,10 +2371,10 @@ int handle_recv(uint8_t *buf, int size)
     if ((uint8_t)(recv_last_packet_id[top_bot] + 1) == packet) {
       recv_last_packet_id[top_bot] = packet;
     } else if ((int8_t)(packet - recv_last_packet_id[top_bot]) > 0) {
-      fprintf_log(stderr, "recv packet skipped: %d to %d (%d:%d)\n", recv_last_packet_id[top_bot], packet, top_bot, recv_last_frame_id[top_bot]);
+      err_log("recv packet skipped: %d to %d (%d:%d)\n", recv_last_packet_id[top_bot], packet, top_bot, recv_last_frame_id[top_bot]);
       recv_last_packet_id[top_bot] = packet;
     } else {
-      fprintf_log(stderr, "recv packet out of order: %d current %d\n", packet, recv_last_packet_id[top_bot]);
+      err_log("recv packet out of order: %d current %d\n", packet, recv_last_packet_id[top_bot]);
     }
   }
 #endif
@@ -2354,7 +2388,7 @@ int handle_recv(uint8_t *buf, int size)
     recv_last_packet_time[work] = packet_time;
   }
 
-  // fprintf_log(stderr, "%d %d %d %d (%d %d)\n", hdr[0], hdr[1], hdr[2], hdr[3], size, end);
+  // err_log("%d %d %d %d (%d %d)\n", hdr[0], hdr[1], hdr[2], hdr[3], size, end);
 
   memcpy(&recv_buf[work][rp_packet_data_size * packet], buf, size);
   recv_track[work][packet] = 1;
@@ -2362,7 +2396,7 @@ int handle_recv(uint8_t *buf, int size)
     recv_end[work] = 1;
     recv_end_packet[work] = packet;
     recv_end_size[work] = rp_packet_data_size * packet + size;
-    // fprintf_log(stderr, "size %d\n", recv_end_size[work]);
+    // err_log("size %d\n", recv_end_size[work]);
   }
 
   if (recv_end[work] == 1) {
@@ -2371,7 +2405,7 @@ int handle_recv(uint8_t *buf, int size)
         if (!recv_end_incomp[work]) {
           recv_end_incomp[work] = 1;
 #ifndef PRINT_PACKET_LOSS_INFO
-          fprintf_log(stderr, "recv end packet incomplete\n");
+          err_log("recv end packet incomplete\n");
 #endif
         }
         return 0;
@@ -2382,12 +2416,12 @@ int handle_recv(uint8_t *buf, int size)
     int top_bot = !recv_hdr[work][1];
 
     decode_info[work] = (struct DecodeInfo) {
-      .ctx = &buffer_ctx[top_bot],
-      .out = screen_decoded[top_bot],
-      .in = recv_buf[work],
-      .in_delay = recv_delay_between_packets[work],
-      .in_size = recv_end_size[work],
       .top_bot = top_bot,
+      .out = screen_decoded[top_bot],
+      .ctx = &buffer_ctx[top_bot],
+      .in_delay = recv_delay_between_packets[work],
+      .in = recv_buf[work],
+      .in_size = recv_end_size[work],
     };
     if (queue_decode(work) != 0)
       return -1;
@@ -2400,18 +2434,18 @@ SOCKET s;
 struct sockaddr_in remoteAddr;
 int received_from_remote;
 
-int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
+static int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
 {
   // if (len == sizeof(IUINT16)) {
-  //   fprintf_log(stderr, "%x\n", (int)*(IUINT16 *)buf);
+  //   err_log("%x\n", (int)*(IUINT16 *)buf);
   // }
-  // fprintf_log(stderr, "udp_output: %d\n", len);
+  // err_log("udp_output: %d\n", len);
   // if (len >= (int)sizeof(uint32_t)) {
-  //   fprintf_log(stderr, "udp_output magic: %x\n", *(uint32_t *)buf);
+  //   err_log("udp_output magic: %x\n", *(uint32_t *)buf);
   // }
   if (!received_from_remote)
     return 0;
-  // fprintf_log(stderr, "remoteAddr: %d.%d.%d.%d:%d\n",
+  // err_log("remoteAddr: %d.%d.%d.%d:%d\n",
   //   (int)remoteAddr.sin_addr.S_un.S_un_b.s_b1,
   //   (int)remoteAddr.sin_addr.S_un.S_un_b.s_b2,
   //   (int)remoteAddr.sin_addr.S_un.S_un_b.s_b3,
@@ -2427,26 +2461,28 @@ int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
 #define RP_KCP_HDR_SIZE_NBITS (11)
 #define RP_KCP_HDR_RC_NBITS (5)
 
+u8 kcp_recv_w[rp_kcp_work_count];
+
 static struct KcpRecv {
   u8 buf[MAX_PACKET_COUNT][PACKET_SIZE - sizeof(IUINT16) - sizeof(u16)];
   u8 count; // packet count including term
   u16 term_size; // term packet size
-} kcp_recv[rp_kcp_work_count][rp_core_count_max];
+} kcp_recv[rp_kcp_work_count][rp_work_count][rp_core_count_max];
 
 static struct KcpRecvInfo {
   bool is_top;
   u16 jpeg_quality;
   u8 core_count;
-  u16 v_adjusted;
-  u16 v_last_adjusted;
+  u8 v_adjusted;
+  u8 v_last_adjusted;
   u16 term_sizes[rp_core_count_max];
   u8 term_count; // term count
 
   u8 last_term; // term being saved
-  u8 last_term_size; // size saved so far
-} kcp_recv_info[rp_kcp_work_count];
+  u16 last_term_size; // size saved so far
+} kcp_recv_info[rp_kcp_work_count][rp_work_count];
 
-void init_kcp(ikcpcb *kcp) {
+static void init_kcp(ikcpcb *kcp) {
   kcp->output = kcp_udp_output;
   ikcp_setmtu(kcp, PACKET_SIZE);
 
@@ -2461,7 +2497,7 @@ static int test_kcp_magic(int magic) {
   return !((magic & (~0x00001100 & 0x0000ff00)) == 0 && (magic & 0x00ff0000) == 0x00020000);
 }
 
-void socket_action(int ret) {
+static void socket_action(int ret) {
   int ntr_is_kcp_test = 0;
   if (ret == (int)sizeof(uint16_t)) {
     ntr_is_kcp_test = 1;
@@ -2471,10 +2507,10 @@ void socket_action(int ret) {
       return;
     }
     int magic = *(uint32_t *)buf;
-    // fprintf_log(stderr, "magic: 0x%x\n", magic);
+    // err_log("magic: 0x%x\n", magic);
     ntr_is_kcp_test = test_kcp_magic(magic);
   }
-  // fprintf_log(stderr, "recvfrom: %d\n", ret);
+  // err_log("recvfrom: %d\n", ret);
   if (ntr_is_kcp_test) {
     kcp_active = 1;
   }
@@ -2487,13 +2523,13 @@ void socket_action(int ret) {
       if (kcp->input_cid == kcp_reset_cid) {
         ikcp_reset(kcp, kcp_reset_cid);
       } else if (kcp->should_reset) {
-        fprintf_log(stderr, "ikcp_reset: %d\n", kcp->cid);
+        err_log("ikcp_reset: %d\n", kcp->cid);
         ikcp_reset(kcp, kcp->cid);
         kcp_reset_cid = kcp->cid;
         kcp_cid = kcp->input_cid;
       } else {
         if (ret < 0) {
-          fprintf_log(stderr, "ikcp_input failed: %d\n", ret);
+          err_log("ikcp_input failed: %d\n", ret);
         }
         ikcp_reset(kcp, kcp->cid);
         kcp_reset_cid = kcp->cid;
@@ -2505,7 +2541,7 @@ void socket_action(int ret) {
     if (kcp->session_just_established) {
       kcp->session_just_established = false;
       if (!kcp->session_established) {
-        fprintf_log(stderr, "kcp session_established\n");
+        err_log("kcp session_established\n");
         kcp->session_established = true;
       }
     }
@@ -2516,7 +2552,179 @@ void socket_action(int ret) {
   }
 }
 
-int handle_recv_kcp(uint8_t *buf, int size)
+static unsigned char jpeg_header_top_buffer_kcp[400 * 240 * 3 + 2048];
+static unsigned char jpeg_header_bot_buffer_kcp[320 * 240 * 3 + 2048];
+static unsigned char jpeg_header_empty_src_kcp[400 * 240 * 3];
+static int set_decode_quality_kcp(bool is_top, int quality, int rc)
+{
+  tjhandle tjInst = tj3Init(TJINIT_COMPRESS);
+  if (!tjInst) {
+    return -1;
+  }
+  int ret = 0;
+
+  ret = tj3Set(tjInst, TJPARAM_NOREALLOC, 1);
+  if (ret < 0) {
+    ret = ret * 0x10 - 2;
+    goto final;
+  }
+
+  ret = tj3Set(tjInst, TJPARAM_RESTARTROWS, rc);
+  if (ret < 0) {
+    ret = ret * 0x10 - 5;
+    goto final;
+  }
+
+  ret = tj3Set(tjInst, TJPARAM_QUALITY, quality);
+  if (ret < 0) {
+    ret = ret * 0x10 - 6;
+    goto final;
+  }
+
+  ret = tj3Set(tjInst, TJPARAM_SUBSAMP, TJSAMP_420);
+  if (ret < 0) {
+    ret = ret * 0x10 - 7;
+    goto final;
+  }
+
+  size_t size = is_top ? sizeof(jpeg_header_top_buffer_kcp) : sizeof(jpeg_header_bot_buffer_kcp);
+  size_t buf_size = tj3JPEGBufSize(240, is_top ? 400 : 320, TJSAMP_420);
+  if (size < buf_size) {
+    err_log("buf size %d size %d\n", (int)buf_size, (int)size);
+    ret = -3;
+    goto final;
+  }
+
+  unsigned char *jpeg_buf = is_top ? jpeg_header_top_buffer_kcp : jpeg_header_bot_buffer_kcp;
+
+  ret = tj3Compress8(tjInst, jpeg_header_empty_src_kcp, 240, 0, is_top ? 400 : 320, TJPF_RGB,
+    &jpeg_buf,
+    &size);
+
+  if (ret < 0) {
+    err_log("tj3Compress8 error (%d): %s\n", tj3GetErrorCode(tjInst), tj3GetErrorStr(tjInst));
+    ret = ret * 0x10 - 4;
+    goto final;
+  }
+
+  ret = 0;
+
+final:
+  tj3Destroy(tjInst);
+  return ret;
+}
+
+static uint8_t *copy_with_escape(uint8_t *out, const uint8_t *in, int size)
+{
+  while (size) {
+    if (*in == 0xff) {
+      *out = 0xff;
+      ++out;
+      *out = 0;
+      ++out;
+      ++in;
+    } else {
+      *out = *in;
+      ++out;
+      ++in;
+    }
+    --size;
+  }
+  return out;
+}
+
+static unsigned char jpeg_buffer_kcp[400 * 240 * 3 + 2048];
+static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
+{
+  struct KcpRecv *recvs = kcp_recv[w][queue_w];
+  struct KcpRecvInfo *info = &kcp_recv_info[w][queue_w];
+
+  int ret;
+  if ((ret = set_decode_quality_kcp(info->is_top, info->jpeg_quality, info->v_adjusted)) < 0) {
+    return ret * 0x100 - 1;
+  }
+
+  unsigned char *jpeg_header = info->is_top ? jpeg_header_top_buffer_kcp : jpeg_header_bot_buffer_kcp;
+  size_t jpeg_header_size_max = info->is_top ? sizeof(jpeg_header_top_buffer_kcp) : sizeof(jpeg_header_bot_buffer_kcp);
+  size_t jpeg_header_size = 0;
+  for (size_t i = 0; i < jpeg_header_size_max; ++i) {
+    if (jpeg_header[i] == 0xff) {
+      if (i + 1 < jpeg_header_size_max) {
+        if (jpeg_header[i + 1] == 0xda) {
+          jpeg_header_size = i + 2;
+          if (jpeg_header_size + 2 >= jpeg_header_size_max) {
+            return -4;
+          }
+          jpeg_header_size += ntohs(*(u16 *)&jpeg_header[jpeg_header_size]);
+          if (jpeg_header_size >= jpeg_header_size_max) {
+            return -5;
+          }
+          break;
+        }
+      }
+    }
+  }
+  if (jpeg_header_size == 0) {
+    return -2;
+  }
+
+  memcpy(jpeg_buffer_kcp, jpeg_header, jpeg_header_size);
+  unsigned char *ptr = jpeg_buffer_kcp + jpeg_header_size;
+  for (int t = 0; t < info->core_count; ++t) {
+    struct KcpRecv *recv = &recvs[t];
+    for (int i = 0; i < recv->count; ++i) {
+      if (i == recv->count - 1) {
+        ptr = copy_with_escape(ptr, recv->buf[i], recv->term_size);
+      } else {
+        ptr = copy_with_escape(ptr, recv->buf[i], PACKET_SIZE - sizeof(IUINT16) - sizeof(u16));
+      }
+    }
+    *ptr = 0xff;
+    ++ptr;
+    if (t == info->core_count - 1) {
+      *ptr = 0xd9;
+    } else {
+      *ptr = 0xd0 + t;
+    }
+    ++ptr;
+  }
+
+  if (handle_decode(out, jpeg_buffer_kcp, ptr - jpeg_buffer_kcp, info->is_top ? 400 : 320, 240) != 0) {
+    return -3;
+  }
+
+  memset(recvs, 0, sizeof(struct KcpRecv) * rp_core_count_max);
+  memset(info, 0, sizeof(struct KcpRecvInfo));
+
+  return 0;
+}
+
+static int queue_decode_kcp(int w, int queue_w) {
+  struct DecodeInfo *ptr = &decode_info[recv_work];
+  int top_bot = kcp_recv_info[w][queue_w].is_top ? 0 : 1;
+  *ptr = (struct DecodeInfo) {
+    .top_bot = top_bot,
+    .out = screen_decoded[top_bot],
+    .ctx = &buffer_ctx[top_bot],
+    .kcp_w = w,
+    .kcp_queue_w = queue_w,
+    .is_kcp = true,
+  };
+  if (rp_syn_rel(&jpeg_decode_queue, ptr) != 0) {
+    running = 0;
+    return -1;
+  }
+
+  if (acquire_decode() < 0) {
+    return -1;
+  }
+  recv_work = (recv_work + 1) % rp_work_count;
+
+  return 0;
+
+}
+
+static int handle_recv_kcp(uint8_t *buf, int size)
 {
   if (size < (int)sizeof(u16)) {
     return -1;
@@ -2526,13 +2734,23 @@ int handle_recv_kcp(uint8_t *buf, int size)
   size -= sizeof(u16);
 
   u16 w = (hdr >> (PID_NBITS + CID_NBITS)) & ((1 << RP_KCP_HDR_W_NBITS) - 1);
+  u16 queue_w = kcp_recv_w[w];
+
   u16 t = (hdr >> (PID_NBITS + CID_NBITS + RP_KCP_HDR_W_NBITS)) & ((1 << RP_KCP_HDR_T_NBITS) - 1);
 
   if (t < rp_core_count_max) {
+    if (kcp_recv_info[w][queue_w].term_count != 0) {
+      err_log("%d %d %d %d\n",
+        (int)kcp_recv_info[w][queue_w].term_count,
+        (int)kcp_recv_info[w][queue_w].last_term,
+        (int)kcp_recv_info[w][queue_w].last_term_size,
+        (int)kcp_recv_info[w][queue_w].term_sizes[kcp_recv_info[w][queue_w].last_term]);
+      return -9;
+    }
     if (size != PACKET_SIZE - sizeof(IUINT16) - sizeof(u16)) {
       return -2;
     }
-    struct KcpRecv *recv = &kcp_recv[w][t];
+    struct KcpRecv *recv = &kcp_recv[w][queue_w][t];
     if (recv->count < MAX_PACKET_COUNT) {
       memcpy(recv->buf[recv->count], buf, size);
       ++recv->count;
@@ -2540,7 +2758,7 @@ int handle_recv_kcp(uint8_t *buf, int size)
       return -4;
     }
   } else { // t == rp_core_count_max
-    struct KcpRecvInfo *info = &kcp_recv_info[w];
+    struct KcpRecvInfo *info = &kcp_recv_info[w][queue_w];
     if (info->term_count == 0) {
       if (size < (int)sizeof(u16)) {
         return -3;
@@ -2551,7 +2769,9 @@ int handle_recv_kcp(uint8_t *buf, int size)
 
       u16 jpeg_quality = hdr & ((1 << RP_KCP_HDR_QUALITY_NBITS) - 1);
       u16 core_count = (hdr >> RP_KCP_HDR_QUALITY_NBITS) & ((1 << RP_KCP_HDR_T_NBITS) - 1);
-      bool is_top = (hdr >> (RP_KCP_HDR_QUALITY_NBITS + RP_KCP_HDR_T_NBITS)) & ((1 << 1) - 1);
+      bool top_bot = (hdr >> (RP_KCP_HDR_QUALITY_NBITS + RP_KCP_HDR_T_NBITS)) & ((1 << 1) - 1);
+
+      // err_log("w %d quality %d cores %d top %d\n", (int)w, (int)jpeg_quality, (int)core_count, (int)is_top);
 
       if (core_count == 0) {
         // ignore core_count == 0 for future extension
@@ -2560,7 +2780,7 @@ int handle_recv_kcp(uint8_t *buf, int size)
 
       info->jpeg_quality = jpeg_quality;
       info->core_count = core_count;
-      info->is_top = is_top;
+      info->is_top = top_bot == 0;
 
       for (int t = 0; t < core_count; ++t) {
         if (size < (int)sizeof(u16)) {
@@ -2573,9 +2793,11 @@ int handle_recv_kcp(uint8_t *buf, int size)
         u16 v_adjusted = (hdr >> RP_KCP_HDR_SIZE_NBITS) & ((1 << RP_KCP_HDR_RC_NBITS) - 1);
         u16 term_size = hdr & ((1 << RP_KCP_HDR_SIZE_NBITS) - 1);
 
+        // err_log("t %d rc %d size %d\n", (int)t, (int)v_adjusted, (int)term_size);
+
         info->term_sizes[t] = term_size;
         if (t == core_count - 1) {
-          if (v_adjusted > info->v_adjusted) {
+          if (core_count > 1 && v_adjusted > info->v_adjusted) {
             return -8;
           }
           info->v_last_adjusted = v_adjusted;
@@ -2587,7 +2809,36 @@ int handle_recv_kcp(uint8_t *buf, int size)
       }
     }
 
-    // TODO finish this
+    while (size) {
+      struct KcpRecv *recv = &kcp_recv[w][queue_w][info->last_term];
+      u16 left_size = info->term_sizes[info->last_term] - info->last_term_size;
+      // err_log("left size %d size %d last term %d last term size %d\n",
+      //   (int)left_size, (int)size, (int)info->last_term, (int)info->last_term_size);
+      if (left_size == 0) {
+        ++recv->count;
+        recv->term_size = info->last_term_size;;
+        // err_log("%d\n", (int)recv->term_size);
+
+        ++info->last_term;
+        info->last_term_size = 0;
+
+        if (info->last_term == info->core_count) {
+          int ret = queue_decode_kcp(w, queue_w);
+          if (ret < 0)
+            return ret * 0x100 - 10;
+          kcp_recv_w[w] = (kcp_recv_w[w] + 1) % rp_work_count;
+          return 0;
+        }
+
+        continue;
+      }
+
+      left_size = left_size <= size ? left_size : size;
+      memcpy(recv->buf[recv->count] + info->last_term_size, buf, left_size);
+      buf += left_size;
+      size -= left_size;
+      info->last_term_size += left_size;
+    }
 
     ++info->term_count;
   }
@@ -2601,9 +2852,9 @@ void socket_reply(void) {
       int ret;
       while ((ret = ikcp_recv(kcp, (char *)buf, sizeof(buf))) > 0)
       {
-        // fprintf_log(stderr, "ikcp_recv: %d\n", ret);
+        // err_log("ikcp_recv: %d\n", ret);
         if ((ret = handle_recv_kcp(buf, ret)) != 0) {
-          fprintf_log(stderr, "handle_recv_kcp failed: %d\n", ret);
+          err_log("handle_recv_kcp failed: %d\n", ret);
           restart_kcp = 1;
           ikcp_reset(kcp, kcp->cid);
           kcp_reset_cid = kcp->cid;
@@ -2613,13 +2864,13 @@ void socket_reply(void) {
       }
       if (ret < 0)
       {
-        fprintf_log(stderr, "ikcp_recv failed: %d\n", ret);
+        err_log("ikcp_recv failed: %d\n", ret);
         restart_kcp = 1;
         return;
       }
       if ((ret = ikcp_reply(kcp)) < 0)
       {
-        fprintf_log(stderr, "ikcp_reply failed: %d\n", ret);
+        err_log("ikcp_reply failed: %d\n", ret);
         restart_kcp = 1;
         return;
       }
@@ -2646,7 +2897,7 @@ void receive_from_socket(SOCKET s)
       int err = sock_errno();
       if (err != WSAETIMEDOUT && err != WSAEWOULDBLOCK)
       {
-        // fprintf_log(stderr, "recvfrom failed: %d\n", err);
+        // err_log("recvfrom failed: %d\n", err);
         // return;
       }
       else if (err == WSAEWOULDBLOCK)
@@ -2661,7 +2912,7 @@ void receive_from_socket(SOCKET s)
           };
           int res = WSAPoll(&pollfd, 1, RP_SOCKET_INTERVAL);
           if (res < 0) {
-            fprintf_log(stderr, "socket poll failed: %d\n", WSAGetLastError());
+            err_log("socket poll failed: %d\n", WSAGetLastError());
             return;
           } else if (res > 0) {
             if (pollfd.revents & POLLIN) {
@@ -2695,12 +2946,53 @@ void receive_from_socket(SOCKET s)
   }
 }
 
+int decoding;
+void *jpeg_decode_thread_func(void *)
+{
+  while (running && decoding) {
+    struct DecodeInfo *ptr;
+    while (1) {
+      if (!(running && decoding))
+        return 0;
+      int res = rp_syn_acq(&jpeg_decode_queue, NWM_THREAD_WAIT_NS, (void **)&ptr);
+      if (res == 0)
+        break;
+      if (res != ETIMEDOUT) {
+        running = 0;
+        return 0;
+      }
+    }
+
+    int ret;
+    if (ptr->is_kcp) {
+      if ((ret = handle_decode_kcp(ptr->out, ptr->kcp_w, ptr->kcp_queue_w)) != 0) {
+        err_log("kcp recv decode error: %d\n", ret);
+        decoding = 0;
+        restart_kcp = 1;
+      } else {
+        handle_decode_frame_screen(ptr->ctx, ptr->out, ptr->top_bot, 0, ptr->in_delay);
+      }
+    } else {
+      if (ptr->out && ptr->in && ptr->ctx) {
+        if (handle_decode(ptr->out, ptr->in, ptr->in_size, ptr->top_bot == 0 ? 400 : 320, 240) != 0) {
+          err_log("recv decode error\n");
+        } else {
+          handle_decode_frame_screen(ptr->ctx, ptr->out, ptr->top_bot, ptr->in_size, ptr->in_delay);
+        }
+      }
+    }
+
+    rp_sem_rel(jpeg_recv_sem);
+  }
+  return 0;
+}
+
 void receive_from_socket_loop(SOCKET s)
 {
   while (running && !ntr_rp_port_changed) {
     kcp = ikcp_create(kcp_cid, 0);
     if (!kcp) {
-      fprintf_log(stderr, "ikcp_create failed\n");
+      err_log("ikcp_create failed\n");
       Sleep(250);
       continue;
     }
@@ -2714,7 +3006,7 @@ void receive_from_socket_loop(SOCKET s)
       recv_last_packet_id[i] = 0;
     }
 
-    // fprintf_log(stderr, "new connection\n");
+    // err_log("new connection\n");
     for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
       buffer_ctx[top_bot].updated = FBS_NOT_AVAIL;
     }
@@ -2726,8 +3018,35 @@ void receive_from_socket_loop(SOCKET s)
     memset(frame_size_tracker, 0, sizeof(frame_size_tracker));
     memset(delay_between_packet_tracker, 0, sizeof(delay_between_packet_tracker));
 
+    pthread_t jpeg_decode_thread;
+    decoding = 1;
+    int ret;
+    if ((ret = pthread_create(&jpeg_decode_thread, NULL, jpeg_decode_thread_func, NULL)))
+    {
+      err_log("jpeg_decode_thread create failed\n");
+      break;
+    }
+    if (jpeg_recv_sem) {
+      if (rp_sem_close(jpeg_recv_sem) != 0) {
+        err_log("jpeg_recv_sem close failed\n");
+        break;
+      }
+    }
+    if (rp_sem_init(jpeg_recv_sem, rp_work_queue_count) != 0) {
+      err_log("jpeg_recv_sem init failed\n");
+      break;
+    }
+    memset(decode_ptr, 0, sizeof(decode_ptr));
+    if (rp_syn_init1(&jpeg_decode_queue, 0, 0, 0, rp_work_count, (void **)decode_ptr) != 0) {
+      err_log("jpeg_decode_queue init failed\n");
+      break;
+    }
+
     receive_from_socket(s);
     // Sleep(250);
+
+    decoding = 0;
+    pthread_join(jpeg_decode_thread, NULL);
 
     if (kcp) {
       ikcp_release(kcp);
@@ -2748,7 +3067,7 @@ void *udp_recv_thread_func(void *)
     int ret;
     if (!SOCKET_VALID(s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)))
     {
-      fprintf_log(stderr, "socket creation failed\n");
+      err_log("socket creation failed\n");
       // running = 0;
       socket_error_pause();
       continue;
@@ -2762,13 +3081,13 @@ void *udp_recv_thread_func(void *)
 
     if (bind(s, (struct sockaddr *)&si_other, sizeof(si_other)) == SOCKET_ERROR)
     {
-      fprintf_log(stderr, "socket bind failed for port %d\n", ntr_rp_bound_port);
+      err_log("socket bind failed for port %d\n", ntr_rp_bound_port);
       // running = 0;
       socket_error_pause();
       continue;
     }
     uint8_t *octets = adaptorIPsOctets[selectedAdaptor];
-    fprintf_log(stderr, "port bound at %d.%d.%d.%d:%d\n", (int)octets[0], (int)octets[1], (int)octets[2], (int)octets[3], ntr_rp_bound_port);
+    err_log("port bound at %d.%d.%d.%d:%d\n", (int)octets[0], (int)octets[1], (int)octets[2], (int)octets[3], ntr_rp_bound_port);
     ntr_rp_port_changed = 0;
     ntr_rp_port = ntr_rp_bound_port;
 
@@ -2780,7 +3099,7 @@ void *udp_recv_thread_func(void *)
     ret = getsockopt(s, SOL_SOCKET, SO_RCVBUF, (char *)(&buff_size), &tmp);
     if (ret)
     {
-      fprintf_log(stderr, "setsockopt buf size failed\n");
+      err_log("setsockopt buf size failed\n");
       // running = 0;
       socket_error_pause();
       continue;
@@ -2796,7 +3115,7 @@ void *udp_recv_thread_func(void *)
     ret = setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout));
     if (ret)
     {
-      fprintf_log(stderr, "setsockopt timeout failed\n");
+      err_log("setsockopt timeout failed\n");
       // running = 0;
       socket_error_pause();
       continue;
@@ -2807,7 +3126,7 @@ void *udp_recv_thread_func(void *)
     ret = ioctlsocket(s, FIONBIO, &val);
     if (ret)
     {
-      fprintf_log(stderr, "ioctlsocket FIONBIO failed, %d\n", WSAGetLastError());
+      err_log("ioctlsocket FIONBIO failed, %d\n", WSAGetLastError());
       // running = 0;
       socket_error_pause();
       continue;
@@ -2821,35 +3140,8 @@ void *udp_recv_thread_func(void *)
     closesocket(s);
   }
 
-  return 0;
-}
+  running = 0;
 
-void *jpeg_decode_thread_func(void *)
-{
-  while (running) {
-    struct DecodeInfo *ptr;
-    while (1) {
-      if (!running)
-        return 0;
-      int res = rp_syn_acq(&jpeg_decode_queue, NWM_THREAD_WAIT_NS, (void **)&ptr);
-      if (res == 0)
-        break;
-      if (res != ETIMEDOUT) {
-        running = 0;
-        return 0;
-      }
-    }
-
-    if (ptr->out && ptr->in && ptr->ctx) {
-      if (handle_decode(ptr->out, ptr->in, ptr->in_size, ptr->top_bot == 0 ? 400 : 320, 240) != 0) {
-        fprintf_log(stderr, "recv decode error\n");
-      } else {
-        handle_decode_frame_screen(ptr->ctx, ptr->out, ptr->top_bot, ptr->in_size, ptr->in_delay);
-      }
-    }
-
-    rp_sem_rel(jpeg_recv_sem);
-  }
   return 0;
 }
 
@@ -2860,7 +3152,7 @@ static void on_gl_error(
     GLenum source, GLenum type, GLuint id, GLenum severity,
     GLsizei length, const GLchar *message, const void *)
 {
-  fprintf_log(stderr, "gl_error: %u:%u:%u:%u:%u: %s\n", source, type, id, severity, length, message);
+  err_log("gl_error: %u:%u:%u:%u:%u: %s\n", source, type, id, severity, length, message);
 }
 #endif
 
@@ -2911,7 +3203,7 @@ int main(int argc, char *argv[])
                          WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
   if (!win[0])
   {
-    fprintf_log(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
+    err_log("SDL_CreateWindow: %s\n", SDL_GetError());
     return -1;
   }
   win[1] = SDL_CreateWindow(TITLE,
@@ -2919,27 +3211,27 @@ int main(int argc, char *argv[])
                          WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
   if (!win[1])
   {
-    fprintf_log(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
+    err_log("SDL_CreateWindow: %s\n", SDL_GetError());
     return -1;
   }
 
   glContext[0] = SDL_GL_CreateContext(win[0]);
   if (!glContext[0])
   {
-    fprintf_log(stderr, "SDL_GL_CreateContext: %s\n", SDL_GetError());
+    err_log("SDL_GL_CreateContext: %s\n", SDL_GetError());
     return -1;
   }
 
 #ifdef USE_OGL_ES
   if (!gladLoadGLES2Loader((GLADloadproc)SDL_GL_GetProcAddress))
   {
-    fprintf_log(stderr, "gladLoadGLES2 failed\n");
+    err_log("gladLoadGLES2 failed\n");
     return -1;
   }
 #else
   if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress))
   {
-    fprintf_log(stderr, "gladLoadGLLoader failed\n");
+    err_log("gladLoadGLLoader failed\n");
     return -1;
   }
 #endif
@@ -2949,7 +3241,7 @@ int main(int argc, char *argv[])
   glDebugMessageCallback(on_gl_error, NULL);
 #endif
 
-  fprintf_log(stderr, "ogl version string: %s\n", glGetString(GL_VERSION));
+  err_log("ogl version string: %s\n", glGetString(GL_VERSION));
 #if 0
 #ifdef USE_OGL_ES
   if (sscanf((const char *)glGetString(GL_VERSION), "OpenGL ES %d.%d", &ogl_version_major, &ogl_version_minor) != 2) {
@@ -2965,7 +3257,7 @@ int main(int argc, char *argv[])
 #endif
   glGetIntegerv(GL_MAJOR_VERSION, &ogl_version_major);
   glGetIntegerv(GL_MINOR_VERSION, &ogl_version_minor);
-  fprintf_log(stderr, "ogl version: %d.%d\n", ogl_version_major, ogl_version_minor);
+  err_log("ogl version: %d.%d\n", ogl_version_major, ogl_version_minor);
 
   SDL_GL_MakeCurrent(win[0], glContext[0]);
 
@@ -2973,7 +3265,7 @@ int main(int argc, char *argv[])
   glContext[1] = SDL_GL_CreateContext(win[1]);
   if (!glContext[1])
   {
-    fprintf_log(stderr, "SDL_GL_CreateContext: %s\n", SDL_GetError());
+    err_log("SDL_GL_CreateContext: %s\n", SDL_GetError());
     return -1;
   }
 
@@ -3042,7 +3334,7 @@ int main(int argc, char *argv[])
       GLenum draw_buffer = GL_COLOR_ATTACHMENT0;
       glDrawBuffers(1, &draw_buffer);
       if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        fprintf_log(stderr, "fbo init error\n");
+        err_log("fbo init error\n");
         return -1;
       }
       glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
@@ -3068,25 +3360,10 @@ int main(int argc, char *argv[])
   getAdapterIPs();
   tryAutoSelectAdapterIP();
 
-  if (rp_sem_init(jpeg_recv_sem, rp_work_queue_count) != 0) {
-    fprintf_log(stderr, "jpeg_recv_sem init failed\n");
-    return -1;
-  }
-  if (rp_syn_init1(&jpeg_decode_queue, 0, 0, 0, rp_work_count, (void **)decode_ptr) != 0) {
-    fprintf_log(stderr, "jpeg_decode_queue init failed\n");
-    return -1;
-  }
-
   pthread_t udp_recv_thread;
   if ((ret = pthread_create(&udp_recv_thread, NULL, udp_recv_thread_func, NULL)))
   {
-    fprintf_log(stderr, "udp_recv_thread create failed\n");
-    return -1;
-  }
-  pthread_t jpeg_decode_thread;
-  if ((ret = pthread_create(&jpeg_decode_thread, NULL, jpeg_decode_thread_func, NULL)))
-  {
-    fprintf_log(stderr, "jpeg_decode_thread create failed\n");
+    err_log("udp_recv_thread create failed\n");
     return -1;
   }
   pthread_t menu_tcp_thread;
@@ -3097,7 +3374,7 @@ int main(int argc, char *argv[])
   };
   if ((ret = pthread_create(&menu_tcp_thread, NULL, tcp_thread_func, &menu_tcp_thread_arg)))
   {
-    fprintf_log(stderr, "menu_tcp_thread create failed\n");
+    err_log("menu_tcp_thread create failed\n");
     return -1;
   }
   pthread_t nwm_tcp_thread;
@@ -3108,7 +3385,7 @@ int main(int argc, char *argv[])
   };
   if ((ret = pthread_create(&nwm_tcp_thread, NULL, tcp_thread_func, &nwm_tcp_thread_arg)))
   {
-    fprintf_log(stderr, "nwm_tcp_thread create failed\n");
+    err_log("nwm_tcp_thread create failed\n");
     return -1;
   }
 
@@ -3128,7 +3405,6 @@ int main(int argc, char *argv[])
   SetThreadExecutionState(ES_CONTINUOUS);
 #endif
 
-  pthread_join(jpeg_decode_thread, NULL);
   pthread_join(udp_recv_thread, NULL);
   pthread_join(menu_tcp_thread, NULL);
   pthread_join(nwm_tcp_thread, NULL);
