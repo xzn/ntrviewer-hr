@@ -2866,6 +2866,7 @@ static int handle_recv_kcp(uint8_t *buf, int size)
   return 0;
 }
 
+static uint32_t reply_time;
 void socket_reply(void) {
   if (kcp_active) {
     if (!kcp->session_just_established) {
@@ -2888,11 +2889,25 @@ void socket_reply(void) {
         restart_kcp = 1;
         return;
       }
-      if ((ret = ikcp_reply(kcp)) < 0)
-      {
-        err_log("ikcp_reply failed: %d\n", ret);
-        restart_kcp = 1;
-        return;
+      bool reply = false;
+      if (kcp->recv_pid == kcp->input_pid) {
+        uint32_t current_time = iclock();
+        // Send ack every 1/8 second or 125 ms; do not spam as that slows thing down considerably
+        if (current_time - reply_time >= 125000) {
+          reply = true;
+          reply_time = current_time;
+        }
+      } else {
+        reply = true;
+        reply_time = iclock();
+      }
+      if (reply) {
+        if ((ret = ikcp_reply(kcp)) < 0)
+        {
+          err_log("ikcp_reply failed: %d\n", ret);
+          restart_kcp = 1;
+          return;
+        }
       }
     }
   }
