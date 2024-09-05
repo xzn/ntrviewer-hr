@@ -2891,23 +2891,28 @@ void socket_reply(void) {
         return;
       }
       bool reply = false;
+      uint32_t current_time = iclock();
       if (kcp->recv_pid == kcp->input_pid) {
-        uint32_t current_time = iclock();
         // Send ack every 1/8 second or 125 ms; do not spam as that slows thing down considerably
         if (current_time - reply_time >= 125000) {
           reply = true;
-          reply_time = current_time;
         }
       } else {
         reply = true;
-        reply_time = iclock();
       }
       if (reply) {
         if ((ret = ikcp_reply(kcp)) < 0)
         {
+          if (ret == -0x100) {
+            if (sock_errno() == WSAEWOULDBLOCK) {
+              return;
+            }
+          }
           err_log("ikcp_reply failed: %d\n", ret);
           restart_kcp = 1;
           return;
+        } else {
+          reply_time = current_time;
         }
       }
     }

@@ -696,7 +696,11 @@ int ikcp_reply(ikcpcb *kcp)
 		return -1;
 	}
 
-	return kcp->output(buf, size, kcp, kcp->user);
+	int ret = kcp->output(buf, size, kcp, kcp->user);
+	if (ret < 0) {
+		return ret * 0x100;
+	}
+	return 0;
 }
 
 
