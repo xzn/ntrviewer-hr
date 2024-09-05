@@ -2,17 +2,13 @@
 ; jdcolor.asm - colorspace conversion (64-bit SSE2)
 ;
 ; Copyright 2009 Pierre Ossman <ossman@cendio.se> for Cendio AB
-; Copyright (C) 2009, 2016, D. R. Commander.
+; Copyright (C) 2009, 2016, 2024, D. R. Commander.
 ;
 ; Based on the x86 SIMD extension for IJG JPEG library
 ; Copyright (C) 1999-2006, MIYASAKA Masaru.
 ; For conditions of distribution and use, see copyright notice in jsimdext.inc
 ;
-; This file should be assembled with NASM (Netwide Assembler),
-; can *not* be assembled with Microsoft's MASM or any compatible
-; assembler (including Borland's Turbo Assembler).
-; NASM is available from http://nasm.sourceforge.net/ or
-; http://sourceforge.net/project/showfiles.php?group_id=6208
+; This file should be assembled with NASM (Netwide Assembler) or Yasm.
 
 %include "jsimdext.inc"
 
@@ -31,7 +27,7 @@ F_0_228 equ (131072 - F_1_772)  ; FIX(2) - FIX(1.77200)
 ; --------------------------------------------------------------------------
     SECTION     SEG_CONST
 
-    alignz      32
+    ALIGNZ      32
     GLOBAL_DATA(jconst_ycc_rgb_convert_sse2)
 
 EXTN(jconst_ycc_rgb_convert_sse2):
@@ -42,13 +38,13 @@ PW_MF0344_F0285 times 4 dw -F_0_344, F_0_285
 PW_ONE          times 8 dw  1
 PD_ONEHALF      times 4 dd  1 << (SCALEBITS - 1)
 
-    alignz      32
+    ALIGNZ      32
 
 ; --------------------------------------------------------------------------
     SECTION     SEG_TEXT
     BITS        64
 
-%include "jdcolext-sse2.inc"
+%include "jdcolext-sse2.asm"
 
 %undef RGB_RED
 %undef RGB_GREEN
@@ -59,7 +55,7 @@ PD_ONEHALF      times 4 dd  1 << (SCALEBITS - 1)
 %define RGB_BLUE  EXT_RGB_BLUE
 %define RGB_PIXELSIZE  EXT_RGB_PIXELSIZE
 %define jsimd_ycc_rgb_convert_sse2  jsimd_ycc_extrgb_convert_sse2
-%include "jdcolext-sse2.inc"
+%include "jdcolext-sse2.asm"
 
 %undef RGB_RED
 %undef RGB_GREEN
@@ -70,7 +66,7 @@ PD_ONEHALF      times 4 dd  1 << (SCALEBITS - 1)
 %define RGB_BLUE  EXT_RGBX_BLUE
 %define RGB_PIXELSIZE  EXT_RGBX_PIXELSIZE
 %define jsimd_ycc_rgb_convert_sse2  jsimd_ycc_extrgbx_convert_sse2
-%include "jdcolext-sse2.inc"
+%include "jdcolext-sse2.asm"
 
 %undef RGB_RED
 %undef RGB_GREEN
@@ -81,7 +77,7 @@ PD_ONEHALF      times 4 dd  1 << (SCALEBITS - 1)
 %define RGB_BLUE  EXT_BGR_BLUE
 %define RGB_PIXELSIZE  EXT_BGR_PIXELSIZE
 %define jsimd_ycc_rgb_convert_sse2  jsimd_ycc_extbgr_convert_sse2
-%include "jdcolext-sse2.inc"
+%include "jdcolext-sse2.asm"
 
 %undef RGB_RED
 %undef RGB_GREEN
@@ -92,7 +88,7 @@ PD_ONEHALF      times 4 dd  1 << (SCALEBITS - 1)
 %define RGB_BLUE  EXT_BGRX_BLUE
 %define RGB_PIXELSIZE  EXT_BGRX_PIXELSIZE
 %define jsimd_ycc_rgb_convert_sse2  jsimd_ycc_extbgrx_convert_sse2
-%include "jdcolext-sse2.inc"
+%include "jdcolext-sse2.asm"
 
 %undef RGB_RED
 %undef RGB_GREEN
@@ -103,7 +99,7 @@ PD_ONEHALF      times 4 dd  1 << (SCALEBITS - 1)
 %define RGB_BLUE  EXT_XBGR_BLUE
 %define RGB_PIXELSIZE  EXT_XBGR_PIXELSIZE
 %define jsimd_ycc_rgb_convert_sse2  jsimd_ycc_extxbgr_convert_sse2
-%include "jdcolext-sse2.inc"
+%include "jdcolext-sse2.asm"
 
 %undef RGB_RED
 %undef RGB_GREEN
@@ -114,4 +110,4 @@ PD_ONEHALF      times 4 dd  1 << (SCALEBITS - 1)
 %define RGB_BLUE  EXT_XRGB_BLUE
 %define RGB_PIXELSIZE  EXT_XRGB_PIXELSIZE
 %define jsimd_ycc_rgb_convert_sse2  jsimd_ycc_extxrgb_convert_sse2
-%include "jdcolext-sse2.inc"
+%include "jdcolext-sse2.asm"

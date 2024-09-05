@@ -1,6 +1,9 @@
 /* libjpeg-turbo build number */
 #define BUILD  "20230611"
 
+/* How to hide global symbols. */
+#define HIDDEN  __attribute__((visibility("hidden")))
+
 /* Compiler's inline keyword */
 #undef inline
 
@@ -14,7 +17,7 @@
 #define PACKAGE_NAME  "libjpeg-turbo"
 
 /* Version number of package */
-#define VERSION  "2.1.92"
+#define VERSION  "3.0.4"
 
 /* The size of `size_t', as computed by sizeof. */
 #define SIZEOF_SIZE_T  8
@@ -43,11 +46,6 @@
 #define FALLTHROUGH
 #endif
 
-#define BMP_SUPPORTED
-#define GIF_SUPPORTED
-#define PPM_SUPPORTED
-#define TARGA_SUPPORTED
-
 /*
  * Define BITS_IN_JSAMPLE as either
  *   8   for 8-bit sample values (the usual setting)
@@ -56,7 +54,6 @@
  * JPEG standard, and the IJG code does not support anything else!
  */
 
-#if 1
 #ifndef BITS_IN_JSAMPLE
 #define BITS_IN_JSAMPLE  8      /* use 8 or 12 */
 #endif
@@ -76,5 +73,4 @@
 /* Use accelerated SIMD routines. */
 #define WITH_SIMD 1
 
-#endif
 #endif

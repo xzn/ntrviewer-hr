@@ -2,18 +2,14 @@
 ; jdmerge.asm - merged upsampling/color conversion (64-bit AVX2)
 ;
 ; Copyright 2009 Pierre Ossman <ossman@cendio.se> for Cendio AB
-; Copyright (C) 2009, 2016, D. R. Commander.
+; Copyright (C) 2009, 2016, 2024, D. R. Commander.
 ; Copyright (C) 2015, Intel Corporation.
 ;
 ; Based on the x86 SIMD extension for IJG JPEG library
 ; Copyright (C) 1999-2006, MIYASAKA Masaru.
 ; For conditions of distribution and use, see copyright notice in jsimdext.inc
 ;
-; This file should be assembled with NASM (Netwide Assembler),
-; can *not* be assembled with Microsoft's MASM or any compatible
-; assembler (including Borland's Turbo Assembler).
-; NASM is available from http://nasm.sourceforge.net/ or
-; http://sourceforge.net/project/showfiles.php?group_id=6208
+; This file should be assembled with NASM (Netwide Assembler) or Yasm.
 
 %include "jsimdext.inc"
 
@@ -32,7 +28,7 @@ F_0_228 equ (131072 - F_1_772)  ; FIX(2) - FIX(1.77200)
 ; --------------------------------------------------------------------------
     SECTION     SEG_CONST
 
-    alignz      32
+    ALIGNZ      32
     GLOBAL_DATA(jconst_merged_upsample_avx2)
 
 EXTN(jconst_merged_upsample_avx2):
@@ -43,13 +39,13 @@ PW_MF0344_F0285 times 8  dw -F_0_344, F_0_285
 PW_ONE          times 16 dw  1
 PD_ONEHALF      times 8  dd  1 << (SCALEBITS - 1)
 
-    alignz      32
+    ALIGNZ      32
 
 ; --------------------------------------------------------------------------
     SECTION     SEG_TEXT
     BITS        64
 
-%include "jdmrgext-avx2.inc"
+%include "jdmrgext-avx2.asm"
 
 %undef RGB_RED
 %undef RGB_GREEN
@@ -63,7 +59,7 @@ PD_ONEHALF      times 8  dd  1 << (SCALEBITS - 1)
   jsimd_h2v1_extrgb_merged_upsample_avx2
 %define jsimd_h2v2_merged_upsample_avx2 \
   jsimd_h2v2_extrgb_merged_upsample_avx2
-%include "jdmrgext-avx2.inc"
+%include "jdmrgext-avx2.asm"
 
 %undef RGB_RED
 %undef RGB_GREEN
@@ -77,7 +73,7 @@ PD_ONEHALF      times 8  dd  1 << (SCALEBITS - 1)
   jsimd_h2v1_extrgbx_merged_upsample_avx2
 %define jsimd_h2v2_merged_upsample_avx2 \
   jsimd_h2v2_extrgbx_merged_upsample_avx2
-%include "jdmrgext-avx2.inc"
+%include "jdmrgext-avx2.asm"
 
 %undef RGB_RED
 %undef RGB_GREEN
@@ -91,7 +87,7 @@ PD_ONEHALF      times 8  dd  1 << (SCALEBITS - 1)
   jsimd_h2v1_extbgr_merged_upsample_avx2
 %define jsimd_h2v2_merged_upsample_avx2 \
   jsimd_h2v2_extbgr_merged_upsample_avx2
-%include "jdmrgext-avx2.inc"
+%include "jdmrgext-avx2.asm"
 
 %undef RGB_RED
 %undef RGB_GREEN
@@ -105,7 +101,7 @@ PD_ONEHALF      times 8  dd  1 << (SCALEBITS - 1)
   jsimd_h2v1_extbgrx_merged_upsample_avx2
 %define jsimd_h2v2_merged_upsample_avx2 \
   jsimd_h2v2_extbgrx_merged_upsample_avx2
-%include "jdmrgext-avx2.inc"
+%include "jdmrgext-avx2.asm"
 
 %undef RGB_RED
 %undef RGB_GREEN
@@ -119,7 +115,7 @@ PD_ONEHALF      times 8  dd  1 << (SCALEBITS - 1)
   jsimd_h2v1_extxbgr_merged_upsample_avx2
 %define jsimd_h2v2_merged_upsample_avx2 \
   jsimd_h2v2_extxbgr_merged_upsample_avx2
-%include "jdmrgext-avx2.inc"
+%include "jdmrgext-avx2.asm"
 
 %undef RGB_RED
 %undef RGB_GREEN
@@ -133,4 +129,4 @@ PD_ONEHALF      times 8  dd  1 << (SCALEBITS - 1)
   jsimd_h2v1_extxrgb_merged_upsample_avx2
 %define jsimd_h2v2_merged_upsample_avx2 \
   jsimd_h2v2_extxrgb_merged_upsample_avx2
-%include "jdmrgext-avx2.inc"
+%include "jdmrgext-avx2.asm"

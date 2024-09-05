@@ -19,7 +19,7 @@
 #define JPEG_INTERNALS
 #include "jinclude.h"
 #include "jpeglib.h"
-#include "jstdhuff.h"
+#include "jstdhuff.c"
 
 
 /*
@@ -233,7 +233,7 @@ jpeg_set_defaults(j_compress_ptr cinfo)
    * tables will be computed.  This test can be removed if default tables
    * are supplied that are valid for the desired precision.
    */
-  if (cinfo->data_precision == 12 && !cinfo->arith_code)
+  if (cinfo->data_precision == 12)
     cinfo->optimize_coding = TRUE;
 
   /* By default, use the simpler non-cosited sampling alignment */

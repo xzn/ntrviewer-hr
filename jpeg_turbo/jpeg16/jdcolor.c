@@ -96,7 +96,7 @@ typedef my_color_deconverter *my_cconvert_ptr;
 
 /* Include inline routines for colorspace extensions */
 
-#include "jdcolext.h"
+#include "jdcolext.c"
 #undef RGB_RED
 #undef RGB_GREEN
 #undef RGB_BLUE
@@ -109,7 +109,7 @@ typedef my_color_deconverter *my_cconvert_ptr;
 #define ycc_rgb_convert_internal  ycc_extrgb_convert_internal
 #define gray_rgb_convert_internal  gray_extrgb_convert_internal
 #define rgb_rgb_convert_internal  rgb_extrgb_convert_internal
-#include "jdcolext.h"
+#include "jdcolext.c"
 #undef RGB_RED
 #undef RGB_GREEN
 #undef RGB_BLUE
@@ -126,7 +126,7 @@ typedef my_color_deconverter *my_cconvert_ptr;
 #define ycc_rgb_convert_internal  ycc_extrgbx_convert_internal
 #define gray_rgb_convert_internal  gray_extrgbx_convert_internal
 #define rgb_rgb_convert_internal  rgb_extrgbx_convert_internal
-#include "jdcolext.h"
+#include "jdcolext.c"
 #undef RGB_RED
 #undef RGB_GREEN
 #undef RGB_BLUE
@@ -143,7 +143,7 @@ typedef my_color_deconverter *my_cconvert_ptr;
 #define ycc_rgb_convert_internal  ycc_extbgr_convert_internal
 #define gray_rgb_convert_internal  gray_extbgr_convert_internal
 #define rgb_rgb_convert_internal  rgb_extbgr_convert_internal
-#include "jdcolext.h"
+#include "jdcolext.c"
 #undef RGB_RED
 #undef RGB_GREEN
 #undef RGB_BLUE
@@ -160,7 +160,7 @@ typedef my_color_deconverter *my_cconvert_ptr;
 #define ycc_rgb_convert_internal  ycc_extbgrx_convert_internal
 #define gray_rgb_convert_internal  gray_extbgrx_convert_internal
 #define rgb_rgb_convert_internal  rgb_extbgrx_convert_internal
-#include "jdcolext.h"
+#include "jdcolext.c"
 #undef RGB_RED
 #undef RGB_GREEN
 #undef RGB_BLUE
@@ -178,7 +178,7 @@ typedef my_color_deconverter *my_cconvert_ptr;
 #define ycc_rgb_convert_internal  ycc_extxbgr_convert_internal
 #define gray_rgb_convert_internal  gray_extxbgr_convert_internal
 #define rgb_rgb_convert_internal  rgb_extxbgr_convert_internal
-#include "jdcolext.h"
+#include "jdcolext.c"
 #undef RGB_RED
 #undef RGB_GREEN
 #undef RGB_BLUE
@@ -196,7 +196,7 @@ typedef my_color_deconverter *my_cconvert_ptr;
 #define ycc_rgb_convert_internal  ycc_extxrgb_convert_internal
 #define gray_rgb_convert_internal  gray_extxrgb_convert_internal
 #define rgb_rgb_convert_internal  rgb_extxrgb_convert_internal
-#include "jdcolext.h"
+#include "jdcolext.c"
 #undef RGB_RED
 #undef RGB_GREEN
 #undef RGB_BLUE
@@ -643,7 +643,7 @@ static INLINE boolean is_big_endian(void)
 #define rgb_rgb565D_convert_internal  rgb_rgb565D_convert_le
 #define gray_rgb565_convert_internal  gray_rgb565_convert_le
 #define gray_rgb565D_convert_internal  gray_rgb565D_convert_le
-#include "jdcol565.h"
+#include "jdcol565.c"
 #undef PACK_SHORT_565
 #undef PACK_TWO_PIXELS
 #undef ycc_rgb565_convert_internal
@@ -661,7 +661,7 @@ static INLINE boolean is_big_endian(void)
 #define rgb_rgb565D_convert_internal  rgb_rgb565D_convert_be
 #define gray_rgb565_convert_internal  gray_rgb565_convert_be
 #define gray_rgb565D_convert_internal  gray_rgb565D_convert_be
-#include "jdcol565.h"
+#include "jdcol565.c"
 #undef PACK_SHORT_565
 #undef PACK_TWO_PIXELS
 #undef ycc_rgb565_convert_internal

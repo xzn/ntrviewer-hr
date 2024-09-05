@@ -4,7 +4,7 @@ CPPFLAGS := -Iinclude
 # CFLAGS := -Og -g
 CFLAGS := -Ofast
 CFLAGS += -mssse3 -mavx2
-EMBED_JPEG_TURBO := 0
+EMBED_JPEG_TURBO := 1
 USE_OGL_ES := 0
 USE_ANGLE := 0
 GL_DEBUG := 0
@@ -43,7 +43,7 @@ JT_SRC_S := $(wildcard jpeg_turbo/simd/x86_64/*.asm)
 JT_OBJ_S := $(JT_SRC_S:.asm=.o)
 
 JT_SRC := $(wildcard jpeg_turbo/*.c) jpeg_turbo/simd/x86_64/jsimd.c
-JT_OBJ := $(JT_SRC:.c=.o) $(JT16_OBJ) $(JT12_OBJ) $(JT8_OBJ)
+JT_OBJ := $(JT16_OBJ) $(JT12_OBJ) $(JT8_OBJ) $(JT_SRC:.c=.o)
 
 CPPFLAGS += -DEMBED_JPEG_TURBO
 # LDLIBS += -ljpeg
@@ -75,29 +75,31 @@ FEC_OBJ := $(FEC_SRC:.cpp=.o)
 $(TARGET): main.o rp_syn.o ikcp.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o libGLAD.o fsr/fsr_main.o fsr/image_utils.o $(JT_OBJ) $(JT_OBJ_S) $(FEC_OBJ)
 	$(CXX) $^ -o $@ $(CFLAGS) $(LDLIBS) $(LDFLAGS)
 
+CC_JT = $(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo -Ijpeg_turbo/include
+
 %.o: %.c
-	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo
+	$(CC_JT) -DBMP_SUPPORTED -DGIF_SUPPORTED -DPPM_SUPPORTED
 
 jpeg_turbo/jpeg8/%.o: jpeg_turbo/jpeg8/%.c
-	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo
+	$(CC_JT) -DBMP_SUPPORTED -DPPM_SUPPORTED
 
 jpeg_turbo/jpeg8/%.o: jpeg_turbo/jpeg12/%.c
-	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo
+	$(CC_JT) -DBMP_SUPPORTED -DPPM_SUPPORTED
 
 jpeg_turbo/jpeg8/%.o: jpeg_turbo/jpeg16/%.c
-	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo
+	$(CC_JT) -DBMP_SUPPORTED -DPPM_SUPPORTED
 
 jpeg_turbo/jpeg12/%.o: jpeg_turbo/jpeg12/%.c
-	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo -DBITS_IN_JSAMPLE=12
+	$(CC_JT) -DBITS_IN_JSAMPLE=12 -DGIF_SUPPORTED -DPPM_SUPPORTED
 
 jpeg_turbo/jpeg12/%.o: jpeg_turbo/jpeg16/%.c
-	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo -DBITS_IN_JSAMPLE=12
+	$(CC_JT) -DBITS_IN_JSAMPLE=12 -DGIF_SUPPORTED -DPPM_SUPPORTED
 
 jpeg_turbo/jpeg16/%.o: jpeg_turbo/jpeg16/%.c
-	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo -DBITS_IN_JSAMPLE=16
+	$(CC_JT) -DBITS_IN_JSAMPLE=16 -DGIF_SUPPORTED -DPPM_SUPPORTED
 
 %.o: %.asm
-	nasm $^ -o $@ $(NASM) -D__x86_64__ -Ijpeg_turbo/simd/nasm -Ijpeg_turbo/simd/x86_64
+	nasm $^ -o $@ $(NASM) -D__x86_64__ -Ijpeg_turbo/simd/nasm -Ijpeg_turbo/simd
 
 %.o: %.cpp
 	$(CXX) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS)

@@ -4,10 +4,10 @@
 #define JPEG_LIB_VERSION  62
 
 /* libjpeg-turbo version */
-#define LIBJPEG_TURBO_VERSION  2.1.92
+#define LIBJPEG_TURBO_VERSION  3.0.4
 
 /* libjpeg-turbo version in integer form */
-#define LIBJPEG_TURBO_VERSION_NUMBER  2001092
+#define LIBJPEG_TURBO_VERSION_NUMBER  3000004
 
 /* Support arithmetic encoding when using 8-bit samples */
 #define C_ARITH_CODING_SUPPORTED 1
@@ -20,7 +20,6 @@
 
 /* Use accelerated SIMD routines when using 8-bit samples */
 #define WITH_SIMD 1
-// #undef WITH_SIMD
 
 /* This version of libjpeg-turbo supports run-time selection of data precision,
  * so BITS_IN_JSAMPLE is no longer used to specify the data precision at build

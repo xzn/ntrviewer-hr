@@ -7,7 +7,7 @@
  * Lossless JPEG Modifications:
  * Copyright (C) 1999, Ken Murchison.
  * libjpeg-turbo Modifications:
- * Copyright (C) 2015-2017, 2019, 2021-2022, D. R. Commander.
+ * Copyright (C) 2015-2017, 2019, 2021-2022, 2024, D. R. Commander.
  * Copyright (C) 2015, Google, Inc.
  * Copyright (C) 2021, Alex Richardson.
  * For conditions of distribution and use, see the accompanying README.ijg
@@ -249,6 +249,9 @@ struct jpeg_decomp_master {
 
   /* Last iMCU row that was successfully decoded */
   JDIMENSION last_good_iMCU_row;
+
+  /* Tail of list of saved markers */
+  jpeg_saved_marker_ptr marker_list_end;
 };
 
 /* Input control module */
@@ -431,10 +434,6 @@ struct jpeg_color_quantizer {
                           JSAMPARRAY output_buf, int num_rows);
   void (*color_quantize_12) (j_decompress_ptr cinfo, J12SAMPARRAY input_buf,
                              J12SAMPARRAY output_buf, int num_rows);
-#ifdef D_LOSSLESS_SUPPORTED
-  void (*color_quantize_16) (j_decompress_ptr cinfo, J16SAMPARRAY input_buf,
-                             J16SAMPARRAY output_buf, int num_rows);
-#endif
   void (*finish_pass) (j_decompress_ptr cinfo);
   void (*new_color_map) (j_decompress_ptr cinfo);
 };
@@ -446,6 +445,12 @@ struct jpeg_color_quantizer {
 #define MAX(a, b)       ((a) > (b) ? (a) : (b))
 #undef MIN
 #define MIN(a, b)       ((a) < (b) ? (a) : (b))
+
+#ifdef ZERO_BUFFERS
+#define MALLOC(size)  calloc(1, size)
+#else
+#define MALLOC(size)  malloc(size)
+#endif
 
 
 /* We assume that right shift corresponds to signed division by 2 with
@@ -553,8 +558,6 @@ EXTERN(void) j16init_d_post_controller(j_decompress_ptr cinfo,
                                        boolean need_full_buffer);
 EXTERN(void) j16init_upsampler(j_decompress_ptr cinfo);
 EXTERN(void) j16init_color_deconverter(j_decompress_ptr cinfo);
-EXTERN(void) j16init_1pass_quantizer(j_decompress_ptr cinfo);
-EXTERN(void) j16init_2pass_quantizer(j_decompress_ptr cinfo);
 EXTERN(void) jinit_d_diff_controller(j_decompress_ptr cinfo,
                                      boolean need_full_buffer);
 EXTERN(void) j12init_d_diff_controller(j_decompress_ptr cinfo,

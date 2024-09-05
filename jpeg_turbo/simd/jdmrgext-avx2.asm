@@ -1,57 +1,55 @@
 ;
-; jdcolext.asm - colorspace conversion (64-bit AVX2)
+; jdmrgext.asm - merged upsampling/color conversion (64-bit AVX2)
 ;
 ; Copyright 2009, 2012 Pierre Ossman <ossman@cendio.se> for Cendio AB
-; Copyright (C) 2009, 2012, 2016, D. R. Commander.
+; Copyright (C) 2009, 2012, 2016, 2024, D. R. Commander.
 ; Copyright (C) 2015, Intel Corporation.
 ; Copyright (C) 2018, Matthias Räncker.
+; Copyright (C) 2023, Aliaksiej Kandracienka.
 ;
 ; Based on the x86 SIMD extension for IJG JPEG library
 ; Copyright (C) 1999-2006, MIYASAKA Masaru.
 ; For conditions of distribution and use, see copyright notice in jsimdext.inc
 ;
-; This file should be assembled with NASM (Netwide Assembler),
-; can *not* be assembled with Microsoft's MASM or any compatible
-; assembler (including Borland's Turbo Assembler).
-; NASM is available from http://nasm.sourceforge.net/ or
-; http://sourceforge.net/project/showfiles.php?group_id=6208
+; This file should be assembled with NASM (Netwide Assembler) or Yasm.
 
 %include "jcolsamp.inc"
 
 ; --------------------------------------------------------------------------
 ;
-; Convert some rows of samples to the output colorspace.
+; Upsample and color convert for the case of 2:1 horizontal and 1:1 vertical.
 ;
 ; GLOBAL(void)
-; jsimd_ycc_rgb_convert_avx2(JDIMENSION out_width, JSAMPIMAGE input_buf,
-;                            JDIMENSION input_row, JSAMPARRAY output_buf,
-;                            int num_rows)
+; jsimd_h2v1_merged_upsample_avx2(JDIMENSION output_width,
+;                                 JSAMPIMAGE input_buf,
+;                                 JDIMENSION in_row_group_ctr,
+;                                 JSAMPARRAY output_buf);
 ;
 
-; r10d = JDIMENSION out_width
+; r10d = JDIMENSION output_width
 ; r11 = JSAMPIMAGE input_buf
-; r12d = JDIMENSION input_row
+; r12d = JDIMENSION in_row_group_ctr
 ; r13 = JSAMPARRAY output_buf
-; r14d = int num_rows
 
-%define wk(i)   rbp - (WK_NUM - (i)) * SIZEOF_YMMWORD  ; ymmword wk[WK_NUM]
-%define WK_NUM  2
+%define wk(i)   r15 - (WK_NUM - (i)) * SIZEOF_YMMWORD  ; ymmword wk[WK_NUM]
+%define WK_NUM  3
 
     align       32
-    GLOBAL_FUNCTION(jsimd_ycc_rgb_convert_avx2)
+    GLOBAL_FUNCTION(jsimd_h2v1_merged_upsample_avx2)
 
-EXTN(jsimd_ycc_rgb_convert_avx2):
+EXTN(jsimd_h2v1_merged_upsample_avx2):
+    ENDBR64
     push        rbp
-    mov         rax, rsp                     ; rax = original rbp
-    sub         rsp, byte 4
+    mov         rbp, rsp
+    push        r15
     and         rsp, byte (-SIZEOF_YMMWORD)  ; align to 256 bits
-    mov         [rsp], rax
-    mov         rbp, rsp                     ; rbp = aligned rbp
-    lea         rsp, [wk(0)]
-    collect_args 5
+    ; Allocate stack space for wk array.  r15 is used to access it.
+    mov         r15, rsp
+    sub         rsp, SIZEOF_YMMWORD * WK_NUM
+    COLLECT_ARGS 4
     push        rbx
 
-    mov         ecx, r10d               ; num_cols
+    mov         ecx, r10d               ; col
     test        rcx, rcx
     jz          near .return
 
@@ -62,47 +60,34 @@ EXTN(jsimd_ycc_rgb_convert_avx2):
     mov         rsip, JSAMPARRAY [rdi+0*SIZEOF_JSAMPARRAY]
     mov         rbxp, JSAMPARRAY [rdi+1*SIZEOF_JSAMPARRAY]
     mov         rdxp, JSAMPARRAY [rdi+2*SIZEOF_JSAMPARRAY]
-    lea         rsi, [rsi+rcx*SIZEOF_JSAMPROW]
-    lea         rbx, [rbx+rcx*SIZEOF_JSAMPROW]
-    lea         rdx, [rdx+rcx*SIZEOF_JSAMPROW]
-
-    pop         rcx
-
     mov         rdi, r13
-    mov         eax, r14d
-    test        rax, rax
-    jle         near .return
-.rowloop:
-    push        rax
-    push        rdi
-    push        rdx
-    push        rbx
-    push        rsi
-    push        rcx                     ; col
+    mov         rsip, JSAMPROW [rsi+rcx*SIZEOF_JSAMPROW]  ; inptr0
+    mov         rbxp, JSAMPROW [rbx+rcx*SIZEOF_JSAMPROW]  ; inptr1
+    mov         rdxp, JSAMPROW [rdx+rcx*SIZEOF_JSAMPROW]  ; inptr2
+    mov         rdip, JSAMPROW [rdi]                      ; outptr
 
-    mov         rsip, JSAMPROW [rsi]    ; inptr0
-    mov         rbxp, JSAMPROW [rbx]    ; inptr1
-    mov         rdxp, JSAMPROW [rdx]    ; inptr2
-    mov         rdip, JSAMPROW [rdi]    ; outptr
+    pop         rcx                     ; col
+
 .columnloop:
 
-    vmovdqu     ymm5, YMMWORD [rbx]     ; ymm5=Cb(0123456789ABCDEFGHIJKLMNOPQRSTUV)
-    vmovdqu     ymm1, YMMWORD [rdx]     ; ymm1=Cr(0123456789ABCDEFGHIJKLMNOPQRSTUV)
+    vmovdqu     ymm6, YMMWORD [rbx]     ; ymm6=Cb(0123456789ABCDEFGHIJKLMNOPQRSTUV)
+    vmovdqu     ymm7, YMMWORD [rdx]     ; ymm7=Cr(0123456789ABCDEFGHIJKLMNOPQRSTUV)
 
-    vpcmpeqw    ymm0, ymm0, ymm0
-    vpcmpeqw    ymm7, ymm7, ymm7
-    vpsrlw      ymm0, ymm0, BYTE_BIT    ; ymm0={0xFF 0x00 0xFF 0x00 ..}
-    vpsllw      ymm7, ymm7, 7           ; ymm7={0xFF80 0xFF80 0xFF80 0xFF80 ..}
+    vpxor       ymm1, ymm1, ymm1        ; ymm1=(all 0's)
+    vpcmpeqw    ymm3, ymm3, ymm3
+    vpsllw      ymm3, ymm3, 7           ; ymm3={0xFF80 0xFF80 0xFF80 0xFF80 ..}
 
-    vpand       ymm4, ymm0, ymm5        ; ymm4=Cb(02468ACEGIKMOQSU)=CbE
-    vpsrlw      ymm5, ymm5, BYTE_BIT    ; ymm5=Cb(13579BDFHJLNPRTV)=CbO
-    vpand       ymm0, ymm0, ymm1        ; ymm0=Cr(02468ACEGIKMOQSU)=CrE
-    vpsrlw      ymm1, ymm1, BYTE_BIT    ; ymm1=Cr(13579BDFHJLNPRTV)=CrO
+    vpermq      ymm6, ymm6, 0xd8        ; ymm6=Cb(01234567GHIJKLMN89ABCDEFOPQRSTUV)
+    vpermq      ymm7, ymm7, 0xd8        ; ymm7=Cr(01234567GHIJKLMN89ABCDEFOPQRSTUV)
+    vpunpcklbw  ymm4, ymm6, ymm1        ; ymm4=Cb(0123456789ABCDEF)=CbL
+    vpunpckhbw  ymm6, ymm6, ymm1        ; ymm6=Cb(GHIJKLMNOPQRSTUV)=CbH
+    vpunpcklbw  ymm0, ymm7, ymm1        ; ymm0=Cr(0123456789ABCDEF)=CrL
+    vpunpckhbw  ymm7, ymm7, ymm1        ; ymm7=Cr(GHIJKLMNOPQRSTUV)=CrH
 
-    vpaddw      ymm2, ymm4, ymm7
-    vpaddw      ymm3, ymm5, ymm7
-    vpaddw      ymm6, ymm0, ymm7
-    vpaddw      ymm7, ymm1, ymm7
+    vpaddw      ymm5, ymm6, ymm3
+    vpaddw      ymm2, ymm4, ymm3
+    vpaddw      ymm1, ymm7, ymm3
+    vpaddw      ymm3, ymm0, ymm3
 
     ; (Original)
     ; R = Y                + 1.40200 * Cr
@@ -114,79 +99,94 @@ EXTN(jsimd_ycc_rgb_convert_avx2):
     ; G = Y - 0.34414 * Cb + 0.28586 * Cr - Cr
     ; B = Y - 0.22800 * Cb + Cb + Cb
 
-    vpaddw      ymm4, ymm2, ymm2             ; ymm4=2*CbE
-    vpaddw      ymm5, ymm3, ymm3             ; ymm5=2*CbO
-    vpaddw      ymm0, ymm6, ymm6             ; ymm0=2*CrE
-    vpaddw      ymm1, ymm7, ymm7             ; ymm1=2*CrO
+    vpaddw      ymm6, ymm5, ymm5             ; ymm6=2*CbH
+    vpaddw      ymm4, ymm2, ymm2             ; ymm4=2*CbL
+    vpaddw      ymm7, ymm1, ymm1             ; ymm7=2*CrH
+    vpaddw      ymm0, ymm3, ymm3             ; ymm0=2*CrL
 
-    vpmulhw     ymm4, ymm4, [rel PW_MF0228]  ; ymm4=(2*CbE * -FIX(0.22800))
-    vpmulhw     ymm5, ymm5, [rel PW_MF0228]  ; ymm5=(2*CbO * -FIX(0.22800))
-    vpmulhw     ymm0, ymm0, [rel PW_F0402]   ; ymm0=(2*CrE * FIX(0.40200))
-    vpmulhw     ymm1, ymm1, [rel PW_F0402]   ; ymm1=(2*CrO * FIX(0.40200))
+    vpmulhw     ymm6, ymm6, [rel PW_MF0228]  ; ymm6=(2*CbH * -FIX(0.22800))
+    vpmulhw     ymm4, ymm4, [rel PW_MF0228]  ; ymm4=(2*CbL * -FIX(0.22800))
+    vpmulhw     ymm7, ymm7, [rel PW_F0402]   ; ymm7=(2*CrH * FIX(0.40200))
+    vpmulhw     ymm0, ymm0, [rel PW_F0402]   ; ymm0=(2*CrL * FIX(0.40200))
 
+    vpaddw      ymm6, ymm6, [rel PW_ONE]
     vpaddw      ymm4, ymm4, [rel PW_ONE]
-    vpaddw      ymm5, ymm5, [rel PW_ONE]
-    vpsraw      ymm4, ymm4, 1                ; ymm4=(CbE * -FIX(0.22800))
-    vpsraw      ymm5, ymm5, 1                ; ymm5=(CbO * -FIX(0.22800))
+    vpsraw      ymm6, ymm6, 1                ; ymm6=(CbH * -FIX(0.22800))
+    vpsraw      ymm4, ymm4, 1                ; ymm4=(CbL * -FIX(0.22800))
+    vpaddw      ymm7, ymm7, [rel PW_ONE]
     vpaddw      ymm0, ymm0, [rel PW_ONE]
-    vpaddw      ymm1, ymm1, [rel PW_ONE]
-    vpsraw      ymm0, ymm0, 1                ; ymm0=(CrE * FIX(0.40200))
-    vpsraw      ymm1, ymm1, 1                ; ymm1=(CrO * FIX(0.40200))
+    vpsraw      ymm7, ymm7, 1                ; ymm7=(CrH * FIX(0.40200))
+    vpsraw      ymm0, ymm0, 1                ; ymm0=(CrL * FIX(0.40200))
 
+    vpaddw      ymm6, ymm6, ymm5
     vpaddw      ymm4, ymm4, ymm2
-    vpaddw      ymm5, ymm5, ymm3
-    vpaddw      ymm4, ymm4, ymm2             ; ymm4=(CbE * FIX(1.77200))=(B-Y)E
-    vpaddw      ymm5, ymm5, ymm3             ; ymm5=(CbO * FIX(1.77200))=(B-Y)O
-    vpaddw      ymm0, ymm0, ymm6             ; ymm0=(CrE * FIX(1.40200))=(R-Y)E
-    vpaddw      ymm1, ymm1, ymm7             ; ymm1=(CrO * FIX(1.40200))=(R-Y)O
+    vpaddw      ymm6, ymm6, ymm5             ; ymm6=(CbH * FIX(1.77200))=(B-Y)H
+    vpaddw      ymm4, ymm4, ymm2             ; ymm4=(CbL * FIX(1.77200))=(B-Y)L
+    vpaddw      ymm7, ymm7, ymm1             ; ymm7=(CrH * FIX(1.40200))=(R-Y)H
+    vpaddw      ymm0, ymm0, ymm3             ; ymm0=(CrL * FIX(1.40200))=(R-Y)L
 
-    vmovdqa     YMMWORD [wk(0)], ymm4        ; wk(0)=(B-Y)E
-    vmovdqa     YMMWORD [wk(1)], ymm5        ; wk(1)=(B-Y)O
+    vmovdqa     YMMWORD [wk(0)], ymm6        ; wk(0)=(B-Y)H
+    vmovdqa     YMMWORD [wk(1)], ymm7        ; wk(1)=(R-Y)H
 
-    vpunpckhwd  ymm4, ymm2, ymm6
-    vpunpcklwd  ymm2, ymm2, ymm6
-    vpmaddwd    ymm2, ymm2, [rel PW_MF0344_F0285]
-    vpmaddwd    ymm4, ymm4, [rel PW_MF0344_F0285]
-    vpunpckhwd  ymm5, ymm3, ymm7
-    vpunpcklwd  ymm3, ymm3, ymm7
-    vpmaddwd    ymm3, ymm3, [rel PW_MF0344_F0285]
+    vpunpckhwd  ymm6, ymm5, ymm1
+    vpunpcklwd  ymm5, ymm5, ymm1
     vpmaddwd    ymm5, ymm5, [rel PW_MF0344_F0285]
+    vpmaddwd    ymm6, ymm6, [rel PW_MF0344_F0285]
+    vpunpckhwd  ymm7, ymm2, ymm3
+    vpunpcklwd  ymm2, ymm2, ymm3
+    vpmaddwd    ymm2, ymm2, [rel PW_MF0344_F0285]
+    vpmaddwd    ymm7, ymm7, [rel PW_MF0344_F0285]
 
-    vpaddd      ymm2, ymm2, [rel PD_ONEHALF]
-    vpaddd      ymm4, ymm4, [rel PD_ONEHALF]
-    vpsrad      ymm2, ymm2, SCALEBITS
-    vpsrad      ymm4, ymm4, SCALEBITS
-    vpaddd      ymm3, ymm3, [rel PD_ONEHALF]
     vpaddd      ymm5, ymm5, [rel PD_ONEHALF]
-    vpsrad      ymm3, ymm3, SCALEBITS
+    vpaddd      ymm6, ymm6, [rel PD_ONEHALF]
     vpsrad      ymm5, ymm5, SCALEBITS
+    vpsrad      ymm6, ymm6, SCALEBITS
+    vpaddd      ymm2, ymm2, [rel PD_ONEHALF]
+    vpaddd      ymm7, ymm7, [rel PD_ONEHALF]
+    vpsrad      ymm2, ymm2, SCALEBITS
+    vpsrad      ymm7, ymm7, SCALEBITS
 
-    vpackssdw   ymm2, ymm2, ymm4             ; ymm2=CbE*-FIX(0.344)+CrE*FIX(0.285)
-    vpackssdw   ymm3, ymm3, ymm5             ; ymm3=CbO*-FIX(0.344)+CrO*FIX(0.285)
-    vpsubw      ymm2, ymm2, ymm6             ; ymm2=CbE*-FIX(0.344)+CrE*-FIX(0.714)=(G-Y)E
-    vpsubw      ymm3, ymm3, ymm7             ; ymm3=CbO*-FIX(0.344)+CrO*-FIX(0.714)=(G-Y)O
+    vpackssdw   ymm5, ymm5, ymm6        ; ymm5=CbH*-FIX(0.344)+CrH*FIX(0.285)
+    vpackssdw   ymm2, ymm2, ymm7        ; ymm2=CbL*-FIX(0.344)+CrL*FIX(0.285)
+    vpsubw      ymm5, ymm5, ymm1        ; ymm5=CbH*-FIX(0.344)+CrH*-FIX(0.714)=(G-Y)H
+    vpsubw      ymm2, ymm2, ymm3        ; ymm2=CbL*-FIX(0.344)+CrL*-FIX(0.714)=(G-Y)L
 
-    vmovdqu     ymm5, YMMWORD [rsi]          ; ymm5=Y(0123456789ABCDEFGHIJKLMNOPQRSTUV)
+    vmovdqa     YMMWORD [wk(2)], ymm5   ; wk(2)=(G-Y)H
 
-    vpcmpeqw    ymm4, ymm4, ymm4
-    vpsrlw      ymm4, ymm4, BYTE_BIT         ; ymm4={0xFF 0x00 0xFF 0x00 ..}
-    vpand       ymm4, ymm4, ymm5             ; ymm4=Y(02468ACEGIKMOQSU)=YE
-    vpsrlw      ymm5, ymm5, BYTE_BIT         ; ymm5=Y(13579BDFHJLNPRTV)=YO
+    mov         al, 2                   ; Yctr
+    jmp         short .Yloop_1st
 
-    vpaddw      ymm0, ymm0, ymm4             ; ymm0=((R-Y)E+YE)=RE=R(02468ACEGIKMOQSU)
-    vpaddw      ymm1, ymm1, ymm5             ; ymm1=((R-Y)O+YO)=RO=R(13579BDFHJLNPRTV)
-    vpackuswb   ymm0, ymm0, ymm0             ; ymm0=R(02468ACE********GIKMOQSU********)
-    vpackuswb   ymm1, ymm1, ymm1             ; ymm1=R(13579BDF********HJLNPRTV********)
+.Yloop_2nd:
+    vmovdqa     ymm0, YMMWORD [wk(1)]   ; ymm0=(R-Y)H
+    vmovdqa     ymm2, YMMWORD [wk(2)]   ; ymm2=(G-Y)H
+    vmovdqa     ymm4, YMMWORD [wk(0)]   ; ymm4=(B-Y)H
 
-    vpaddw      ymm2, ymm2, ymm4             ; ymm2=((G-Y)E+YE)=GE=G(02468ACEGIKMOQSU)
-    vpaddw      ymm3, ymm3, ymm5             ; ymm3=((G-Y)O+YO)=GO=G(13579BDFHJLNPRTV)
-    vpackuswb   ymm2, ymm2, ymm2             ; ymm2=G(02468ACE********GIKMOQSU********)
-    vpackuswb   ymm3, ymm3, ymm3             ; ymm3=G(13579BDF********HJLNPRTV********)
+.Yloop_1st:
+    vmovdqu     ymm7, YMMWORD [rsi]     ; ymm7=Y(0123456789ABCDEFGHIJKLMNOPQRSTUV)
 
-    vpaddw      ymm4, ymm4, YMMWORD [wk(0)]  ; ymm4=(YE+(B-Y)E)=BE=B(02468ACEGIKMOQSU)
-    vpaddw      ymm5, ymm5, YMMWORD [wk(1)]  ; ymm5=(YO+(B-Y)O)=BO=B(13579BDFHJLNPRTV)
-    vpackuswb   ymm4, ymm4, ymm4             ; ymm4=B(02468ACE********GIKMOQSU********)
-    vpackuswb   ymm5, ymm5, ymm5             ; ymm5=B(13579BDF********HJLNPRTV********)
+    vpcmpeqw    ymm6, ymm6, ymm6
+    vpsrlw      ymm6, ymm6, BYTE_BIT    ; ymm6={0xFF 0x00 0xFF 0x00 ..}
+    vpand       ymm6, ymm6, ymm7        ; ymm6=Y(02468ACEGIKMOQSU)=YE
+    vpsrlw      ymm7, ymm7, BYTE_BIT    ; ymm7=Y(13579BDFHJLNPRTV)=YO
+
+    vmovdqa     ymm1, ymm0              ; ymm1=ymm0=(R-Y)(L/H)
+    vmovdqa     ymm3, ymm2              ; ymm3=ymm2=(G-Y)(L/H)
+    vmovdqa     ymm5, ymm4              ; ymm5=ymm4=(B-Y)(L/H)
+
+    vpaddw      ymm0, ymm0, ymm6        ; ymm0=((R-Y)+YE)=RE=R(02468ACEGIKMOQSU)
+    vpaddw      ymm1, ymm1, ymm7        ; ymm1=((R-Y)+YO)=RO=R(13579BDFHJLNPRTV)
+    vpackuswb   ymm0, ymm0, ymm0        ; ymm0=R(02468ACE********GIKMOQSU********)
+    vpackuswb   ymm1, ymm1, ymm1        ; ymm1=R(13579BDF********HJLNPRTV********)
+
+    vpaddw      ymm2, ymm2, ymm6        ; ymm2=((G-Y)+YE)=GE=G(02468ACEGIKMOQSU)
+    vpaddw      ymm3, ymm3, ymm7        ; ymm3=((G-Y)+YO)=GO=G(13579BDFHJLNPRTV)
+    vpackuswb   ymm2, ymm2, ymm2        ; ymm2=G(02468ACE********GIKMOQSU********)
+    vpackuswb   ymm3, ymm3, ymm3        ; ymm3=G(13579BDF********HJLNPRTV********)
+
+    vpaddw      ymm4, ymm4, ymm6        ; ymm4=((B-Y)+YE)=BE=B(02468ACEGIKMOQSU)
+    vpaddw      ymm5, ymm5, ymm7        ; ymm5=((B-Y)+YO)=BO=B(13579BDFHJLNPRTV)
+    vpackuswb   ymm4, ymm4, ymm4        ; ymm4=B(02468ACE********GIKMOQSU********)
+    vpackuswb   ymm5, ymm5, ymm5        ; ymm5=B(13579BDF********HJLNPRTV********)
 
 %if RGB_PIXELSIZE == 3  ; ---------------
 
@@ -277,9 +277,12 @@ EXTN(jsimd_ycc_rgb_convert_avx2):
 .out0:
     add         rdi, byte RGB_PIXELSIZE*SIZEOF_YMMWORD  ; outptr
     sub         rcx, byte SIZEOF_YMMWORD
-    jz          near .nextrow
+    jz          near .endcolumn
 
     add         rsi, byte SIZEOF_YMMWORD  ; inptr0
+    dec         al                        ; Yctr
+    jnz         near .Yloop_2nd
+
     add         rbx, byte SIZEOF_YMMWORD  ; inptr1
     add         rdx, byte SIZEOF_YMMWORD  ; inptr2
     jmp         near .columnloop
@@ -341,7 +344,7 @@ EXTN(jsimd_ycc_rgb_convert_avx2):
     ; Store the lower 1 byte of rax to the output when it has enough
     ; space.
     test        rcx, rcx
-    jz          short .nextrow
+    jz          short .endcolumn
     mov         byte [rdi], al
 
 %else  ; RGB_PIXELSIZE == 4 ; -----------
@@ -417,9 +420,12 @@ EXTN(jsimd_ycc_rgb_convert_avx2):
 .out0:
     add         rdi, RGB_PIXELSIZE*SIZEOF_YMMWORD  ; outptr
     sub         rcx, byte SIZEOF_YMMWORD
-    jz          near .nextrow
+    jz          near .endcolumn
 
     add         rsi, byte SIZEOF_YMMWORD  ; inptr0
+    dec         al
+    jnz         near .Yloop_2nd
+
     add         rbx, byte SIZEOF_YMMWORD  ; inptr1
     add         rdx, byte SIZEOF_YMMWORD  ; inptr2
     jmp         near .columnloop
@@ -444,8 +450,8 @@ EXTN(jsimd_ycc_rgb_convert_avx2):
     cmp         rcx, byte SIZEOF_YMMWORD/8
     jb          short .column_st15
     vmovdqu     XMMWORD [rdi+0*SIZEOF_XMMWORD], xmmA
-    vperm2i128  ymmA, ymmA, ymmA, 1
     add         rdi, byte SIZEOF_XMMWORD    ; outptr
+    vperm2i128  ymmA, ymmA, ymmA, 1
     sub         rcx, byte SIZEOF_YMMWORD/8
 .column_st15:
     ; Store two pixels (8 bytes) of ymmA to the output when it has enough
@@ -460,34 +466,126 @@ EXTN(jsimd_ycc_rgb_convert_avx2):
     ; Store one pixel (4 bytes) of ymmA to the output when it has enough
     ; space.
     test        rcx, rcx
-    jz          short .nextrow
+    jz          short .endcolumn
     vmovd       XMM_DWORD [rdi], xmmA
 
 %endif  ; RGB_PIXELSIZE ; ---------------
 
-.nextrow:
-    pop         rcx
-    pop         rsi
-    pop         rbx
-    pop         rdx
-    pop         rdi
-    pop         rax
-
-    add         rsi, byte SIZEOF_JSAMPROW
-    add         rbx, byte SIZEOF_JSAMPROW
-    add         rdx, byte SIZEOF_JSAMPROW
-    add         rdi, byte SIZEOF_JSAMPROW  ; output_buf
-    dec         rax                        ; num_rows
-    jg          near .rowloop
-
+.endcolumn:
     sfence                              ; flush the write buffer
 
 .return:
     pop         rbx
     vzeroupper
-    uncollect_args 5
-    mov         rsp, rbp                ; rsp <- aligned rbp
-    pop         rsp                     ; rsp <- original rbp
+    UNCOLLECT_ARGS 4
+    lea         rsp, [rbp-8]
+    pop         r15
+    pop         rbp
+    ret
+
+; --------------------------------------------------------------------------
+;
+; Upsample and color convert for the case of 2:1 horizontal and 2:1 vertical.
+;
+; GLOBAL(void)
+; jsimd_h2v2_merged_upsample_avx2(JDIMENSION output_width,
+;                                 JSAMPIMAGE input_buf,
+;                                 JDIMENSION in_row_group_ctr,
+;                                 JSAMPARRAY output_buf);
+;
+
+; r10d = JDIMENSION output_width
+; r11 = JSAMPIMAGE input_buf
+; r12d = JDIMENSION in_row_group_ctr
+; r13 = JSAMPARRAY output_buf
+
+    align       32
+    GLOBAL_FUNCTION(jsimd_h2v2_merged_upsample_avx2)
+
+EXTN(jsimd_h2v2_merged_upsample_avx2):
+    ENDBR64
+    push        rbp
+    mov         rbp, rsp
+    COLLECT_ARGS 4
+    push        rbx
+
+    mov         eax, r10d
+
+    mov         rdi, r11
+    mov         ecx, r12d
+    mov         rsip, JSAMPARRAY [rdi+0*SIZEOF_JSAMPARRAY]
+    mov         rbxp, JSAMPARRAY [rdi+1*SIZEOF_JSAMPARRAY]
+    mov         rdxp, JSAMPARRAY [rdi+2*SIZEOF_JSAMPARRAY]
+    mov         rdi, r13
+    lea         rsi, [rsi+rcx*SIZEOF_JSAMPROW]
+
+    sub         rsp, SIZEOF_JSAMPARRAY*4
+    mov         JSAMPARRAY [rsp+0*SIZEOF_JSAMPARRAY], rsip  ; intpr00
+    mov         JSAMPARRAY [rsp+1*SIZEOF_JSAMPARRAY], rbxp  ; intpr1
+    mov         JSAMPARRAY [rsp+2*SIZEOF_JSAMPARRAY], rdxp  ; intpr2
+    mov         rbx, rsp
+
+    push        rdi
+    push        rcx
+    push        rax
+
+    %ifdef WIN64
+    mov         r8, rcx
+    mov         r9, rdi
+    mov         rcx, rax
+    mov         rdx, rbx
+    %else
+    mov         rdx, rcx
+    mov         rcx, rdi
+    mov         rdi, rax
+    mov         rsi, rbx
+    %endif
+
+    call        EXTN(jsimd_h2v1_merged_upsample_avx2)
+
+    pop         rax
+    pop         rcx
+    pop         rdi
+    mov         rsip, JSAMPARRAY [rsp+0*SIZEOF_JSAMPARRAY]
+    mov         rbxp, JSAMPARRAY [rsp+1*SIZEOF_JSAMPARRAY]
+    mov         rdxp, JSAMPARRAY [rsp+2*SIZEOF_JSAMPARRAY]
+
+    add         rdi, byte SIZEOF_JSAMPROW  ; outptr1
+    add         rsi, byte SIZEOF_JSAMPROW  ; inptr01
+
+    mov         JSAMPARRAY [rsp+0*SIZEOF_JSAMPARRAY], rsip  ; intpr00
+    mov         JSAMPARRAY [rsp+1*SIZEOF_JSAMPARRAY], rbxp  ; intpr1
+    mov         JSAMPARRAY [rsp+2*SIZEOF_JSAMPARRAY], rdxp  ; intpr2
+    mov         rbx, rsp
+
+    push        rdi
+    push        rcx
+    push        rax
+
+    %ifdef WIN64
+    mov         r8, rcx
+    mov         r9, rdi
+    mov         rcx, rax
+    mov         rdx, rbx
+    %else
+    mov         rdx, rcx
+    mov         rcx, rdi
+    mov         rdi, rax
+    mov         rsi, rbx
+    %endif
+
+    call        EXTN(jsimd_h2v1_merged_upsample_avx2)
+
+    pop         rax
+    pop         rcx
+    pop         rdi
+    mov         rsip, JSAMPARRAY [rsp+0*SIZEOF_JSAMPARRAY]
+    mov         rbxp, JSAMPARRAY [rsp+1*SIZEOF_JSAMPARRAY]
+    mov         rdxp, JSAMPARRAY [rsp+2*SIZEOF_JSAMPARRAY]
+    add         rsp, SIZEOF_JSAMPARRAY*4
+
+    pop         rbx
+    UNCOLLECT_ARGS 4
     pop         rbp
     ret
 

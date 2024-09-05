@@ -7,7 +7,8 @@
  * Lossless JPEG Modifications:
  * Copyright (C) 1999, Ken Murchison.
  * libjpeg-turbo Modifications:
- * Copyright (C) 2009-2011, 2013-2014, 2016-2017, 2020, 2022, D. R. Commander.
+ * Copyright (C) 2009-2011, 2013-2014, 2016-2017, 2020, 2022-2024,
+             D. R. Commander.
  * Copyright (C) 2015, Google, Inc.
  * For conditions of distribution and use, see the accompanying README.ijg
  * file.
@@ -15,6 +16,16 @@
  * This file defines the application interface for the JPEG library.
  * Most applications using the library need only include this file,
  * and perhaps jerror.h if they want to know the exact error codes.
+ */
+
+/* NOTE: This header file does not include stdio.h, despite the fact that it
+ * uses FILE and size_t.  That is by design, since the libjpeg API predates the
+ * widespread adoption of ANSI/ISO C.  Referring to libjpeg.txt, it is a
+ * documented requirement that calling programs "include system headers that
+ * define at least the typedefs FILE and size_t" before including jpeglib.h.
+ * Technically speaking, changing that requirement by including stdio.h here
+ * would break backward API compatibility.  Please do not file bug reports,
+ * feature requests, or pull requests regarding this.
  */
 
 #ifndef JPEGLIB_H
@@ -270,7 +281,8 @@ typedef enum {
   JCS_EXT_BGRA,           /* blue/green/red/alpha */
   JCS_EXT_ABGR,           /* alpha/blue/green/red */
   JCS_EXT_ARGB,           /* alpha/red/green/blue */
-  JCS_RGB565              /* 5-bit red/6-bit green/5-bit blue */
+  JCS_RGB565              /* 5-bit red/6-bit green/5-bit blue
+                             [decompression only] */
 } J_COLOR_SPACE;
 
 /* DCT/IDCT algorithm options. */
@@ -296,17 +308,6 @@ typedef enum {
   JDITHER_FS              /* Floyd-Steinberg error diffusion dither */
 } J_DITHER_MODE;
 
-struct rp_alloc_stats {
-  uint32_t offset;
-  uint32_t remaining;
-};
-
-struct rp_alloc_state {
-  uint8_t* buf;
-  struct rp_alloc_stats stats;
-  uint32_t max_offset;
-};
-
 
 /* Common fields between JPEG compression and decompression master structs. */
 
@@ -316,8 +317,7 @@ struct rp_alloc_state {
   struct jpeg_progress_mgr *progress; /* Progress monitor, or NULL if none */ \
   void *client_data;            /* Available for use by application */ \
   boolean is_decompressor;      /* So common code can tell which is which */ \
-  int global_state;             /* For checking call sequence validity */ \
-  boolean has_error
+  int global_state              /* For checking call sequence validity */
 
 /* Routines that are to be used by both halves of the library are declared
  * to receive a pointer to this structure.  There are no actual instances of
@@ -335,8 +335,6 @@ typedef struct jpeg_common_struct *j_common_ptr;
 typedef struct jpeg_compress_struct *j_compress_ptr;
 typedef struct jpeg_decompress_struct *j_decompress_ptr;
 
-void* rpMalloc(j_common_ptr cinfo, uint32_t size);
-void rpFree(j_common_ptr, void*);
 
 /* Master record for a compression instance */
 
@@ -587,11 +585,10 @@ struct jpeg_decompress_struct {
    */
   int actual_number_of_colors;  /* number of entries in use */
   JSAMPARRAY colormap;          /* The color map as a 2-D pixel array
-                                   If data_precision is 12 or 16, then this is
-                                   actually a J12SAMPARRAY or a J16SAMPARRAY,
-                                   so callers must type-cast it in order to
-                                   read/write 12-bit or 16-bit samples from/to
-                                   the array. */
+                                   If data_precision is 12, then this is
+                                   actually a J12SAMPARRAY, so callers must
+                                   type-cast it in order to read/write 12-bit
+                                   samples from/to the array. */
 
   /* State variables: these variables indicate the progress of decompression.
    * The application may examine these but must not modify them.
