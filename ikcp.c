@@ -665,6 +665,9 @@ int ikcp_reply(ikcpcb *kcp)
 					*(IUINT16 *)ptr = nack;
 					ptr += sizeof(IUINT16);
 					size += sizeof(IUINT16);
+					if (size > kcp->mtu) {
+						return -1;
+					}
 
 					nack_start = pid;
 					nack_count_0 = 0;
@@ -677,6 +680,9 @@ int ikcp_reply(ikcpcb *kcp)
 			*(IUINT16 *)ptr = nack;
 			ptr += sizeof(IUINT16);
 			size += sizeof(IUINT16);
+			if (size > kcp->mtu) {
+				return -1;
+			}
 		}
 	}
 
@@ -686,6 +692,9 @@ int ikcp_reply(ikcpcb *kcp)
 	*(IUINT16 *)ptr = ((pid & ((1 << PID_NBITS) - 1)) << count_nbits);
 	ptr += sizeof(IUINT16);
 	size += sizeof(IUINT16);
+	if (size > kcp->mtu) {
+		return -1;
+	}
 
 	return kcp->output(buf, size, kcp, kcp->user);
 }
