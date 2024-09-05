@@ -75,7 +75,7 @@ FEC_OBJ := $(FEC_SRC:.cpp=.o)
 $(TARGET): main.o rp_syn.o ikcp.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o libGLAD.o fsr/fsr_main.o fsr/image_utils.o $(JT_OBJ) $(JT_OBJ_S) $(FEC_OBJ)
 	$(CXX) $^ -o $@ $(CFLAGS) $(LDLIBS) $(LDFLAGS)
 
-CC_JT = $(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo -Ijpeg_turbo/include
+CC_JT = $(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo -Ijpeg_turbo/include -Wno-stringop-overflow
 
 %.o: %.c
 	$(CC_JT) -DBMP_SUPPORTED -DGIF_SUPPORTED -DPPM_SUPPORTED

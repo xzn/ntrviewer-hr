@@ -2555,63 +2555,73 @@ static void socket_action(int ret) {
 static unsigned char jpeg_header_top_buffer_kcp[400 * 240 * 3 + 2048];
 static unsigned char jpeg_header_bot_buffer_kcp[320 * 240 * 3 + 2048];
 static unsigned char jpeg_header_empty_src_kcp[400 * 240 * 3];
+static u16 jpeg_header_top_quality_kcp;
+static u16 jpeg_header_bot_quality_kcp;
 static int set_decode_quality_kcp(bool is_top, int quality, int rc)
 {
-  tjhandle tjInst = tj3Init(TJINIT_COMPRESS);
-  if (!tjInst) {
-    return -1;
-  }
-  int ret = 0;
+  u16 *hdr_quality = is_top ? &jpeg_header_top_quality_kcp : &jpeg_header_bot_quality_kcp;
 
-  ret = tj3Set(tjInst, TJPARAM_NOREALLOC, 1);
-  if (ret < 0) {
-    ret = ret * 0x10 - 2;
-    goto final;
-  }
+  // No need to check for rc as we change restart interval manually later
+  if (*hdr_quality != quality) {
+    tjhandle tjInst = tj3Init(TJINIT_COMPRESS);
+    if (!tjInst) {
+      return -1;
+    }
+    int ret = 0;
 
-  ret = tj3Set(tjInst, TJPARAM_RESTARTROWS, rc);
-  if (ret < 0) {
-    ret = ret * 0x10 - 5;
-    goto final;
-  }
+    ret = tj3Set(tjInst, TJPARAM_NOREALLOC, 1);
+    if (ret < 0) {
+      ret = ret * 0x10 - 2;
+      goto final;
+    }
 
-  ret = tj3Set(tjInst, TJPARAM_QUALITY, quality);
-  if (ret < 0) {
-    ret = ret * 0x10 - 6;
-    goto final;
-  }
+    ret = tj3Set(tjInst, TJPARAM_RESTARTROWS, rc);
+    if (ret < 0) {
+      ret = ret * 0x10 - 5;
+      goto final;
+    }
 
-  ret = tj3Set(tjInst, TJPARAM_SUBSAMP, TJSAMP_420);
-  if (ret < 0) {
-    ret = ret * 0x10 - 7;
-    goto final;
-  }
+    ret = tj3Set(tjInst, TJPARAM_QUALITY, quality);
+    if (ret < 0) {
+      ret = ret * 0x10 - 6;
+      goto final;
+    }
 
-  size_t size = is_top ? sizeof(jpeg_header_top_buffer_kcp) : sizeof(jpeg_header_bot_buffer_kcp);
-  size_t buf_size = tj3JPEGBufSize(240, is_top ? 400 : 320, TJSAMP_420);
-  if (size < buf_size) {
-    err_log("buf size %d size %d\n", (int)buf_size, (int)size);
-    ret = -3;
-    goto final;
-  }
+    ret = tj3Set(tjInst, TJPARAM_SUBSAMP, TJSAMP_420);
+    if (ret < 0) {
+      ret = ret * 0x10 - 7;
+      goto final;
+    }
 
-  unsigned char *jpeg_buf = is_top ? jpeg_header_top_buffer_kcp : jpeg_header_bot_buffer_kcp;
+    size_t size = is_top ? sizeof(jpeg_header_top_buffer_kcp) : sizeof(jpeg_header_bot_buffer_kcp);
+    size_t buf_size = tj3JPEGBufSize(240, is_top ? 400 : 320, TJSAMP_420);
+    if (size < buf_size) {
+      err_log("buf size %d size %d\n", (int)buf_size, (int)size);
+      ret = -3;
+      goto final;
+    }
 
-  ret = tj3Compress8(tjInst, jpeg_header_empty_src_kcp, 240, 0, is_top ? 400 : 320, TJPF_RGB,
-    &jpeg_buf,
-    &size);
+    unsigned char *jpeg_buf = is_top ? jpeg_header_top_buffer_kcp : jpeg_header_bot_buffer_kcp;
 
-  if (ret < 0) {
-    err_log("tj3Compress8 error (%d): %s\n", tj3GetErrorCode(tjInst), tj3GetErrorStr(tjInst));
-    ret = ret * 0x10 - 4;
-    goto final;
-  }
+    ret = tj3Compress8(tjInst, jpeg_header_empty_src_kcp, 240, 0, is_top ? 400 : 320, TJPF_RGB,
+      &jpeg_buf,
+      &size);
 
-  ret = 0;
+    if (ret < 0) {
+      err_log("tj3Compress8 error (%d): %s\n", tj3GetErrorCode(tjInst), tj3GetErrorStr(tjInst));
+      ret = ret * 0x10 - 4;
+      goto final;
+    }
+
+    ret = 0;
+    *hdr_quality = quality;
 
 final:
-  tj3Destroy(tjInst);
-  return ret;
+    tj3Destroy(tjInst);
+    return ret;
+  }
+
+  return 0;
 }
 
 static uint8_t *copy_with_escape(uint8_t *out, const uint8_t *in, int size)
@@ -2650,7 +2660,12 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
   for (size_t i = 0; i < jpeg_header_size_max; ++i) {
     if (jpeg_header[i] == 0xff) {
       if (i + 1 < jpeg_header_size_max) {
-        if (jpeg_header[i + 1] == 0xda) {
+        if (jpeg_header[i + 1] == 0xdd) {
+          if (i + 6 >= jpeg_header_size_max) {
+            return -6;
+          }
+          *(u16 *)&jpeg_header[i + 4] = htons(info->v_adjusted * (240 / (8 * 2)));
+        } else if (jpeg_header[i + 1] == 0xda) {
           jpeg_header_size = i + 2;
           if (jpeg_header_size + 2 >= jpeg_header_size_max) {
             return -4;
