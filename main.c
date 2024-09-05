@@ -36,6 +36,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <time.h>
@@ -2955,7 +2956,20 @@ void receive_from_socket(SOCKET s)
             }
           }
 #else
-#error TODO
+          struct pollfd pollfd = {
+            .fd = s,
+            .events = POLLIN,
+            .revents = 0,
+          };
+          int res = poll(&pollfd, 1, RP_SOCKET_INTERVAL);
+          if (res < 0) {
+            err_log("socket poll failed: %d\n", errno);
+            return;
+          } else if (res > 0) {
+            if (pollfd.revents & POLLIN) {
+              break;
+            }
+          }
 #endif
         }
       }
@@ -3024,6 +3038,7 @@ void *jpeg_decode_thread_func(void *)
   return 0;
 }
 
+static int jpeg_recv_sem_inited;
 void receive_from_socket_loop(SOCKET s)
 {
   while (running && !ntr_rp_port_changed) {
@@ -3055,16 +3070,18 @@ void receive_from_socket_loop(SOCKET s)
     memset(frame_size_tracker, 0, sizeof(frame_size_tracker));
     memset(delay_between_packet_tracker, 0, sizeof(delay_between_packet_tracker));
 
-    if (jpeg_recv_sem) {
+    if (jpeg_recv_sem_inited) {
       if (rp_sem_close(jpeg_recv_sem) != 0) {
         err_log("jpeg_recv_sem close failed\n");
         break;
       }
+      jpeg_recv_sem_inited = 0;
     }
     if (rp_sem_init(jpeg_recv_sem, rp_work_queue_count) != 0) {
       err_log("jpeg_recv_sem init failed\n");
       break;
     }
+    jpeg_recv_sem_inited = 1;
     memset(decode_ptr, 0, sizeof(decode_ptr));
     if (rp_syn_init1(&jpeg_decode_queue, 0, 0, 0, rp_work_count, (void **)decode_ptr) != 0) {
       err_log("jpeg_decode_queue init failed\n");
@@ -3122,7 +3139,7 @@ void *udp_recv_thread_func(void *)
       err_log("socket bind failed for port %d\n", ntr_rp_bound_port);
       // running = 0;
       socket_error_pause();
-      continue;
+      goto final_socket;
     }
     uint8_t *octets = adaptorIPsOctets[selectedAdaptor];
     err_log("port bound at %d.%d.%d.%d:%d\n", (int)octets[0], (int)octets[1], (int)octets[2], (int)octets[3], ntr_rp_bound_port);
@@ -3140,7 +3157,7 @@ void *udp_recv_thread_func(void *)
       err_log("setsockopt buf size failed\n");
       // running = 0;
       socket_error_pause();
-      continue;
+      goto final_socket;
     }
 
 #ifdef _WIN32
@@ -3156,7 +3173,7 @@ void *udp_recv_thread_func(void *)
       err_log("setsockopt timeout failed\n");
       // running = 0;
       socket_error_pause();
-      continue;
+      goto final_socket;
     }
 
 #ifdef _WIN32
@@ -3167,14 +3184,26 @@ void *udp_recv_thread_func(void *)
       err_log("ioctlsocket FIONBIO failed, %d\n", WSAGetLastError());
       // running = 0;
       socket_error_pause();
-      continue;
+      goto final_socket;
     }
 #else
-#error TODO
+    int flags = fcntl(s, F_GETFL, 0);
+    if (flags == -1) {
+      err_log("fcntl F_GETFL failed, %d\n", errno);
+      socket_error_pause();
+      goto final_socket;
+    }
+    flags |= O_NONBLOCK;
+    if (fcntl(s, F_SETFL, flags) != 0) {
+      err_log("fcntl F_SETFL failed, %d\n", errno);
+      socket_error_pause();
+      goto final_socket;
+    }
 #endif
 
     receive_from_socket_loop(s);
 
+final_socket:
     closesocket(s);
   }
 
