@@ -1418,9 +1418,15 @@ static GLbyte fbo_fShaderStr[] =
     "void main() \n"
     "{ \n"
     " gl_FragColor = vec4("
+#ifdef _WIN32
+        "texture3D(s_texture, vec3(v_texCoord, 2.0 / 3.0)).x / 255.0,"
+        "texture3D(s_texture, vec3(v_texCoord, 1.0 / 3.0)).x / 255.0,"
+        "texture3D(s_texture, vec3(v_texCoord, 0.0)).x / 255.0,"
+#else
         "texture3D(s_texture, vec3(v_texCoord, 0.0)).x / 255.0,"
         "texture3D(s_texture, vec3(v_texCoord, 1.0 / 3.0)).x / 255.0,"
         "texture3D(s_texture, vec3(v_texCoord, 2.0 / 3.0)).x / 255.0,"
+#endif
         "texture3D(s_texture, vec3(v_texCoord, 1.0)).x / 255.0"
         ");\n"
     "} \n";

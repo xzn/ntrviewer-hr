@@ -84,7 +84,9 @@ RealCUGAN::RealCUGAN(int gpuid, bool _tta_mode, int num_threads)
     out_gpu_buf = new ncnn::VkMat();
     out_gpu_tex = new OutVkImageMat();
 
-    support_ext_mem = ncnn::support_VK_KHR_external_memory_capabilities &&
+    // Tested on AMD and NVIDIA for now
+    bool supported_gpu_vendor = vkdev->info.vendor_id() == 0x1002 || vkdev->info.vendor_id() == 0x10de;
+    support_ext_mem = supported_gpu_vendor && ncnn::support_VK_KHR_external_memory_capabilities &&
 #if _WIN32
         vkdev->info.support_VK_KHR_external_memory() && vkdev->info.support_VK_KHR_external_memory_win32() &&
         GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_win32;
@@ -4269,7 +4271,7 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
 #endif
 
     VkImageCreateInfo imageCreateInfo;
-    VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL;
+    VkImageTiling tiling = cugan->vkdev->info.vendor_id() == 0x1002 ? VK_IMAGE_TILING_LINEAR : VK_IMAGE_TILING_OPTIMAL;
     VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     imageCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
     imageCreateInfo.pNext = &extImageCreateInfo;
@@ -4531,14 +4533,17 @@ void OutVkImageMat::create_handles(const RealCUGAN* cugan)
 #endif
 
     glGenTextures(1, &gl_texture);
+    GLint tiling = cugan->vkdev->info.vendor_id() == 0x1002 ? GL_LINEAR_TILING_EXT : GL_OPTIMAL_TILING_EXT;
     if (depth == 1) {
         glBindTexture(GL_TEXTURE_2D, gl_texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_TILING_EXT, tiling);
         glTextureStorageMem2DEXT(
             gl_texture, 1, GL_RGBA8, width,
             height, gl_memory, 0);
         glBindTexture(GL_TEXTURE_2D, 0);
     } else {
         glBindTexture(GL_TEXTURE_3D, gl_texture);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_TILING_EXT, tiling);
         glTextureStorageMem3DEXT(
             gl_texture, 1, GL_R32F, width,
             height, depth, gl_memory, 0);
