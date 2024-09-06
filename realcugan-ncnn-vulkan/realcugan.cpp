@@ -88,6 +88,7 @@ RealCUGAN::RealCUGAN(int gpuid, bool _tta_mode, int num_threads)
     bool supported_gpu_vendor = vkdev->info.vendor_id() == 0x1002 || vkdev->info.vendor_id() == 0x10de;
     // fprintf(stderr, "GPU vendor id: 0x%x\n", (unsigned)vkdev->info.vendor_id());
     support_ext_mem = supported_gpu_vendor && ncnn::support_VK_KHR_external_memory_capabilities &&
+        vkdev->info.support_VK_KHR_get_memory_requirements2() &&
 #if _WIN32
         vkdev->info.support_VK_KHR_external_memory() && vkdev->info.support_VK_KHR_external_memory_win32() &&
         GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_win32;
@@ -95,6 +96,7 @@ RealCUGAN::RealCUGAN(int gpuid, bool _tta_mode, int num_threads)
         vkdev->info.support_VK_KHR_external_memory() && vkdev->info.support_VK_KHR_external_memory_fd() &&
         GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_fd;
 #endif
+    tiling_linear = false;
 }
 
 RealCUGAN::~RealCUGAN()
@@ -4216,7 +4218,7 @@ void OutVkImageMat::create_like(const RealCUGAN* cugan, const ncnn::VkMat& m, co
         release(cugan);
 }
 
-static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, size_t elemsize, int elempack, size_t& totalsize) {
+static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, size_t elemsize, int elempack, size_t& totalsize, bool& dedicated) {
     if (elempack != 1 && elempack != 4 && elempack != 8)
     {
         NCNN_LOGE("elempack must be 1 4 8");
@@ -4272,8 +4274,9 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
 #endif
 
     VkImageCreateInfo imageCreateInfo;
-    VkImageTiling tiling = cugan->vkdev->info.vendor_id() == 0x1002 ? VK_IMAGE_TILING_LINEAR : VK_IMAGE_TILING_OPTIMAL;
-    VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    VkImageTiling tiling = cugan->tiling_linear ? VK_IMAGE_TILING_LINEAR : VK_IMAGE_TILING_OPTIMAL;
+    // VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     imageCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
     imageCreateInfo.pNext = &extImageCreateInfo;
     imageCreateInfo.flags = 0;
@@ -4300,19 +4303,47 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
         return 0;
     }
 
-    VkMemoryRequirements memoryRequirements;
-    vkGetImageMemoryRequirements(cugan->vkdev->vkdevice(), image, &memoryRequirements);
+    VkMemoryDedicatedRequirements dedReqs;
+    VkImageMemoryRequirementsInfo2 memReqsInfo2;
+    VkMemoryRequirements2 memReqs2;
 
-    const size_t size = memoryRequirements.size;
-    const size_t alignment = memoryRequirements.alignment;
+	memset(&dedReqs, 0, sizeof(dedReqs));
+	dedReqs.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS;
+
+	/* VkImageMemoryRequirementsInfo2 */
+	memset(&memReqsInfo2, 0, sizeof(memReqsInfo2));
+	memReqsInfo2.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2;
+	memReqsInfo2.image = image;
+
+	/* VkMemoryRequirements2 */
+	memset(&memReqs2, 0, sizeof(memReqs2));
+	memReqs2.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+	memReqs2.pNext = &dedReqs;
+
+    cugan->vkdev->vkGetImageMemoryRequirements2KHR(cugan->vkdev->vkdevice(), &memReqsInfo2, &memReqs2);
+
+    const size_t size = memReqs2.memoryRequirements.size;
+    const size_t alignment = memReqs2.memoryRequirements.alignment;
 
     size_t aligned_size = alignSize(size, alignment);
 
-    uint32_t image_memory_type_index = cugan->vkdev->find_memory_index(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+    uint32_t image_memory_type_index = cugan->vkdev->find_memory_index(memReqs2.memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+
+    VkMemoryDedicatedAllocateInfoKHR dedAllocInfo;
 
     VkExportMemoryAllocateInfo exportAllocInfo{
         VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO, nullptr,
         extImageCreateInfo.handleTypes};
+
+    dedicated = dedReqs.requiresDedicatedAllocation;
+    if (dedicated) {
+        memset(&dedAllocInfo, 0, sizeof dedAllocInfo);
+        dedAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+        dedAllocInfo.image = image;
+        dedAllocInfo.buffer = nullptr;
+
+        exportAllocInfo.pNext = &dedAllocInfo;
+    }
 
     VkMemoryAllocateInfo memoryAllocateInfo;
     memoryAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -4407,7 +4438,7 @@ void OutVkImageMat::create(const RealCUGAN* cugan, int _w, int _h, size_t _elems
 
     if (total() > 0)
     {
-        data = out_create(cugan, w, h, c, elemsize, elempack, totalsize);
+        data = out_create(cugan, w, h, c, elemsize, elempack, totalsize, dedicated);
 
         if (data) create_handles(cugan);
         else release(cugan);
@@ -4439,7 +4470,7 @@ void OutVkImageMat::create(const RealCUGAN* cugan, int _w, int _h, int _c, size_
 
     if (total() > 0)
     {
-        data = out_create(cugan, w, h, c, elemsize, elempack, totalsize);
+        data = out_create(cugan, w, h, c, elemsize, elempack, totalsize, dedicated);
 
         if (data) create_handles(cugan);
         else release(cugan);
@@ -4527,6 +4558,8 @@ void OutVkImageMat::create_handles(const RealCUGAN* cugan)
 #endif
 
     glCreateMemoryObjectsEXT(1, &gl_memory);
+    GLint ded = dedicated ? GL_TRUE : GL_FALSE;
+    glMemoryObjectParameterivEXT(gl_memory, GL_DEDICATED_MEMORY_OBJECT_EXT, &ded);
 #if _WIN32
     glImportMemoryWin32HandleEXT(gl_memory, totalsize, GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, memory);
 #else
@@ -4534,7 +4567,7 @@ void OutVkImageMat::create_handles(const RealCUGAN* cugan)
 #endif
 
     glGenTextures(1, &gl_texture);
-    GLint tiling = cugan->vkdev->info.vendor_id() == 0x1002 ? GL_LINEAR_TILING_EXT : GL_OPTIMAL_TILING_EXT;
+    GLint tiling = cugan->tiling_linear ? GL_LINEAR_TILING_EXT : GL_OPTIMAL_TILING_EXT;
     if (depth == 1) {
         glBindTexture(GL_TEXTURE_2D, gl_texture);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_TILING_EXT, tiling);

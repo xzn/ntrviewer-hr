@@ -68,6 +68,7 @@ public:
 #endif
     GLuint gl_memory;
     GLuint gl_texture;
+    bool dedicated;
 };
 
 class RealCUGAN
@@ -136,6 +137,7 @@ public:
     ncnn::VkMat* out_gpu_buf;
     OutVkImageMat* out_gpu_tex;
     bool support_ext_mem;
+    bool tiling_linear;
 };
 
 #endif // REALCUGAN_H
