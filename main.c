@@ -553,7 +553,7 @@ void *tcp_thread_func(void *arg)
       char *buf = (char *)&header;
       int size = sizeof(header);
       int ret;
-      if ((ret = tcp_recv(sockfd, buf, size)) < 0)
+      if ((ret = tcp_recv(sockfd, buf, size)) < 0 || !running)
       {
         if (running)
           err_log("tcp recv error: %d\n", sock_errno());
@@ -564,7 +564,8 @@ void *tcp_thread_func(void *arg)
       {
         if (header.magic != TCP_MAGIC)
         {
-          err_log("broken protocol\n");
+          if (running)
+            err_log("broken protocol\n");
           RESET_SOCKET(tcp_status, *(t->work_state));
           continue;
         }
