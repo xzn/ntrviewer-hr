@@ -45,9 +45,12 @@ typedef int SOCKET;
 #define sock_errno() errno
 #define WSAEWOULDBLOCK EWOULDBLOCK
 #define WSAETIMEDOUT ETIMEDOUT
-#define SOCKET_ERROR SO_ERROR
+#define SOCKET_ERROR (-1)
 #define INVALID_SOCKET (-1)
 #define closesocket close
+#define WSAPOLLFD struct pollfd
+#define WSAPoll poll
+#define SD_BOTH SHUT_RDWR
 
 void Sleep(int milliseconds) {
   struct timespec ts;
@@ -118,21 +121,12 @@ int sock_close(SOCKET sock)
 {
   int status = 0;
 
-#ifdef _WIN32
   status = shutdown(sock, SD_BOTH);
   if (status != 0)
   {
     err_log("socket shudown failed: %d\n", sock_errno());
   }
   status = closesocket(sock);
-#else
-  status = shutdown(sock, SHUT_RDWR);
-  if (status != 0)
-  {
-    err_log("socket shudown failed: %d\n", sock_errno());
-  }
-  status = close(sock);
-#endif
 
   return status;
 }
@@ -309,12 +303,32 @@ typedef struct _TCPPacketHeader
   uint32_t data_len;
 } TCPPacketHeader;
 
-int tcp_recv(SOCKET sockfd, char *buf, int size)
+static bool socket_poll(SOCKET s)
+{
+  while (running) {
+    WSAPOLLFD pollfd = {
+      .fd = s,
+      .events = POLLIN,
+      .revents = 0,
+    };
+    int res = WSAPoll(&pollfd, 1, RP_SOCKET_INTERVAL);
+    if (res < 0) {
+      return false;
+    } else if (res > 0) {
+      if (pollfd.revents & POLLIN) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+static int tcp_recv(SOCKET sockfd, char *buf, int size)
 {
   int ret, pos = 0;
   int tmpsize = size;
 
-  while (tmpsize)
+  while (running && tmpsize)
   {
     if ((ret = recv(sockfd, &buf[pos], tmpsize, 0)) <= 0)
     {
@@ -322,10 +336,17 @@ int tcp_recv(SOCKET sockfd, char *buf, int size)
       {
         if (sock_errno() == WSAEWOULDBLOCK)
         {
-          if (pos)
-            continue;
-          else
+          if (pos) {
+            if (socket_poll(sockfd)) {
+              continue;
+            } else {
+              if (running)
+                err_log("socket poll failed: %d\n", sock_errno());
+              return -1;
+            }
+          } else {
             return 0;
+          }
         }
       }
       return ret;
@@ -337,15 +358,24 @@ int tcp_recv(SOCKET sockfd, char *buf, int size)
   return size;
 }
 
-int tcp_send(SOCKET sockfd, char *buf, int size)
+static int tcp_send(SOCKET sockfd, char *buf, int size)
 {
   int ret, pos = 0;
   int tmpsize = size;
 
-  while (tmpsize)
+  while (running && tmpsize)
   {
     if ((ret = send(sockfd, &buf[pos], tmpsize, 0)) < 0)
     {
+      if (sock_errno() == WSAEWOULDBLOCK) {
+        if (socket_poll(sockfd)) {
+          continue;
+        } else {
+          if (running)
+            err_log("socket poll failed: %d\n", sock_errno());
+          return -1;
+        }
+      }
       return ret;
     }
     pos += ret;
@@ -355,7 +385,7 @@ int tcp_send(SOCKET sockfd, char *buf, int size)
   return size;
 }
 
-int tcp_send_packet_header(SOCKET s, uint32_t seq, uint32_t type, uint32_t cmd, uint32_t *argv, int argc, uint32_t data_len)
+static int tcp_send_packet_header(SOCKET s, uint32_t seq, uint32_t type, uint32_t cmd, uint32_t *argv, int argc, uint32_t data_len)
 {
   TCPPacketHeader packet;
   packet.magic = TCP_MAGIC;
@@ -380,7 +410,27 @@ int tcp_send_packet_header(SOCKET s, uint32_t seq, uint32_t type, uint32_t cmd, 
   return tcp_send(s, buf, size);
 }
 
-SOCKET tcp_connect(int port)
+static bool socket_set_nonblock(SOCKET s, bool nb)
+{
+#ifdef _WIN32
+  u_long opt = nb;
+  if (ioctlsocket(s, FIONBIO, &opt)) {
+    return false;
+  }
+#else
+  int flags = fcntl(s, F_GETFL, 0);
+  if (flags == -1) {
+    return false;
+  }
+  flags = nb ? flags | O_NONBLOCK : flags & ~O_NONBLOCK;
+  if (fcntl(s, F_SETFL, flags) != 0) {
+    return false;
+  }
+#endif
+  return true;
+}
+
+static SOCKET tcp_connect(int port)
 {
   struct sockaddr_in servaddr = {0};
   SOCKET sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -390,19 +440,11 @@ SOCKET tcp_connect(int port)
     return INVALID_SOCKET;
   }
 
-#ifdef _WIN32
-  u_long opt = 1;
-  if (ioctlsocket(sockfd, FIONBIO, &opt)) {
-    err_log("ioctlsocket FIONBIO failed: %d\n", sock_errno());
+  if (!socket_set_nonblock(sockfd, 1)) {
+    err_log("socket_set_nonblock failed: %d\n", sock_errno());
+    closesocket(sockfd);
     return INVALID_SOCKET;
   }
-#else
-  int flags = fcntl(sockfd, F_GETFL, 0);
-  if (flags == -1) return INVALID_SOCKET;
-  flags = flags | O_NONBLOCK;
-  if (fcntl(sockfd, F_SETFL, flags) != 0) return INVALID_SOCKET;
-#endif
-
 
   servaddr.sin_family = AF_INET;
   snprintf(ip_addr_buf, sizeof(ip_addr_buf),
@@ -454,6 +496,9 @@ SOCKET tcp_connect(int port)
   sockfd = INVALID_SOCKET; \
   ts = 0; \
   ws = CS_DISCONNECTED; \
+  if (t->remote_play) { \
+    *(t->remote_play) = 0; \
+  } \
   err_log("disconnected\n"); \
 } while (0)
 
@@ -502,7 +547,8 @@ void *tcp_thread_func(void *arg)
       int ret;
       if ((ret = tcp_recv(sockfd, buf, size)) < 0)
       {
-        err_log("tcp recv error: %d\n", sock_errno());
+        if (running)
+          err_log("tcp recv error: %d\n", sock_errno());
         RESET_SOCKET(tcp_status, *(t->work_state));
         continue;
       }
@@ -522,7 +568,8 @@ void *tcp_thread_func(void *arg)
             char *buf = malloc(header.data_len + 1);
             if ((ret = tcp_recv(sockfd, buf, header.data_len)) < 0)
             {
-              err_log("heart beat recv error: %d\n", sock_errno());
+              if (running)
+                err_log("heart beat recv error: %d\n", sock_errno());
               free(buf);
               RESET_SOCKET(tcp_status, *(t->work_state));
               continue;
@@ -541,7 +588,8 @@ void *tcp_thread_func(void *arg)
           char *buf = malloc(header.data_len);
           if ((ret = tcp_recv(sockfd, buf, header.data_len)) < 0)
           {
-            err_log("tcp recv error: %d\n", sock_errno());
+            if (running)
+              err_log("tcp recv error: %d\n", sock_errno());
             free(buf);
             RESET_SOCKET(tcp_status, *(t->work_state));
             continue;
@@ -553,7 +601,8 @@ void *tcp_thread_func(void *arg)
       ret = tcp_send_packet_header(sockfd, packet_seq, 0, 0, 0, 0, 0);
       if (ret < 0)
       {
-        err_log("heart beat send failed: %d\n", sock_errno());
+        if (running)
+          err_log("heart beat send failed: %d\n", sock_errno());
         RESET_SOCKET(tcp_status, *(t->work_state));
       }
       ++packet_seq;
@@ -572,7 +621,8 @@ void *tcp_thread_func(void *arg)
 
         if (ret < 0)
         {
-          err_log("remote play send failed: %d\n", sock_errno());
+          if (running)
+            err_log("remote play send failed: %d\n", sock_errno());
           RESET_SOCKET(tcp_status, *(t->work_state));
         }
         ++packet_seq;
@@ -2903,7 +2953,7 @@ void socket_reply(void) {
       if (reply) {
         if ((ret = ikcp_reply(kcp)) < 0)
         {
-          if (ret == -0x100) {
+          if (ret < -0x100) {
             if (sock_errno() == WSAEWOULDBLOCK) {
               return;
             }
@@ -2919,7 +2969,7 @@ void socket_reply(void) {
   }
 }
 
-void receive_from_socket(SOCKET s)
+static void receive_from_socket(SOCKET s)
 {
   while (running && !ntr_rp_port_changed && !restart_kcp)
   {
@@ -2939,43 +2989,16 @@ void receive_from_socket(SOCKET s)
       if (err != WSAETIMEDOUT && err != WSAEWOULDBLOCK)
       {
         // err_log("recvfrom failed: %d\n", err);
-        // return;
+        Sleep(RP_SOCKET_INTERVAL);
+        return;
       }
       else if (err == WSAEWOULDBLOCK)
       {
         socket_reply();
-        while (running) {
-#ifdef _WIN32
-          WSAPOLLFD pollfd = {
-            .fd = s,
-            .events = POLLIN,
-            .revents = 0,
-          };
-          int res = WSAPoll(&pollfd, 1, RP_SOCKET_INTERVAL);
-          if (res < 0) {
-            err_log("socket poll failed: %d\n", WSAGetLastError());
-            return;
-          } else if (res > 0) {
-            if (pollfd.revents & POLLIN) {
-              break;
-            }
-          }
-#else
-          struct pollfd pollfd = {
-            .fd = s,
-            .events = POLLIN,
-            .revents = 0,
-          };
-          int res = poll(&pollfd, 1, RP_SOCKET_INTERVAL);
-          if (res < 0) {
-            err_log("socket poll failed: %d\n", errno);
-            return;
-          } else if (res > 0) {
-            if (pollfd.revents & POLLIN) {
-              break;
-            }
-          }
-#endif
+        if (!socket_poll(s)) {
+          if (running)
+            err_log("socket poll failed: %d\n", sock_errno());
+          return;
         }
       }
       continue;
@@ -3181,30 +3204,11 @@ void *udp_recv_thread_func(void *)
       goto final_socket;
     }
 
-#ifdef _WIN32
-    u_long val = 1;
-    ret = ioctlsocket(s, FIONBIO, &val);
-    if (ret)
-    {
-      err_log("ioctlsocket FIONBIO failed, %d\n", WSAGetLastError());
-      // running = 0;
+    if (!socket_set_nonblock(s, 1)) {
+      err_log("socket_set_nonblock failed, %d\n", sock_errno());
       socket_error_pause();
       goto final_socket;
     }
-#else
-    int flags = fcntl(s, F_GETFL, 0);
-    if (flags == -1) {
-      err_log("fcntl F_GETFL failed, %d\n", errno);
-      socket_error_pause();
-      goto final_socket;
-    }
-    flags |= O_NONBLOCK;
-    if (fcntl(s, F_SETFL, flags) != 0) {
-      err_log("fcntl F_SETFL failed, %d\n", errno);
-      socket_error_pause();
-      goto final_socket;
-    }
-#endif
 
     receive_from_socket_loop(s);
 
