@@ -134,35 +134,44 @@ int sock_close(SOCKET sock)
 #include <stdint.h>
 #include <time.h>
 
+int running = nk_true;
+
 static inline void itimeofday(int64_t *sec, int64_t *usec)
 {
 #ifdef _WIN32
-  static int64_t mode = 0, addsec = 0;
-  BOOL retval;
+  static int64_t mode = 0;
   static int64_t freq = 1;
   int64_t qpc;
   if (mode == 0)
   {
-    retval = QueryPerformanceFrequency((LARGE_INTEGER *)&freq);
+    if (!QueryPerformanceFrequency((LARGE_INTEGER *)&freq)) {
+      running = 0;
+      *sec = *usec = 0;
+      return;
+    }
     freq = (freq == 0) ? 1 : freq;
-    retval = QueryPerformanceCounter((LARGE_INTEGER *)&qpc);
-    addsec = (int64_t)time(NULL);
-    addsec = addsec - (int64_t)((qpc / freq) & 0x7fffffff);
     mode = 1;
   }
-  retval = QueryPerformanceCounter((LARGE_INTEGER *)&qpc);
-  retval = retval * 2;
+  if (!QueryPerformanceCounter((LARGE_INTEGER *)&qpc)) {
+    running = 0;
+    *sec = *usec = 0;
+    return;
+  }
   if (sec)
-    *sec = (int64_t)(qpc / freq) + addsec;
+    *sec = (int64_t)(qpc / freq);
   if (usec)
     *usec = (int64_t)((qpc % freq) * 1000000 / freq);
 #else
-  struct timeval time;
-  gettimeofday(&time, NULL);
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC_RAW, &ts) < 0) {
+    running = 0;
+    *sec = *usec = 0;
+    return;
+  }
   if (sec)
-    *sec = time.tv_sec;
+    *sec = ts.tv_sec;
   if (usec)
-    *usec = time.tv_usec;
+    *usec = ts.tv_nsec / 1000;
 #endif
 }
 
@@ -230,7 +239,6 @@ struct {
 /* Platform */
 SDL_Window *win[2];
 SDL_GLContext glContext[2];
-int running = nk_true;
 int win_width[2], win_height[2];
 int ogl_version_major, ogl_version_minor;
 
