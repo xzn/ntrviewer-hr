@@ -86,6 +86,7 @@ RealCUGAN::RealCUGAN(int gpuid, bool _tta_mode, int num_threads)
 
     // Tested on AMD and NVIDIA for now
     bool supported_gpu_vendor = vkdev->info.vendor_id() == 0x1002 || vkdev->info.vendor_id() == 0x10de;
+    // fprintf(stderr, "GPU vendor id: 0x%x\n", (unsigned)vkdev->info.vendor_id());
     support_ext_mem = supported_gpu_vendor && ncnn::support_VK_KHR_external_memory_capabilities &&
 #if _WIN32
         vkdev->info.support_VK_KHR_external_memory() && vkdev->info.support_VK_KHR_external_memory_win32() &&
