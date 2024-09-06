@@ -81,7 +81,7 @@ struct rp_syn_comp_func_t jpeg_decode_queue;
 #define JCS_FORMAT JCS_EXT_RGBA
 
 int realcugan_create();
-GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, bool *dim3);
+GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, bool *dim3, bool *success);
 void realcugan_destroy();
 
 #define err_log(f, ...) fprintf(stderr, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
@@ -1691,26 +1691,28 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int
   int scale = upscaled ? screen_upscale_factor : 1;
   GLuint tex = upscaled ? ctx->gl_tex_upscaled : ctx->gl_tex_id;
   bool dim3 = false;
+  bool success = false;
 
   if (upscaled) {
     scale = screen_upscale_factor;
-    GLuint tex_upscaled = sr_run(top_bot, height, width, GL_CHANNELS_N, ctx->images[index], screen_upscaled, &dim3);
+    GLuint tex_upscaled = sr_run(top_bot, height, width, GL_CHANNELS_N, ctx->images[index], screen_upscaled, &dim3, &success);
     if (!tex_upscaled) {
-#if 0
-      upscaled = 0;
-      upscaling_filter = 0;
-#else
-      glActiveTexture(GL_TEXTURE0);
-      glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id);
-      glTexImage2D(
-        GL_TEXTURE_2D, 0,
-        GL_INT_FORMAT, height * scale,
-        width * scale, 0,
-        GL_FORMAT, GL_UNSIGNED_BYTE,
-        screen_upscaled);
+      if (!success) {
+        upscaled = 0;
+        upscaling_filter = 0;
+        err_log("upscaling failed; filter disabled\n");
+      } else {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id);
+        glTexImage2D(
+          GL_TEXTURE_2D, 0,
+          GL_INT_FORMAT, height * scale,
+          width * scale, 0,
+          GL_FORMAT, GL_UNSIGNED_BYTE,
+          screen_upscaled);
 
-      tex = ctx->gl_tex_id;
-#endif
+        tex = ctx->gl_tex_id;
+      }
     } else {
       glActiveTexture(GL_TEXTURE0);
 

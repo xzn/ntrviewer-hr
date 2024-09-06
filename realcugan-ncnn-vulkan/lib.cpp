@@ -250,15 +250,17 @@ extern "C" int realcugan_create()
     return 0;
 }
 
-extern "C" GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, bool *dim3)
+extern "C" GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, bool *dim3, bool *success)
 {
     ncnn::Mat inimage = ncnn::Mat(w, h, (void*)indata, (size_t)c, c);
     ncnn::Mat outimage = ncnn::Mat(w * scale, h * scale, (void*)outdata, (size_t)c, c);
     if (realcugan[top_bot]->process(inimage, outimage) != 0) {
+        *success = false;
         return 0;
     }
     // return realcugan[top_bot]->out_gpu->gl_texture;
     *dim3 = realcugan[top_bot]->out_gpu_tex->depth > 1;
+    *success = true;
     return realcugan[top_bot]->out_gpu_tex->gl_texture;
 }
 
