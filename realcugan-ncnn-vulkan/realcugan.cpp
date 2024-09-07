@@ -436,8 +436,8 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
             // delete out_gpu_buf;
             // out_gpu_buf = new ncnn::VkMat();
 
-            destroy_sem();
-            create_sem();
+            // destroy_sem();
+            // create_sem();
         }
         ncnn::VkMat& out_gpu = *out_gpu_buf;
         if (opt.use_fp16_storage && opt.use_int8_storage)

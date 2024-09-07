@@ -37,6 +37,8 @@ static void runFSR(struct Extent outputExtent, uint32_t fsrProgramEASU, uint32_t
         // glFinish();
     }
 
+    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
     {
         // FSR RCAS
         // connect the input uniform data

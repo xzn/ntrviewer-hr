@@ -1834,7 +1834,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
             tex = tex_upscaled;
           }
 
-          // glFinish();
+          glFinish();
         }
       }
     }
@@ -1898,6 +1898,8 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     GLuint out_tex = fsr_main(top_bot, tex, height * scale, width * scale, ctx_height, ctx_width, 0.25f);
+    glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
+
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, out_tex);
 
