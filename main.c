@@ -1834,7 +1834,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
             tex = tex_upscaled;
           }
 
-          glFinish();
+          // glFinish();
         }
       }
     }
@@ -1958,6 +1958,7 @@ static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int to
       do_hr_draw_screen(ctx, NULL, width, height, top_bot);
     return 0;
   } else {
+    err_log("rp_syn_acq failed\n");
     running = 0;
     return 0;
   }
@@ -3136,6 +3137,7 @@ void *jpeg_decode_thread_func(void *)
       if (res == 0)
         break;
       if (res != ETIMEDOUT) {
+        err_log("rp_syn_acq failed\n");
         running = 0;
         return 0;
       }

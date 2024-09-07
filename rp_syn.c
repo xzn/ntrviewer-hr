@@ -92,6 +92,10 @@ int rp_syn_acq1(struct rp_syn_comp_func_t *syn1, unsigned timeout, void **pos) {
 }
 
 int rp_syn_rel1(struct rp_syn_comp_func_t *syn1, void *pos) {
+	if (!pos) {
+		fprintf(stderr, "null data rp_syn_rel1 at pos %d\n", syn1->pos_head);
+		return -1;
+	}
 	int res;
 	struct timespec ts = {0, NWM_THREAD_WAIT_NS};
 	if ((res = rp_lock_wait(syn1->mutex, &ts))) {
