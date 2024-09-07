@@ -34,7 +34,7 @@ static void runFSR(struct Extent outputExtent, uint32_t fsrProgramEASU, uint32_t
         glBindImageTexture(inFSROutputTexture, outputImage, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
 
         glDispatchCompute(dispatchX, dispatchY, 1);
-        glFinish();
+        // glFinish();
     }
 
     {
@@ -51,7 +51,7 @@ static void runFSR(struct Extent outputExtent, uint32_t fsrProgramEASU, uint32_t
 
         glUseProgram(fsrProgramRCAS);
         glDispatchCompute(dispatchX, dispatchY, 1);
-        glFinish();
+        // glFinish();
     }
 }
 

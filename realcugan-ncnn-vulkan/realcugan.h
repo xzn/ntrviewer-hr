@@ -134,10 +134,20 @@ public:
     bool tta_mode;
 
     // OutVkMat* out_gpu;
-    ncnn::VkMat* out_gpu_buf;
-    OutVkImageMat* out_gpu_tex;
+    mutable ncnn::VkMat* out_gpu_buf;
+    mutable OutVkImageMat* out_gpu_tex;
     bool support_ext_mem;
     bool tiling_linear;
+
+    mutable VkSemaphore vk_sem;
+#ifdef _WIN32
+    mutable HANDLE sem;
+#else
+    mutable int sem;
+#endif
+    mutable GLuint gl_sem;
+    void create_sem(void) const;
+    void destroy_sem(void) const;
 };
 
 #endif // REALCUGAN_H

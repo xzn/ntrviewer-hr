@@ -85,10 +85,10 @@ RealCUGAN::RealCUGAN(int gpuid, bool _tta_mode, int num_threads)
     out_gpu_tex = new OutVkImageMat();
 
     // Tested on AMD and NVIDIA for now
-    bool supported_gpu_vendor = vkdev->info.vendor_id() == 0x1002 || vkdev->info.vendor_id() == 0x10de;
+    // bool supported_gpu_vendor = vkdev->info.vendor_id() == 0x1002 || vkdev->info.vendor_id() == 0x10de;
+    bool supported_gpu_vendor = 1;
     // fprintf(stderr, "GPU vendor id: 0x%x\n", (unsigned)vkdev->info.vendor_id());
     support_ext_mem = supported_gpu_vendor && ncnn::support_VK_KHR_external_memory_capabilities &&
-        vkdev->info.support_VK_KHR_get_memory_requirements2() &&
 #if _WIN32
         vkdev->info.support_VK_KHR_external_memory() && vkdev->info.support_VK_KHR_external_memory_win32() &&
         GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_win32;
@@ -97,6 +97,10 @@ RealCUGAN::RealCUGAN(int gpuid, bool _tta_mode, int num_threads)
         GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_fd;
 #endif
     tiling_linear = false;
+
+    if (support_ext_mem) {
+        create_sem();
+    }
 }
 
 RealCUGAN::~RealCUGAN()
@@ -123,6 +127,8 @@ RealCUGAN::~RealCUGAN()
 
     // out_gpu->release(this);
     // delete out_gpu;
+
+    destroy_sem();
 }
 
 #if _WIN32
@@ -422,7 +428,18 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
         //     out_gpu.create(this, w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1);
         // }
 
-        ncnn::VkMat& out_gpu = *this->out_gpu_buf;
+        if (support_ext_mem) {
+            // out_gpu_tex->release(this);
+            // delete out_gpu_tex;
+            // out_gpu_tex = new OutVkImageMat();
+
+            // delete out_gpu_buf;
+            // out_gpu_buf = new ncnn::VkMat();
+
+            // destroy_sem();
+            // create_sem();
+        }
+        ncnn::VkMat& out_gpu = *out_gpu_buf;
         if (opt.use_fp16_storage && opt.use_int8_storage)
         {
             out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1, opt.blob_vkallocator);
@@ -777,7 +794,7 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
         if (support_ext_mem) {
             out_gpu_tex->create_like(this, out_gpu, opt);
             cmd.record_clone(out_gpu, *out_gpu_tex, opt);
-            cmd.submit_and_wait();
+            cmd.submit_and_wait(vk_sem);
         }
 
         // download
@@ -4116,6 +4133,228 @@ static PFN_vkGetMemoryFdKHR vkGetMemoryFdKHR;
 static const VkStructureType VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR = (VkStructureType)1000074002;
 #endif
 
+typedef enum VkExternalSemaphoreHandleTypeFlagBits {
+    VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT = 0x00000001,
+    VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT = 0x00000002,
+    VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT = 0x00000004,
+    VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT = 0x00000008,
+    VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT = 0x00000010,
+    VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_ZIRCON_EVENT_BIT_FUCHSIA = 0x00000080,
+    VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D11_FENCE_BIT = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT,
+    VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT_KHR = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT,
+    VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT_KHR = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT,
+    VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT_KHR = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT,
+    VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT_KHR = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT,
+    VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT_KHR = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT,
+    VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+} VkExternalSemaphoreHandleTypeFlagBits;
+typedef VkFlags VkExternalSemaphoreHandleTypeFlags;
+
+typedef enum VkExternalSemaphoreFeatureFlagBits {
+    VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT = 0x00000001,
+    VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT = 0x00000002,
+    VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT_KHR = VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT,
+    VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT_KHR = VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT,
+    VK_EXTERNAL_SEMAPHORE_FEATURE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+} VkExternalSemaphoreFeatureFlagBits;
+typedef VkFlags VkExternalSemaphoreFeatureFlags;
+
+typedef struct VkPhysicalDeviceExternalSemaphoreInfo {
+    VkStructureType                          sType;
+    const void*                              pNext;
+    VkExternalSemaphoreHandleTypeFlagBits    handleType;
+} VkPhysicalDeviceExternalSemaphoreInfo;
+
+typedef struct VkExternalSemaphoreProperties {
+    VkStructureType                       sType;
+    void*                                 pNext;
+    VkExternalSemaphoreHandleTypeFlags    exportFromImportedHandleTypes;
+    VkExternalSemaphoreHandleTypeFlags    compatibleHandleTypes;
+    VkExternalSemaphoreFeatureFlags       externalSemaphoreFeatures;
+} VkExternalSemaphoreProperties;
+
+typedef void (VKAPI_PTR *PFN_vkGetPhysicalDeviceExternalSemaphoreProperties)(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalSemaphoreInfo* pExternalSemaphoreInfo, VkExternalSemaphoreProperties* pExternalSemaphoreProperties);
+
+static PFN_vkGetPhysicalDeviceExternalSemaphoreProperties vkGetPhysicalDeviceExternalSemaphorePropertiesKHR;
+
+static const VkStructureType VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO = (VkStructureType)1000076000;
+static const VkStructureType VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES = (VkStructureType)1000076001;
+
+typedef struct VkExportSemaphoreCreateInfo {
+    VkStructureType                       sType;
+    const void*                           pNext;
+    VkExternalSemaphoreHandleTypeFlags    handleTypes;
+} VkExportSemaphoreCreateInfo;
+
+static const VkStructureType VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO = (VkStructureType)1000077000;
+
+typedef struct VkSemaphoreGetWin32HandleInfoKHR {
+    VkStructureType                          sType;
+    const void*                              pNext;
+    VkSemaphore                              semaphore;
+    VkExternalSemaphoreHandleTypeFlagBits    handleType;
+} VkSemaphoreGetWin32HandleInfoKHR;
+
+static const VkStructureType VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR = (VkStructureType)1000078003;
+
+typedef VkResult (VKAPI_PTR *PFN_vkGetSemaphoreWin32HandleKHR)(VkDevice device, const VkSemaphoreGetWin32HandleInfoKHR* pGetWin32HandleInfo, HANDLE* pHandle);
+static PFN_vkGetSemaphoreWin32HandleKHR vkGetSemaphoreWin32HandleKHR;
+
+typedef struct VkSemaphoreGetFdInfoKHR {
+    VkStructureType                          sType;
+    const void*                              pNext;
+    VkSemaphore                              semaphore;
+    VkExternalSemaphoreHandleTypeFlagBits    handleType;
+} VkSemaphoreGetFdInfoKHR;
+
+static const VkStructureType VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR = (VkStructureType)1000079001;
+
+typedef VkResult (VKAPI_PTR *PFN_vkGetSemaphoreFdKHR)(VkDevice device, const VkSemaphoreGetFdInfoKHR* pGetFdInfo, int* pFd);
+static PFN_vkGetSemaphoreFdKHR vkGetSemaphoreFdKHR;
+
+static bool shared_sem_supported(const RealCUGAN* cugan)
+{
+    bool ret = cugan->vkdev->info.support_VK_KHR_external_semaphore() && GLAD_GL_EXT_semaphore &&
+#ifdef _WIN32
+        cugan->vkdev->info.support_VK_KHR_external_semaphore_win32() && GLAD_GL_EXT_semaphore_win32;
+#else
+        cugan->vkdev->info.support_VK_KHR_external_semaphore_fd() && GLAD_GL_EXT_semaphore_fd;
+#endif
+    if (!ret) {
+        return false;
+    }
+
+    if (!vkGetPhysicalDeviceExternalSemaphorePropertiesKHR) {
+        VkInstance instance = get_gpu_instance();
+        vkGetPhysicalDeviceExternalSemaphorePropertiesKHR = (PFN_vkGetPhysicalDeviceExternalSemaphoreProperties)vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceExternalSemaphorePropertiesKHR");
+    }
+
+#ifdef _WIN32
+    if (!vkGetSemaphoreWin32HandleKHR) {
+        VkInstance instance = get_gpu_instance();
+        vkGetSemaphoreWin32HandleKHR = (PFN_vkGetSemaphoreWin32HandleKHR)vkGetInstanceProcAddr(instance, "vkGetSemaphoreWin32HandleKHR");
+        if (!vkGetSemaphoreWin32HandleKHR) {
+            return false;
+        }
+    }
+#else
+    if (!vkGetSemaphoreFdKHR) {
+        VkInstance instance = get_gpu_instance();
+        vkGetSemaphoreFdKHR = (PFN_vkGetSemaphoreFdKHR)vkGetInstanceProcAddr(instance, "vkGetSemaphoreFdKHR");
+        if (!vkGetSemaphoreFdKHR) {
+            return false;
+        }
+    }
+#endif
+
+    return true;
+}
+
+void RealCUGAN::create_sem(void) const
+{
+    if (shared_sem_supported(this)) {
+        VkExternalSemaphoreHandleTypeFlagBits compatable_semaphore_type;
+        bool found = false;
+        if (vkGetPhysicalDeviceExternalSemaphorePropertiesKHR) {
+            VkExternalSemaphoreHandleTypeFlagBits flags[] = {
+                VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT,
+                VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT,
+                VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT,
+                VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT,
+                VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT};
+
+            VkPhysicalDeviceExternalSemaphoreInfo extSemInfo{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO, nullptr};
+            VkExternalSemaphoreProperties extSemProps{VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES,
+                                                nullptr};
+
+            for (size_t i = 0; i < 5; i++)
+            {
+                extSemInfo.handleType = flags[i];
+                vkGetPhysicalDeviceExternalSemaphorePropertiesKHR(vkdev->info.physical_device(), &extSemInfo, &extSemProps);
+                if (extSemProps.compatibleHandleTypes & flags[i] && extSemProps.externalSemaphoreFeatures & VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT)
+                {
+                    compatable_semaphore_type = flags[i];
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found) {
+#ifdef _WIN32
+            compatable_semaphore_type = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+#else
+            compatable_semaphore_type = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
+#endif
+        }
+
+        VkExportSemaphoreCreateInfo exportSemaphoreCreateInfo{
+            VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO, nullptr,
+            compatable_semaphore_type};
+        VkSemaphoreCreateInfo semaphoreCreateInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+                                                    &exportSemaphoreCreateInfo};
+        VkResult ret = vkCreateSemaphore(vkdev->vkdevice(), &semaphoreCreateInfo, nullptr, &vk_sem);
+        if (ret != VK_SUCCESS) {
+            vk_sem = 0;
+            return;
+        }
+
+#ifdef _WIN32
+        VkSemaphoreGetWin32HandleInfoKHR semaphoreGetHandleInfo{
+            VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR, nullptr,
+            VK_NULL_HANDLE, compatable_semaphore_type};
+        semaphoreGetHandleInfo.semaphore = vk_sem;
+        ret = vkGetSemaphoreWin32HandleKHR(vkdev->vkdevice(), &semaphoreGetHandleInfo, &sem);
+#else
+        VkSemaphoreGetFdInfoKHR semaphoreGetFdInfo{
+            VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR, nullptr,
+            VK_NULL_HANDLE, compatable_semaphore_type};
+        semaphoreGetFdInfo.semaphore = vk_sem;
+        ret = vkGetSemaphoreFdKHR(vkdev->vkdevice(), &semaphoreGetFdInfo, &sem);
+#endif
+        if (ret != VK_SUCCESS) {
+            sem = 0;
+            destroy_sem();
+            return;
+        }
+
+        glGenSemaphoresEXT(1, &gl_sem);
+#ifdef _WIN32
+        glImportSemaphoreWin32HandleEXT(gl_sem, GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, sem);
+#else
+        glImportSemaphoreFdEXT(gl_sem, GL_HANDLE_TYPE_OPAQUE_FD_EXT, sem);
+#endif
+    } else {
+        vk_sem = 0;
+        sem = 0;
+        gl_sem = 0;
+    }
+}
+
+void RealCUGAN::destroy_sem(void) const
+{
+    if (shared_sem_supported(this)) {
+        if (gl_sem) {
+            glDeleteSemaphoresEXT(1, &gl_sem);
+            gl_sem = 0;
+        }
+
+        if (sem) {
+#ifdef _WIN32
+            CloseHandle(sem);
+#else
+            close(sem);
+#endif
+            sem = 0;
+        }
+
+        if (vk_sem) {
+            vkDestroySemaphore(vkdev->vkdevice(), vk_sem, nullptr);
+            vk_sem = 0;
+        }
+    }
+}
+
 void OutVkMat::create_handles(const RealCUGAN* cugan)
 {
     release_handles();
@@ -4303,31 +4542,48 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
         return 0;
     }
 
-    VkMemoryDedicatedRequirements dedReqs;
-    VkImageMemoryRequirementsInfo2 memReqsInfo2;
-    VkMemoryRequirements2 memReqs2;
+    size_t aligned_size;
+    uint32_t image_memory_type_index;
+    if (cugan->vkdev->info.support_VK_KHR_get_memory_requirements2()) {
+        VkMemoryDedicatedRequirements dedReqs;
+        VkImageMemoryRequirementsInfo2 memReqsInfo2;
+        VkMemoryRequirements2 memReqs2;
 
-	memset(&dedReqs, 0, sizeof(dedReqs));
-	dedReqs.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS;
+        memset(&dedReqs, 0, sizeof(dedReqs));
+        dedReqs.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS;
 
-	/* VkImageMemoryRequirementsInfo2 */
-	memset(&memReqsInfo2, 0, sizeof(memReqsInfo2));
-	memReqsInfo2.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2;
-	memReqsInfo2.image = image;
+        /* VkImageMemoryRequirementsInfo2 */
+        memset(&memReqsInfo2, 0, sizeof(memReqsInfo2));
+        memReqsInfo2.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2;
+        memReqsInfo2.image = image;
 
-	/* VkMemoryRequirements2 */
-	memset(&memReqs2, 0, sizeof(memReqs2));
-	memReqs2.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
-	memReqs2.pNext = &dedReqs;
+        /* VkMemoryRequirements2 */
+        memset(&memReqs2, 0, sizeof(memReqs2));
+        memReqs2.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+        memReqs2.pNext = &dedReqs;
 
-    cugan->vkdev->vkGetImageMemoryRequirements2KHR(cugan->vkdev->vkdevice(), &memReqsInfo2, &memReqs2);
+        cugan->vkdev->vkGetImageMemoryRequirements2KHR(cugan->vkdev->vkdevice(), &memReqsInfo2, &memReqs2);
 
-    const size_t size = memReqs2.memoryRequirements.size;
-    const size_t alignment = memReqs2.memoryRequirements.alignment;
+        const size_t size = memReqs2.memoryRequirements.size;
+        const size_t alignment = memReqs2.memoryRequirements.alignment;
 
-    size_t aligned_size = alignSize(size, alignment);
+        aligned_size = alignSize(size, alignment);
+        image_memory_type_index = cugan->vkdev->find_memory_index(memReqs2.memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
 
-    uint32_t image_memory_type_index = cugan->vkdev->find_memory_index(memReqs2.memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+        dedicated = dedReqs.requiresDedicatedAllocation;
+    } else {
+        VkMemoryRequirements memoryRequirements;
+        vkGetImageMemoryRequirements(cugan->vkdev->vkdevice(), image, &memoryRequirements);
+
+        const size_t size = memoryRequirements.size;
+        const size_t alignment = memoryRequirements.alignment;
+
+        aligned_size = alignSize(size, alignment);
+        image_memory_type_index = cugan->vkdev->find_memory_index(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+
+        // Always use dedicated memory if we can't test for it
+        dedicated = true;
+    }
 
     VkMemoryDedicatedAllocateInfoKHR dedAllocInfo;
 
@@ -4335,7 +4591,6 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
         VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO, nullptr,
         extImageCreateInfo.handleTypes};
 
-    dedicated = dedReqs.requiresDedicatedAllocation;
     if (dedicated) {
         memset(&dedAllocInfo, 0, sizeof dedAllocInfo);
         dedAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;

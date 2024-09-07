@@ -250,7 +250,7 @@ extern "C" int realcugan_create()
     return 0;
 }
 
-extern "C" GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, bool *dim3, bool *success)
+extern "C" GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, GLuint *gl_sem, bool *dim3, bool *success, void **tex_obj)
 {
     ncnn::Mat inimage = ncnn::Mat(w, h, (void*)indata, (size_t)c, c);
     ncnn::Mat outimage = ncnn::Mat(w * scale, h * scale, (void*)outdata, (size_t)c, c);
@@ -259,9 +259,22 @@ extern "C" GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned
         return 0;
     }
     // return realcugan[top_bot]->out_gpu->gl_texture;
+    
+    GLuint tex = realcugan[top_bot]->out_gpu_tex->gl_texture;
+    *gl_sem = realcugan[top_bot]->gl_sem;
     *dim3 = realcugan[top_bot]->out_gpu_tex->depth > 1;
     *success = true;
-    return realcugan[top_bot]->out_gpu_tex->gl_texture;
+    *tex_obj = realcugan[top_bot]->out_gpu_tex;
+    realcugan[top_bot]->out_gpu_tex = new OutVkImageMat();
+    return tex;
+}
+
+extern "C" void realcugan_next(int top_bot, void *tex_obj)
+{
+    OutVkImageMat *out_gpu_tex = (OutVkImageMat *)tex_obj;
+    out_gpu_tex->release(realcugan[top_bot]);
+    delete out_gpu_tex;
+
 }
 
 extern "C" void realcugan_destroy()

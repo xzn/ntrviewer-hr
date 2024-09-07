@@ -13,6 +13,7 @@
 #define sr_create realcugan_create
 #define sr_run realcugan_run
 #define sr_destroy realcugan_destroy
+#define sr_next realcugan_next
 #else
 #define screen_upscale_factor (1)
 #define sr_create() (0)
@@ -81,7 +82,8 @@ struct rp_syn_comp_func_t jpeg_decode_queue;
 #define JCS_FORMAT JCS_EXT_RGBA
 
 int realcugan_create();
-GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, bool *dim3, bool *success);
+GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, GLuint *gl_sem, bool *dim3, bool *success, void **tex_obj);
+void realcugan_next(int top_bot, void *tex_obj);
 void realcugan_destroy();
 
 #define err_log(f, ...) fprintf(stderr, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
@@ -223,12 +225,15 @@ typedef int64_t		s64;
 // #define MAX(a, b) ((a) < (b) ? (b) : (a))
 #define LEN(a) (sizeof(a) / sizeof(a)[0])
 
-#define FRAME_STAT_EVERY_X_TICKS 1000000
+#define FRAME_STAT_EVERY_X_US 1000000
 char window_title_with_fps[500];
 uint64_t window_title_last_tick;
 struct {
   int counter;
-} frame_rate_tracker[SCREEN_COUNT] = {};
+} frame_rate_decoded_tracker[SCREEN_COUNT] = {};
+struct {
+  int counter;
+} frame_rate_displayed_tracker[SCREEN_COUNT] = {};
 struct {
   int counter;
 } frame_size_tracker[SCREEN_COUNT] = {};
@@ -1586,17 +1591,20 @@ enum FrameBufferStatus
   FBS_NOT_UPDATED,
 };
 
+#define JpegDispImagesCount (3)
+
 typedef struct _FrameBufferContext
 {
-  pthread_mutex_t gl_tex_mutex;
-  uint8_t *images[3];
   GLuint gl_tex_id;
-  enum FrameBufferStatus updated;
-  int index;
-  int next_index;
-
   GLuint gl_tex_upscaled;
   GLuint gl_fbo_upscaled[SCREEN_COUNT];
+
+  rp_sem_t jpeg_disp_sem;
+  struct rp_syn_comp_func_t jpeg_disp_queue;
+  uint8_t *data_ptrs[JpegDispImagesCount];
+  uint8_t *prev_data;
+  GLuint prev_tex;
+  void *tex_obj;
 } FrameBufferContext;
 
 int gl_updated = 0;
@@ -1605,18 +1613,8 @@ pthread_mutex_t gl_updated_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 FrameBufferContext buffer_ctx[SCREEN_COUNT];
 
-int frame_buffer_context_next_free_index(int index, int skip_index)
-{
-  int next_index = (index + 1) % 3;
-  if (next_index == skip_index)
-  {
-    next_index = (index + 1) % 3;
-  }
-  return next_index;
-}
-
 static uint8_t screen_upscaled[400 * 240 * GL_CHANNELS_N * screen_upscale_factor * screen_upscale_factor];
-static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int height, int top_bot)
+static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot)
 {
   double ctx_left_f;
   double ctx_top_f;
@@ -1709,73 +1707,60 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int
   bool success = false;
 
   if (upscaled) {
-    scale = screen_upscale_factor;
-    GLuint tex_upscaled = sr_run(top_bot, height, width, GL_CHANNELS_N, ctx->images[index], screen_upscaled, &dim3, &success);
-    if (!tex_upscaled) {
-      if (!success) {
-        upscaled = 0;
-        upscaling_filter = 0;
-        err_log("upscaling failed; filter disabled\n");
+    if (!data) {
+      if (!ctx->prev_tex) {
+        data = ctx->prev_data;
       } else {
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id);
-        glTexImage2D(
-          GL_TEXTURE_2D, 0,
-          GL_INT_FORMAT, height * scale,
-          width * scale, 0,
-          GL_FORMAT, GL_UNSIGNED_BYTE,
-          screen_upscaled);
-
-        tex = ctx->gl_tex_id;
+        glBindTexture(GL_TEXTURE_2D, ctx->prev_tex);
+        tex = ctx->prev_tex;
       }
-    } else {
-      glActiveTexture(GL_TEXTURE0);
+    }
 
-      if (0) {
-        glBindTexture(GL_TEXTURE_BUFFER, tex_upscaled);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, ctx->gl_fbo_upscaled[tb]);
-        glViewport(0, 0, height * scale, width * scale);
-        glDisable(GL_CULL_FACE);
-        glDisable(GL_DEPTH_TEST);
+    if (data) {
+      scale = screen_upscale_factor;
+      GLuint gl_sem = 0;
+      if (ctx->tex_obj) {
+        sr_next(top_bot, ctx->tex_obj);
+        ctx->tex_obj = NULL;
+      }
+      GLuint tex_upscaled = sr_run(top_bot, height, width, GL_CHANNELS_N, data, screen_upscaled, &gl_sem, &dim3, &success, &ctx->tex_obj);
+      if (!tex_upscaled) {
+        if (!success) {
+          upscaled = 0;
+          upscaling_filter = 0;
+          err_log("upscaling failed; filter disabled\n");
+        } else {
+          glActiveTexture(GL_TEXTURE0);
+          glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id);
+          glTexImage2D(
+            GL_TEXTURE_2D, 0,
+            GL_INT_FORMAT, height * scale,
+            width * scale, 0,
+            GL_FORMAT, GL_UNSIGNED_BYTE,
+            screen_upscaled);
 
-        glUseProgram(gl_fbo_program);
-        fbo_vVertices_tex_coord[0][0] = 0.5;
-        fbo_vVertices_tex_coord[0][1] = 0.5;
-        fbo_vVertices_tex_coord[1][0] = 0.5;
-        fbo_vVertices_tex_coord[1][1] = width * scale - 0.5;
-        fbo_vVertices_tex_coord[2][0] = height * scale - 0.5;
-        fbo_vVertices_tex_coord[2][1] = 0.5;
-        fbo_vVertices_tex_coord[3][0] = height * scale - 0.5;
-        fbo_vVertices_tex_coord[3][1] = width * scale - 0.5;
-
-        glVertexAttribPointer(gl_fbo_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_pos), fbo_vVertices_pos);
-        glVertexAttribPointer(gl_fbo_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_tex_coord), fbo_vVertices_tex_coord);
-        glEnableVertexAttribArray(gl_fbo_position_loc);
-        glEnableVertexAttribArray(gl_fbo_tex_coord_loc);
-
-        glUniform1i(gl_fbo_sampler_loc, 0);
-        glUniform1i(gl_fbo_tex_size_loc, height * scale);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, fbo_indices);
-
-        glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled);
-        tex = ctx->gl_tex_upscaled;
+          tex = ctx->gl_tex_id;
+        }
       } else {
-        if (dim3) {
-          glBindTexture(GL_TEXTURE_3D, tex_upscaled);
+        glActiveTexture(GL_TEXTURE0);
+
+        if (0) {
+          glBindTexture(GL_TEXTURE_BUFFER, tex_upscaled);
           glBindFramebuffer(GL_DRAW_FRAMEBUFFER, ctx->gl_fbo_upscaled[tb]);
           glViewport(0, 0, height * scale, width * scale);
           glDisable(GL_CULL_FACE);
           glDisable(GL_DEPTH_TEST);
 
           glUseProgram(gl_fbo_program);
-          fbo_vVertices_tex_coord[0][0] = 0;
-          fbo_vVertices_tex_coord[0][1] = 0;
-          fbo_vVertices_tex_coord[1][0] = 0;
-          fbo_vVertices_tex_coord[1][1] = 1;
-          fbo_vVertices_tex_coord[2][0] = 1;
-          fbo_vVertices_tex_coord[2][1] = 0;
-          fbo_vVertices_tex_coord[3][0] = 1;
-          fbo_vVertices_tex_coord[3][1] = 1;
+          fbo_vVertices_tex_coord[0][0] = 0.5;
+          fbo_vVertices_tex_coord[0][1] = 0.5;
+          fbo_vVertices_tex_coord[1][0] = 0.5;
+          fbo_vVertices_tex_coord[1][1] = width * scale - 0.5;
+          fbo_vVertices_tex_coord[2][0] = height * scale - 0.5;
+          fbo_vVertices_tex_coord[2][1] = 0.5;
+          fbo_vVertices_tex_coord[3][0] = height * scale - 0.5;
+          fbo_vVertices_tex_coord[3][1] = width * scale - 0.5;
 
           glVertexAttribPointer(gl_fbo_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_pos), fbo_vVertices_pos);
           glVertexAttribPointer(gl_fbo_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_tex_coord), fbo_vVertices_tex_coord);
@@ -1783,32 +1768,79 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int
           glEnableVertexAttribArray(gl_fbo_tex_coord_loc);
 
           glUniform1i(gl_fbo_sampler_loc, 0);
-          if (0)
-            glUniform1i(gl_fbo_tex_size_loc, height * scale);
+          glUniform1i(gl_fbo_tex_size_loc, height * scale);
           glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, fbo_indices);
 
           glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled);
           tex = ctx->gl_tex_upscaled;
         } else {
-          glBindTexture(GL_TEXTURE_2D, tex_upscaled);
-          tex = tex_upscaled;
+          if (gl_sem) {
+            GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
+            glWaitSemaphoreEXT(gl_sem, 0, NULL, 1, &tex_upscaled, &layout);
+          }
+          if (dim3) {
+            glBindTexture(GL_TEXTURE_3D, tex_upscaled);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, ctx->gl_fbo_upscaled[tb]);
+            glViewport(0, 0, height * scale, width * scale);
+            glDisable(GL_CULL_FACE);
+            glDisable(GL_DEPTH_TEST);
+
+            glUseProgram(gl_fbo_program);
+            fbo_vVertices_tex_coord[0][0] = 0;
+            fbo_vVertices_tex_coord[0][1] = 0;
+            fbo_vVertices_tex_coord[1][0] = 0;
+            fbo_vVertices_tex_coord[1][1] = 1;
+            fbo_vVertices_tex_coord[2][0] = 1;
+            fbo_vVertices_tex_coord[2][1] = 0;
+            fbo_vVertices_tex_coord[3][0] = 1;
+            fbo_vVertices_tex_coord[3][1] = 1;
+
+            glVertexAttribPointer(gl_fbo_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_pos), fbo_vVertices_pos);
+            glVertexAttribPointer(gl_fbo_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_tex_coord), fbo_vVertices_tex_coord);
+            glEnableVertexAttribArray(gl_fbo_position_loc);
+            glEnableVertexAttribArray(gl_fbo_tex_coord_loc);
+
+            glUniform1i(gl_fbo_sampler_loc, 0);
+            if (0)
+              glUniform1i(gl_fbo_tex_size_loc, height * scale);
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, fbo_indices);
+
+            glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled);
+            tex = ctx->gl_tex_upscaled;
+          } else {
+            glBindTexture(GL_TEXTURE_2D, tex_upscaled);
+            tex = tex_upscaled;
+          }
+
+          glFinish();
         }
       }
     }
+
+    ctx->prev_tex = tex;
   }
 
   if (!upscaled) {
     scale = 1;
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id);
-    glTexImage2D(
-      GL_TEXTURE_2D, 0,
-      GL_INT_FORMAT, height,
-      width, 0,
-      GL_FORMAT, GL_UNSIGNED_BYTE,
-      ctx->images[index]);
+    if (!data) {
+      if (ctx->prev_tex) {
+        data = ctx->prev_data;
+      }
+    }
+    if (data) {
+      glTexImage2D(
+        GL_TEXTURE_2D, 0,
+        GL_INT_FORMAT, height,
+        width, 0,
+        GL_FORMAT, GL_UNSIGNED_BYTE,
+        data);
+    }
 
     tex = ctx->gl_tex_id;
+
+    ctx->prev_tex = 0;
   }
 
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
@@ -1871,41 +1903,36 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, int index, int width, int
 
 static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot, int force)
 {
-  if (ctx->updated == FBS_NOT_AVAIL)
+  uint8_t *data;
+  int ret = rp_syn_acq(&ctx->jpeg_disp_queue, 0, (void **)&data);
+
+  if (ret == 0)
   {
-    return 0;
-  }
+    ctx->prev_data = data;
 
-  pthread_mutex_lock(&ctx->gl_tex_mutex);
-  int index = ctx->index;
-  if (ctx->updated == FBS_UPDATED)
-  {
-    int next_index = frame_buffer_context_next_free_index(ctx->index, ctx->next_index);
-    index = ctx->index = ctx->next_index;
-    ctx->next_index = next_index;
-    ctx->updated = FBS_NOT_UPDATED;
+    do_hr_draw_screen(ctx, data, width, height, top_bot);
 
-    pthread_mutex_unlock(&ctx->gl_tex_mutex);
+    rp_sem_rel(ctx->jpeg_disp_sem);
 
-    do_hr_draw_screen(ctx, index, width, height, top_bot);
+    __atomic_add_fetch(&frame_rate_displayed_tracker[top_bot].counter, 1, __ATOMIC_RELAXED);
 
     return 1;
   }
   else
   {
-    pthread_mutex_unlock(&ctx->gl_tex_mutex);
-
-    if (force)
-      do_hr_draw_screen(ctx, index, width, height, top_bot);
+    if (force && ctx->prev_data)
+      do_hr_draw_screen(ctx, NULL, width, height, top_bot);
     return 0;
   }
 }
 
 static void kcpUpdateWindowTitle(SDL_Window *win, int tick_diff)
 {
-  snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (FPS %03d %03d) (Counter %d | %d | %d | %d)",
-    __atomic_load_n(&frame_rate_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_TICKS / (int)tick_diff,
-    __atomic_load_n(&frame_rate_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_TICKS / (int)tick_diff,
+  snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (FPS %03d %03d | %03d %03d) (Counter %d %d %d %d)",
+    __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+    __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+    __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+    __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
     __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED),
     __atomic_load_n(&kcp_input_fid_count, __ATOMIC_RELAXED),
     __atomic_load_n(&kcp_input_pid_count, __ATOMIC_RELAXED),
@@ -1916,8 +1943,9 @@ static void kcpUpdateWindowTitle(SDL_Window *win, int tick_diff)
 static void kcpUpdateWindowsTitles(int tb, int top_bot, int tick_diff)
 {
   snprintf(window_title_with_fps, sizeof(window_title_with_fps),
-    tb == 0 ? TITLE " (FPS %03d) (Counter %d | %d | %d | %d)" : TITLE " (FPS %03d)",
-    __atomic_load_n(&frame_rate_tracker[top_bot].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_TICKS / tick_diff,
+    tb == 0 ? TITLE " (FPS %03d | %03d) (Counter %d %d %d %d)" : TITLE " (FPS %03d | %03d)",
+    __atomic_load_n(&frame_rate_decoded_tracker[top_bot].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
+    __atomic_load_n(&frame_rate_displayed_tracker[top_bot].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
     __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED),
     __atomic_load_n(&kcp_input_fid_count, __ATOMIC_RELAXED),
     __atomic_load_n(&kcp_input_pid_count, __ATOMIC_RELAXED),
@@ -1929,16 +1957,18 @@ static void updateWindowsTitles(void)
 {
   uint64_t next_tick = iclock64();
   uint64_t tick_diff = next_tick - window_title_last_tick;
-  if (tick_diff >= FRAME_STAT_EVERY_X_TICKS) {
+  if (tick_diff >= FRAME_STAT_EVERY_X_US) {
     int my_view = view_mode;
 
     if (my_view == VIEW_MODE_TOP_BOT) {
       if (kcp_active) {
         kcpUpdateWindowTitle(win[0], (int)tick_diff);
       } else {
-        snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (FPS %03d %03d) (Size %06d | %06d) (Packet time %04d %04d)",
-          __atomic_load_n(&frame_rate_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_TICKS / (int)tick_diff,
-          __atomic_load_n(&frame_rate_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_TICKS / (int)tick_diff,
+        snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (FPS %03d %03d | %03d %03d) (Size %06d %06d) (Packet time %04d %04d)",
+          __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+          __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+          __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+          __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
           __atomic_load_n(&frame_size_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED),
           __atomic_load_n(&frame_size_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED),
           __atomic_load_n(&delay_between_packet_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED),
@@ -1955,8 +1985,9 @@ static void updateWindowsTitles(void)
         if (kcp_active) {
           kcpUpdateWindowsTitles(tb, top_bot, (int)tick_diff);
         } else {
-          snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (FPS %03d) (Size %06d) (Packet time %04d)",
-            __atomic_load_n(&frame_rate_tracker[top_bot].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_TICKS / (int)tick_diff,
+          snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (FPS %03d | %03d) (Size %06d) (Packet time %04d)",
+            __atomic_load_n(&frame_rate_decoded_tracker[top_bot].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+            __atomic_load_n(&frame_rate_displayed_tracker[top_bot].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
             __atomic_load_n(&frame_size_tracker[top_bot].counter, __ATOMIC_RELAXED),
             __atomic_load_n(&delay_between_packet_tracker[top_bot].counter, __ATOMIC_RELAXED));
           SDL_SetWindowTitle(win[tb], window_title_with_fps);
@@ -1969,7 +2000,8 @@ static void updateWindowsTitles(void)
 
     window_title_last_tick = next_tick;
     for (int i = 0; i < SCREEN_COUNT; ++i) {
-      __atomic_store_n(&frame_rate_tracker[i].counter, 0, __ATOMIC_RELAXED);
+      __atomic_store_n(&frame_rate_decoded_tracker[i].counter, 0, __ATOMIC_RELAXED);
+      __atomic_store_n(&frame_rate_displayed_tracker[i].counter, 0, __ATOMIC_RELAXED);
       __atomic_store_n(&frame_size_tracker[i].counter, 0, __ATOMIC_RELAXED);
       __atomic_store_n(&delay_between_packet_tracker[i].counter, 0, __ATOMIC_RELAXED);
     }
@@ -2083,17 +2115,36 @@ MainLoop(void *loopArg)
   }
 }
 
+static int acquire_sem(rp_sem_t sem) {
+  struct timespec ts = {0, NWM_THREAD_WAIT_NS};
+  while (1) {
+    if (!running)
+      return -1;
+    int res = rp_sem_wait(sem, &ts);
+    if (res == 0)
+      return 0;
+    if (res != ETIMEDOUT) {
+      return -1;
+    }
+  }
+}
+
 void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int top_bot, int frame_size, int delay_between_packet)
 {
-  pthread_mutex_lock(&ctx->gl_tex_mutex);
-  int next_index = frame_buffer_context_next_free_index(ctx->next_index, ctx->index);
-  uint8_t **pimage = &ctx->images[next_index];
-  *pimage = rgb;
-  ctx->updated = FBS_UPDATED;
-  ctx->next_index = next_index;
-  pthread_mutex_unlock(&ctx->gl_tex_mutex);
+  if (acquire_sem(ctx->jpeg_disp_sem) != 0) {
+    if (running) {
+      running = 0;
+      err_log("jpeg_disp_sem wait error\n");
+    }
+    return;
+  }
 
-  __atomic_add_fetch(&frame_rate_tracker[top_bot].counter, 1, __ATOMIC_RELAXED);
+  if (rp_syn_rel(&ctx->jpeg_disp_queue, rgb) != 0) {
+    running = 0;
+    return;
+  }
+
+  __atomic_add_fetch(&frame_rate_decoded_tracker[top_bot].counter, 1, __ATOMIC_RELAXED);
   if (__atomic_load_n(&frame_size_tracker[top_bot].counter, __ATOMIC_RELAXED) < frame_size) {
     __atomic_store_n(&frame_size_tracker[top_bot].counter, frame_size, __ATOMIC_RELAXED);
   }
@@ -2322,20 +2373,15 @@ static int queue_decode(int work) {
   return 0;
 }
 
-static int acquire_decode(void) {
-  struct timespec ts = {0, NWM_THREAD_WAIT_NS};
-  while (1) {
-    if (!running)
-      return -1;
-    int res = rp_sem_wait(jpeg_recv_sem, &ts);
-    if (res == 0)
-      return 0;
-    if (res != ETIMEDOUT) {
+static int acquire_decode() {
+  int ret;
+  if ((ret = acquire_sem(jpeg_recv_sem)) != 0) {
+    if (running) {
       running = 0;
       err_log("jpeg_recv_sem wait error\n");
-      return -1;
     }
   }
+  return ret;
 }
 
 static int handle_recv(uint8_t *buf, int size)
@@ -3105,13 +3151,15 @@ void receive_from_socket_loop(SOCKET s)
 
     // err_log("new connection\n");
     for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
-      buffer_ctx[top_bot].updated = FBS_NOT_AVAIL;
+      buffer_ctx[top_bot].prev_data = NULL;
+      buffer_ctx[top_bot].tex_obj = NULL;
     }
     for (int i = 0; i < rp_work_count; ++i) {
       recv_end[i] = 2;
     }
 
-    memset(frame_rate_tracker, 0, sizeof(frame_rate_tracker));
+    memset(frame_rate_decoded_tracker, 0, sizeof(frame_rate_decoded_tracker));
+    memset(frame_rate_displayed_tracker, 0, sizeof(frame_rate_displayed_tracker));
     memset(frame_size_tracker, 0, sizeof(frame_size_tracker));
     memset(delay_between_packet_tracker, 0, sizeof(delay_between_packet_tracker));
 
@@ -3415,7 +3463,10 @@ int main(int argc, char *argv[])
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    pthread_mutex_init(&buffer_ctx[i].gl_tex_mutex, NULL);
+    memset(buffer_ctx[i].data_ptrs, 0, sizeof(buffer_ctx[i].data_ptrs));
+    rp_syn_init1(&buffer_ctx[i].jpeg_disp_queue, 0, 0, 0, JpegDispImagesCount, (void **)buffer_ctx[i].data_ptrs);
+    rp_sem_init(buffer_ctx[i].jpeg_disp_sem, JpegDispImagesCount - 1);
+    buffer_ctx[i].prev_data = NULL;
   }
 
   for (int j = 0; j < SCREEN_COUNT; ++j) {
@@ -3508,7 +3559,12 @@ int main(int argc, char *argv[])
   glDeleteProgram(gl_fbo_program);
   glDeleteProgram(gl_program);
   for (int i = 0; i < SCREEN_COUNT; ++i) {
-    pthread_mutex_destroy(&buffer_ctx[i].gl_tex_mutex);
+    if (buffer_ctx[i].tex_obj) {
+      sr_next(i, buffer_ctx[i].tex_obj);
+    }
+
+    rp_sem_close(buffer_ctx[i].jpeg_disp_sem);
+    rp_syn_close1(&buffer_ctx[i].jpeg_disp_queue);
     glDeleteTextures(1, &buffer_ctx[i].gl_tex_id);
     for (int j = 0; j < SCREEN_COUNT; ++j) {
       glDeleteFramebuffers(1, &buffer_ctx[i].gl_fbo_upscaled[j]);
