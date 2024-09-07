@@ -2308,30 +2308,34 @@ static int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
   jerr.error_exit = jpeg_error_exit;
   jerr.emit_message = jpeg_emit_message;
 
-  int i = setjmp(jpeg_jmp);
   int ret = 0;
-  if (i == 0) {
+  if (setjmp(jpeg_jmp) == 0) {
     jpeg_create_decompress(&cinfo);
-    jpeg_mem_src(&cinfo, in, size);
-    ret = jpeg_read_header(&cinfo, TRUE);
-    if (ret == JPEG_HEADER_OK) {
-      cinfo.out_color_space = JCS_FORMAT;
-      jpeg_start_decompress(&cinfo);
-      // err_log("jpeg_read_header: %d %d (%d %d)\n", (int)cinfo.output_width, (int)cinfo.output_height, h, w);
-      if ((int)cinfo.output_width == h && (int)cinfo.output_height == w) {
-        while (cinfo.output_scanline < cinfo.output_height) {
-          uint8_t *buffer = out + cinfo.output_scanline * cinfo.output_width * GL_CHANNELS_N;
-          jpeg_read_scanlines(&cinfo, &buffer, 1);
+    if (setjmp(jpeg_jmp) == 0) {
+      jpeg_mem_src(&cinfo, in, size);
+      ret = jpeg_read_header(&cinfo, TRUE);
+      if (ret == JPEG_HEADER_OK) {
+        cinfo.out_color_space = JCS_FORMAT;
+        jpeg_start_decompress(&cinfo);
+        // err_log("jpeg_read_header: %d %d (%d %d)\n", (int)cinfo.output_width, (int)cinfo.output_height, h, w);
+        if ((int)cinfo.output_width == h && (int)cinfo.output_height == w) {
+          while (cinfo.output_scanline < cinfo.output_height) {
+            uint8_t *buffer = out + cinfo.output_scanline * cinfo.output_width * GL_CHANNELS_N;
+            jpeg_read_scanlines(&cinfo, &buffer, 1);
+          }
+          jpeg_finish_decompress(&cinfo);
+          jpeg_destroy_decompress(&cinfo);
+          ret = 0;
+        } else {
+          jpeg_destroy_decompress(&cinfo);
+          ret = -1;
         }
-        jpeg_finish_decompress(&cinfo);
-        // jpeg_destroy_decompress(&cinfo);
-        ret = 0;
       } else {
-        // jpeg_destroy_decompress(&cinfo);
+        jpeg_destroy_decompress(&cinfo);
         ret = -1;
       }
     } else {
-      // jpeg_destroy_decompress(&cinfo);
+      jpeg_destroy_decompress(&cinfo);
       ret = -1;
     }
   } else {
