@@ -274,7 +274,6 @@ extern "C" void realcugan_next(int top_bot, void *tex_obj)
     OutVkImageMat *out_gpu_tex = (OutVkImageMat *)tex_obj;
     out_gpu_tex->release(realcugan[top_bot]);
     delete out_gpu_tex;
-
 }
 
 extern "C" void realcugan_destroy()

@@ -42,7 +42,7 @@ int rp_syn_close1(struct rp_syn_comp_func_t *syn1) {
 int rp_syn_acq(struct rp_syn_comp_func_t *syn1, unsigned timeout, void **pos) {
 	int res;
 	struct timespec ts = {0, timeout};
-	if ((res = rp_sem_wait(syn1->sem, &ts)) != 0) {
+	if ((res = timeout ? rp_sem_wait(syn1->sem, &ts) : rp_sem_wait_try(syn1->sem)) != 0) {
 		if (res != ETIMEDOUT)
 			fprintf(stderr, "rp_syn_acq wait sem error\n");
 		return res;
@@ -59,6 +59,10 @@ int rp_syn_acq(struct rp_syn_comp_func_t *syn1, unsigned timeout, void **pos) {
 }
 
 int rp_syn_rel(struct rp_syn_comp_func_t *syn1, void *pos) {
+	if (!pos) {
+		fprintf(stderr, "null data rp_syn_rel at pos %d\n", syn1->pos_head);
+		return -1;
+	}
 	unsigned pos_head = syn1->pos_head;
 	syn1->pos[pos_head] = pos;
 	syn1->pos_head = (pos_head + 1) % syn1->count;
@@ -72,7 +76,7 @@ int rp_syn_rel(struct rp_syn_comp_func_t *syn1, void *pos) {
 int rp_syn_acq1(struct rp_syn_comp_func_t *syn1, unsigned timeout, void **pos) {
 	int res;
 	struct timespec ts = {0, timeout};
-	if ((res = rp_sem_wait(syn1->sem, &ts)) != 0) {
+	if ((res = timeout ? rp_sem_wait(syn1->sem, &ts) : rp_sem_wait_try(syn1->sem)) != 0) {
 		if (res != ETIMEDOUT)
 			fprintf(stderr, "rp_syn_acq1 wait sem error\n");
 		return res;

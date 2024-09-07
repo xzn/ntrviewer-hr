@@ -16,7 +16,7 @@ typedef sem_t rp_sem_t;
 #define rp_lock_close(n) pthread_mutex_destroy(&n)
 
 #define rp_sem_init(n, i) sem_init(&n, 0, i)
-#define rp_sem_wait_try(n) sem_trywait(&n)
+#define rp_sem_wait_try(n) ({ int _ret = sem_trywait(&n); if (_ret) { _ret = errno; if (_ret == EAGAIN) { _ret = ETIMEDOUT; }} _ret;})
 #define rp_sem_wait(n, to) ({ int _ret = sem_timedwait(&n, to); if (_ret) { _ret = errno; } _ret;})
 #define rp_sem_rel(n) sem_post(&n)
 #define rp_sem_close(n) sem_destroy(&n)

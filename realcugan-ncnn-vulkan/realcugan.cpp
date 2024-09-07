@@ -4339,6 +4339,7 @@ void RealCUGAN::destroy_sem(void) const
         if (gl_sem) {
             glDeleteSemaphoresEXT(1, &gl_sem);
             gl_sem = 0;
+            sem = 0;
         }
 
         if (sem) {
@@ -4438,6 +4439,7 @@ void OutVkMat::release_handles() {
     if (gl_memory) {
         glDeleteMemoryObjectsEXT(1, &gl_memory);
         gl_memory = 0;
+        memory = 0;
     }
     if (memory) {
 #if _WIN32
@@ -4856,6 +4858,7 @@ void OutVkImageMat::release_handles()
     if (gl_memory) {
         glDeleteMemoryObjectsEXT(1, &gl_memory);
         gl_memory = 0;
+        memory = 0;
     }
     if (memory) {
 #if _WIN32

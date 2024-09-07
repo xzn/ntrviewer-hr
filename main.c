@@ -1952,10 +1952,13 @@ static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int to
 
     return 1;
   }
-  else
+  else if (ret == ETIMEDOUT)
   {
     if (force && ctx->prev_data)
       do_hr_draw_screen(ctx, NULL, width, height, top_bot);
+    return 0;
+  } else {
+    running = 0;
     return 0;
   }
 }
@@ -2165,8 +2168,17 @@ static int acquire_sem(rp_sem_t sem) {
 
 void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int top_bot, int frame_size, int delay_between_packet)
 {
-  if (acquire_sem(ctx->jpeg_disp_sem) != 0) {
-    if (running) {
+  __atomic_add_fetch(&frame_rate_decoded_tracker[top_bot].counter, 1, __ATOMIC_RELAXED);
+  if (__atomic_load_n(&frame_size_tracker[top_bot].counter, __ATOMIC_RELAXED) < frame_size) {
+    __atomic_store_n(&frame_size_tracker[top_bot].counter, frame_size, __ATOMIC_RELAXED);
+  }
+  if (__atomic_load_n(&delay_between_packet_tracker[top_bot].counter, __ATOMIC_RELAXED) < delay_between_packet) {
+    __atomic_store_n(&delay_between_packet_tracker[top_bot].counter, delay_between_packet, __ATOMIC_RELAXED);
+  }
+
+  int ret;
+  if ((ret = rp_sem_wait_try(ctx->jpeg_disp_sem)) != 0) {
+    if (ret != ETIMEDOUT && running) {
       running = 0;
       err_log("jpeg_disp_sem wait error\n");
     }
@@ -2176,14 +2188,6 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int top_b
   if (rp_syn_rel(&ctx->jpeg_disp_queue, rgb) != 0) {
     running = 0;
     return;
-  }
-
-  __atomic_add_fetch(&frame_rate_decoded_tracker[top_bot].counter, 1, __ATOMIC_RELAXED);
-  if (__atomic_load_n(&frame_size_tracker[top_bot].counter, __ATOMIC_RELAXED) < frame_size) {
-    __atomic_store_n(&frame_size_tracker[top_bot].counter, frame_size, __ATOMIC_RELAXED);
-  }
-  if (__atomic_load_n(&delay_between_packet_tracker[top_bot].counter, __ATOMIC_RELAXED) < delay_between_packet) {
-    __atomic_store_n(&delay_between_packet_tracker[top_bot].counter, delay_between_packet, __ATOMIC_RELAXED);
   }
 
   pthread_mutex_lock(&gl_updated_mutex);
