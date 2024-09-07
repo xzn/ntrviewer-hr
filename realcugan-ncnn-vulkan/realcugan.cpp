@@ -4188,6 +4188,7 @@ typedef struct VkExportSemaphoreCreateInfo {
 
 static const VkStructureType VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO = (VkStructureType)1000077000;
 
+#ifdef _WIN32
 typedef struct VkSemaphoreGetWin32HandleInfoKHR {
     VkStructureType                          sType;
     const void*                              pNext;
@@ -4199,7 +4200,7 @@ static const VkStructureType VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_K
 
 typedef VkResult (VKAPI_PTR *PFN_vkGetSemaphoreWin32HandleKHR)(VkDevice device, const VkSemaphoreGetWin32HandleInfoKHR* pGetWin32HandleInfo, HANDLE* pHandle);
 static PFN_vkGetSemaphoreWin32HandleKHR vkGetSemaphoreWin32HandleKHR;
-
+#else
 typedef struct VkSemaphoreGetFdInfoKHR {
     VkStructureType                          sType;
     const void*                              pNext;
@@ -4211,6 +4212,7 @@ static const VkStructureType VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR = (VkSt
 
 typedef VkResult (VKAPI_PTR *PFN_vkGetSemaphoreFdKHR)(VkDevice device, const VkSemaphoreGetFdInfoKHR* pGetFdInfo, int* pFd);
 static PFN_vkGetSemaphoreFdKHR vkGetSemaphoreFdKHR;
+#endif
 
 static bool shared_sem_supported(const RealCUGAN* cugan)
 {
