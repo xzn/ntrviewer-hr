@@ -280,6 +280,7 @@ static int ntr_rp_port = 8001;
 static int ntr_rp_port_changed;
 static int ntr_rp_bound_port;
 
+static nk_bool fsr_filter;
 static nk_bool upscaling_filter;
 static nk_bool upscaling_filter_created;
 typedef enum {
@@ -1194,18 +1195,39 @@ static void guiMain(struct nk_context *ctx)
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Upscaling Filter", NK_TEXT_CENTERED);
-    if (nk_checkbox_label(ctx, "", &upscaling_filter)) {
-      if (upscaling_filter) {
+    int upscaling_selected = upscaling_filter ? 2 : fsr_filter ? 1 : 0;
+    selected = upscaling_selected;
+    const char *upscaling_filter_options[] = {
+      "None",
+      "FSR",
+      "Real-CUGAN + FSR",
+    };
+    nk_combobox(ctx, upscaling_filter_options, sizeof(upscaling_filter_options) / sizeof(*upscaling_filter_options), &selected, 30, comboIPsSize);
+    if (selected != upscaling_selected) {
+      if (selected == 2) {
         if (!upscaling_filter_created) {
           if (sr_create() < 0) {
             err_log("Failed to create NCNN instance for upscaling filter.\n");
             upscaling_filter = 0;
-          } else
+            fsr_filter = 1;
+            selected = 1;
+          } else {
+            upscaling_filter = 1;
+            fsr_filter = 1;
             upscaling_filter_created = 1;
+          }
+        } else {
+          upscaling_filter = 1;
+          fsr_filter = 1;
         }
+      } else if (selected == 1) {
+        upscaling_filter = 0;
+        fsr_filter = 1;
+      } else {
+        upscaling_filter = 0;
+        fsr_filter = 0;
       }
     }
-
     nk_layout_row_dynamic(ctx, 30, 5);
     nk_label(ctx, "3DS IP", NK_TEXT_CENTERED);
 
@@ -1846,16 +1868,28 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
   glViewport(0, 0, win_w, win_h);
 
+  nk_bool use_fsr = ctx_height > height * scale && ctx_width > width * scale && fsr_filter;
 #if defined(USE_ANGLE) && defined(_WIN32)
-  nk_bool use_fsr = 0;
+  nk_bool can_use_fsr = 0;
 #else
-  nk_bool use_fsr = ctx_height > height * scale && ctx_width > width * scale && upscaled;
 #ifdef USE_OGL_ES
-  use_fsr = use_fsr && ogl_version_major >= 3 && ogl_version_minor >= 1;
+  nk_bool can_use_fsr = use_fsr && ogl_version_major >= 3 && ogl_version_minor >= 1;
 #else
-  use_fsr = use_fsr && ogl_version_major >= 4 && ogl_version_minor >= 3;
+  nk_bool can_use_fsr = use_fsr && ogl_version_major >= 4 && ogl_version_minor >= 3;
 #endif
 #endif
+
+  if (use_fsr) {
+    if (!can_use_fsr) {
+      if (upscaling_filter) {
+        err_log("FSR not supported; using Real-CUGAN only\n");
+      } else {
+        err_log("FSR not supported; filter disabled\n");
+      }
+      fsr_filter = 0;
+      use_fsr = 0;
+    }
+  }
 
   if (use_fsr) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
