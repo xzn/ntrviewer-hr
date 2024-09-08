@@ -2081,7 +2081,7 @@ MainLoop(void *loopArg)
     glClearColor(bg[0], bg[1], bg[2], bg[3]);
     glClear(GL_COLOR_BUFFER_BIT);
 
-#define MIN_UPDATE_INTERVAL_NS (33333)
+#define MIN_UPDATE_INTERVAL_US (33333)
 
     int force = 0;
     if (i == 0) {
@@ -2089,7 +2089,9 @@ MainLoop(void *loopArg)
       while (!gl_updated) {
         struct timespec to;
         clock_gettime(CLOCK_REALTIME, &to);
-        to.tv_nsec += MIN_UPDATE_INTERVAL_NS * 1000;
+        to.tv_nsec += MIN_UPDATE_INTERVAL_US * 1000;
+        to.tv_sec += to.tv_nsec / 1000000000;
+        to.tv_nsec %= 1000000000;
         if (ETIMEDOUT == pthread_cond_timedwait(&gl_updated_cond, &gl_updated_mutex, &to)) {
           force = 1;
           break;
@@ -2102,7 +2104,7 @@ MainLoop(void *loopArg)
     int updated = 0;
     static uint64_t lastUpdated[2] = { 0 };
     uint64_t nextUpdated = iclock64();
-    if (nextUpdated - lastUpdated[i] > MIN_UPDATE_INTERVAL_NS)
+    if (nextUpdated - lastUpdated[i] > MIN_UPDATE_INTERVAL_US)
       force = 1;
 
     if (view_mode == VIEW_MODE_TOP_BOT) {
@@ -2164,11 +2166,15 @@ MainLoop(void *loopArg)
 }
 
 static int acquire_sem(rp_sem_t sem) {
-  struct timespec ts = {0, NWM_THREAD_WAIT_NS};
+  struct timespec to;
+  clock_gettime(CLOCK_REALTIME, &to);
+  to.tv_nsec += NWM_THREAD_WAIT_NS;
+  to.tv_sec += to.tv_nsec / 1000000000;
+  to.tv_nsec %= 1000000000;
   while (1) {
     if (!running)
       return -1;
-    int res = rp_sem_wait(sem, &ts);
+    int res = rp_sem_wait(sem, &to);
     if (res == 0)
       return 0;
     if (res != ETIMEDOUT) {
