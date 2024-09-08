@@ -4216,7 +4216,7 @@ static PFN_vkGetSemaphoreFdKHR vkGetSemaphoreFdKHR;
 
 static bool shared_sem_supported(const RealCUGAN* cugan)
 {
-    bool ret = cugan->vkdev->info.support_VK_KHR_external_semaphore() && GLAD_GL_EXT_semaphore &&
+    bool ret = 0 && cugan->vkdev->info.support_VK_KHR_external_semaphore() && GLAD_GL_EXT_semaphore &&
 #ifdef _WIN32
         cugan->vkdev->info.support_VK_KHR_external_semaphore_win32() && GLAD_GL_EXT_semaphore_win32;
 #else

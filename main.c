@@ -1833,8 +1833,6 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
             glBindTexture(GL_TEXTURE_2D, tex_upscaled);
             tex = tex_upscaled;
           }
-
-          glFinish();
         }
       }
     }
@@ -1897,6 +1895,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
+    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
     GLuint out_tex = fsr_main(top_bot, tex, height * scale, width * scale, ctx_height, ctx_width, 0.25f);
     glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
 
@@ -1935,6 +1934,8 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     glUniform1i(gl_sampler_loc, 0);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
   }
+
+  glFinish();
 }
 
 static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot, int force)
@@ -2215,8 +2216,7 @@ ikcpcb *kcp;
 
 #define MAX_PACKET_COUNT (128)
 
-#define rp_work_queue_count (2)
-#define rp_work_count (rp_work_queue_count + 1)
+#define rp_work_count (3)
 uint8_t recv_buf[rp_work_count][PACKET_SIZE * MAX_PACKET_COUNT];
 uint8_t recv_track[rp_work_count][MAX_PACKET_COUNT];
 uint8_t recv_hdr[rp_work_count][rp_data_hdr_id_size];
@@ -2396,6 +2396,7 @@ struct DecodeInfo {
     struct {
       uint8_t *in;
       uint32_t in_size;
+      bool not_queued;
     };
 
     struct {
@@ -2486,7 +2487,7 @@ static int handle_recv(uint8_t *buf, int size)
   if (memcmp(recv_hdr[work], hdr, rp_data_hdr_id_size) != 0) {
     // If no decode_info is set at this point, it means network receive has skipped frame.
     // Queue empty info to keep in sync.
-    if (!decode_info[work].ctx && !decode_info[work].in && !decode_info[work].out) {
+    if (decode_info[work].not_queued) {
       if (queue_decode(work) != 0) {
         return -1;
       }
@@ -2502,6 +2503,7 @@ static int handle_recv(uint8_t *buf, int size)
     }
 
     decode_info[work] = (struct DecodeInfo) {0};
+    decode_info[work].not_queued = true;
 
     memcpy(recv_hdr[work], hdr, rp_data_hdr_id_size);
     recv_delay_between_packets[work] = 0;
@@ -2874,6 +2876,10 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
 }
 
 static int queue_decode_kcp(int w, int queue_w) {
+  if (acquire_decode() < 0) {
+    return -1;
+  }
+
   struct DecodeInfo *ptr = &decode_info[recv_work];
   int top_bot = kcp_recv_info[w][queue_w].is_top ? 0 : 1;
   *ptr = (struct DecodeInfo) {
@@ -2889,9 +2895,6 @@ static int queue_decode_kcp(int w, int queue_w) {
     return -1;
   }
 
-  if (acquire_decode() < 0) {
-    return -1;
-  }
   recv_work = (recv_work + 1) % rp_work_count;
 
   return 0;
@@ -3216,12 +3219,13 @@ void receive_from_socket_loop(SOCKET s)
       }
       jpeg_recv_sem_inited = 0;
     }
-    if (rp_sem_init(jpeg_recv_sem, rp_work_queue_count) != 0) {
+    if (rp_sem_init(jpeg_recv_sem, rp_work_count) != 0) {
       err_log("jpeg_recv_sem init failed\n");
       break;
     }
     jpeg_recv_sem_inited = 1;
     memset(decode_ptr, 0, sizeof(decode_ptr));
+    memset(decode_info, 0, sizeof(decode_info));
     if (rp_syn_init1(&jpeg_decode_queue, 0, 0, 0, rp_work_count, (void **)decode_ptr) != 0) {
       err_log("jpeg_decode_queue init failed\n");
       break;
