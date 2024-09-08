@@ -2391,12 +2391,12 @@ final:
 
 struct DecodeInfo {
   int top_bot;
+  uint32_t in_size;
   uint32_t in_delay;
 
   union {
     struct {
       uint8_t *in;
-      uint32_t in_size;
       bool not_queued;
     };
 
@@ -3163,7 +3163,7 @@ void *jpeg_decode_thread_func(void *)
         restart_kcp = 1;
       } else {
         // err_log("%d\n", kcp_recv_info[ptr->kcp_w][ptr->kcp_queue_w].term_count);
-        handle_decode_frame_screen(ctx, ptr->top_bot, 0, ptr->in_delay);
+        handle_decode_frame_screen(ctx, ptr->top_bot, ptr->in_size, ptr->in_delay);
       }
     } else {
       if (ptr->in) {
