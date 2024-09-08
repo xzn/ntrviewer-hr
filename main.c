@@ -68,7 +68,7 @@ void Sleep(int milliseconds) {
 #include "main.h"
 #include "rp_syn.h"
 
-rp_sem_t jpeg_recv_sem;
+rp_sem_t jpeg_decode_sem;
 struct rp_syn_comp_func_t jpeg_decode_queue;
 
 // #define GL_DEBUG
@@ -2423,10 +2423,10 @@ static int queue_decode(int work) {
 
 static int acquire_decode() {
   int ret;
-  if ((ret = acquire_sem(jpeg_recv_sem)) != 0) {
+  if ((ret = acquire_sem(jpeg_decode_sem)) != 0) {
     if (running) {
       running = 0;
-      err_log("jpeg_recv_sem wait error\n");
+      err_log("jpeg_decode_sem wait error\n");
     }
   }
   return ret;
@@ -3174,12 +3174,13 @@ void *jpeg_decode_thread_func(void *)
       }
     }
 
-    rp_sem_rel(jpeg_recv_sem);
+    rp_sem_rel(jpeg_decode_sem);
   }
   return 0;
 }
 
-static int jpeg_recv_sem_inited;
+static int jpeg_decode_sem_inited;
+static int jpeg_decode_queue_inited;
 void receive_from_socket_loop(SOCKET s)
 {
   while (running && !ntr_rp_port_changed) {
@@ -3215,24 +3216,34 @@ void receive_from_socket_loop(SOCKET s)
     memset(frame_size_tracker, 0, sizeof(frame_size_tracker));
     memset(delay_between_packet_tracker, 0, sizeof(delay_between_packet_tracker));
 
-    if (jpeg_recv_sem_inited) {
-      if (rp_sem_close(jpeg_recv_sem) != 0) {
-        err_log("jpeg_recv_sem close failed\n");
+    if (jpeg_decode_sem_inited) {
+      if (rp_sem_close(jpeg_decode_sem) != 0) {
+        err_log("jpeg_decode_sem close failed\n");
         break;
       }
-      jpeg_recv_sem_inited = 0;
+      jpeg_decode_sem_inited = 0;
     }
-    if (rp_sem_init(jpeg_recv_sem, rp_work_count) != 0) {
-      err_log("jpeg_recv_sem init failed\n");
+    if (rp_sem_init(jpeg_decode_sem, rp_work_count) != 0) {
+      err_log("jpeg_decode_sem init failed\n");
       break;
     }
-    jpeg_recv_sem_inited = 1;
-    memset(decode_ptr, 0, sizeof(decode_ptr));
-    memset(decode_info, 0, sizeof(decode_info));
+    jpeg_decode_sem_inited = 1;
+
+    if (jpeg_decode_queue_inited) {
+      if (rp_syn_close1(&jpeg_decode_queue)) {
+        err_log("jpeg_decode_queue close failed\n");
+        break;
+      }
+      jpeg_decode_queue_inited = 0;
+    }
     if (rp_syn_init1(&jpeg_decode_queue, 0, 0, 0, rp_work_count, (void **)decode_ptr) != 0) {
       err_log("jpeg_decode_queue init failed\n");
       break;
     }
+    jpeg_decode_queue_inited = 1;
+
+    memset(decode_ptr, 0, sizeof(decode_ptr));
+    memset(decode_info, 0, sizeof(decode_info));
 
     pthread_t jpeg_decode_thread;
     decoding = 1;
@@ -3604,7 +3615,7 @@ int main(int argc, char *argv[])
   pthread_join(nwm_tcp_thread, NULL);
 
   rp_syn_close1(&jpeg_decode_queue);
-  rp_sem_close(jpeg_recv_sem);
+  rp_sem_close(jpeg_decode_sem);
 
   glDeleteProgram(gl_fbo_program);
   glDeleteProgram(gl_program);
