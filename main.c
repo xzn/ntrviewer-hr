@@ -1,14 +1,4 @@
-#if 0
-#define screen_upscale_factor (4)
-#define sr_create realsr_create
-#define sr_run realsr_run
-#define sr_destroy realsr_destroy
-#elif 0
-#define screen_upscale_factor (2)
-#define sr_create srmd_create
-#define sr_run srmd_run
-#define sr_destroy srmd_destroy
-#elif 1
+#if 1
 #define screen_upscale_factor (2)
 #define sr_create realcugan_create
 #define sr_run realcugan_run
@@ -16,9 +6,10 @@
 #define sr_next realcugan_next
 #else
 #define screen_upscale_factor (1)
-#define sr_create() (0)
-#define sr_run()
-#define sr_destroy()
+#define sr_create(...) (0)
+#define sr_run(...) (0)
+#define sr_destroy(...) ((void)0)
+#define sr_next(...)
 #endif
 
 #define HR_MAX(a, b) ((a) > (b) ? (a) : (b))
