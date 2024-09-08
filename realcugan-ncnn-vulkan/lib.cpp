@@ -259,7 +259,7 @@ extern "C" GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned
         return 0;
     }
     // return realcugan[top_bot]->out_gpu->gl_texture;
-    
+
     GLuint tex = realcugan[top_bot]->out_gpu_tex->gl_texture;
     *gl_sem = realcugan[top_bot]->gl_sem;
     *dim3 = realcugan[top_bot]->out_gpu_tex->depth > 1;

@@ -1,3 +1,4 @@
+#include <pthread.h>
 #if 0
 #define screen_upscale_factor (4)
 #define sr_create realsr_create
@@ -1613,17 +1614,21 @@ enum FrameBufferStatus
   FBS_NOT_UPDATED,
 };
 
-#define JpegDispImagesCount (3)
-
+#define FrameBufferCount (3)
 typedef struct _FrameBufferContext
 {
   GLuint gl_tex_id;
   GLuint gl_tex_upscaled;
   GLuint gl_fbo_upscaled[SCREEN_COUNT];
 
-  rp_sem_t jpeg_disp_sem;
-  struct rp_syn_comp_func_t jpeg_disp_queue;
-  uint8_t *data_ptrs[JpegDispImagesCount];
+  uint8_t screen_decoded[FrameBufferCount][400 * 240 * GL_CHANNELS_N];
+  uint8_t screen_upscaled[400 * 240 * GL_CHANNELS_N * screen_upscale_factor * screen_upscale_factor];
+
+  pthread_mutex_t status_lock;
+  enum FrameBufferStatus status;
+  int index_display;
+  int index_done_decode_ready_display;
+  int index_decode;
   uint8_t *prev_data;
   GLuint prev_tex;
   void *tex_obj;
@@ -1635,7 +1640,6 @@ pthread_mutex_t gl_updated_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 FrameBufferContext buffer_ctx[SCREEN_COUNT];
 
-static uint8_t screen_upscaled[400 * 240 * GL_CHANNELS_N * screen_upscale_factor * screen_upscale_factor];
 static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot)
 {
   double ctx_left_f;
@@ -1746,7 +1750,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
         sr_next(top_bot, ctx->tex_obj);
         ctx->tex_obj = NULL;
       }
-      GLuint tex_upscaled = sr_run(top_bot, height, width, GL_CHANNELS_N, data, screen_upscaled, &gl_sem, &dim3, &success, &ctx->tex_obj);
+      GLuint tex_upscaled = sr_run(top_bot, height, width, GL_CHANNELS_N, data, ctx->screen_upscaled, &gl_sem, &dim3, &success, &ctx->tex_obj);
       if (!tex_upscaled) {
         if (!success) {
           upscaled = 0;
@@ -1760,7 +1764,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
             GL_INT_FORMAT, height * scale,
             width * scale, 0,
             GL_FORMAT, GL_UNSIGNED_BYTE,
-            screen_upscaled);
+            ctx->screen_upscaled);
 
           tex = ctx->gl_tex_id;
         }
@@ -1940,29 +1944,32 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
 
 static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot, int force)
 {
-  uint8_t *data;
-  int ret = rp_syn_acq(&ctx->jpeg_disp_queue, 0, (void **)&data);
+  pthread_mutex_lock(&ctx->status_lock);
+  enum FrameBufferStatus status = ctx->status;
+  if (ctx->status == FBS_UPDATED) {
+    int index = ctx->index_done_decode_ready_display;
+    ctx->index_done_decode_ready_display = ctx->index_display;
+    ctx->index_display = index;
+    ctx->status = FBS_NOT_UPDATED;
+  }
+  int index_display = ctx->index_display;
+  pthread_mutex_unlock(&ctx->status_lock);
 
-  if (ret == 0)
+  if (status == FBS_NOT_AVAIL)
+    return 0;
+
+  uint8_t *data = ctx->screen_decoded[index_display];
+  ctx->prev_data = data;
+  if (status == FBS_UPDATED)
   {
-    ctx->prev_data = data;
-
-    do_hr_draw_screen(ctx, data, width, height, top_bot);
-
-    rp_sem_rel(ctx->jpeg_disp_sem);
-
     __atomic_add_fetch(&frame_rate_displayed_tracker[top_bot].counter, 1, __ATOMIC_RELAXED);
-
+    do_hr_draw_screen(ctx, data, width, height, top_bot);
     return 1;
   }
-  else if (ret == ETIMEDOUT)
+  else
   {
-    if (force && ctx->prev_data)
+    if (force)
       do_hr_draw_screen(ctx, NULL, width, height, top_bot);
-    return 0;
-  } else {
-    err_log("rp_syn_acq failed\n");
-    running = 0;
     return 0;
   }
 }
@@ -2170,7 +2177,7 @@ static int acquire_sem(rp_sem_t sem) {
   }
 }
 
-void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int top_bot, int frame_size, int delay_between_packet)
+void handle_decode_frame_screen(FrameBufferContext *ctx, int top_bot, int frame_size, int delay_between_packet)
 {
   __atomic_add_fetch(&frame_rate_decoded_tracker[top_bot].counter, 1, __ATOMIC_RELAXED);
   if (__atomic_load_n(&frame_size_tracker[top_bot].counter, __ATOMIC_RELAXED) < frame_size) {
@@ -2180,27 +2187,18 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, uint8_t *rgb, int top_b
     __atomic_store_n(&delay_between_packet_tracker[top_bot].counter, delay_between_packet, __ATOMIC_RELAXED);
   }
 
-  int ret;
-  if ((ret = rp_sem_wait_try(ctx->jpeg_disp_sem)) != 0) {
-    if (ret != ETIMEDOUT && running) {
-      running = 0;
-      err_log("jpeg_disp_sem wait error\n");
-    }
-    return;
-  }
-
-  if (rp_syn_rel(&ctx->jpeg_disp_queue, rgb) != 0) {
-    running = 0;
-    return;
-  }
+  pthread_mutex_lock(&ctx->status_lock);
+  int index = ctx->index_done_decode_ready_display;
+  ctx->index_done_decode_ready_display = ctx->index_decode;
+  ctx->index_decode = index;
+  ctx->status = FBS_UPDATED;
+  pthread_mutex_unlock(&ctx->status_lock);
 
   pthread_mutex_lock(&gl_updated_mutex);
   gl_updated = 1;
   pthread_cond_signal(&gl_updated_cond);
   pthread_mutex_unlock(&gl_updated_mutex);
 }
-
-uint8_t screen_decoded[SCREEN_COUNT][400 * 240 * GL_CHANNELS_N];
 
 uint8_t upscaled_u_image[400 * 240];
 uint8_t upscaled_v_image[400 * 240];
@@ -2388,8 +2386,6 @@ final:
 
 struct DecodeInfo {
   int top_bot;
-  uint8_t *out;
-  FrameBufferContext *ctx;
   uint32_t in_delay;
 
   union {
@@ -2578,8 +2574,6 @@ static int handle_recv(uint8_t *buf, int size)
 
     decode_info[work] = (struct DecodeInfo) {
       .top_bot = top_bot,
-      .out = screen_decoded[top_bot],
-      .ctx = &buffer_ctx[top_bot],
       .in_delay = recv_delay_between_packets[work],
       .in = recv_buf[work],
       .in_size = recv_end_size[work],
@@ -2884,8 +2878,6 @@ static int queue_decode_kcp(int w, int queue_w) {
   int top_bot = kcp_recv_info[w][queue_w].is_top ? 0 : 1;
   *ptr = (struct DecodeInfo) {
     .top_bot = top_bot,
-    .out = screen_decoded[top_bot],
-    .ctx = &buffer_ctx[top_bot],
     .kcp_w = w,
     .kcp_queue_w = queue_w,
     .is_kcp = true,
@@ -3152,23 +3144,26 @@ void *jpeg_decode_thread_func(void *)
       }
     }
 
+    FrameBufferContext *ctx = &buffer_ctx[ptr->top_bot];
+    uint8_t *out = ctx->screen_decoded[ctx->index_decode];
+
     int ret;
     if (ptr->is_kcp) {
       // err_log("%d %d\n", ptr->kcp_w, ptr->kcp_queue_w);
-      if ((ret = handle_decode_kcp(ptr->out, ptr->kcp_w, ptr->kcp_queue_w)) != 0) {
+      if ((ret = handle_decode_kcp(out, ptr->kcp_w, ptr->kcp_queue_w)) != 0) {
         err_log("kcp recv decode error: %d\n", ret);
         decoding = 0;
         restart_kcp = 1;
       } else {
         // err_log("%d\n", kcp_recv_info[ptr->kcp_w][ptr->kcp_queue_w].term_count);
-        handle_decode_frame_screen(ptr->ctx, ptr->out, ptr->top_bot, 0, ptr->in_delay);
+        handle_decode_frame_screen(ctx, ptr->top_bot, 0, ptr->in_delay);
       }
     } else {
-      if (ptr->out && ptr->in && ptr->ctx) {
-        if (handle_decode(ptr->out, ptr->in, ptr->in_size, ptr->top_bot == 0 ? 400 : 320, 240) != 0) {
+      if (ptr->in) {
+        if (handle_decode(out, ptr->in, ptr->in_size, ptr->top_bot == 0 ? 400 : 320, 240) != 0) {
           err_log("recv decode error\n");
         } else {
-          handle_decode_frame_screen(ptr->ctx, ptr->out, ptr->top_bot, ptr->in_size, ptr->in_delay);
+          handle_decode_frame_screen(ctx, ptr->top_bot, ptr->in_size, ptr->in_delay);
         }
       }
     }
@@ -3200,7 +3195,9 @@ void receive_from_socket_loop(SOCKET s)
 
     // err_log("new connection\n");
     for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
+      buffer_ctx[top_bot].status = FBS_NOT_AVAIL;
       buffer_ctx[top_bot].prev_data = NULL;
+      buffer_ctx[top_bot].prev_tex = 0;
       buffer_ctx[top_bot].tex_obj = NULL;
     }
     for (int i = 0; i < rp_work_count; ++i) {
@@ -3513,10 +3510,7 @@ int main(int argc, char *argv[])
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    memset(buffer_ctx[i].data_ptrs, 0, sizeof(buffer_ctx[i].data_ptrs));
-    rp_syn_init1(&buffer_ctx[i].jpeg_disp_queue, 0, 0, 0, JpegDispImagesCount, (void **)buffer_ctx[i].data_ptrs);
-    rp_sem_init(buffer_ctx[i].jpeg_disp_sem, JpegDispImagesCount);
-    buffer_ctx[i].prev_data = NULL;
+    buffer_ctx[i].status_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
   }
 
   for (int j = 0; j < SCREEN_COUNT; ++j) {
@@ -3613,8 +3607,8 @@ int main(int argc, char *argv[])
       sr_next(i, buffer_ctx[i].tex_obj);
     }
 
-    rp_sem_close(buffer_ctx[i].jpeg_disp_sem);
-    rp_syn_close1(&buffer_ctx[i].jpeg_disp_queue);
+    pthread_mutex_destroy(&buffer_ctx[i].status_lock);
+
     glDeleteTextures(1, &buffer_ctx[i].gl_tex_id);
     for (int j = 0; j < SCREEN_COUNT; ++j) {
       glDeleteFramebuffers(1, &buffer_ctx[i].gl_fbo_upscaled[j]);
