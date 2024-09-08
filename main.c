@@ -2101,7 +2101,7 @@ MainLoop(void *loopArg)
     }
 
     int updated = 0;
-    static uint64_t lastUpdated[2] = { 0 };
+    static uint64_t lastUpdated[SCREEN_COUNT] = { 0 };
     uint64_t nextUpdated = iclock64();
     if (nextUpdated - lastUpdated[i] > MIN_UPDATE_INTERVAL_US)
       force = 1;
