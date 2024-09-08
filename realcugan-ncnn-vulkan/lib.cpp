@@ -17,6 +17,7 @@
 #endif
 
 #include "realcugan.h"
+#include "lib.h"
 
 #include "filesystem_utils.h"
 
@@ -247,7 +248,7 @@ extern "C" int realcugan_create()
     return 0;
 }
 
-extern "C" GLuint realcugan_run(int index, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, GLuint *gl_sem, bool *dim3, bool *success)
+extern "C" GLuint realcugan_run(int index, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, GLuint *gl_sem, GLuint *gl_sem_next, bool *dim3, bool *success)
 {
     ncnn::Mat inimage = ncnn::Mat(w, h, (void*)indata, (size_t)c, c);
     ncnn::Mat outimage = ncnn::Mat(w * scale, h * scale, (void*)outdata, (size_t)c, c);
@@ -256,11 +257,29 @@ extern "C" GLuint realcugan_run(int index, int w, int h, int c, const unsigned c
         return 0;
     }
 
-    GLuint tex = realcugan->out_gpu_tex[index]->gl_texture;
-    *gl_sem = realcugan->out_gpu_tex[index]->gl_sem;
-    *dim3 = realcugan->out_gpu_tex[index]->depth > 1;
+    OutVkImageMat *out = realcugan->out_gpu_tex[index];
+    GLuint tex = out->gl_texture;
+    *gl_sem = out->gl_sem;
+    *gl_sem_next = out->gl_sem_next;
+    *dim3 = out->depth > 1;
     *success = true;
     return tex;
+}
+
+extern "C" void realcugan_next(int index)
+{
+    if (!realcugan || index >= realcugan->out_gpu_tex.size()) {
+        return;
+    }
+    OutVkImageMat *out = realcugan->out_gpu_tex[index];
+    if (!out || !out->first_subseq) {
+        return;
+    }
+    VkResult ret = ncnn::vkWaitForFences(realcugan->vkdev->vkdevice(), 1, &out->fence, VK_TRUE, (uint64_t)-1);
+    if (ret != VK_SUCCESS)
+    {
+        NCNN_LOGE("vkWaitForFences failed %d", ret);
+    }
 }
 
 extern "C" void realcugan_destroy()

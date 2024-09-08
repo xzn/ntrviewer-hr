@@ -113,6 +113,7 @@ RealCUGAN::~RealCUGAN()
     delete bicubic_4x;
 
     for (int i = 0; i < out_gpu_tex.size(); ++i) {
+        delete out_gpu_tex[i]->cmd;
         out_gpu_tex[i]->release(this);
         out_gpu_tex[i]->destroy_sem(this);
         delete out_gpu_tex[i];
@@ -326,10 +327,13 @@ int RealCUGAN::process(int index, const ncnn::Mat& inimage, ncnn::Mat& outimage)
 
     if (index + 1 > out_gpu_tex.size()) {
         out_gpu_tex.resize(index + 1);
+    }
+    if (!out_gpu_tex[index]) {
         out_gpu_tex[index] = new OutVkImageMat();
         if (support_ext_mem) {
             out_gpu_tex[index]->create_sem(this);
         }
+        out_gpu_tex[index]->cmd = new ncnn::VkCompute(vkdev);
     }
 
     const unsigned char* pixeldata = (const unsigned char*)inimage.data;
@@ -397,7 +401,16 @@ int RealCUGAN::process(int index, const ncnn::Mat& inimage, ncnn::Mat& outimage)
             }
         }
 
-        ncnn::VkCompute cmd(vkdev);
+        ncnn::VkCompute& cmd = *out_gpu_tex[index]->cmd;
+        if (out_gpu_tex[index]->first_subseq) {
+            VkResult ret = ncnn::vkWaitForFences(vkdev->vkdevice(), 1, &out_gpu_tex[index]->fence, VK_TRUE, (uint64_t)-1);
+            if (ret != VK_SUCCESS)
+            {
+                NCNN_LOGE("vkWaitForFences failed %d", ret);
+            }
+
+            cmd.reset();
+        }
 
         // upload
         ncnn::VkMat in_gpu;
@@ -769,7 +782,8 @@ int RealCUGAN::process(int index, const ncnn::Mat& inimage, ncnn::Mat& outimage)
         if (support_ext_mem) {
             out_gpu_tex[index]->create_like(this, out_gpu, opt);
             cmd.record_clone(out_gpu, *out_gpu_tex[index], opt);
-            cmd.submit_and_wait(out_gpu_tex[index]->vk_sem);
+            cmd.submit_and_wait(out_gpu_tex[index]->first_subseq ? out_gpu_tex[index]->vk_sem_next : nullptr, out_gpu_tex[index]->vk_sem, &out_gpu_tex[index]->fence);
+            out_gpu_tex[index]->first_subseq = true;
         }
 
         // download
@@ -4027,7 +4041,7 @@ static PFN_vkGetSemaphoreFdKHR vkGetSemaphoreFdKHR;
 
 static bool shared_sem_supported(const RealCUGAN* cugan)
 {
-    bool ret = 0 && cugan->vkdev->info.support_VK_KHR_external_semaphore() && GLAD_GL_EXT_semaphore &&
+    bool ret = cugan->vkdev->info.support_VK_KHR_external_semaphore() && GLAD_GL_EXT_semaphore &&
 #ifdef _WIN32
         cugan->vkdev->info.support_VK_KHR_external_semaphore_win32() && GLAD_GL_EXT_semaphore_win32;
 #else
@@ -4070,11 +4084,15 @@ void OutVkImageMat::create_sem(const RealCUGAN* cugan)
         bool found = false;
         if (vkGetPhysicalDeviceExternalSemaphorePropertiesKHR) {
             VkExternalSemaphoreHandleTypeFlagBits flags[] = {
-                VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT,
+#ifdef _WIN32
                 VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT,
-                VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT,
-                VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT,
-                VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT};
+#else
+                VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT,
+#endif
+                // VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT,
+                // VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT,
+                // VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT
+            };
 
             VkPhysicalDeviceExternalSemaphoreInfo extSemInfo{
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO, nullptr};
@@ -4106,9 +4124,17 @@ void OutVkImageMat::create_sem(const RealCUGAN* cugan)
             compatable_semaphore_type};
         VkSemaphoreCreateInfo semaphoreCreateInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
                                                     &exportSemaphoreCreateInfo};
-        VkResult ret = vkCreateSemaphore(cugan->vkdev->vkdevice(), &semaphoreCreateInfo, nullptr, &vk_sem);
+        VkResult ret;
+        ret = vkCreateSemaphore(cugan->vkdev->vkdevice(), &semaphoreCreateInfo, nullptr, &vk_sem);
         if (ret != VK_SUCCESS) {
             vk_sem = 0;
+            destroy_sem(cugan);
+            return;
+        }
+        ret = vkCreateSemaphore(cugan->vkdev->vkdevice(), &semaphoreCreateInfo, nullptr, &vk_sem_next);
+        if (ret != VK_SUCCESS) {
+            vk_sem_next = 0;
+            destroy_sem(cugan);
             return;
         }
 
@@ -4130,17 +4156,36 @@ void OutVkImageMat::create_sem(const RealCUGAN* cugan)
             destroy_sem(cugan);
             return;
         }
+#ifdef _WIN32
+        semaphoreGetHandleInfo.semaphore = vk_sem_next;
+        ret = vkGetSemaphoreWin32HandleKHR(cugan->vkdev->vkdevice(), &semaphoreGetHandleInfo, &sem_next);
+#else
+        semaphoreGetFdInfo.semaphore = vk_sem_next;
+        ret = vkGetSemaphoreFdKHR(cugan->vkdev->vkdevice(), &semaphoreGetFdInfo, &sem_next);
+#endif
+        if (ret != VK_SUCCESS) {
+            sem_next = 0;
+            destroy_sem(cugan);
+            return;
+        }
 
         glGenSemaphoresEXT(1, &gl_sem);
+        glGenSemaphoresEXT(1, &gl_sem_next);
 #ifdef _WIN32
         glImportSemaphoreWin32HandleEXT(gl_sem, GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, sem);
+        glImportSemaphoreWin32HandleEXT(gl_sem_next, GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, sem_next);
 #else
         glImportSemaphoreFdEXT(gl_sem, GL_HANDLE_TYPE_OPAQUE_FD_EXT, sem);
+        glImportSemaphoreFdEXT(gl_sem_next, GL_HANDLE_TYPE_OPAQUE_FD_EXT, sem_next);
 #endif
     } else {
         vk_sem = 0;
         sem = 0;
         gl_sem = 0;
+
+        vk_sem_next = 0;
+        sem_next = 0;
+        gl_sem_next = 0;
     }
 }
 
@@ -4165,6 +4210,26 @@ void OutVkImageMat::destroy_sem(const RealCUGAN* cugan)
         if (vk_sem) {
             vkDestroySemaphore(cugan->vkdev->vkdevice(), vk_sem, nullptr);
             vk_sem = 0;
+        }
+
+        if (gl_sem_next) {
+            glDeleteSemaphoresEXT(1, &gl_sem_next);
+            gl_sem_next = 0;
+            sem_next = 0;
+        }
+
+        if (sem_next) {
+#ifdef _WIN32
+            CloseHandle(sem_next);
+#else
+            close(sem_next);
+#endif
+            sem_next = 0;
+        }
+
+        if (vk_sem_next) {
+            vkDestroySemaphore(cugan->vkdev->vkdevice(), vk_sem_next, nullptr);
+            vk_sem_next = 0;
         }
     }
 }

@@ -85,7 +85,7 @@ static void runBilinear(struct FSRConstants fsrData, uint32_t bilinearProgram, i
         glBindImageTexture(inFSROutputTexture, outputImage, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
 
         glDispatchCompute(dispatchX, dispatchY, 1);
-        glFinish();
+        // glFinish();
     }
 }
 

@@ -2,11 +2,13 @@
 #define screen_upscale_factor (2)
 #define sr_create realcugan_create
 #define sr_run realcugan_run
+#define sr_next realcugan_next
 #define sr_destroy realcugan_destroy
 #else
 #define screen_upscale_factor (1)
 #define sr_create(...) (0)
 #define sr_run(...) (0)
+#define sr_next(...) ((void)0)
 #define sr_destroy(...) ((void)0)
 #endif
 
@@ -53,6 +55,7 @@ void Sleep(int milliseconds) {
 
 #include <stdatomic.h>
 #include <errno.h>
+#include "realcugan-ncnn-vulkan/lib.h"
 #include "main.h"
 #include "rp_syn.h"
 
@@ -69,10 +72,6 @@ struct rp_syn_comp_func_t jpeg_decode_queue;
 #define GL_INT_FORMAT GL_RGBA8
 #define TJ_FORMAT TJPF_RGBA
 #define JCS_FORMAT JCS_EXT_RGBA
-
-int realcugan_create();
-GLuint realcugan_run(int index, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, GLuint *gl_sem, bool *dim3, bool *success);
-void realcugan_destroy();
 
 #define err_log(f, ...) fprintf(stderr, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
 
@@ -1730,6 +1729,9 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
   nk_bool upscaled = screen_upscale_factor > 1 && upscaling_filter && upscaling_filter_created;
   int scale = upscaled ? screen_upscale_factor : 1;
   GLuint tex = upscaled ? ctx->gl_tex_upscaled : ctx->gl_tex_id;
+  GLuint gl_sem = 0;
+  GLuint gl_sem_next = 0;
+  GLuint tex_upscaled = 0;
   bool dim3 = false;
   bool success = false;
 
@@ -1746,8 +1748,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
 
     if (data) {
       scale = screen_upscale_factor;
-      GLuint gl_sem = 0;
-      GLuint tex_upscaled = sr_run(top_bot, height, width, GL_CHANNELS_N, data, ctx->screen_upscaled, &gl_sem, &dim3, &success);
+      tex_upscaled = sr_run(top_bot, height, width, GL_CHANNELS_N, data, ctx->screen_upscaled, &gl_sem, &gl_sem_next, &dim3, &success);
       if (!tex_upscaled) {
         if (!success) {
           upscaled = 0;
@@ -1797,10 +1798,6 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
           glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled);
           tex = ctx->gl_tex_upscaled;
         } else {
-          if (gl_sem) {
-            GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
-            glWaitSemaphoreEXT(gl_sem, 0, NULL, 1, &tex_upscaled, &layout);
-          }
           if (dim3) {
             glBindTexture(GL_TEXTURE_3D, tex_upscaled);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, ctx->gl_fbo_upscaled[tb]);
@@ -1826,7 +1823,16 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
             glUniform1i(gl_fbo_sampler_loc, 0);
             if (0)
               glUniform1i(gl_fbo_tex_size_loc, height * scale);
+
+            if (gl_sem) {
+              GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
+              glWaitSemaphoreEXT(gl_sem, 0, NULL, 1, &tex_upscaled, &layout);
+            }
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, fbo_indices);
+            if (gl_sem && gl_sem_next) {
+              GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
+              glSignalSemaphoreEXT(gl_sem_next, 0, NULL, 1, &tex_upscaled, &layout);
+            }
 
             glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled);
             tex = ctx->gl_tex_upscaled;
@@ -1897,10 +1903,18 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     if (data || !ctx->prev_tex_fsr) {
+      if (!dim3 && tex_upscaled && gl_sem) {
+        GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
+        glWaitSemaphoreEXT(gl_sem, 0, NULL, 1, &tex_upscaled, &layout);
+      }
       glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
       GLuint out_tex = fsr_main(top_bot, tex, height * scale, width * scale, ctx_height, ctx_width, 0.25f);
       ctx->prev_tex_fsr = out_tex;
       glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
+      if (!dim3 && tex_upscaled && gl_sem && gl_sem_next) {
+        GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
+        glSignalSemaphoreEXT(gl_sem_next, 0, NULL, 1, &tex_upscaled, &layout);
+      }
 
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_2D, out_tex);
@@ -1939,11 +1953,19 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     glGenerateMipmap(GL_TEXTURE_2D);
 
     glUniform1i(gl_sampler_loc, 0);
+
+    if (!dim3 && tex_upscaled && gl_sem) {
+      GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
+      glWaitSemaphoreEXT(gl_sem, 0, NULL, 1, &tex_upscaled, &layout);
+    }
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+    if (!dim3 && tex_upscaled && gl_sem && gl_sem_next) {
+      GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
+      glSignalSemaphoreEXT(gl_sem_next, 0, NULL, 1, &tex_upscaled, &layout);
+    }
+
     ctx->prev_tex_fsr = 0;
   }
-
-  glFinish();
 }
 
 static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot, int force)
@@ -3158,6 +3180,7 @@ void *jpeg_decode_thread_func(void *)
     }
 
     FrameBufferContext *ctx = &buffer_ctx[ptr->top_bot];
+    sr_next(ctx->index_decode);
     uint8_t *out = ctx->screen_decoded[ctx->index_decode];
 
     int ret;

@@ -24,7 +24,7 @@ class RealCUGAN;
 
 class OutVkImageMat : public ncnn::VkImageMat {
 public:
-    OutVkImageMat() : ncnn::VkImageMat(), totalsize(0), width(0), height(0), depth(0), memory(0), gl_memory(0), gl_texture(0) {}
+    OutVkImageMat() : ncnn::VkImageMat() {}
 
     void create_like(const RealCUGAN* cugan, const ncnn::VkMat& m, const ncnn::Option& opt);
     void create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, int _elempack, const ncnn::Option& opt);
@@ -34,29 +34,33 @@ public:
     void create_handles(const RealCUGAN* cugan);
     void release_handles();
 
-    size_t totalsize;
-    uint32_t width;
-    uint32_t height;
-    uint32_t depth;
+    size_t totalsize = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t depth = 0;
 
 #ifdef _WIN32
-    HANDLE memory;
+    HANDLE memory = 0;
 #else
-    int memory;
+    int memory = 0;
 #endif
-    GLuint gl_memory;
-    GLuint gl_texture;
-    bool dedicated;
+    GLuint gl_memory = 0;
+    GLuint gl_texture = 0;
+    bool dedicated = 0;
 
-    VkSemaphore vk_sem;
+    VkSemaphore vk_sem = 0, vk_sem_next = 0;
 #ifdef _WIN32
-    HANDLE sem;
+    HANDLE sem = 0, sem_next = 0;
 #else
-    int sem;
+    int sem = 0, sem_next = 0;
 #endif
-    GLuint gl_sem;
+    GLuint gl_sem = 0, gl_sem_next = 0;
     void create_sem(const RealCUGAN* cugan);
     void destroy_sem(const RealCUGAN* cugan);
+
+    bool first_subseq = 0;
+    ncnn::VkCompute *cmd = 0;
+    VkFence fence = 0;
 };
 
 class RealCUGAN
@@ -104,26 +108,26 @@ protected:
 
 public:
     // realcugan parameters
-    int noise;
-    int scale;
-    int tilesize;
-    int prepadding;
-    int syncgap;
+    int noise = 0;
+    int scale = 0;
+    int tilesize = 0;
+    int prepadding = 0;
+    int syncgap = 0;
 
 // private:
-    ncnn::VulkanDevice* vkdev;
+    ncnn::VulkanDevice* vkdev = 0;
     ncnn::Net net;
-    ncnn::Pipeline* realcugan_preproc;
-    ncnn::Pipeline* realcugan_postproc;
-    ncnn::Pipeline* realcugan_4x_postproc;
-    ncnn::Layer* bicubic_2x;
-    ncnn::Layer* bicubic_3x;
-    ncnn::Layer* bicubic_4x;
-    bool tta_mode;
+    ncnn::Pipeline* realcugan_preproc = 0;
+    ncnn::Pipeline* realcugan_postproc = 0;
+    ncnn::Pipeline* realcugan_4x_postproc = 0;
+    ncnn::Layer* bicubic_2x = 0;
+    ncnn::Layer* bicubic_3x = 0;
+    ncnn::Layer* bicubic_4x = 0;
+    bool tta_mode = 0;
 
     mutable std::vector<OutVkImageMat*> out_gpu_tex;
-    bool support_ext_mem;
-    bool tiling_linear;
+    bool support_ext_mem = 0;
+    bool tiling_linear = 0;
 };
 
 #endif // REALCUGAN_H
