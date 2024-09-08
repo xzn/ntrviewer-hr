@@ -1604,7 +1604,15 @@ enum FrameBufferStatus
   FBS_NOT_UPDATED,
 };
 
-#define FrameBufferCount (3)
+enum FrameBufferIndexInit
+{
+  FBI_DECODE,
+  FBI_IN_BETWEEN,
+  FBI_DISPLAY,
+  FBI_COUNT,
+};
+
+#define FrameBufferCount (FBI_COUNT)
 typedef struct _FrameBufferContext
 {
   GLuint gl_tex_id;
@@ -3521,6 +3529,9 @@ int main(int argc, char *argv[])
     glBindTexture(GL_TEXTURE_2D, 0);
 
     buffer_ctx[i].status_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    buffer_ctx[i].index_display = FBI_DISPLAY;
+    buffer_ctx[i].index_done_decode_ready_display = FBI_IN_BETWEEN;
+    buffer_ctx[i].index_decode = FBI_DECODE;
   }
 
   for (int j = 0; j < SCREEN_COUNT; ++j) {
