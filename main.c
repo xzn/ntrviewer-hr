@@ -1,4 +1,3 @@
-#include <pthread.h>
 #if 0
 #define screen_upscale_factor (4)
 #define sr_create realsr_create
