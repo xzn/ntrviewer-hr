@@ -31,9 +31,9 @@ struct rp_syn_comp_func_t {
 
 int rp_syn_init1(struct rp_syn_comp_func_t *syn1, int init, void *base, unsigned stride, int count, void **pos);
 int rp_syn_close1(struct rp_syn_comp_func_t *syn1);
-int rp_syn_acq(struct rp_syn_comp_func_t *syn1, unsigned timeout, void **pos);
+int rp_syn_acq(struct rp_syn_comp_func_t *syn1, unsigned timeout_ns, void **pos);
 int rp_syn_rel(struct rp_syn_comp_func_t *syn1, void *pos);
-int rp_syn_acq1(struct rp_syn_comp_func_t *syn1, unsigned timeout, void **pos);
+int rp_syn_acq1(struct rp_syn_comp_func_t *syn1, unsigned timeout_ns, void **pos);
 int rp_syn_rel1(struct rp_syn_comp_func_t *syn1, void *pos);
 
 #endif

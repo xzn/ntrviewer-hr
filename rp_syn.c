@@ -39,14 +39,14 @@ int rp_syn_close1(struct rp_syn_comp_func_t *syn1) {
 	return ret;
 }
 
-int rp_syn_acq(struct rp_syn_comp_func_t *syn1, unsigned timeout, void **pos) {
+int rp_syn_acq(struct rp_syn_comp_func_t *syn1, unsigned timeout_ns, void **pos) {
 	int res;
 	struct timespec to;
 	clock_gettime(CLOCK_REALTIME, &to);
-	to.tv_nsec += timeout;
+	to.tv_nsec += timeout_ns;
 	to.tv_sec += to.tv_nsec / 1000000000;
 	to.tv_nsec %= 1000000000;
-	if ((res = timeout ? rp_sem_wait(syn1->sem, &to) : rp_sem_wait_try(syn1->sem)) != 0) {
+	if ((res = timeout_ns ? rp_sem_wait(syn1->sem, &to) : rp_sem_wait_try(syn1->sem)) != 0) {
 		if (res != ETIMEDOUT)
 			fprintf(stderr, "rp_syn_acq wait sem error\n");
 		return res;
@@ -79,14 +79,14 @@ int rp_syn_rel(struct rp_syn_comp_func_t *syn1, void *pos) {
 	return res;
 }
 
-int rp_syn_acq1(struct rp_syn_comp_func_t *syn1, unsigned timeout, void **pos) {
+int rp_syn_acq1(struct rp_syn_comp_func_t *syn1, unsigned timeout_ns, void **pos) {
 	int res;
 	struct timespec to;
 	clock_gettime(CLOCK_REALTIME, &to);
-	to.tv_nsec += timeout;
+	to.tv_nsec += timeout_ns;
 	to.tv_sec += to.tv_nsec / 1000000000;
 	to.tv_nsec %= 1000000000;
-	if ((res = timeout ? rp_sem_wait(syn1->sem, &to) : rp_sem_wait_try(syn1->sem)) != 0) {
+	if ((res = timeout_ns ? rp_sem_wait(syn1->sem, &to) : rp_sem_wait_try(syn1->sem)) != 0) {
 		if (res != ETIMEDOUT)
 			fprintf(stderr, "rp_syn_acq1 wait sem error\n");
 		return res;

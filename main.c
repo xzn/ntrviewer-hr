@@ -2880,6 +2880,8 @@ static int queue_decode_kcp(int w, int queue_w) {
     return -1;
   }
 
+  // err_log("recv_work %d\n", recv_work);
+
   struct DecodeInfo *ptr = &decode_info[recv_work];
   int top_bot = kcp_recv_info[w][queue_w].is_top ? 0 : 1;
   *ptr = (struct DecodeInfo) {
@@ -3201,15 +3203,17 @@ void receive_from_socket_loop(SOCKET s)
     }
 
     // err_log("new connection\n");
-    for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
-      buffer_ctx[top_bot].status = FBS_NOT_AVAIL;
-      buffer_ctx[top_bot].prev_data = NULL;
-      buffer_ctx[top_bot].prev_tex = 0;
-      buffer_ctx[top_bot].tex_obj = NULL;
-    }
+    // for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
+    //   buffer_ctx[top_bot].status = FBS_NOT_AVAIL;
+    //   buffer_ctx[top_bot].prev_data = NULL;
+    //   buffer_ctx[top_bot].prev_tex = 0;
+    //   buffer_ctx[top_bot].tex_obj = NULL;
+    // }
     for (int i = 0; i < rp_work_count; ++i) {
       recv_end[i] = 2;
     }
+    memset(recv_hdr, 0, sizeof(recv_hdr));
+    recv_work = 0;
 
     memset(frame_rate_decoded_tracker, 0, sizeof(frame_rate_decoded_tracker));
     memset(frame_rate_displayed_tracker, 0, sizeof(frame_rate_displayed_tracker));
