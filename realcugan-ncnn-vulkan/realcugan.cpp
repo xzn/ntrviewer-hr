@@ -113,10 +113,12 @@ RealCUGAN::~RealCUGAN()
     delete bicubic_4x;
 
     for (int i = 0; i < out_gpu_tex.size(); ++i) {
-        delete out_gpu_tex[i]->cmd;
-        out_gpu_tex[i]->release(this);
-        out_gpu_tex[i]->destroy_sem(this);
-        delete out_gpu_tex[i];
+        if (out_gpu_tex[i]) {
+            delete out_gpu_tex[i]->cmd;
+            out_gpu_tex[i]->release(this);
+            out_gpu_tex[i]->destroy_sem(this);
+            delete out_gpu_tex[i];
+        }
     }
 }
 
@@ -782,7 +784,7 @@ int RealCUGAN::process(int index, const ncnn::Mat& inimage, ncnn::Mat& outimage)
         if (support_ext_mem) {
             out_gpu_tex[index]->create_like(this, out_gpu, opt);
             cmd.record_clone(out_gpu, *out_gpu_tex[index], opt);
-            cmd.submit_and_wait(out_gpu_tex[index]->first_subseq ? out_gpu_tex[index]->vk_sem_next : nullptr, out_gpu_tex[index]->vk_sem, &out_gpu_tex[index]->fence);
+            cmd.submit_and_wait(out_gpu_tex[index]->first_subseq ? out_gpu_tex[index]->vk_sem_next : nullptr, VK_PIPELINE_STAGE_TRANSFER_BIT, out_gpu_tex[index]->vk_sem, &out_gpu_tex[index]->fence);
             out_gpu_tex[index]->first_subseq = true;
         }
 

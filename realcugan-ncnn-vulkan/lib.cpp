@@ -5,6 +5,8 @@
 #include <queue>
 #include <vector>
 #include <clocale>
+#include <mutex>
+#include <memory>
 
 #if 0
 #include "cpu.h"
@@ -22,6 +24,8 @@
 #include "filesystem_utils.h"
 
 static RealCUGAN* realcugan;
+static std::vector<std::unique_ptr<std::mutex>> realcugan_locks;
+static std::vector<char> realcugan_waits;
 static const int scale = 2;
 
 extern "C" int realcugan_create()
@@ -252,10 +256,23 @@ extern "C" GLuint realcugan_run(int index, int w, int h, int c, const unsigned c
 {
     ncnn::Mat inimage = ncnn::Mat(w, h, (void*)indata, (size_t)c, c);
     ncnn::Mat outimage = ncnn::Mat(w * scale, h * scale, (void*)outdata, (size_t)c, c);
+
+    if (index + 1 > realcugan_locks.size()) {
+        realcugan_locks.resize(index + 1);
+        realcugan_waits.resize(index + 1);
+    }
+
+    if (!realcugan_locks[index]) {
+        realcugan_locks[index] = std::make_unique<std::mutex>();
+    }
+
+    realcugan_locks[index]->lock();
     if (realcugan->process(index, inimage, outimage) != 0) {
         *success = false;
         return 0;
     }
+    realcugan_waits[index] = true;
+    realcugan_locks[index]->unlock();
 
     OutVkImageMat *out = realcugan->out_gpu_tex[index];
     GLuint tex = out->gl_texture;
@@ -275,16 +292,26 @@ extern "C" void realcugan_next(int index)
     if (!out || !out->first_subseq) {
         return;
     }
-    VkResult ret = ncnn::vkWaitForFences(realcugan->vkdev->vkdevice(), 1, &out->fence, VK_TRUE, (uint64_t)-1);
-    if (ret != VK_SUCCESS)
-    {
-        NCNN_LOGE("vkWaitForFences failed %d", ret);
+
+    if (realcugan_waits[index]) {
+        realcugan_locks[index]->lock();
+        if (realcugan_waits[index]) {
+            VkResult ret = ncnn::vkWaitForFences(realcugan->vkdev->vkdevice(), 1, &out->fence, VK_TRUE, (uint64_t)-1);
+            if (ret != VK_SUCCESS) {
+                NCNN_LOGE("vkWaitForFences failed %d", ret);
+            }
+            realcugan_waits[index] = false;
+        }
+        realcugan_locks[index]->unlock();
     }
 }
 
 extern "C" void realcugan_destroy()
 {
     if (realcugan) {
+        for (int i = 0; i < realcugan->out_gpu_tex.size(); ++i) {
+            realcugan_next(i);
+        }
         delete realcugan;
         realcugan = nullptr;
     }
