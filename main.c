@@ -3082,7 +3082,7 @@ void socket_reply(void) {
 
 static void receive_from_socket(SOCKET s)
 {
-  while (running && !ntr_rp_port_changed && !restart_kcp)
+  while (running && !restart_kcp)
   {
     socklen_t nAddrLen = sizeof(remoteAddr);
 
@@ -3134,15 +3134,16 @@ static void receive_from_socket(SOCKET s)
   }
 }
 
-int decoding;
 void *jpeg_decode_thread_func(void *)
 {
-  while (running && decoding) {
+  while (running && !restart_kcp) {
     struct DecodeInfo *ptr;
     while (1) {
-      if (!(running && decoding))
+      if (!(running && !restart_kcp))
         return 0;
+      pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
       int res = rp_syn_acq(&jpeg_decode_queue, NWM_THREAD_WAIT_NS, (void **)&ptr);
+      pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
       if (res == 0)
         break;
       if (res != ETIMEDOUT) {
@@ -3160,7 +3161,6 @@ void *jpeg_decode_thread_func(void *)
       // err_log("%d %d\n", ptr->kcp_w, ptr->kcp_queue_w);
       if ((ret = handle_decode_kcp(out, ptr->kcp_w, ptr->kcp_queue_w)) != 0) {
         err_log("kcp recv decode error: %d\n", ret);
-        decoding = 0;
         restart_kcp = 1;
       } else {
         // err_log("%d\n", kcp_recv_info[ptr->kcp_w][ptr->kcp_queue_w].term_count);
@@ -3213,7 +3213,7 @@ void receive_from_socket_loop(SOCKET s)
       recv_end[i] = 2;
     }
     memset(recv_hdr, 0, sizeof(recv_hdr));
-    recv_work = 0;
+    // recv_work = 0;
 
     memset(frame_rate_decoded_tracker, 0, sizeof(frame_rate_decoded_tracker));
     memset(frame_rate_displayed_tracker, 0, sizeof(frame_rate_displayed_tracker));
@@ -3250,7 +3250,6 @@ void receive_from_socket_loop(SOCKET s)
     memset(decode_info, 0, sizeof(decode_info));
 
     pthread_t jpeg_decode_thread;
-    decoding = 1;
     int ret;
     if ((ret = pthread_create(&jpeg_decode_thread, NULL, jpeg_decode_thread_func, NULL)))
     {
@@ -3261,7 +3260,7 @@ void receive_from_socket_loop(SOCKET s)
     receive_from_socket(s);
     // Sleep(250);
 
-    decoding = 0;
+    pthread_cancel(jpeg_decode_thread);
     pthread_join(jpeg_decode_thread, NULL);
 
     if (kcp) {
@@ -3614,8 +3613,11 @@ int main(int argc, char *argv[])
   SetThreadExecutionState(ES_CONTINUOUS);
 #endif
 
+  pthread_cancel(udp_recv_thread);
   pthread_join(udp_recv_thread, NULL);
+  pthread_cancel(menu_tcp_thread);
   pthread_join(menu_tcp_thread, NULL);
+  pthread_cancel(nwm_tcp_thread);
   pthread_join(nwm_tcp_thread, NULL);
 
   rp_syn_close1(&jpeg_decode_queue);
