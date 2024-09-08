@@ -2155,7 +2155,7 @@ MainLoop(void *loopArg)
   }
 }
 
-static int acquire_sem(rp_sem_t sem) {
+static int acquire_sem(rp_sem_t *sem) {
   while (1) {
     if (!running)
       return -1;
@@ -2164,7 +2164,7 @@ static int acquire_sem(rp_sem_t sem) {
     to.tv_nsec += NWM_THREAD_WAIT_NS;
     to.tv_sec += to.tv_nsec / 1000000000;
     to.tv_nsec %= 1000000000;
-    int res = rp_sem_wait(sem, &to);
+    int res = rp_sem_wait(*sem, &to);
     if (res == 0)
       return 0;
     if (res != ETIMEDOUT) {
@@ -2413,7 +2413,7 @@ static int queue_decode(int work) {
 
 static int acquire_decode() {
   int ret;
-  if ((ret = acquire_sem(jpeg_decode_sem)) != 0) {
+  if ((ret = acquire_sem(&jpeg_decode_sem)) != 0) {
     if (running) {
       running = 0;
       err_log("jpeg_decode_sem wait error\n");
