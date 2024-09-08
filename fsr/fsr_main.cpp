@@ -120,11 +120,13 @@ struct fsr_last_t {
     uint32_t out_w, out_h;
     GLuint vbo, out_image;
     float rcasAtt;
-} fsr_last[SCREEN_COUNT];
+};
+
+std::vector<struct fsr_last_t> fsr_last;
 
 uint32_t fsrProgramEASU, fsrProgramRCAS;
 
-extern "C" GLuint fsr_main(int top_bot, GLuint inputTexture, uint32_t in_w, uint32_t in_h, uint32_t out_w, uint32_t out_h, float rcasAtt) {
+extern "C" GLuint fsr_main(int index, GLuint inputTexture, uint32_t in_w, uint32_t in_h, uint32_t out_w, uint32_t out_h, float rcasAtt) {
     const std::string baseDir = "fsr/";
 
     if (!fsrProgramEASU)
@@ -133,7 +135,12 @@ extern "C" GLuint fsr_main(int top_bot, GLuint inputTexture, uint32_t in_w, uint
         fsrProgramRCAS = createFSRComputeProgramRCAS(baseDir);
     // uint32_t bilinearProgram = createBilinearComputeProgram(baseDir);
 
-    struct fsr_last_t *l = &fsr_last[top_bot];
+    int min_size = index + 1;
+    if (min_size > fsr_last.size()) {
+        fsr_last.resize(min_size);
+    }
+
+    struct fsr_last_t *l = &fsr_last[index];
 
     struct Extent outputExtent = { out_w, out_h };
     if (l->out_w != out_w || l->out_h != out_h || l->rcasAtt != rcasAtt) {

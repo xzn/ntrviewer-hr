@@ -20,9 +20,7 @@
 
 #include "filesystem_utils.h"
 
-#define SCREEN_COUNT 2
-
-static RealCUGAN* realcugan[SCREEN_COUNT] = { 0 };
+static RealCUGAN* realcugan;
 static const int scale = 2;
 
 extern "C" int realcugan_create()
@@ -235,51 +233,41 @@ extern "C" int realcugan_create()
         return -1;
     }
 
-    for (int s = 0; s < SCREEN_COUNT; ++s) {
-        realcugan[s] = new RealCUGAN(gpuid[i], tta_mode);
-
-        realcugan[s]->load(paramfullpath, modelfullpath);
-
-        realcugan[s]->noise = noise;
-        realcugan[s]->scale = scale;
-        realcugan[s]->tilesize = tilesize[i];
-        realcugan[s]->prepadding = prepadding;
-        realcugan[s]->syncgap = syncgap;
+    if (realcugan) {
+        delete realcugan;
     }
+    realcugan = new RealCUGAN(gpuid[i], tta_mode);
+    realcugan->load(paramfullpath, modelfullpath);
+    realcugan->noise = noise;
+    realcugan->scale = scale;
+    realcugan->tilesize = tilesize[i];
+    realcugan->prepadding = prepadding;
+    realcugan->syncgap = syncgap;
 
     return 0;
 }
 
-extern "C" GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, GLuint *gl_sem, bool *dim3, bool *success, void **tex_obj)
+extern "C" GLuint realcugan_run(int index, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, GLuint *gl_sem, bool *dim3, bool *success)
 {
     ncnn::Mat inimage = ncnn::Mat(w, h, (void*)indata, (size_t)c, c);
     ncnn::Mat outimage = ncnn::Mat(w * scale, h * scale, (void*)outdata, (size_t)c, c);
-    if (realcugan[top_bot]->process(inimage, outimage) != 0) {
+    if (realcugan->process(index, inimage, outimage) != 0) {
         *success = false;
         return 0;
     }
-    // return realcugan[top_bot]->out_gpu->gl_texture;
 
-    GLuint tex = realcugan[top_bot]->out_gpu_tex->gl_texture;
-    *gl_sem = realcugan[top_bot]->gl_sem;
-    *dim3 = realcugan[top_bot]->out_gpu_tex->depth > 1;
+    GLuint tex = realcugan->out_gpu_tex[index]->gl_texture;
+    *gl_sem = realcugan->out_gpu_tex[index]->gl_sem;
+    *dim3 = realcugan->out_gpu_tex[index]->depth > 1;
     *success = true;
-    // *tex_obj = realcugan[top_bot]->out_gpu_tex;
-    // realcugan[top_bot]->out_gpu_tex = new OutVkImageMat();
     return tex;
-}
-
-extern "C" void realcugan_next(int top_bot, void *tex_obj)
-{
-    OutVkImageMat *out_gpu_tex = (OutVkImageMat *)tex_obj;
-    out_gpu_tex->release(realcugan[top_bot]);
-    delete out_gpu_tex;
 }
 
 extern "C" void realcugan_destroy()
 {
-    for (int s = 0; s < SCREEN_COUNT; ++s) {
-        delete realcugan[s];
+    if (realcugan) {
+        delete realcugan;
+        realcugan = nullptr;
     }
 
     ncnn::destroy_gpu_instance();

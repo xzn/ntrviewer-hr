@@ -80,10 +80,6 @@ RealCUGAN::RealCUGAN(int gpuid, bool _tta_mode, int num_threads)
     bicubic_4x = 0;
     tta_mode = _tta_mode;
 
-    // out_gpu = new OutVkMat();
-    out_gpu_buf = new ncnn::VkMat();
-    out_gpu_tex = new OutVkImageMat();
-
     // Tested on AMD and NVIDIA for now
     // bool supported_gpu_vendor = vkdev->info.vendor_id() == 0x1002 || vkdev->info.vendor_id() == 0x10de;
     bool supported_gpu_vendor = 1;
@@ -97,10 +93,6 @@ RealCUGAN::RealCUGAN(int gpuid, bool _tta_mode, int num_threads)
         GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_fd;
 #endif
     tiling_linear = false;
-
-    if (support_ext_mem) {
-        create_sem();
-    }
 }
 
 RealCUGAN::~RealCUGAN()
@@ -120,15 +112,11 @@ RealCUGAN::~RealCUGAN()
     bicubic_4x->destroy_pipeline(net.opt);
     delete bicubic_4x;
 
-    out_gpu_tex->release(this);
-    delete out_gpu_tex;
-
-    delete out_gpu_buf;
-
-    // out_gpu->release(this);
-    // delete out_gpu;
-
-    destroy_sem();
+    for (int i = 0; i < out_gpu_tex.size(); ++i) {
+        out_gpu_tex[i]->release(this);
+        out_gpu_tex[i]->destroy_sem(this);
+        delete out_gpu_tex[i];
+    }
 }
 
 #if _WIN32
@@ -288,13 +276,13 @@ int RealCUGAN::load(const std::string& parampath, const std::string& modelpath)
     return 0;
 }
 
-int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
+int RealCUGAN::process(int index, const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 {
     bool syncgap_needed = tilesize < std::max(inimage.w, inimage.h);
 
     if (!vkdev)
     {
-#if 0
+#if 1
         fprintf(stderr, "not a gpu vulkan device\n");
         return -1;
 #else
@@ -323,8 +311,8 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 
     if (syncgap_needed && syncgap)
     {
-#if 0
-        fprintf(stderr, "syncgap not supported\n");
+#if 1
+        fprintf(stderr, "insufficient vram, syncgap not supported\n");
         return -1;
 #else
         if (syncgap == 1)
@@ -334,6 +322,14 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
         if (syncgap == 3)
             return process_se_very_rough(inimage, outimage);
 #endif
+    }
+
+    if (index + 1 > out_gpu_tex.size()) {
+        out_gpu_tex.resize(index + 1);
+        out_gpu_tex[index] = new OutVkImageMat();
+        if (support_ext_mem) {
+            out_gpu_tex[index]->create_sem(this);
+        }
     }
 
     const unsigned char* pixeldata = (const unsigned char*)inimage.data;
@@ -418,28 +414,7 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
         int out_tile_y0 = std::max(yi * TILE_SIZE_Y, 0);
         int out_tile_y1 = std::min((yi + 1) * TILE_SIZE_Y, h);
 
-        // OutVkMat& out_gpu = *this->out_gpu;
-        // if (opt.use_fp16_storage && opt.use_int8_storage)
-        // {
-        //     out_gpu.create(this, w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1);
-        // }
-        // else
-        // {
-        //     out_gpu.create(this, w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1);
-        // }
-
-        if (support_ext_mem) {
-            // out_gpu_tex->release(this);
-            // delete out_gpu_tex;
-            // out_gpu_tex = new OutVkImageMat();
-
-            // delete out_gpu_buf;
-            // out_gpu_buf = new ncnn::VkMat();
-
-            // destroy_sem();
-            // create_sem();
-        }
-        ncnn::VkMat& out_gpu = *out_gpu_buf;
+        ncnn::VkMat out_gpu;
         if (opt.use_fp16_storage && opt.use_int8_storage)
         {
             out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1, opt.blob_vkallocator);
@@ -792,9 +767,9 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
         }
 
         if (support_ext_mem) {
-            out_gpu_tex->create_like(this, out_gpu, opt);
-            cmd.record_clone(out_gpu, *out_gpu_tex, opt);
-            cmd.submit_and_wait(vk_sem);
+            out_gpu_tex[index]->create_like(this, out_gpu, opt);
+            cmd.record_clone(out_gpu, *out_gpu_tex[index], opt);
+            cmd.submit_and_wait(out_gpu_tex[index]->vk_sem);
         }
 
         // download
@@ -3939,170 +3914,6 @@ int RealCUGAN::process_cpu_se_very_rough_sync_gap(const ncnn::Mat& inimage, cons
 
 using namespace ncnn;
 
-void OutVkMat::release(const RealCUGAN* cugan)
-{
-    if (data) {
-        release_handles();
-
-        vkFreeMemory(cugan->vkdev->vkdevice(), data->memory, 0);
-        vkDestroyBuffer(cugan->vkdev->vkdevice(), data->buffer, 0);
-
-        delete data;
-        data = 0;
-    }
-
-    elemsize = 0;
-    elempack = 0;
-
-    dims = 0;
-    w = 0;
-    h = 0;
-    d = 0;
-    c = 0;
-
-    cstep = 0;
-
-    totalsize = 0;
-}
-
-static VkBufferMemory* out_create(const RealCUGAN* cugan, size_t size) {
-    VkExternalMemoryBufferCreateInfo extMemInfo;
-    extMemInfo.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
-    extMemInfo.pNext = 0;
-#ifdef _WIN32
-    extMemInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-#else
-    extMemInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
-#endif
-
-    VkBufferCreateInfo bufferCreateInfo;
-    bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferCreateInfo.pNext = &extMemInfo;
-    bufferCreateInfo.flags = 0;
-    bufferCreateInfo.size = size;
-    bufferCreateInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    bufferCreateInfo.queueFamilyIndexCount = 0;
-    bufferCreateInfo.pQueueFamilyIndices = 0;
-
-    VkBuffer buffer = 0;
-    VkResult ret = vkCreateBuffer(cugan->vkdev->vkdevice(), &bufferCreateInfo, 0, &buffer);
-    if (ret != VK_SUCCESS)
-    {
-        NCNN_LOGE("vkCreateBuffer failed %d", ret);
-        return 0;
-    }
-
-    VkMemoryRequirements memoryRequirements;
-    vkGetBufferMemoryRequirements(cugan->vkdev->vkdevice(), buffer, &memoryRequirements);
-
-    uint32_t buffer_memory_type_index;
-    buffer_memory_type_index = cugan->vkdev->find_memory_index(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
-
-    VkExportMemoryAllocateInfo exportAllocInfo{
-        VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO, nullptr,
-        extMemInfo.handleTypes};
-
-    VkMemoryAllocateInfo memoryAllocateInfo;
-    memoryAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    memoryAllocateInfo.pNext = &exportAllocInfo;
-    memoryAllocateInfo.allocationSize = memoryRequirements.size;
-    memoryAllocateInfo.memoryTypeIndex = buffer_memory_type_index;
-
-    VkDeviceMemory memory = 0;
-    ret = vkAllocateMemory(cugan->vkdev->vkdevice(), &memoryAllocateInfo, 0, &memory);
-    if (ret != VK_SUCCESS)
-    {
-        NCNN_LOGE("vkAllocateMemory failed %d", ret);
-
-        vkDestroyBuffer(cugan->vkdev->vkdevice(), buffer, 0);
-        return 0;
-    }
-
-    vkBindBufferMemory(cugan->vkdev->vkdevice(), buffer, memory, 0);
-
-    VkBufferMemory* ptr = new VkBufferMemory;
-
-    ptr->buffer = buffer;
-    ptr->offset = 0;
-    ptr->memory = memory;
-    ptr->capacity = size;
-    ptr->mapped_ptr = 0;
-    ptr->access_flags = 0;
-    ptr->stage_flags = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-    ptr->refcount = -1;
-
-    return ptr;
-}
-
-void OutVkMat::create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, int _elempack) {
-    if (dims == 2 && w == _w && h == _h && elemsize == _elemsize && elempack == _elempack) {
-        data->refcount = -1;
-        return;
-    }
-
-    release(cugan);
-
-    elemsize = _elemsize;
-    elempack = _elempack;
-
-    dims = 2;
-    w = _w;
-    h = _h;
-    d = 1;
-    c = 1;
-
-    cstep = w * h;
-
-    if (total() > 0)
-    {
-        totalsize = alignSize(total() * elemsize, 4);
-
-        data = out_create(cugan, totalsize);
-
-        if (data) create_handles(cugan);
-        else release(cugan);
-    }
-    else
-    {
-        release(cugan);
-    }
-}
-
-void OutVkMat::create(const RealCUGAN* cugan, int _w, int _h, int _c, size_t _elemsize, int _elempack) {
-    if (dims == 3 && w == _w && h == _h && c == _c && elemsize == _elemsize && elempack == _elempack) {
-        data->refcount = -1;
-        return;
-    }
-
-    release(cugan);
-
-    elemsize = _elemsize;
-    elempack = _elempack;
-
-    dims = 3;
-    w = _w;
-    h = _h;
-    d = 1;
-    c = _c;
-
-    cstep = alignSize(w * h * elemsize, 16) / elemsize;
-
-    if (total() > 0)
-    {
-        totalsize = alignSize(total() * elemsize, 4);
-
-        data = out_create(cugan, totalsize);
-
-        if (data) create_handles(cugan);
-        else release(cugan);
-    }
-    else
-    {
-        release(cugan);
-    }
-}
-
 #if _WIN32
 typedef struct VkMemoryGetWin32HandleInfoKHR
 {
@@ -4252,9 +4063,9 @@ static bool shared_sem_supported(const RealCUGAN* cugan)
     return true;
 }
 
-void RealCUGAN::create_sem(void) const
+void OutVkImageMat::create_sem(const RealCUGAN* cugan)
 {
-    if (shared_sem_supported(this)) {
+    if (shared_sem_supported(cugan)) {
         VkExternalSemaphoreHandleTypeFlagBits compatable_semaphore_type;
         bool found = false;
         if (vkGetPhysicalDeviceExternalSemaphorePropertiesKHR) {
@@ -4273,7 +4084,7 @@ void RealCUGAN::create_sem(void) const
             for (size_t i = 0; i < 5; i++)
             {
                 extSemInfo.handleType = flags[i];
-                vkGetPhysicalDeviceExternalSemaphorePropertiesKHR(vkdev->info.physical_device(), &extSemInfo, &extSemProps);
+                vkGetPhysicalDeviceExternalSemaphorePropertiesKHR(cugan->vkdev->info.physical_device(), &extSemInfo, &extSemProps);
                 if (extSemProps.compatibleHandleTypes & flags[i] && extSemProps.externalSemaphoreFeatures & VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT)
                 {
                     compatable_semaphore_type = flags[i];
@@ -4295,7 +4106,7 @@ void RealCUGAN::create_sem(void) const
             compatable_semaphore_type};
         VkSemaphoreCreateInfo semaphoreCreateInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
                                                     &exportSemaphoreCreateInfo};
-        VkResult ret = vkCreateSemaphore(vkdev->vkdevice(), &semaphoreCreateInfo, nullptr, &vk_sem);
+        VkResult ret = vkCreateSemaphore(cugan->vkdev->vkdevice(), &semaphoreCreateInfo, nullptr, &vk_sem);
         if (ret != VK_SUCCESS) {
             vk_sem = 0;
             return;
@@ -4306,17 +4117,17 @@ void RealCUGAN::create_sem(void) const
             VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR, nullptr,
             VK_NULL_HANDLE, compatable_semaphore_type};
         semaphoreGetHandleInfo.semaphore = vk_sem;
-        ret = vkGetSemaphoreWin32HandleKHR(vkdev->vkdevice(), &semaphoreGetHandleInfo, &sem);
+        ret = vkGetSemaphoreWin32HandleKHR(cugan->vkdev->vkdevice(), &semaphoreGetHandleInfo, &sem);
 #else
         VkSemaphoreGetFdInfoKHR semaphoreGetFdInfo{
             VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR, nullptr,
             VK_NULL_HANDLE, compatable_semaphore_type};
         semaphoreGetFdInfo.semaphore = vk_sem;
-        ret = vkGetSemaphoreFdKHR(vkdev->vkdevice(), &semaphoreGetFdInfo, &sem);
+        ret = vkGetSemaphoreFdKHR(cugan->vkdev->vkdevice(), &semaphoreGetFdInfo, &sem);
 #endif
         if (ret != VK_SUCCESS) {
             sem = 0;
-            destroy_sem();
+            destroy_sem(cugan);
             return;
         }
 
@@ -4333,9 +4144,9 @@ void RealCUGAN::create_sem(void) const
     }
 }
 
-void RealCUGAN::destroy_sem(void) const
+void OutVkImageMat::destroy_sem(const RealCUGAN* cugan)
 {
-    if (shared_sem_supported(this)) {
+    if (shared_sem_supported(cugan)) {
         if (gl_sem) {
             glDeleteSemaphoresEXT(1, &gl_sem);
             gl_sem = 0;
@@ -4352,102 +4163,9 @@ void RealCUGAN::destroy_sem(void) const
         }
 
         if (vk_sem) {
-            vkDestroySemaphore(vkdev->vkdevice(), vk_sem, nullptr);
+            vkDestroySemaphore(cugan->vkdev->vkdevice(), vk_sem, nullptr);
             vk_sem = 0;
         }
-    }
-}
-
-void OutVkMat::create_handles(const RealCUGAN* cugan)
-{
-    release_handles();
-
-#if _WIN32
-    if (!(GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_win32)) return;
-
-    if (!vkGetMemoryWin32HandleKHR) {
-        VkInstance instance = get_gpu_instance();
-        vkGetMemoryWin32HandleKHR = (PFN_vkGetMemoryWin32HandleKHR)vkGetInstanceProcAddr(instance, "vkGetMemoryWin32HandleKHR");
-        if (!vkGetMemoryWin32HandleKHR) {
-            return;
-        }
-    }
-
-    VkMemoryGetWin32HandleInfoKHR memoryFdInfo{
-        VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR, nullptr,
-        data->memory,
-        VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT};
-
-    VkResult ret = vkGetMemoryWin32HandleKHR(cugan->vkdev->vkdevice(), &memoryFdInfo, &memory);
-    if (ret != VK_SUCCESS) {
-        memory = 0;
-        return;
-    }
-#else
-    if (!(GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_fd)) return;
-
-    if (!vkGetMemoryFdKHR) {
-        VkInstance instance = get_gpu_instance();
-        vkGetMemoryFdKHR = (PFN_vkGetMemoryFdKHR)vkGetInstanceProcAddr(instance, "vkGetMemoryFdKHR");
-        if (!vkGetMemoryFdKHR) {
-            return;
-        }
-    }
-
-    VkMemoryGetFdInfoKHR memoryFdInfo{
-        VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR, nullptr,
-        data->memory,
-        VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT};
-
-    VkResult ret = vkGetMemoryFdKHR(cugan->vkdev->vkdevice(), &memoryFdInfo, &memory);
-    if (ret != VK_SUCCESS) {
-        memory = 0;
-        return;
-    }
-#endif
-
-    glCreateMemoryObjectsEXT(1, &gl_memory);
-#if _WIN32
-    glImportMemoryWin32HandleEXT(gl_memory, totalsize, GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, memory);
-#else
-    glImportMemoryFdEXT(gl_memory, totalsize, GL_HANDLE_TYPE_OPAQUE_FD_EXT, memory);
-#endif
-
-    glGenBuffers(1, &gl_buffer);
-    glBindBuffer(GL_TEXTURE_BUFFER, gl_buffer);
-    glBufferStorageMemEXT(GL_TEXTURE_BUFFER, totalsize, gl_memory, 0);
-    glBindBuffer(GL_TEXTURE_BUFFER, 0);
-
-    glGenTextures(1, &gl_texture);
-    glBindTexture(GL_TEXTURE_BUFFER, gl_texture);
-
-    // TODO
-    // may not be GL_RGBA8, hard-coded for now
-    glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA8, gl_buffer);
-    glBindTexture(GL_TEXTURE_BUFFER, 0);
-}
-
-void OutVkMat::release_handles() {
-    if (gl_texture) {
-        glDeleteTextures(1, &gl_texture);
-        gl_texture = 0;
-    }
-    if (gl_buffer) {
-        glDeleteBuffers(1, &gl_buffer);
-        gl_buffer = 0;
-    }
-    if (gl_memory) {
-        glDeleteMemoryObjectsEXT(1, &gl_memory);
-        gl_memory = 0;
-        memory = 0;
-    }
-    if (memory) {
-#if _WIN32
-        CloseHandle(memory);
-#else
-        close(memory);
-#endif
-        memory = 0;
     }
 }
 

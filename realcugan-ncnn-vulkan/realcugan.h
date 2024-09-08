@@ -22,28 +22,6 @@ class FeatureCache;
 
 class RealCUGAN;
 
-class OutVkMat : public ncnn::VkMat {
-public:
-    OutVkMat() : ncnn::VkMat(), totalsize(0), memory(0), gl_memory(0), gl_buffer(0), gl_texture(0) {}
-
-    void create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, int _elempack);
-    void create(const RealCUGAN* cugan, int _w, int _h, int _c, size_t _elemsize, int _elempack);
-    void release(const RealCUGAN* cugan);
-
-    void create_handles(const RealCUGAN* cugan);
-    void release_handles();
-
-    size_t totalsize;
-#ifdef _WIN32
-    HANDLE memory;
-#else
-    int memory;
-#endif
-    GLuint gl_memory;
-    GLuint gl_buffer;
-    GLuint gl_texture;
-};
-
 class OutVkImageMat : public ncnn::VkImageMat {
 public:
     OutVkImageMat() : ncnn::VkImageMat(), totalsize(0), width(0), height(0), depth(0), memory(0), gl_memory(0), gl_texture(0) {}
@@ -69,6 +47,16 @@ public:
     GLuint gl_memory;
     GLuint gl_texture;
     bool dedicated;
+
+    VkSemaphore vk_sem;
+#ifdef _WIN32
+    HANDLE sem;
+#else
+    int sem;
+#endif
+    GLuint gl_sem;
+    void create_sem(const RealCUGAN* cugan);
+    void destroy_sem(const RealCUGAN* cugan);
 };
 
 class RealCUGAN
@@ -83,7 +71,7 @@ public:
     int load(const std::string& parampath, const std::string& modelpath);
 #endif
 
-    int process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const;
+    int process(int index, const ncnn::Mat& inimage, ncnn::Mat& outimage) const;
 
     int process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const;
 
@@ -133,21 +121,9 @@ public:
     ncnn::Layer* bicubic_4x;
     bool tta_mode;
 
-    // OutVkMat* out_gpu;
-    mutable ncnn::VkMat* out_gpu_buf;
-    mutable OutVkImageMat* out_gpu_tex;
+    mutable std::vector<OutVkImageMat*> out_gpu_tex;
     bool support_ext_mem;
     bool tiling_linear;
-
-    mutable VkSemaphore vk_sem;
-#ifdef _WIN32
-    mutable HANDLE sem;
-#else
-    mutable int sem;
-#endif
-    mutable GLuint gl_sem;
-    void create_sem(void) const;
-    void destroy_sem(void) const;
 };
 
 #endif // REALCUGAN_H

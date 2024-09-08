@@ -3,13 +3,11 @@
 #define sr_create realcugan_create
 #define sr_run realcugan_run
 #define sr_destroy realcugan_destroy
-#define sr_next realcugan_next
 #else
 #define screen_upscale_factor (1)
 #define sr_create(...) (0)
 #define sr_run(...) (0)
 #define sr_destroy(...) ((void)0)
-#define sr_next(...)
 #endif
 
 #define HR_MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -73,8 +71,7 @@ struct rp_syn_comp_func_t jpeg_decode_queue;
 #define JCS_FORMAT JCS_EXT_RGBA
 
 int realcugan_create();
-GLuint realcugan_run(int top_bot, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, GLuint *gl_sem, bool *dim3, bool *success, void **tex_obj);
-void realcugan_next(int top_bot, void *tex_obj);
+GLuint realcugan_run(int index, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, GLuint *gl_sem, bool *dim3, bool *success);
 void realcugan_destroy();
 
 #define err_log(f, ...) fprintf(stderr, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
@@ -216,6 +213,12 @@ typedef int64_t		s64;
 // #define MAX(a, b) ((a) < (b) ? (b) : (a))
 #define LEN(a) (sizeof(a) / sizeof(a)[0])
 
+enum {
+  SCREEN_TOP,
+  SCREEN_BOT,
+  SCREEN_COUNT,
+};
+
 #define FRAME_STAT_EVERY_X_US 1000000
 char window_title_with_fps[500];
 uint64_t window_title_last_tick;
@@ -231,6 +234,23 @@ struct {
 struct {
   int counter;
 } delay_between_packet_tracker[SCREEN_COUNT] = {};
+
+enum FrameBufferIndexInit
+{
+  FBI_DECODE,
+  FBI_IN_BETWEEN,
+  FBI_DISPLAY,
+  FBI_COUNT,
+};
+
+#define FrameBufferCount (FBI_COUNT)
+
+enum FrameBufferStatus
+{
+  FBS_NOT_AVAIL,
+  FBS_UPDATED,
+  FBS_NOT_UPDATED,
+};
 
 /* Platform */
 SDL_Window *win[2];
@@ -1597,22 +1617,6 @@ GLint gl_fbo_tex_coord_loc;
 GLint gl_fbo_sampler_loc;
 GLint gl_fbo_tex_size_loc;
 
-enum FrameBufferStatus
-{
-  FBS_NOT_AVAIL,
-  FBS_UPDATED,
-  FBS_NOT_UPDATED,
-};
-
-enum FrameBufferIndexInit
-{
-  FBI_DECODE,
-  FBI_IN_BETWEEN,
-  FBI_DISPLAY,
-  FBI_COUNT,
-};
-
-#define FrameBufferCount (FBI_COUNT)
 typedef struct _FrameBufferContext
 {
   GLuint gl_tex_id;
@@ -1628,8 +1632,7 @@ typedef struct _FrameBufferContext
   int index_done_decode_ready_display;
   int index_decode;
   uint8_t *prev_data;
-  GLuint prev_tex;
-  void *tex_obj;
+  GLuint prev_tex_upscaled, prev_tex_fsr;
 } FrameBufferContext;
 
 int gl_updated = 0;
@@ -1732,23 +1735,19 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
 
   if (upscaled) {
     if (!data) {
-      if (!ctx->prev_tex) {
+      if (!ctx->prev_tex_upscaled) {
         data = ctx->prev_data;
       } else {
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, ctx->prev_tex);
-        tex = ctx->prev_tex;
+        glBindTexture(GL_TEXTURE_2D, ctx->prev_tex_upscaled);
+        tex = ctx->prev_tex_upscaled;
       }
     }
 
     if (data) {
       scale = screen_upscale_factor;
       GLuint gl_sem = 0;
-      if (ctx->tex_obj) {
-        sr_next(top_bot, ctx->tex_obj);
-        ctx->tex_obj = NULL;
-      }
-      GLuint tex_upscaled = sr_run(top_bot, height, width, GL_CHANNELS_N, data, ctx->screen_upscaled, &gl_sem, &dim3, &success, &ctx->tex_obj);
+      GLuint tex_upscaled = sr_run(top_bot, height, width, GL_CHANNELS_N, data, ctx->screen_upscaled, &gl_sem, &dim3, &success);
       if (!tex_upscaled) {
         if (!success) {
           upscaled = 0;
@@ -1839,7 +1838,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
       }
     }
 
-    ctx->prev_tex = tex;
+    ctx->prev_tex_upscaled = tex;
   }
 
   if (!upscaled) {
@@ -1847,7 +1846,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id);
     if (!data) {
-      if (ctx->prev_tex) {
+      if (ctx->prev_tex_upscaled) {
         data = ctx->prev_data;
       }
     }
@@ -1862,7 +1861,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
 
     tex = ctx->gl_tex_id;
 
-    ctx->prev_tex = 0;
+    ctx->prev_tex_upscaled = 0;
   }
 
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
@@ -1897,12 +1896,18 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-    GLuint out_tex = fsr_main(top_bot, tex, height * scale, width * scale, ctx_height, ctx_width, 0.25f);
-    glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
+    if (data || !ctx->prev_tex_fsr) {
+      glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+      GLuint out_tex = fsr_main(top_bot, tex, height * scale, width * scale, ctx_height, ctx_width, 0.25f);
+      ctx->prev_tex_fsr = out_tex;
+      glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
 
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, out_tex);
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, out_tex);
+    } else {
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, ctx->prev_tex_fsr);
+    }
 
     glUseProgram(gl_program);
     glVertexAttribPointer(gl_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*vVertices_pos), vVertices_pos);
@@ -1935,6 +1940,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
 
     glUniform1i(gl_sampler_loc, 0);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+    ctx->prev_tex_fsr = 0;
   }
 
   glFinish();
@@ -3205,7 +3211,6 @@ void receive_from_socket_loop(SOCKET s)
     //   buffer_ctx[top_bot].status = FBS_NOT_AVAIL;
     //   buffer_ctx[top_bot].prev_data = NULL;
     //   buffer_ctx[top_bot].prev_tex = 0;
-    //   buffer_ctx[top_bot].tex_obj = NULL;
     // }
     for (int i = 0; i < rp_work_count; ++i) {
       recv_end[i] = 2;
@@ -3627,10 +3632,6 @@ int main(int argc, char *argv[])
   glDeleteProgram(gl_fbo_program);
   glDeleteProgram(gl_program);
   for (int i = 0; i < SCREEN_COUNT; ++i) {
-    if (buffer_ctx[i].tex_obj) {
-      sr_next(i, buffer_ctx[i].tex_obj);
-    }
-
     pthread_mutex_destroy(&buffer_ctx[i].status_lock);
 
     glDeleteTextures(1, &buffer_ctx[i].gl_tex_id);
