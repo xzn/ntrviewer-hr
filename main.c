@@ -2166,14 +2166,14 @@ MainLoop(void *loopArg)
 }
 
 static int acquire_sem(rp_sem_t sem) {
-  struct timespec to;
-  clock_gettime(CLOCK_REALTIME, &to);
-  to.tv_nsec += NWM_THREAD_WAIT_NS;
-  to.tv_sec += to.tv_nsec / 1000000000;
-  to.tv_nsec %= 1000000000;
   while (1) {
     if (!running)
       return -1;
+    struct timespec to;
+    clock_gettime(CLOCK_REALTIME, &to);
+    to.tv_nsec += NWM_THREAD_WAIT_NS;
+    to.tv_sec += to.tv_nsec / 1000000000;
+    to.tv_nsec %= 1000000000;
     int res = rp_sem_wait(sem, &to);
     if (res == 0)
       return 0;
