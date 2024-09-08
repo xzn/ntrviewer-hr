@@ -3515,7 +3515,7 @@ int main(int argc, char *argv[])
 
     memset(buffer_ctx[i].data_ptrs, 0, sizeof(buffer_ctx[i].data_ptrs));
     rp_syn_init1(&buffer_ctx[i].jpeg_disp_queue, 0, 0, 0, JpegDispImagesCount, (void **)buffer_ctx[i].data_ptrs);
-    rp_sem_init(buffer_ctx[i].jpeg_disp_sem, JpegDispImagesCount - 1);
+    rp_sem_init(buffer_ctx[i].jpeg_disp_sem, JpegDispImagesCount);
     buffer_ctx[i].prev_data = NULL;
   }
 
