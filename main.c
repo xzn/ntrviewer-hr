@@ -2870,7 +2870,7 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
 }
 
 static int queue_decode_kcp(int w, int queue_w) {
-  if (acquire_decode() < 0) {
+  if (acquire_decode() != 0) {
     return -1;
   }
 
