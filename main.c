@@ -3085,7 +3085,10 @@ void socket_reply(void) {
           reply = true;
         }
       } else {
-        reply = true;
+        // Likewise nack every 1/80 second or 12.5 ms
+        if (current_time - reply_time >= 12500) {
+          reply = true;
+        }
       }
       if (reply) {
         if ((ret = ikcp_reply(kcp)) < 0)
