@@ -3436,7 +3436,6 @@ int main(int argc, char *argv[])
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_DEBUG_FLAG);
 #endif
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-  SDL_GL_SetSwapInterval(1);
 
   win[SCREEN_TOP] = SDL_CreateWindow(TITLE,
                          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -3461,6 +3460,7 @@ int main(int argc, char *argv[])
     err_log("SDL_GL_CreateContext: %s\n", SDL_GetError());
     return -1;
   }
+  SDL_GL_SetSwapInterval(1);
 
 #ifdef USE_OGL_ES
   if (!gladLoadGLES2Loader((GLADloadproc)SDL_GL_GetProcAddress))
@@ -3499,7 +3499,7 @@ int main(int argc, char *argv[])
   glGetIntegerv(GL_MINOR_VERSION, &ogl_version_minor);
   err_log("ogl version: %d.%d\n", ogl_version_major, ogl_version_minor);
 
-  SDL_GL_MakeCurrent(win[SCREEN_TOP], glContext[SCREEN_TOP]);
+  // SDL_GL_MakeCurrent(win[SCREEN_TOP], glContext[SCREEN_TOP]);
 
   SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
   glContext[SCREEN_BOT] = SDL_GL_CreateContext(win[SCREEN_BOT]);
@@ -3508,6 +3508,7 @@ int main(int argc, char *argv[])
     err_log("SDL_GL_CreateContext: %s\n", SDL_GetError());
     return -1;
   }
+  SDL_GL_SetSwapInterval(1);
 
   if (upscaling_filter) {
     if (sr_create() < 0)
