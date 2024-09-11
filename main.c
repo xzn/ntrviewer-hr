@@ -215,18 +215,12 @@ typedef int64_t		s64;
 #define FRAME_STAT_EVERY_X_US 1000000
 char window_title_with_fps[500];
 uint64_t window_title_last_tick[SCREEN_COUNT];
-struct {
-  int counter;
-} frame_rate_decoded_tracker[SCREEN_COUNT] = {};
-struct {
-  int counter;
-} frame_rate_displayed_tracker[SCREEN_COUNT] = {};
-struct {
-  int counter;
-} frame_size_tracker[SCREEN_COUNT] = {};
-struct {
-  int counter;
-} delay_between_packet_tracker[SCREEN_COUNT] = {};
+int frame_rate_decoded_tracker[SCREEN_COUNT] = {};
+int frame_rate_displayed_tracker[SCREEN_COUNT] = {};
+int frame_size_tracker[SCREEN_COUNT] = {};
+int delay_between_packet_tracker[SCREEN_COUNT] = {};
+int frame_fully_received_tracker;
+int frame_lost_tracker;
 
 enum FrameBufferStatus
 {
@@ -1985,7 +1979,7 @@ static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int to
   ctx->prev_data = data;
   if (status == FBS_UPDATED)
   {
-    __atomic_add_fetch(&frame_rate_displayed_tracker[top_bot].counter, 1, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&frame_rate_displayed_tracker[top_bot], 1, __ATOMIC_RELAXED);
     do_hr_draw_screen(ctx, data, width, height, top_bot, tb, index_display);
     return 1;
   }
@@ -1999,28 +1993,43 @@ static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int to
 
 static void kcpUpdateWindowTitle(SDL_Window *win, int tick_diff)
 {
-  snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (FPS %03d %03d | %03d %03d) (Counter %d %d %d %d)",
-    __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-    __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-    __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-    __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-    __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED),
-    __atomic_load_n(&kcp_input_fid_count, __ATOMIC_RELAXED),
-    __atomic_load_n(&kcp_input_pid_count, __ATOMIC_RELAXED),
-    __atomic_load_n(&kcp_recv_pid_count, __ATOMIC_RELAXED));
+  snprintf(window_title_with_fps, sizeof(window_title_with_fps),
+    TITLE " (FPS %03d %03d | %03d %03d)"
+    " (Connection Quality %.1f%%)"
+    // " (Counter %d %d %d %d)"
+    " [Reliable Stream Mode]"
+    ,
+    __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_TOP], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+    __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_BOT], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+    __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_TOP], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+    __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_BOT], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+    (double)__atomic_load_n(&kcp_recv_pid_count, __ATOMIC_RELAXED) / __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED) * 100
+    // __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED),
+    // __atomic_load_n(&kcp_input_fid_count, __ATOMIC_RELAXED),
+    // __atomic_load_n(&kcp_input_pid_count, __ATOMIC_RELAXED),
+    // __atomic_load_n(&kcp_recv_pid_count, __ATOMIC_RELAXED)
+  );
   SDL_SetWindowTitle(win, window_title_with_fps);
 }
 
 static void kcpUpdateWindowsTitles(int tb, int top_bot, int tick_diff)
 {
   snprintf(window_title_with_fps, sizeof(window_title_with_fps),
-    tb == SCREEN_TOP ? TITLE " (FPS %03d | %03d) (Counter %d %d %d %d)" : TITLE " (FPS %03d | %03d)",
-    __atomic_load_n(&frame_rate_decoded_tracker[top_bot].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
-    __atomic_load_n(&frame_rate_displayed_tracker[top_bot].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
-    __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED),
-    __atomic_load_n(&kcp_input_fid_count, __ATOMIC_RELAXED),
-    __atomic_load_n(&kcp_input_pid_count, __ATOMIC_RELAXED),
-    __atomic_load_n(&kcp_recv_pid_count, __ATOMIC_RELAXED));
+    tb == SCREEN_TOP ?
+      TITLE " (FPS %03d | %03d)"
+      " (Connection Quality %.1f%%)"
+      // " (Counter %d %d %d %d)"
+      " [Reliable Stream Mode]"
+      :
+      TITLE " (FPS %03d | %03d)",
+    __atomic_load_n(&frame_rate_decoded_tracker[top_bot], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
+    __atomic_load_n(&frame_rate_displayed_tracker[top_bot], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
+    (double)__atomic_load_n(&kcp_recv_pid_count, __ATOMIC_RELAXED) / __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED) * 100
+    // __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED),
+    // __atomic_load_n(&kcp_input_fid_count, __ATOMIC_RELAXED),
+    // __atomic_load_n(&kcp_input_pid_count, __ATOMIC_RELAXED),
+    // __atomic_load_n(&kcp_recv_pid_count, __ATOMIC_RELAXED)
+  );
   SDL_SetWindowTitle(win[tb], window_title_with_fps);
 }
 
@@ -2029,6 +2038,10 @@ static void updateWindowsTitles(int i)
   uint64_t next_tick = iclock64();
   uint64_t tick_diff = next_tick - window_title_last_tick[i];
   if (tick_diff >= FRAME_STAT_EVERY_X_US) {
+    int frame_fully_received = __atomic_load_n(&frame_fully_received_tracker, __ATOMIC_RELAXED);
+    int frame_lost = __atomic_load_n(&frame_lost_tracker, __ATOMIC_RELAXED);
+    double packet_rate = (double)frame_fully_received / (frame_fully_received + frame_lost) * 100;
+
     int vm = __atomic_load_n(&view_mode, __ATOMIC_RELAXED);
 
     if (vm == VIEW_MODE_TOP_BOT) {
@@ -2036,15 +2049,22 @@ static void updateWindowsTitles(int i)
         if (kcp_active) {
           kcpUpdateWindowTitle(win[i], (int)tick_diff);
         } else {
-          snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (FPS %03d %03d | %03d %03d) (Size %06d %06d) (Packet time %04d %04d)",
-            __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-            __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-            __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-            __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-            __atomic_load_n(&frame_size_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED),
-            __atomic_load_n(&frame_size_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED),
-            __atomic_load_n(&delay_between_packet_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED),
-            __atomic_load_n(&delay_between_packet_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED));
+          snprintf(window_title_with_fps, sizeof(window_title_with_fps),
+            TITLE " (FPS %03d %03d | %03d %03d)"
+            " (Packet Rate %.1f%%)"
+            // " (Size %06d %06d) (Packet time %04d %04d)"
+            " [Compatibility Mode]"
+            ,
+            __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_TOP], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+            __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_BOT], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+            __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_TOP], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+            __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_BOT], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+            packet_rate
+            // __atomic_load_n(&frame_size_tracker[SCREEN_TOP], __ATOMIC_RELAXED),
+            // __atomic_load_n(&frame_size_tracker[SCREEN_BOT], __ATOMIC_RELAXED),
+            // __atomic_load_n(&delay_between_packet_tracker[SCREEN_TOP], __ATOMIC_RELAXED),
+            // __atomic_load_n(&delay_between_packet_tracker[SCREEN_BOT], __ATOMIC_RELAXED)
+          );
           SDL_SetWindowTitle(win[i], window_title_with_fps);
         }
       }
@@ -2059,11 +2079,22 @@ static void updateWindowsTitles(int i)
           if (kcp_active) {
             kcpUpdateWindowsTitles(tb, top_bot, (int)tick_diff);
           } else {
-            snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (FPS %03d | %03d) (Size %06d) (Packet time %04d)",
-              __atomic_load_n(&frame_rate_decoded_tracker[top_bot].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-              __atomic_load_n(&frame_rate_displayed_tracker[top_bot].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-              __atomic_load_n(&frame_size_tracker[top_bot].counter, __ATOMIC_RELAXED),
-              __atomic_load_n(&delay_between_packet_tracker[top_bot].counter, __ATOMIC_RELAXED));
+            snprintf(window_title_with_fps, sizeof(window_title_with_fps),
+              tb == SCREEN_TOP ?
+                TITLE " (FPS %03d | %03d) "
+                " (Packet Rate %.1f%%)"
+                // "(Size %06d) (Packet time %04d)"
+                " [Compatibility Mode]"
+                :
+                TITLE " (FPS %03d | %03d) "
+                // "(Size %06d) (Packet time %04d)"
+              ,
+              __atomic_load_n(&frame_rate_decoded_tracker[top_bot], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+              __atomic_load_n(&frame_rate_displayed_tracker[top_bot], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+              packet_rate
+              // __atomic_load_n(&frame_size_tracker[top_bot], __ATOMIC_RELAXED),
+              // __atomic_load_n(&delay_between_packet_tracker[top_bot], __ATOMIC_RELAXED)
+            );
             SDL_SetWindowTitle(win[tb], window_title_with_fps);
           }
         }
@@ -2080,16 +2111,19 @@ static void updateWindowsTitles(int i)
           continue;
         }
       }
-      __atomic_store_n(&frame_rate_decoded_tracker[top_bot].counter, 0, __ATOMIC_RELAXED);
-      __atomic_store_n(&frame_rate_displayed_tracker[top_bot].counter, 0, __ATOMIC_RELAXED);
-      __atomic_store_n(&frame_size_tracker[top_bot].counter, 0, __ATOMIC_RELAXED);
-      __atomic_store_n(&delay_between_packet_tracker[top_bot].counter, 0, __ATOMIC_RELAXED);
+      __atomic_store_n(&frame_rate_decoded_tracker[top_bot], 0, __ATOMIC_RELAXED);
+      __atomic_store_n(&frame_rate_displayed_tracker[top_bot], 0, __ATOMIC_RELAXED);
+      __atomic_store_n(&frame_size_tracker[top_bot], 0, __ATOMIC_RELAXED);
+      __atomic_store_n(&delay_between_packet_tracker[top_bot], 0, __ATOMIC_RELAXED);
     }
     if (i == SCREEN_TOP) {
       __atomic_store_n(&kcp_input_count, 0, __ATOMIC_RELAXED);
       __atomic_store_n(&kcp_input_fid_count, 0, __ATOMIC_RELAXED);
       __atomic_store_n(&kcp_input_pid_count, 0, __ATOMIC_RELAXED);
       __atomic_store_n(&kcp_recv_pid_count, 0, __ATOMIC_RELAXED);
+
+      __atomic_store_n(&frame_fully_received_tracker, 0, __ATOMIC_RELAXED);
+      __atomic_store_n(&frame_lost_tracker, 0, __ATOMIC_RELAXED);
     }
   }
 }
@@ -2322,12 +2356,12 @@ static int acquire_sem(rp_sem_t *sem) {
 
 void handle_decode_frame_screen(FrameBufferContext *ctx, int top_bot, int frame_size, int delay_between_packet)
 {
-  __atomic_add_fetch(&frame_rate_decoded_tracker[top_bot].counter, 1, __ATOMIC_RELAXED);
-  if (__atomic_load_n(&frame_size_tracker[top_bot].counter, __ATOMIC_RELAXED) < frame_size) {
-    __atomic_store_n(&frame_size_tracker[top_bot].counter, frame_size, __ATOMIC_RELAXED);
+  __atomic_add_fetch(&frame_rate_decoded_tracker[top_bot], 1, __ATOMIC_RELAXED);
+  if (__atomic_load_n(&frame_size_tracker[top_bot], __ATOMIC_RELAXED) < frame_size) {
+    __atomic_store_n(&frame_size_tracker[top_bot], frame_size, __ATOMIC_RELAXED);
   }
-  if (__atomic_load_n(&delay_between_packet_tracker[top_bot].counter, __ATOMIC_RELAXED) < delay_between_packet) {
-    __atomic_store_n(&delay_between_packet_tracker[top_bot].counter, delay_between_packet, __ATOMIC_RELAXED);
+  if (__atomic_load_n(&delay_between_packet_tracker[top_bot], __ATOMIC_RELAXED) < delay_between_packet) {
+    __atomic_store_n(&delay_between_packet_tracker[top_bot], delay_between_packet, __ATOMIC_RELAXED);
   }
 
   pthread_mutex_lock(&ctx->status_lock);
@@ -3314,9 +3348,13 @@ void *jpeg_decode_thread_func(void *)
       if (ptr->in) {
         if (handle_decode(out, ptr->in, ptr->in_size, top_bot == 0 ? 400 : 320, 240) != 0) {
           err_log("recv decode error\n");
+          __atomic_add_fetch(&frame_lost_tracker, 1, __ATOMIC_RELAXED);
         } else {
           handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay);
+          __atomic_add_fetch(&frame_fully_received_tracker, 1, __ATOMIC_RELAXED);
         }
+      } else {
+        __atomic_add_fetch(&frame_lost_tracker, 1, __ATOMIC_RELAXED);
       }
     }
 
