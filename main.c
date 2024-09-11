@@ -2139,15 +2139,15 @@ MainLoop(void *loopArg)
     if (
       evt.type == SDL_QUIT ||
       (evt.type == SDL_WINDOWEVENT && evt.window.event == SDL_WINDOWEVENT_CLOSE)
-    )
+    ) {
       running = 0;
-    else if (
+      return;
+    } else if (
       evt.type == SDL_KEYDOWN &&
       evt.key.keysym.sym == SDLK_f
     ) {
       fullscreen = !fullscreen;
-    }
-    else {
+    } else {
       switch (evt.type) {
         case SDL_MOUSEMOTION:
           if (evt.motion.windowID != win_id[SCREEN_TOP]) {
