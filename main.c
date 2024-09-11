@@ -1632,6 +1632,7 @@ typedef struct _FrameBufferContext
   int index_decode;
   uint8_t *prev_data;
   GLuint prev_tex_upscaled, prev_tex_fsr;
+  int prev_ctx_width, prev_ctx_height;
 } FrameBufferContext;
 
 int gl_updated = 0;
@@ -1902,7 +1903,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    if (data || !ctx->prev_tex_fsr) {
+    if (data || !ctx->prev_tex_fsr || ctx->prev_ctx_width != ctx_width || ctx->prev_ctx_height != ctx_height) {
       if (!dim3 && tex_upscaled && gl_sem) {
         GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
         glWaitSemaphoreEXT(gl_sem, 0, NULL, 1, &tex_upscaled, &layout);
@@ -1910,6 +1911,8 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
       glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
       GLuint out_tex = fsr_main(top_bot, tex, height * scale, width * scale, ctx_height, ctx_width, 0.25f);
       ctx->prev_tex_fsr = out_tex;
+      ctx->prev_ctx_width = ctx_width;
+      ctx->prev_ctx_height = ctx_height;
       glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
       if (!dim3 && tex_upscaled && gl_sem && gl_sem_next) {
         GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
@@ -1964,7 +1967,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
       glSignalSemaphoreEXT(gl_sem_next, 0, NULL, 1, &tex_upscaled, &layout);
     }
 
-    ctx->prev_tex_fsr = 0;
+    ctx->prev_ctx_height = ctx->prev_ctx_width = ctx->prev_tex_fsr = 0;
   }
 }
 
