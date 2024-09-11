@@ -252,9 +252,9 @@ enum FrameBufferStatus
 };
 
 /* Platform */
-SDL_Window *win[2];
-SDL_GLContext glContext[2];
-int win_width[2], win_height[2];
+SDL_Window *win[SCREEN_COUNT];
+SDL_GLContext glContext[SCREEN_COUNT];
+int win_width[SCREEN_COUNT], win_height[SCREEN_COUNT];
 int ogl_version_major, ogl_version_minor;
 
 enum ConnectionState
@@ -1640,7 +1640,7 @@ pthread_mutex_t gl_updated_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 FrameBufferContext buffer_ctx[SCREEN_COUNT];
 
-static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot)
+static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot, int index)
 {
   double ctx_left_f;
   double ctx_top_f;
@@ -1748,7 +1748,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
 
     if (data) {
       scale = screen_upscale_factor;
-      tex_upscaled = sr_run(top_bot, height, width, GL_CHANNELS_N, data, ctx->screen_upscaled, &gl_sem, &gl_sem_next, &dim3, &success);
+      tex_upscaled = sr_run(top_bot * FrameBufferCount + index, height, width, GL_CHANNELS_N, data, ctx->screen_upscaled, &gl_sem, &gl_sem_next, &dim3, &success);
       if (!tex_upscaled) {
         if (!success) {
           upscaled = 0;
@@ -1989,13 +1989,13 @@ static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int to
   if (status == FBS_UPDATED)
   {
     __atomic_add_fetch(&frame_rate_displayed_tracker[top_bot].counter, 1, __ATOMIC_RELAXED);
-    do_hr_draw_screen(ctx, data, width, height, top_bot);
+    do_hr_draw_screen(ctx, data, width, height, top_bot, index_display);
     return 1;
   }
   else
   {
     if (force)
-      do_hr_draw_screen(ctx, NULL, width, height, top_bot);
+      do_hr_draw_screen(ctx, NULL, width, height, top_bot, index_display);
     return 0;
   }
 }
@@ -3183,7 +3183,7 @@ void *jpeg_decode_thread_func(void *)
     }
 
     FrameBufferContext *ctx = &buffer_ctx[ptr->top_bot];
-    sr_next(ctx->index_decode);
+    sr_next(ptr->top_bot * FrameBufferCount + ctx->index_decode);
     uint8_t *out = ctx->screen_decoded[ctx->index_decode];
 
     int ret;
@@ -3435,25 +3435,25 @@ int main(int argc, char *argv[])
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
   SDL_GL_SetSwapInterval(1);
 
-  win[0] = SDL_CreateWindow(TITLE,
+  win[SCREEN_TOP] = SDL_CreateWindow(TITLE,
                          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                          WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
-  if (!win[0])
+  if (!win[SCREEN_TOP])
   {
     err_log("SDL_CreateWindow: %s\n", SDL_GetError());
     return -1;
   }
-  win[1] = SDL_CreateWindow(TITLE,
+  win[SCREEN_BOT] = SDL_CreateWindow(TITLE,
                          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                          WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
-  if (!win[1])
+  if (!win[SCREEN_BOT])
   {
     err_log("SDL_CreateWindow: %s\n", SDL_GetError());
     return -1;
   }
 
-  glContext[0] = SDL_GL_CreateContext(win[0]);
-  if (!glContext[0])
+  glContext[SCREEN_TOP] = SDL_GL_CreateContext(win[SCREEN_TOP]);
+  if (!glContext[SCREEN_TOP])
   {
     err_log("SDL_GL_CreateContext: %s\n", SDL_GetError());
     return -1;
@@ -3496,11 +3496,11 @@ int main(int argc, char *argv[])
   glGetIntegerv(GL_MINOR_VERSION, &ogl_version_minor);
   err_log("ogl version: %d.%d\n", ogl_version_major, ogl_version_minor);
 
-  SDL_GL_MakeCurrent(win[0], glContext[0]);
+  SDL_GL_MakeCurrent(win[SCREEN_TOP], glContext[SCREEN_TOP]);
 
   SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
-  glContext[1] = SDL_GL_CreateContext(win[1]);
-  if (!glContext[1])
+  glContext[SCREEN_BOT] = SDL_GL_CreateContext(win[SCREEN_BOT]);
+  if (!glContext[SCREEN_BOT])
   {
     err_log("SDL_GL_CreateContext: %s\n", SDL_GetError());
     return -1;
@@ -3516,7 +3516,7 @@ int main(int argc, char *argv[])
   /* OpenGL setup */
   glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
 
-  ctx = nk_sdl_init(win[0]);
+  ctx = nk_sdl_init(win[SCREEN_TOP]);
   /* Load Fonts: if none of these are loaded a default font will be used  */
   /* Load Cursor: if you uncomment cursor loading please hide the cursor */
   {
@@ -3672,10 +3672,10 @@ int main(int argc, char *argv[])
   if (upscaling_filter_created)
     sr_destroy();
 
-  SDL_GL_DeleteContext(glContext[1]);
-  SDL_GL_DeleteContext(glContext[0]);
-  SDL_DestroyWindow(win[1]);
-  SDL_DestroyWindow(win[0]);
+  SDL_GL_DeleteContext(glContext[SCREEN_BOT]);
+  SDL_GL_DeleteContext(glContext[SCREEN_TOP]);
+  SDL_DestroyWindow(win[SCREEN_BOT]);
+  SDL_DestroyWindow(win[SCREEN_TOP]);
   SDL_Quit();
 
   return 0;
