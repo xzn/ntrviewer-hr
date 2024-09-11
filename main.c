@@ -228,16 +228,6 @@ struct {
   int counter;
 } delay_between_packet_tracker[SCREEN_COUNT] = {};
 
-enum FrameBufferIndexInit
-{
-  FBI_DECODE,
-  FBI_IN_BETWEEN,
-  FBI_DISPLAY,
-  FBI_COUNT,
-};
-
-#define FrameBufferCount (FBI_COUNT)
-
 enum FrameBufferStatus
 {
   FBS_NOT_AVAIL,
@@ -1753,7 +1743,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
 
     if (data) {
       scale = screen_upscale_factor;
-      tex_upscaled = sr_run((tb * SCREEN_COUNT + top_bot) * FrameBufferCount + index, height, width, GL_CHANNELS_N, data, ctx->screen_upscaled, &gl_sem, &gl_sem_next, &dim3, &success);
+      tex_upscaled = sr_run(tb, top_bot * FrameBufferCount + index, height, width, GL_CHANNELS_N, data, ctx->screen_upscaled, &gl_sem, &gl_sem_next, &dim3, &success);
       if (!tex_upscaled) {
         if (!success) {
           upscaled = 0;
@@ -3307,7 +3297,7 @@ void *jpeg_decode_thread_func(void *)
     FrameBufferContext *ctx = &buffer_ctx[top_bot];
     int index = ctx->index_decode;
     int tb = __atomic_load_n(&view_mode, __ATOMIC_RELAXED) == VIEW_MODE_SEPARATE ? top_bot : SCREEN_TOP;
-    sr_next((tb * SCREEN_COUNT + top_bot) * FrameBufferCount + index);
+    sr_next(tb, top_bot * FrameBufferCount + index);
     uint8_t *out = ctx->screen_decoded[index];
 
     int ret;

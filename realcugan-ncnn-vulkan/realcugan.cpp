@@ -93,10 +93,16 @@ RealCUGAN::RealCUGAN(int gpuid, bool _tta_mode, int num_threads)
         GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_fd;
 #endif
     tiling_linear = false;
+
+    blob_vkallocator = vkdev->acquire_blob_allocator();
+    staging_vkallocator = vkdev->acquire_staging_allocator();
 }
 
 RealCUGAN::~RealCUGAN()
 {
+    vkdev->reclaim_blob_allocator(blob_vkallocator);
+    vkdev->reclaim_staging_allocator(staging_vkallocator);
+
     // cleanup preprocess and postprocess pipeline
     {
         delete realcugan_preproc;
@@ -346,9 +352,6 @@ int RealCUGAN::process(int index, const ncnn::Mat& inimage, ncnn::Mat& outimage)
     const int TILE_SIZE_X = tilesize;
     const int TILE_SIZE_Y = tilesize;
 
-    ncnn::VkAllocator* blob_vkallocator = vkdev->acquire_blob_allocator();
-    ncnn::VkAllocator* staging_vkallocator = vkdev->acquire_staging_allocator();
-
     ncnn::Option opt = net.opt;
     opt.blob_vkallocator = blob_vkallocator;
     opt.workspace_vkallocator = blob_vkallocator;
@@ -441,7 +444,6 @@ int RealCUGAN::process(int index, const ncnn::Mat& inimage, ncnn::Mat& outimage)
         {
             out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1, opt.blob_vkallocator);
         }
-
 
         for (int xi = 0; xi < xtiles; xi++)
         {
@@ -828,9 +830,6 @@ int RealCUGAN::process(int index, const ncnn::Mat& inimage, ncnn::Mat& outimage)
         }
 #endif
     }
-
-    vkdev->reclaim_blob_allocator(blob_vkallocator);
-    vkdev->reclaim_staging_allocator(staging_vkallocator);
 
     return 0;
 }
@@ -4467,6 +4466,7 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
 void OutVkImageMat::create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, int _elempack, const ncnn::Option& opt)
 {
     if (dims == 2 && w == _w && h == _h && elemsize == _elemsize && elempack == _elempack) {
+        allocator = opt.blob_vkallocator;
         data->refcount = -1;
         return;
     }
@@ -4499,6 +4499,7 @@ void OutVkImageMat::create(const RealCUGAN* cugan, int _w, int _h, size_t _elems
 void OutVkImageMat::create(const RealCUGAN* cugan, int _w, int _h, int _c, size_t _elemsize, int _elempack, const ncnn::Option& opt)
 {
     if (dims == 3 && w == _w && h == _h && c == _c && elemsize == _elemsize && elempack == _elempack) {
+        allocator = opt.blob_vkallocator;
         data->refcount = -1;
         return;
     }

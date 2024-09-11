@@ -129,6 +129,9 @@ public:
     mutable std::vector<OutVkImageMat*> out_gpu_tex;
     bool support_ext_mem = 0;
     bool tiling_linear = 0;
+
+    ncnn::VkAllocator* blob_vkallocator = 0;
+    ncnn::VkAllocator* staging_vkallocator = 0;
 };
 
 #endif // REALCUGAN_H

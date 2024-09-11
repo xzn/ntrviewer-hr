@@ -22,10 +22,10 @@
 #include "lib.h"
 
 #include "filesystem_utils.h"
+#include "../fsr/fsr_main.h"
 
-static RealCUGAN* realcugan;
+static RealCUGAN* realcugan[SCREEN_COUNT];
 static std::vector<std::unique_ptr<std::mutex>> realcugan_locks;
-static std::mutex realcugan_process_lock;
 static const int scale = 2;
 
 extern "C" int realcugan_create()
@@ -238,43 +238,46 @@ extern "C" int realcugan_create()
         return -1;
     }
 
-    if (realcugan) {
-        delete realcugan;
+    for (int j = 0; j < SCREEN_COUNT; ++j) {
+        if (realcugan[j]) {
+            delete realcugan[j];
+        }
+        realcugan[j] = new RealCUGAN(gpuid[i], tta_mode);
+        realcugan[j]->load(paramfullpath, modelfullpath);
+        realcugan[j]->noise = noise;
+        realcugan[j]->scale = scale;
+        realcugan[j]->tilesize = tilesize[i];
+        realcugan[j]->prepadding = prepadding;
+        realcugan[j]->syncgap = syncgap;
     }
-    realcugan = new RealCUGAN(gpuid[i], tta_mode);
-    realcugan->load(paramfullpath, modelfullpath);
-    realcugan->noise = noise;
-    realcugan->scale = scale;
-    realcugan->tilesize = tilesize[i];
-    realcugan->prepadding = prepadding;
-    realcugan->syncgap = syncgap;
 
     return 0;
 }
 
-extern "C" GLuint realcugan_run(int index, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, GLuint *gl_sem, GLuint *gl_sem_next, bool *dim3, bool *success)
+extern "C" GLuint realcugan_run(int tb, int index, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, GLuint *gl_sem, GLuint *gl_sem_next, bool *dim3, bool *success)
 {
     ncnn::Mat inimage = ncnn::Mat(w, h, (void*)indata, (size_t)c, c);
     ncnn::Mat outimage = ncnn::Mat(w * scale, h * scale, (void*)outdata, (size_t)c, c);
 
-    if (index + 1 > realcugan_locks.size()) {
-        realcugan_locks.resize(index + 1);
+    int locks_index = tb * SCREEN_COUNT * FrameBufferCount + index;
+    if (locks_index + 1 > realcugan_locks.size()) {
+        realcugan_locks.resize(locks_index + 1);
     }
 
-    if (!realcugan_locks[index]) {
-        realcugan_locks[index] = std::make_unique<std::mutex>();
+    if (!realcugan_locks[locks_index]) {
+        realcugan_locks[locks_index] = std::make_unique<std::mutex>();
     }
 
-    realcugan_locks[index]->lock();
-    realcugan_process_lock.lock();
-    if (realcugan->process(index, inimage, outimage) != 0) {
+    realcugan_locks[locks_index]->lock();
+    if (realcugan[tb]->process(index, inimage, outimage) != 0) {
+        realcugan_locks[locks_index]->unlock();
+
         *success = false;
         return 0;
     }
-    realcugan_process_lock.unlock();
-    realcugan_locks[index]->unlock();
+    realcugan_locks[locks_index]->unlock();
 
-    OutVkImageMat *out = realcugan->out_gpu_tex[index];
+    OutVkImageMat *out = realcugan[tb]->out_gpu_tex[index];
     GLuint tex = out->gl_texture;
     *gl_sem = out->gl_sem;
     *gl_sem_next = out->gl_sem_next;
@@ -283,37 +286,40 @@ extern "C" GLuint realcugan_run(int index, int w, int h, int c, const unsigned c
     return tex;
 }
 
-extern "C" void realcugan_next(int index)
+extern "C" void realcugan_next(int tb, int index)
 {
-    if (!realcugan || index >= realcugan->out_gpu_tex.size()) {
+    if (!realcugan[tb] || index >= realcugan[tb]->out_gpu_tex.size()) {
         return;
     }
-    OutVkImageMat *out = realcugan->out_gpu_tex[index];
+    OutVkImageMat *out = realcugan[tb]->out_gpu_tex[index];
     if (!out || !out->first_subseq) {
         return;
     }
 
     if (out->need_wait) {
-        realcugan_locks[index]->lock();
+        int locks_index = tb * SCREEN_COUNT * FrameBufferCount + index;
+        realcugan_locks[locks_index]->lock();
         if (out->need_wait) {
-            VkResult ret = ncnn::vkWaitForFences(realcugan->vkdev->vkdevice(), 1, &out->fence, VK_TRUE, (uint64_t)-1);
+            VkResult ret = ncnn::vkWaitForFences(realcugan[tb]->vkdev->vkdevice(), 1, &out->fence, VK_TRUE, (uint64_t)-1);
             if (ret != VK_SUCCESS) {
                 NCNN_LOGE("vkWaitForFences failed %d", ret);
             }
             out->need_wait = false;
         }
-        realcugan_locks[index]->unlock();
+        realcugan_locks[locks_index]->unlock();
     }
 }
 
 extern "C" void realcugan_destroy()
 {
-    if (realcugan) {
-        for (int i = 0; i < realcugan->out_gpu_tex.size(); ++i) {
-            realcugan_next(i);
+    for (int j = 0; j < SCREEN_COUNT; ++j) {
+        if (realcugan[j]) {
+            for (int i = 0; i < realcugan[j]->out_gpu_tex.size(); ++i) {
+                realcugan_next(j, i);
+            }
+            delete realcugan[j];
+            realcugan[j] = nullptr;
         }
-        delete realcugan;
-        realcugan = nullptr;
     }
 
     ncnn::destroy_gpu_instance();
