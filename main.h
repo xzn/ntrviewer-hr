@@ -30,6 +30,10 @@
 #include "nuklear.h"
 #include "nuklear_sdl_gles2.h"
 
+extern int NK_PROPERTY_DEFAULT_IMPL;
+extern int NK_PROPERTY_EDIT_IMPL;
+char *nk_itoa_impl(char *s, long n);
+
 #ifdef _WIN32
 #include <iphlpapi.h>
 #endif

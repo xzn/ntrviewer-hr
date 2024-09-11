@@ -261,6 +261,15 @@ const char *connection_msg[CS_MAX] = {
 #define TITLE "NTR Viewer HR"
 
 static struct nk_context *nk_ctx;
+static const char *nk_property_name = "#";
+static enum {
+  NK_NAV_NONE,
+  NK_NAV_NEXT,
+  NK_NAV_PREVIOUS,
+  NK_NAV_CONFIRM,
+  NK_NAV_CANCEL,
+} nk_nav_command;
+
 static nk_bool ntr_rp_priority;
 static int ntr_rp_priority_factor;
 static int ntr_rp_quality;
@@ -1146,6 +1155,171 @@ static void updateViewMode(int i, view_mode_t vm) {
   }
 }
 
+// HACK
+// Try to get Nuklear to accept keyboard navigation
+
+static nk_hash nk_hash_from_name_prev(const char *name, struct nk_window *win, int prev)
+{
+  // copied from nuklear.h since I don't want to edit that file
+  if (name[0] == '#') {
+      return nk_murmur_hash(name, (int)nk_strlen(name), win->property.seq - prev);
+  } else return nk_murmur_hash(name, (int)nk_strlen(name), 42);
+}
+
+static nk_hash nk_hash_from_name(const char *name, struct nk_window *win)
+{
+  return nk_hash_from_name_prev(name, win, 0);
+}
+
+static void focus_next_property(struct nk_context *ctx, const char *name, int val)
+{
+  struct nk_window *win = ctx->current;
+  nk_hash hash = nk_hash_from_name(name, win);
+
+  win->property.active = 1;
+  nk_itoa_impl(win->property.buffer, val);
+  win->property.length = nk_strlen(win->property.buffer);
+  win->property.cursor = 0;
+  win->property.state = NK_PROPERTY_EDIT_IMPL;
+  win->property.name = hash;
+  win->property.select_start = 0;
+  win->property.select_end = win->property.length;
+}
+
+static void cancel_next_property(struct nk_context *ctx)
+{
+  struct nk_window *win = ctx->current;
+
+  if (win->property.active && win->property.state == NK_PROPERTY_EDIT_IMPL) {
+    win->property.active = 0;
+    win->property.buffer[0] = 0;
+    win->property.length = 0;
+    win->property.cursor = 0;
+    win->property.state = 0;
+    win->property.name = 0;
+    win->property.select_start = 0;
+    win->property.select_end = 0;
+  }
+}
+
+static void confirm_next_property(struct nk_context *ctx)
+{
+  nk_input_key(ctx, NK_KEY_ENTER, nk_true);
+}
+
+static nk_bool check_next_property(struct nk_context *ctx, const char *name)
+{
+  struct nk_window *win = ctx->current;
+  nk_hash hash = nk_hash_from_name(name, win);
+  return win->property.active && win->property.name == hash;
+}
+
+static enum NK_FOCUS {
+  NK_FOCUS_NONE,
+  NK_FOCUS_VIEW_MODE,
+  NK_FOCUS_UPSCALING_FILTER,
+  NK_FOCUS_IP_OCTET_0,
+  NK_FOCUS_IP_OCTET_1,
+  NK_FOCUS_IP_OCTET_2,
+  NK_FOCUS_IP_OCTET_3,
+  NK_FOCUS_IP_AUTO_DETECT,
+  NK_FOCUS_IP_COMBO,
+  NK_FOCUS_VIEWER_IP,
+  NK_FOCUS_VIEWER_PORT,
+  NK_FOCUS_PRIORITY_SCREEN,
+  NK_FOCUS_PRIORITY_FACTOR,
+  NK_FOCUS_QUALITY,
+  NK_FOCUS_BANDWIDTH_LIMIT,
+  NK_FOCUS_RELIABLE_STREAM,
+  NK_FOCUS_DEFAULT,
+  NK_FOCUS_CONNECT,
+  NK_FOCUS_MIN = NK_FOCUS_VIEW_MODE,
+  NK_FOCUS_MAX = NK_FOCUS_CONNECT,
+} nk_focus_current;
+
+static enum NK_NAV_FOCUS {
+  NK_NAV_FOCUS_NONE,
+  NK_NAV_FOCUS_NORMAL,
+  NK_NAV_FOCUS_NAV,
+} nk_nav_focus;
+
+static void do_nav_next(enum NK_FOCUS nk_focus)
+{
+  if (nk_focus == nk_focus_current) {
+    switch (__atomic_load_n(&nk_nav_command, __ATOMIC_RELAXED)) {
+      case NK_NAV_PREVIOUS:
+        if (nk_focus_current <= NK_FOCUS_MIN)
+          nk_focus_current = NK_FOCUS_MAX;
+        else
+          --nk_focus_current;
+        nk_nav_focus = NK_NAV_FOCUS_NAV;
+        break;
+
+      case NK_NAV_NEXT:
+        if (nk_focus_current >= NK_FOCUS_MAX)
+          nk_focus_current = NK_FOCUS_MIN;
+        else
+          ++nk_focus_current;
+        nk_nav_focus = NK_NAV_FOCUS_NAV;
+        break;
+
+      case NK_NAV_CANCEL:
+      case NK_NAV_CONFIRM:
+        nk_nav_focus = NK_NAV_FOCUS_NONE;
+        break;
+
+      default:
+        break;
+    }
+    __atomic_store_n(&nk_nav_command, NK_NAV_NONE, __ATOMIC_RELAXED);
+  }
+}
+
+static void do_nav_property_next(struct nk_context *ctx, const char *name, enum NK_FOCUS nk_focus, int val)
+{
+  if (check_next_property(ctx, name)) {
+    nk_focus_current = nk_focus;
+    nk_nav_focus = NK_NAV_FOCUS_NORMAL;
+  } else if (nk_focus_current == nk_focus && nk_nav_focus != NK_NAV_FOCUS_NONE) {
+    focus_next_property(ctx, name, val);
+    nk_nav_focus = NK_NAV_FOCUS_NORMAL;
+  }
+
+  if (nk_focus_current == nk_focus && nk_nav_focus != NK_NAV_FOCUS_NONE) {
+    switch (__atomic_load_n(&nk_nav_command, __ATOMIC_RELAXED)) {
+      case NK_NAV_PREVIOUS:
+      case NK_NAV_NEXT:
+      case NK_NAV_CONFIRM:
+        confirm_next_property(ctx);
+        break;
+
+      case NK_NAV_CANCEL:
+        cancel_next_property(ctx);
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  do_nav_next(nk_focus);
+}
+
+static void check_nav_property_prev(struct nk_context *ctx, const char *name, enum NK_FOCUS nk_focus)
+{
+  struct nk_window *win = ctx->current;
+  if (win->property.active) {
+    nk_hash hash = nk_hash_from_name_prev(name, win, 1);
+    if (win->property.name == hash) {
+      nk_focus_current = nk_focus;
+      nk_nav_focus = NK_NAV_FOCUS_NORMAL;
+    }
+  } else if (nk_nav_focus != NK_NAV_FOCUS_NAV) {
+    nk_nav_focus = NK_NAV_FOCUS_NONE;
+  }
+  ctx->input.keyboard.keys[NK_KEY_ENTER].clicked = 0;
+}
+
 int hide_windows = 0;
 static void guiMain(struct nk_context *ctx)
 {
@@ -1173,6 +1347,8 @@ static void guiMain(struct nk_context *ctx)
   if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 450, 495),
                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_TITLE))
   {
+    do_nav_next(NK_FOCUS_NONE);
+
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "View Mode", NK_TEXT_CENTERED);
     int selected = view_mode;
@@ -1183,6 +1359,7 @@ static void guiMain(struct nk_context *ctx)
       "Top Only",
       "Bottom Only"
     };
+    do_nav_next(NK_FOCUS_VIEW_MODE);
     nk_combobox(ctx, view_mode_options, sizeof(view_mode_options) / sizeof(*view_mode_options), &selected, 30, comboIPsSize);
     if (selected != (int)view_mode) {
       __atomic_store_n(&view_mode, selected, __ATOMIC_RELAXED);
@@ -1198,6 +1375,7 @@ static void guiMain(struct nk_context *ctx)
       "FSR",
       "Real-CUGAN + FSR",
     };
+    do_nav_next(NK_FOCUS_UPSCALING_FILTER);
     nk_combobox(ctx, upscaling_filter_options, sizeof(upscaling_filter_options) / sizeof(*upscaling_filter_options), &selected, 30, comboIPsSize);
     if (selected != upscaling_selected) {
       if (selected == 2) {
@@ -1230,7 +1408,9 @@ static void guiMain(struct nk_context *ctx)
     for (int i = 0; i < 4; ++i)
     {
       int ip_octet = ip_octets[i];
-      nk_property_int(ctx, "#", 0, &ip_octet, 255, 1, 1);
+      do_nav_property_next(ctx, nk_property_name, NK_FOCUS_IP_OCTET_0 + i, ip_octet);
+      nk_property_int(ctx, nk_property_name, 0, &ip_octet, 255, 1, 1);
+      check_nav_property_prev(ctx, nk_property_name, NK_FOCUS_IP_OCTET_0 + i);
       if (ip_octet != ip_octets[i]) {
         ip_octets[i] = ip_octet;
         strcpy(autoIPs[0], "Manual");
@@ -1268,7 +1448,10 @@ static void guiMain(struct nk_context *ctx)
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Viewer Port", NK_TEXT_CENTERED);
-    nk_property_int(ctx, "#", 1024, &ntr_rp_port, 65535, 1, 1);
+    nk_property_int(ctx, nk_property_name, 1024, &ntr_rp_port, 65535, 1, 1);
+
+    nk_layout_row_dynamic(ctx, 30, 1);
+    nk_label(ctx, "Press \"F\" to toggle fullscreen.", NK_TEXT_CENTERED);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Prioritize Top Screen", NK_TEXT_CENTERED);
@@ -1276,7 +1459,7 @@ static void guiMain(struct nk_context *ctx)
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Priority Screen Factor", NK_TEXT_CENTERED);
-    nk_property_int(ctx, "#", 0, &ntr_rp_priority_factor, 255, 1, 1);
+    nk_property_int(ctx, nk_property_name, 0, &ntr_rp_priority_factor, 255, 1, 1);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     snprintf(msg_buf, sizeof(msg_buf), "JPEG Quality %d", ntr_rp_quality);
@@ -1320,9 +1503,6 @@ static void guiMain(struct nk_context *ctx)
       }
       restart_kcp = 1;
     }
-
-    nk_layout_row_dynamic(ctx, 30, 1);
-    nk_label(ctx, "Press \"F\" to toggle fullscreen.", NK_TEXT_CENTERED);
   }
   nk_end(ctx);
   nk_window_show(ctx, remote_play_wnd, show_window);
@@ -1363,6 +1543,9 @@ static void guiMain(struct nk_context *ctx)
   }
   nk_end(ctx);
   nk_window_show(ctx, debug_msg_wnd, show_window);
+
+  // HACK to ensure Remote Play config window has keyboard focus
+  nk_window_set_focus(ctx, remote_play_wnd);
 }
 
 #ifdef USE_OGL_ES
@@ -2187,6 +2370,24 @@ MainLoop(void *loopArg)
         case SDL_MOUSEWHEEL:
           if (evt.wheel.windowID != win_id[SCREEN_TOP]) {
             goto skip_evt;
+          }
+          break;
+        case SDL_KEYDOWN:
+          switch (evt.key.keysym.sym) {
+            case SDLK_TAB: {
+              const Uint8* state = SDL_GetKeyboardState(0);
+              __atomic_store_n(&nk_nav_command, state[SDL_SCANCODE_LSHIFT] || state[SDL_SCANCODE_RSHIFT] ? NK_NAV_PREVIOUS : NK_NAV_NEXT, __ATOMIC_RELAXED);
+              goto skip_evt;
+            }
+
+            case SDLK_SPACE:
+            case SDLK_RETURN:
+              __atomic_store_n(&nk_nav_command, NK_NAV_CONFIRM, __ATOMIC_RELAXED);
+              goto skip_evt;
+
+            case SDLK_ESCAPE:
+              __atomic_store_n(&nk_nav_command, NK_NAV_CANCEL, __ATOMIC_RELAXED);
+              goto skip_evt;
           }
           break;
       }

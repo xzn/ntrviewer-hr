@@ -2,7 +2,9 @@
     "C_Cpp.default.intelliSenseMode": "windows-gcc-x64",
     "C_Cpp.default.compilerPath": "/mingw64/bin/gcc",
     "C_Cpp.default.defines": [
-        "_WIN32"
+        "_WIN32",
+        "NK_IMPLEMENTATION",
+        "NK_SDL_GLES2_IMPLEMENTATION"
     ],
     "clangd.fallbackFlags": [
         "-I${workspaceFolder}/include"
