@@ -405,10 +405,13 @@ int RealCUGAN::process(int index, const ncnn::Mat& inimage, ncnn::Mat& outimage)
 
         ncnn::VkCompute& cmd = *out_gpu_tex[index]->cmd;
         if (out_gpu_tex[index]->first_subseq) {
-            VkResult ret = ncnn::vkWaitForFences(vkdev->vkdevice(), 1, &out_gpu_tex[index]->fence, VK_TRUE, (uint64_t)-1);
-            if (ret != VK_SUCCESS)
-            {
-                NCNN_LOGE("vkWaitForFences failed %d", ret);
+            if (out_gpu_tex[index]->need_wait) {
+                VkResult ret = ncnn::vkWaitForFences(vkdev->vkdevice(), 1, &out_gpu_tex[index]->fence, VK_TRUE, (uint64_t)-1);
+                if (ret != VK_SUCCESS)
+                {
+                    NCNN_LOGE("vkWaitForFences failed %d", ret);
+                }
+                out_gpu_tex[index]->need_wait = false;
             }
 
             cmd.reset();
@@ -785,7 +788,7 @@ int RealCUGAN::process(int index, const ncnn::Mat& inimage, ncnn::Mat& outimage)
             out_gpu_tex[index]->create_like(this, out_gpu, opt);
             cmd.record_clone(out_gpu, *out_gpu_tex[index], opt);
             cmd.submit_and_wait(out_gpu_tex[index]->first_subseq ? out_gpu_tex[index]->vk_sem_next : nullptr, VK_PIPELINE_STAGE_TRANSFER_BIT, out_gpu_tex[index]->vk_sem, &out_gpu_tex[index]->fence);
-            out_gpu_tex[index]->first_subseq = true;
+            out_gpu_tex[index]->need_wait = out_gpu_tex[index]->first_subseq = true;
         }
 
         // download

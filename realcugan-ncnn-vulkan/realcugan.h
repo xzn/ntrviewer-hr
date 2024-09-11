@@ -59,6 +59,7 @@ public:
     void destroy_sem(const RealCUGAN* cugan);
 
     bool first_subseq = 0;
+    bool need_wait = 0;
     ncnn::VkCompute *cmd = 0;
     VkFence fence = 0;
 };
