@@ -25,6 +25,7 @@
 
 static RealCUGAN* realcugan;
 static std::vector<std::unique_ptr<std::mutex>> realcugan_locks;
+static std::mutex realcugan_process_lock;
 static const int scale = 2;
 
 extern "C" int realcugan_create()
@@ -265,10 +266,12 @@ extern "C" GLuint realcugan_run(int index, int w, int h, int c, const unsigned c
     }
 
     realcugan_locks[index]->lock();
+    realcugan_process_lock.lock();
     if (realcugan->process(index, inimage, outimage) != 0) {
         *success = false;
         return 0;
     }
+    realcugan_process_lock.unlock();
     realcugan_locks[index]->unlock();
 
     OutVkImageMat *out = realcugan->out_gpu_tex[index];

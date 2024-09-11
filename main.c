@@ -123,7 +123,7 @@ int sock_close(SOCKET sock)
 #include <stdint.h>
 #include <time.h>
 
-int running = nk_true;
+int running = 1;
 
 static inline void itimeofday(int64_t *sec, int64_t *usec)
 {
@@ -212,15 +212,9 @@ typedef int64_t		s64;
 // #define MAX(a, b) ((a) < (b) ? (b) : (a))
 #define LEN(a) (sizeof(a) / sizeof(a)[0])
 
-enum {
-  SCREEN_TOP,
-  SCREEN_BOT,
-  SCREEN_COUNT,
-};
-
 #define FRAME_STAT_EVERY_X_US 1000000
 char window_title_with_fps[500];
-uint64_t window_title_last_tick;
+uint64_t window_title_last_tick[SCREEN_COUNT];
 struct {
   int counter;
 } frame_rate_decoded_tracker[SCREEN_COUNT] = {};
@@ -253,6 +247,7 @@ enum FrameBufferStatus
 
 /* Platform */
 SDL_Window *win[SCREEN_COUNT];
+Uint32 win_id[SCREEN_COUNT];
 SDL_GLContext glContext[SCREEN_COUNT];
 int win_width[SCREEN_COUNT], win_height[SCREEN_COUNT];
 int ogl_version_major, ogl_version_minor;
@@ -281,6 +276,7 @@ const char *connection_msg[CS_MAX] = {
 
 #define TITLE "NTR Viewer HR"
 
+static struct nk_context *nk_ctx;
 static nk_bool ntr_rp_priority;
 static int ntr_rp_priority_factor;
 static int ntr_rp_quality;
@@ -301,6 +297,8 @@ typedef enum {
 } view_mode_t;
 static view_mode_t view_mode;
 static int fullscreen;
+static int fullscreen_index;
+static int fullscreen_count;
 
 static atomic_uint_fast8_t ip_octets[4];
 
@@ -1124,38 +1122,42 @@ static void getAdapterIPs(void) {
 }
 #endif
 
-static void updateViewMode(void) {
-  switch (view_mode) {
+static void updateViewMode(int i, view_mode_t vm) {
+  switch (vm) {
     case VIEW_MODE_TOP_BOT:
     case VIEW_MODE_TOP:
     case VIEW_MODE_BOT:
-      SDL_HideWindow(win[1]);
+      if (i == SCREEN_BOT) SDL_HideWindow(win[i]);
       break;
 
     case VIEW_MODE_SEPARATE:
-      SDL_ShowWindow(win[1]);
+      if (i == SCREEN_BOT) SDL_ShowWindow(win[i]);
       break;
   }
 
-  SDL_SetWindowFullscreen(win[0], 0);
-  SDL_SetWindowFullscreen(win[1], 0);
-  fullscreen = 0;
-  switch (view_mode) {
+  SDL_SetWindowFullscreen(win[i], 0);
+  SDL_RestoreWindow(win[i]);
+  switch (vm) {
     case VIEW_MODE_TOP_BOT:
-      SDL_SetWindowSize(win[0], WINDOW_WIDTH, WINDOW_HEIGHT);
+      if (i == SCREEN_TOP)
+        SDL_SetWindowSize(win[i], WINDOW_WIDTH, WINDOW_HEIGHT);
       break;
 
     case VIEW_MODE_TOP:
-      SDL_SetWindowSize(win[0], WINDOW_WIDTH, WINDOW_HEIGHT12);
+      if (i == SCREEN_TOP)
+        SDL_SetWindowSize(win[i], WINDOW_WIDTH, WINDOW_HEIGHT12);
       break;
 
     case VIEW_MODE_BOT:
-      SDL_SetWindowSize(win[0], WINDOW_WIDTH2, WINDOW_HEIGHT12);
+      if (i == SCREEN_TOP)
+        SDL_SetWindowSize(win[i], WINDOW_WIDTH2, WINDOW_HEIGHT12);
       break;
 
     case VIEW_MODE_SEPARATE:
-      SDL_SetWindowSize(win[0], WINDOW_WIDTH, WINDOW_HEIGHT12);
-      SDL_SetWindowSize(win[1], WINDOW_WIDTH2, WINDOW_HEIGHT12);
+      if (i == SCREEN_TOP)
+        SDL_SetWindowSize(win[i], WINDOW_WIDTH, WINDOW_HEIGHT12);
+      else
+        SDL_SetWindowSize(win[i], WINDOW_WIDTH2, WINDOW_HEIGHT12);
       break;
   }
 }
@@ -1166,7 +1168,7 @@ static void guiMain(struct nk_context *ctx)
   struct nk_style_item fixed_background = ctx->style.window.fixed_background;
   ctx->style.window.fixed_background = nk_style_item_hide();
   const char *background_wnd = "Background";
-  if (nk_begin(ctx, background_wnd, nk_rect(0, 0, win_width[0], win_height[0]),
+  if (nk_begin(ctx, background_wnd, nk_rect(0, 0, win_width[SCREEN_TOP], win_height[SCREEN_TOP]),
                NK_WINDOW_BACKGROUND))
   {
     if (nk_window_is_hovered(ctx) && nk_window_is_active(ctx, background_wnd) &&
@@ -1190,7 +1192,7 @@ static void guiMain(struct nk_context *ctx)
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "View Mode", NK_TEXT_CENTERED);
     int selected = view_mode;
-    static struct nk_vec2 comboIPsSize = {225, 200};
+    static const struct nk_vec2 comboIPsSize = {225, 200};
     const char *view_mode_options[] = {
       "Top and Bottom",
       "Separate Windows",
@@ -1199,8 +1201,8 @@ static void guiMain(struct nk_context *ctx)
     };
     nk_combobox(ctx, view_mode_options, sizeof(view_mode_options) / sizeof(*view_mode_options), &selected, 30, comboIPsSize);
     if (selected != (int)view_mode) {
-      view_mode = selected;
-      updateViewMode();
+      __atomic_store_n(&view_mode, selected, __ATOMIC_RELAXED);
+      fullscreen = 0;
     }
 
     nk_layout_row_dynamic(ctx, 30, 2);
@@ -1485,12 +1487,12 @@ static GLfloat fbo_vVertices_tex_coord[4][2] = {
 static GLushort fbo_indices[] =
     {0, 1, 2, 1, 2, 3};
 
-static GLfloat vVertices_pos[4][3] = {
-    { -0.5f, 0.5f, 0.0f },  // Position 0
-    { -0.5f, -0.5f, 0.0f }, // Position 1
-    { 0.5f, -0.5f, 0.0f },  // Position 2
-    { 0.5f, 0.5f, 0.0f },   // Position 3
-};
+// static GLfloat vVertices_pos[4][3] = {
+//     { -0.5f, 0.5f, 0.0f },  // Position 0
+//     { -0.5f, -0.5f, 0.0f }, // Position 1
+//     { 0.5f, -0.5f, 0.0f },  // Position 2
+//     { 0.5f, 0.5f, 0.0f },   // Position 3
+// };
 
 static GLfloat vVertices_tex_coord[4][2] = {
     { 1.0f, 0.0f }, // TexCoord 2
@@ -1605,21 +1607,21 @@ GLuint LoadProgram(const char *vertShaderSrc, const char *fragShaderSrc)
   return programObject;
 }
 
-GLuint gl_program;
-GLint gl_position_loc;
-GLint gl_tex_coord_loc;
-GLint gl_sampler_loc;
+GLuint gl_program[SCREEN_COUNT];
+GLint gl_position_loc[SCREEN_COUNT];
+GLint gl_tex_coord_loc[SCREEN_COUNT];
+GLint gl_sampler_loc[SCREEN_COUNT];
 
-GLuint gl_fbo_program;
-GLint gl_fbo_position_loc;
-GLint gl_fbo_tex_coord_loc;
-GLint gl_fbo_sampler_loc;
-GLint gl_fbo_tex_size_loc;
+GLuint gl_fbo_program[SCREEN_COUNT];
+GLint gl_fbo_position_loc[SCREEN_COUNT];
+GLint gl_fbo_tex_coord_loc[SCREEN_COUNT];
+GLint gl_fbo_sampler_loc[SCREEN_COUNT];
+GLint gl_fbo_tex_size_loc[SCREEN_COUNT];
 
 typedef struct _FrameBufferContext
 {
-  GLuint gl_tex_id;
-  GLuint gl_tex_upscaled;
+  GLuint gl_tex_id[SCREEN_COUNT];
+  GLuint gl_tex_upscaled[SCREEN_COUNT];
   GLuint gl_fbo_upscaled[SCREEN_COUNT];
 
   uint8_t screen_decoded[FrameBufferCount][400 * 240 * GL_CHANNELS_N];
@@ -1631,17 +1633,17 @@ typedef struct _FrameBufferContext
   int index_done_decode_ready_display;
   int index_decode;
   uint8_t *prev_data;
-  GLuint prev_tex_upscaled, prev_tex_fsr;
+  GLuint prev_tex_upscaled[SCREEN_COUNT], prev_tex_fsr[SCREEN_COUNT];
   int prev_ctx_width, prev_ctx_height;
-} FrameBufferContext;
 
-int gl_updated = 0;
-pthread_cond_t gl_updated_cond = PTHREAD_COND_INITIALIZER;
-pthread_mutex_t gl_updated_mutex = PTHREAD_MUTEX_INITIALIZER;
+  int decode_updated;
+  pthread_cond_t decode_updated_cond;
+  pthread_mutex_t decode_updated_mutex;
+} FrameBufferContext;
 
 FrameBufferContext buffer_ctx[SCREEN_COUNT];
 
-static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot, int index)
+static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot, int tb, int index)
 {
   double ctx_left_f;
   double ctx_top_f;
@@ -1651,47 +1653,48 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
   int ctx_height;
   int win_w;
   int win_h;
-  int tb;
-  if (view_mode == VIEW_MODE_TOP_BOT) {
-    tb = 0;
-    win_w = win_width[0];
-    win_h = win_height[0];
+  // int tb;
+  view_mode_t vm = __atomic_load_n(&view_mode, __ATOMIC_RELAXED);
+  if (vm == VIEW_MODE_TOP_BOT) {
+    // tb = SCREEN_TOP;
+    win_w = win_width[tb];
+    win_h = win_height[tb];
 
-    ctx_height = (double)win_height[0] / 2;
+    ctx_height = (double)win_height[tb] / 2;
     int ctx_left;
     int ctx_top;
-    if ((double)win_width[0] / width * height > ctx_height)
+    if ((double)win_width[tb] / width * height > ctx_height)
     {
       ctx_width = (double)ctx_height / height * width;
-      ctx_left = (double)(win_width[0] - ctx_width) / 2;
+      ctx_left = (double)(win_width[tb] - ctx_width) / 2;
       ctx_top = 0;
     }
     else
     {
-      ctx_height = (double)win_width[0] / width * height;
+      ctx_height = (double)win_width[tb] / width * height;
       ctx_left = 0;
-      ctx_width = win_width[0];
-      ctx_top = (double)win_height[0] / 2 - ctx_height;
+      ctx_width = win_width[tb];
+      ctx_top = (double)win_height[tb] / 2 - ctx_height;
     }
 
     if (top_bot == SCREEN_TOP)
     {
-      ctx_left_f = (double)ctx_left / win_width[0] * 2 - 1;
-      ctx_top_f = 1 - (double)ctx_top / win_height[0] * 2;
+      ctx_left_f = (double)ctx_left / win_width[tb] * 2 - 1;
+      ctx_top_f = 1 - (double)ctx_top / win_height[tb] * 2;
       ctx_right_f = -ctx_left_f;
       ctx_bot_f = 0;
     }
     else
     {
-      ctx_left_f = (double)ctx_left / win_width[0] * 2 - 1;
+      ctx_left_f = (double)ctx_left / win_width[tb] * 2 - 1;
       ctx_top_f = 0;
       ctx_right_f = -ctx_left_f;
-      ctx_bot_f = -1 + (double)ctx_top / win_height[0] * 2;
+      ctx_bot_f = -1 + (double)ctx_top / win_height[tb] * 2;
     }
   } else {
-    tb = top_bot;
-    if (view_mode == VIEW_MODE_BOT)
-      tb = 0;
+    // tb = top_bot;
+    // if (vm == VIEW_MODE_BOT)
+      // tb = SCREEN_TOP;
 
     win_w = win_width[tb];
     win_h = win_height[tb];
@@ -1718,6 +1721,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     ctx_right_f = -ctx_left_f;
     ctx_bot_f = -ctx_top_f;
   }
+  GLfloat vVertices_pos[4][3] = { 0 };
   vVertices_pos[0][0] = ctx_left_f;
   vVertices_pos[0][1] = ctx_top_f;
   vVertices_pos[1][0] = ctx_left_f;
@@ -1729,7 +1733,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
 
   nk_bool upscaled = screen_upscale_factor > 1 && upscaling_filter && upscaling_filter_created;
   int scale = upscaled ? screen_upscale_factor : 1;
-  GLuint tex = upscaled ? ctx->gl_tex_upscaled : ctx->gl_tex_id;
+  GLuint tex = upscaled ? ctx->gl_tex_upscaled[tb] : ctx->gl_tex_id[tb];
   GLuint gl_sem = 0;
   GLuint gl_sem_next = 0;
   GLuint tex_upscaled = 0;
@@ -1738,18 +1742,18 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
 
   if (upscaled) {
     if (!data) {
-      if (!ctx->prev_tex_upscaled) {
+      if (!ctx->prev_tex_upscaled[tb]) {
         data = ctx->prev_data;
       } else {
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, ctx->prev_tex_upscaled);
-        tex = ctx->prev_tex_upscaled;
+        glBindTexture(GL_TEXTURE_2D, ctx->prev_tex_upscaled[tb]);
+        tex = ctx->prev_tex_upscaled[tb];
       }
     }
 
     if (data) {
       scale = screen_upscale_factor;
-      tex_upscaled = sr_run(top_bot * FrameBufferCount + index, height, width, GL_CHANNELS_N, data, ctx->screen_upscaled, &gl_sem, &gl_sem_next, &dim3, &success);
+      tex_upscaled = sr_run((tb * SCREEN_COUNT + top_bot) * FrameBufferCount + index, height, width, GL_CHANNELS_N, data, ctx->screen_upscaled, &gl_sem, &gl_sem_next, &dim3, &success);
       if (!tex_upscaled) {
         if (!success) {
           upscaled = 0;
@@ -1757,7 +1761,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
           err_log("upscaling failed; filter disabled\n");
         } else {
           glActiveTexture(GL_TEXTURE0);
-          glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id);
+          glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id[tb]);
           glTexImage2D(
             GL_TEXTURE_2D, 0,
             GL_INT_FORMAT, height * scale,
@@ -1765,7 +1769,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
             GL_FORMAT, GL_UNSIGNED_BYTE,
             ctx->screen_upscaled);
 
-          tex = ctx->gl_tex_id;
+          tex = ctx->gl_tex_id[tb];
         }
       } else {
         glActiveTexture(GL_TEXTURE0);
@@ -1777,7 +1781,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
           glDisable(GL_CULL_FACE);
           glDisable(GL_DEPTH_TEST);
 
-          glUseProgram(gl_fbo_program);
+          glUseProgram(gl_fbo_program[tb]);
           fbo_vVertices_tex_coord[0][0] = 0.5;
           fbo_vVertices_tex_coord[0][1] = 0.5;
           fbo_vVertices_tex_coord[1][0] = 0.5;
@@ -1787,17 +1791,17 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
           fbo_vVertices_tex_coord[3][0] = height * scale - 0.5;
           fbo_vVertices_tex_coord[3][1] = width * scale - 0.5;
 
-          glVertexAttribPointer(gl_fbo_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_pos), fbo_vVertices_pos);
-          glVertexAttribPointer(gl_fbo_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_tex_coord), fbo_vVertices_tex_coord);
-          glEnableVertexAttribArray(gl_fbo_position_loc);
-          glEnableVertexAttribArray(gl_fbo_tex_coord_loc);
+          glVertexAttribPointer(gl_fbo_position_loc[tb], 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_pos), fbo_vVertices_pos);
+          glVertexAttribPointer(gl_fbo_tex_coord_loc[tb], 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_tex_coord), fbo_vVertices_tex_coord);
+          glEnableVertexAttribArray(gl_fbo_position_loc[tb]);
+          glEnableVertexAttribArray(gl_fbo_tex_coord_loc[tb]);
 
-          glUniform1i(gl_fbo_sampler_loc, 0);
-          glUniform1i(gl_fbo_tex_size_loc, height * scale);
+          glUniform1i(gl_fbo_sampler_loc[tb], 0);
+          glUniform1i(gl_fbo_tex_size_loc[tb], height * scale);
           glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, fbo_indices);
 
-          glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled);
-          tex = ctx->gl_tex_upscaled;
+          glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled[tb]);
+          tex = ctx->gl_tex_upscaled[tb];
         } else {
           if (dim3) {
             glBindTexture(GL_TEXTURE_3D, tex_upscaled);
@@ -1806,7 +1810,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
             glDisable(GL_CULL_FACE);
             glDisable(GL_DEPTH_TEST);
 
-            glUseProgram(gl_fbo_program);
+            glUseProgram(gl_fbo_program[tb]);
             fbo_vVertices_tex_coord[0][0] = 0;
             fbo_vVertices_tex_coord[0][1] = 0;
             fbo_vVertices_tex_coord[1][0] = 0;
@@ -1816,14 +1820,14 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
             fbo_vVertices_tex_coord[3][0] = 1;
             fbo_vVertices_tex_coord[3][1] = 1;
 
-            glVertexAttribPointer(gl_fbo_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_pos), fbo_vVertices_pos);
-            glVertexAttribPointer(gl_fbo_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_tex_coord), fbo_vVertices_tex_coord);
-            glEnableVertexAttribArray(gl_fbo_position_loc);
-            glEnableVertexAttribArray(gl_fbo_tex_coord_loc);
+            glVertexAttribPointer(gl_fbo_position_loc[tb], 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_pos), fbo_vVertices_pos);
+            glVertexAttribPointer(gl_fbo_tex_coord_loc[tb], 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_tex_coord), fbo_vVertices_tex_coord);
+            glEnableVertexAttribArray(gl_fbo_position_loc[tb]);
+            glEnableVertexAttribArray(gl_fbo_tex_coord_loc[tb]);
 
-            glUniform1i(gl_fbo_sampler_loc, 0);
+            glUniform1i(gl_fbo_sampler_loc[tb], 0);
             if (0)
-              glUniform1i(gl_fbo_tex_size_loc, height * scale);
+              glUniform1i(gl_fbo_tex_size_loc[tb], height * scale);
 
             if (gl_sem) {
               GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
@@ -1835,8 +1839,8 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
               glSignalSemaphoreEXT(gl_sem_next, 0, NULL, 1, &tex_upscaled, &layout);
             }
 
-            glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled);
-            tex = ctx->gl_tex_upscaled;
+            glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled[tb]);
+            tex = ctx->gl_tex_upscaled[tb];
           } else {
             glBindTexture(GL_TEXTURE_2D, tex_upscaled);
             tex = tex_upscaled;
@@ -1845,15 +1849,15 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
       }
     }
 
-    ctx->prev_tex_upscaled = tex;
+    ctx->prev_tex_upscaled[tb] = tex;
   }
 
   if (!upscaled) {
     scale = 1;
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id);
+    glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id[tb]);
     if (!data) {
-      if (ctx->prev_tex_upscaled) {
+      if (ctx->prev_tex_upscaled[tb]) {
         data = ctx->prev_data;
       }
     }
@@ -1866,9 +1870,9 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
         data);
     }
 
-    tex = ctx->gl_tex_id;
+    tex = ctx->gl_tex_id[tb];
 
-    ctx->prev_tex_upscaled = 0;
+    ctx->prev_tex_upscaled[tb] = 0;
   }
 
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
@@ -1903,14 +1907,14 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    if (data || !ctx->prev_tex_fsr || ctx->prev_ctx_width != ctx_width || ctx->prev_ctx_height != ctx_height) {
+    if (data || !ctx->prev_tex_fsr[tb] || ctx->prev_ctx_width != ctx_width || ctx->prev_ctx_height != ctx_height) {
       if (!dim3 && tex_upscaled && gl_sem) {
         GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
         glWaitSemaphoreEXT(gl_sem, 0, NULL, 1, &tex_upscaled, &layout);
       }
       glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-      GLuint out_tex = fsr_main(top_bot, tex, height * scale, width * scale, ctx_height, ctx_width, 0.25f);
-      ctx->prev_tex_fsr = out_tex;
+      GLuint out_tex = fsr_main(tb, top_bot, tex, height * scale, width * scale, ctx_height, ctx_width, 0.25f);
+      ctx->prev_tex_fsr[tb] = out_tex;
       ctx->prev_ctx_width = ctx_width;
       ctx->prev_ctx_height = ctx_height;
       glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
@@ -1923,15 +1927,15 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
       glBindTexture(GL_TEXTURE_2D, out_tex);
     } else {
       glActiveTexture(GL_TEXTURE0);
-      glBindTexture(GL_TEXTURE_2D, ctx->prev_tex_fsr);
+      glBindTexture(GL_TEXTURE_2D, ctx->prev_tex_fsr[tb]);
     }
 
-    glUseProgram(gl_program);
-    glVertexAttribPointer(gl_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*vVertices_pos), vVertices_pos);
-    glVertexAttribPointer(gl_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*vVertices_tex_coord), vVertices_tex_coord);
+    glUseProgram(gl_program[tb]);
+    glVertexAttribPointer(gl_position_loc[tb], 3, GL_FLOAT, GL_FALSE, sizeof(*vVertices_pos), vVertices_pos);
+    glVertexAttribPointer(gl_tex_coord_loc[tb], 2, GL_FLOAT, GL_FALSE, sizeof(*vVertices_tex_coord), vVertices_tex_coord);
 
-    glEnableVertexAttribArray(gl_position_loc);
-    glEnableVertexAttribArray(gl_tex_coord_loc);
+    glEnableVertexAttribArray(gl_position_loc[tb]);
+    glEnableVertexAttribArray(gl_tex_coord_loc[tb]);
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -1939,15 +1943,15 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glGenerateMipmap(GL_TEXTURE_2D);
 
-    glUniform1i(gl_sampler_loc, 0);
+    glUniform1i(gl_sampler_loc[tb], 0);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
   } else {
-    glUseProgram(gl_program);
-    glVertexAttribPointer(gl_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*vVertices_pos), vVertices_pos);
-    glVertexAttribPointer(gl_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*vVertices_tex_coord), vVertices_tex_coord);
+    glUseProgram(gl_program[tb]);
+    glVertexAttribPointer(gl_position_loc[tb], 3, GL_FLOAT, GL_FALSE, sizeof(*vVertices_pos), vVertices_pos);
+    glVertexAttribPointer(gl_tex_coord_loc[tb], 2, GL_FLOAT, GL_FALSE, sizeof(*vVertices_tex_coord), vVertices_tex_coord);
 
-    glEnableVertexAttribArray(gl_position_loc);
-    glEnableVertexAttribArray(gl_tex_coord_loc);
+    glEnableVertexAttribArray(gl_position_loc[tb]);
+    glEnableVertexAttribArray(gl_tex_coord_loc[tb]);
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -1955,7 +1959,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glGenerateMipmap(GL_TEXTURE_2D);
 
-    glUniform1i(gl_sampler_loc, 0);
+    glUniform1i(gl_sampler_loc[tb], 0);
 
     if (!dim3 && tex_upscaled && gl_sem) {
       GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
@@ -1967,11 +1971,11 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
       glSignalSemaphoreEXT(gl_sem_next, 0, NULL, 1, &tex_upscaled, &layout);
     }
 
-    ctx->prev_ctx_height = ctx->prev_ctx_width = ctx->prev_tex_fsr = 0;
+    ctx->prev_ctx_height = ctx->prev_ctx_width = ctx->prev_tex_fsr[tb] = 0;
   }
 }
 
-static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot, int force)
+static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot, int tb, int force)
 {
   pthread_mutex_lock(&ctx->status_lock);
   enum FrameBufferStatus status = ctx->status;
@@ -1992,13 +1996,13 @@ static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int to
   if (status == FBS_UPDATED)
   {
     __atomic_add_fetch(&frame_rate_displayed_tracker[top_bot].counter, 1, __ATOMIC_RELAXED);
-    do_hr_draw_screen(ctx, data, width, height, top_bot, index_display);
+    do_hr_draw_screen(ctx, data, width, height, top_bot, tb, index_display);
     return 1;
   }
   else
   {
     if (force)
-      do_hr_draw_screen(ctx, NULL, width, height, top_bot, index_display);
+      do_hr_draw_screen(ctx, NULL, width, height, top_bot, tb, index_display);
     return 0;
   }
 }
@@ -2020,7 +2024,7 @@ static void kcpUpdateWindowTitle(SDL_Window *win, int tick_diff)
 static void kcpUpdateWindowsTitles(int tb, int top_bot, int tick_diff)
 {
   snprintf(window_title_with_fps, sizeof(window_title_with_fps),
-    tb == 0 ? TITLE " (FPS %03d | %03d) (Counter %d %d %d %d)" : TITLE " (FPS %03d | %03d)",
+    tb == SCREEN_TOP ? TITLE " (FPS %03d | %03d) (Counter %d %d %d %d)" : TITLE " (FPS %03d | %03d)",
     __atomic_load_n(&frame_rate_decoded_tracker[top_bot].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
     __atomic_load_n(&frame_rate_displayed_tracker[top_bot].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
     __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED),
@@ -2030,168 +2034,282 @@ static void kcpUpdateWindowsTitles(int tb, int top_bot, int tick_diff)
   SDL_SetWindowTitle(win[tb], window_title_with_fps);
 }
 
-static void updateWindowsTitles(void)
+static void updateWindowsTitles(int i)
 {
   uint64_t next_tick = iclock64();
-  uint64_t tick_diff = next_tick - window_title_last_tick;
+  uint64_t tick_diff = next_tick - window_title_last_tick[i];
   if (tick_diff >= FRAME_STAT_EVERY_X_US) {
-    int my_view = view_mode;
+    int vm = __atomic_load_n(&view_mode, __ATOMIC_RELAXED);
 
-    if (my_view == VIEW_MODE_TOP_BOT) {
-      if (kcp_active) {
-        kcpUpdateWindowTitle(win[0], (int)tick_diff);
-      } else {
-        snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (FPS %03d %03d | %03d %03d) (Size %06d %06d) (Packet time %04d %04d)",
-          __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-          __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-          __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-          __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-          __atomic_load_n(&frame_size_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED),
-          __atomic_load_n(&frame_size_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED),
-          __atomic_load_n(&delay_between_packet_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED),
-          __atomic_load_n(&delay_between_packet_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED));
-        SDL_SetWindowTitle(win[0], window_title_with_fps);
+    if (vm == VIEW_MODE_TOP_BOT) {
+      if (i == SCREEN_TOP) {
+        if (kcp_active) {
+          kcpUpdateWindowTitle(win[i], (int)tick_diff);
+        } else {
+          snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (FPS %03d %03d | %03d %03d) (Size %06d %06d) (Packet time %04d %04d)",
+            __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+            __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+            __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+            __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+            __atomic_load_n(&frame_size_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED),
+            __atomic_load_n(&frame_size_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED),
+            __atomic_load_n(&delay_between_packet_tracker[SCREEN_TOP].counter, __ATOMIC_RELAXED),
+            __atomic_load_n(&delay_between_packet_tracker[SCREEN_BOT].counter, __ATOMIC_RELAXED));
+          SDL_SetWindowTitle(win[i], window_title_with_fps);
+        }
       }
     } else {
       for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
         int tb = top_bot;
-        if (my_view == VIEW_MODE_BOT) {
-          tb = 0;
+        if (vm == VIEW_MODE_BOT) {
+          tb = SCREEN_TOP;
           top_bot = SCREEN_BOT;
         }
-        if (kcp_active) {
-          kcpUpdateWindowsTitles(tb, top_bot, (int)tick_diff);
-        } else {
-          snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (FPS %03d | %03d) (Size %06d) (Packet time %04d)",
-            __atomic_load_n(&frame_rate_decoded_tracker[top_bot].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-            __atomic_load_n(&frame_rate_displayed_tracker[top_bot].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-            __atomic_load_n(&frame_size_tracker[top_bot].counter, __ATOMIC_RELAXED),
-            __atomic_load_n(&delay_between_packet_tracker[top_bot].counter, __ATOMIC_RELAXED));
-          SDL_SetWindowTitle(win[tb], window_title_with_fps);
+        if (i == tb) {
+          if (kcp_active) {
+            kcpUpdateWindowsTitles(tb, top_bot, (int)tick_diff);
+          } else {
+            snprintf(window_title_with_fps, sizeof(window_title_with_fps), TITLE " (FPS %03d | %03d) (Size %06d) (Packet time %04d)",
+              __atomic_load_n(&frame_rate_decoded_tracker[top_bot].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+              __atomic_load_n(&frame_rate_displayed_tracker[top_bot].counter, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+              __atomic_load_n(&frame_size_tracker[top_bot].counter, __ATOMIC_RELAXED),
+              __atomic_load_n(&delay_between_packet_tracker[top_bot].counter, __ATOMIC_RELAXED));
+            SDL_SetWindowTitle(win[tb], window_title_with_fps);
+          }
         }
-        if (my_view != VIEW_MODE_SEPARATE) {
+        if (vm != VIEW_MODE_SEPARATE) {
           break;
         }
       }
     }
 
-    window_title_last_tick = next_tick;
-    for (int i = 0; i < SCREEN_COUNT; ++i) {
-      __atomic_store_n(&frame_rate_decoded_tracker[i].counter, 0, __ATOMIC_RELAXED);
-      __atomic_store_n(&frame_rate_displayed_tracker[i].counter, 0, __ATOMIC_RELAXED);
-      __atomic_store_n(&frame_size_tracker[i].counter, 0, __ATOMIC_RELAXED);
-      __atomic_store_n(&delay_between_packet_tracker[i].counter, 0, __ATOMIC_RELAXED);
+    window_title_last_tick[i] = next_tick;
+    for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
+      if (vm == VIEW_MODE_SEPARATE) {
+        if (top_bot != i) {
+          continue;
+        }
+      }
+      __atomic_store_n(&frame_rate_decoded_tracker[top_bot].counter, 0, __ATOMIC_RELAXED);
+      __atomic_store_n(&frame_rate_displayed_tracker[top_bot].counter, 0, __ATOMIC_RELAXED);
+      __atomic_store_n(&frame_size_tracker[top_bot].counter, 0, __ATOMIC_RELAXED);
+      __atomic_store_n(&delay_between_packet_tracker[top_bot].counter, 0, __ATOMIC_RELAXED);
     }
-    __atomic_store_n(&kcp_input_count, 0, __ATOMIC_RELAXED);
-    __atomic_store_n(&kcp_input_fid_count, 0, __ATOMIC_RELAXED);
-    __atomic_store_n(&kcp_input_pid_count, 0, __ATOMIC_RELAXED);
-    __atomic_store_n(&kcp_recv_pid_count, 0, __ATOMIC_RELAXED);
+    if (i == SCREEN_TOP) {
+      __atomic_store_n(&kcp_input_count, 0, __ATOMIC_RELAXED);
+      __atomic_store_n(&kcp_input_fid_count, 0, __ATOMIC_RELAXED);
+      __atomic_store_n(&kcp_input_pid_count, 0, __ATOMIC_RELAXED);
+      __atomic_store_n(&kcp_recv_pid_count, 0, __ATOMIC_RELAXED);
+    }
   }
+}
 
+static uint64_t lastUpdated[SCREEN_COUNT];
+static rp_lock_t nk_lock;
+static int nk_input_current;
+
+static void rp_lock_wait_nk_lock(void)
+{
+  while (running) {
+    struct timespec to;
+    clock_gettime(CLOCK_REALTIME, &to);
+    to.tv_nsec += NWM_THREAD_WAIT_NS;
+    to.tv_sec += to.tv_nsec / 1000000000;
+    to.tv_nsec %= 1000000000;
+    int ret = rp_lock_wait(nk_lock, &to);
+    if (ret == 0) {
+      break;
+    }
+    if (ret != ETIMEDOUT) {
+      err_log("nk_lock lock error\n");
+      running = 0;
+    }
+  }
 }
 
 static void
 MainLoop(void *loopArg)
 {
+  struct nk_context *ctx = (struct nk_context *)loopArg;
+
+  /* Input */
+  SDL_Event evt;
+  while (SDL_WaitEventTimeout(&evt, REST_EVERY_MS))
+  {
+    if (
+      evt.type == SDL_QUIT ||
+      (evt.type == SDL_WINDOWEVENT && evt.window.event == SDL_WINDOWEVENT_CLOSE)
+    )
+      running = 0;
+    else if (
+      evt.type == SDL_KEYDOWN &&
+      evt.key.keysym.sym == SDLK_f
+    ) {
+      fullscreen = !fullscreen;
+    }
+    else {
+      switch (evt.type) {
+        case SDL_MOUSEMOTION:
+          if (evt.motion.windowID != win_id[SCREEN_TOP]) {
+            goto skip_evt;
+          }
+          break;
+        case SDL_MOUSEBUTTONDOWN:
+        case SDL_MOUSEBUTTONUP:
+          if (evt.button.windowID != win_id[SCREEN_TOP]) {
+            goto skip_evt;
+          }
+          break;
+        case SDL_MOUSEWHEEL:
+          if (evt.wheel.windowID != win_id[SCREEN_TOP]) {
+            goto skip_evt;
+          }
+          break;
+      }
+
+      rp_lock_wait_nk_lock();
+      if (!running)
+        return;
+
+      if (!nk_input_current) {
+        nk_input_begin(ctx);
+        nk_input_current = 1;
+      }
+      nk_sdl_handle_event(&evt);
+
+      rp_lock_rel(nk_lock);
+
+skip_evt:
+    }
+  }
+}
+
+static view_mode_t prev_view_mode[SCREEN_COUNT];
+static int prev_fullscreen[SCREEN_COUNT];
+
+static void
+ThreadLoop(int i)
+{
   /* Draw */
   int screen_count = SCREEN_COUNT;
-  if (view_mode == VIEW_MODE_TOP || view_mode == VIEW_MODE_BOT || view_mode == VIEW_MODE_TOP_BOT)
+  view_mode_t vm = __atomic_load_n(&view_mode, __ATOMIC_RELAXED);
+  if (vm != VIEW_MODE_SEPARATE)
     screen_count = 1;
 
-  for (int i = 0; i < screen_count; ++i)
-  {
-    float bg[4];
-    nk_color_fv(bg, nk_rgb(28, 48, 62));
-    // SDL_GetWindowSize(win[i], &win_width[i], &win_height[i]);
-    SDL_GL_GetDrawableSize(win[i], &win_width[i], &win_height[i]);
+  if (prev_view_mode[i] != vm) {
+    updateViewMode(i, vm);
+    prev_view_mode[i] = vm;
+  }
 
-    SDL_GL_MakeCurrent(win[i], glContext[i]);
-    glViewport(0, 0, win_width[i], win_height[i]);
-    glClearColor(bg[0], bg[1], bg[2], bg[3]);
-    glClear(GL_COLOR_BUFFER_BIT);
+  if (i >= screen_count) {
+    Sleep(REST_EVERY_MS);
+    return;
+  }
+
+  if (prev_fullscreen[i] != fullscreen) {
+    if (fullscreen) {
+      if (__atomic_load_n(&fullscreen_count, __ATOMIC_ACQUIRE) == i) {
+        if (i == SCREEN_TOP) {
+          __atomic_store_n(&fullscreen_index, SDL_GetWindowDisplayIndex(win[i]), __ATOMIC_RELEASE);
+        } else if (__atomic_load_n(&fullscreen_index, __ATOMIC_ACQUIRE) == SDL_GetWindowDisplayIndex(win[i])) {
+          goto skip_fullscreen;
+        }
+        SDL_SetWindowFullscreen(win[i], SDL_WINDOW_FULLSCREEN_DESKTOP);
+skip_fullscreen:
+        __atomic_store_n(&fullscreen_count, i + 1, __ATOMIC_RELEASE);
+        prev_fullscreen[i] = fullscreen;
+      }
+    } else {
+      fullscreen_count = 0;
+      updateViewMode(i, vm);
+      prev_fullscreen[i] = fullscreen;
+    }
+  }
+
+  float bg[4];
+  nk_color_fv(bg, nk_rgb(28, 48, 62));
+  // SDL_GetWindowSize(win[i], &win_width[i], &win_height[i]);
+  SDL_GL_GetDrawableSize(win[i], &win_width[i], &win_height[i]);
+
+  // SDL_GL_MakeCurrent(win[i], glContext[i]);
+  glViewport(0, 0, win_width[i], win_height[i]);
+  glClearColor(bg[0], bg[1], bg[2], bg[3]);
+  glClear(GL_COLOR_BUFFER_BIT);
 
 #define MIN_UPDATE_INTERVAL_US (33333)
 
-    int force = 0;
-    if (i == 0) {
-      pthread_mutex_lock(&gl_updated_mutex);
-      while (!gl_updated) {
-        struct timespec to;
-        clock_gettime(CLOCK_REALTIME, &to);
-        to.tv_nsec += MIN_UPDATE_INTERVAL_US * 1000;
-        to.tv_sec += to.tv_nsec / 1000000000;
-        to.tv_nsec %= 1000000000;
-        if (ETIMEDOUT == pthread_cond_timedwait(&gl_updated_cond, &gl_updated_mutex, &to)) {
-          force = 1;
-          break;
-        }
-      }
-      gl_updated = 0;
-      pthread_mutex_unlock(&gl_updated_mutex);
+  int force = 0;
+  pthread_mutex_lock(&buffer_ctx[i].decode_updated_mutex);
+  while (!buffer_ctx[i].decode_updated) {
+    if (!running) {
+      return;
     }
-
-    int updated = 0;
-    static uint64_t lastUpdated[SCREEN_COUNT] = { 0 };
-    uint64_t nextUpdated = iclock64();
-    if (nextUpdated - lastUpdated[i] > MIN_UPDATE_INTERVAL_US)
+    struct timespec to;
+    clock_gettime(CLOCK_REALTIME, &to);
+    to.tv_nsec += MIN_UPDATE_INTERVAL_US * 1000;
+    to.tv_sec += to.tv_nsec / 1000000000;
+    to.tv_nsec %= 1000000000;
+    if (ETIMEDOUT == pthread_cond_timedwait(&buffer_ctx[i].decode_updated_cond, &buffer_ctx[i].decode_updated_mutex, &to)) {
       force = 1;
-
-    if (view_mode == VIEW_MODE_TOP_BOT) {
-      force = 1;
-      updated |= hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400, 240, SCREEN_TOP, force);
-      updated |= hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT, force);
-    } else if (view_mode == VIEW_MODE_BOT)
-      updated = hr_draw_screen(&buffer_ctx[1], 320, 240, 1, force);
-    else
-      updated = hr_draw_screen(&buffer_ctx[i], i == 0 ? 400 : 320, 240, i, force);
-
-    /* IMPORTANT: `nk_sdl_render` modifies some global OpenGL state
-     * with blending, scissor, face culling, depth test and viewport and
-     * defaults everything back into a default state.
-     * Make sure to either a.) save and restore or b.) reset your own state after
-     * rendering the UI. */
-    if (updated || force) {
-      if (i == 0) {
-        struct nk_context *ctx = (struct nk_context *)loopArg;
-        /* Input */
-        SDL_Event evt;
-        nk_input_begin(ctx);
-        while (SDL_PollEvent(&evt))
-        {
-          if (
-            evt.type == SDL_QUIT ||
-            (evt.type == SDL_WINDOWEVENT && evt.window.event == SDL_WINDOWEVENT_CLOSE)
-          )
-            running = nk_false;
-          else if (
-            evt.type == SDL_KEYDOWN &&
-            evt.key.keysym.sym == SDLK_f
-          ) {
-            if (fullscreen) {
-              SDL_SetWindowFullscreen(win[0], 0);
-              if (view_mode == VIEW_MODE_SEPARATE)
-                SDL_SetWindowFullscreen(win[1], 0);
-              fullscreen = 0;
-            } else {
-              SDL_SetWindowFullscreen(win[0], SDL_WINDOW_FULLSCREEN_DESKTOP);
-              if (view_mode == VIEW_MODE_SEPARATE)
-                SDL_SetWindowFullscreen(win[1], SDL_WINDOW_FULLSCREEN_DESKTOP);
-              fullscreen = 1;
-            }
-          }
-          else
-            nk_sdl_handle_event(&evt);
-        }
-        nk_input_end(ctx);
-
-        guiMain(ctx);
-        updateWindowsTitles();
-        nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
-      }
-      SDL_GL_SwapWindow(win[i]);
-      lastUpdated[i] = nextUpdated;
+      break;
     }
   }
+  buffer_ctx[i].decode_updated = 0;
+  pthread_mutex_unlock(&buffer_ctx[i].decode_updated_mutex);
+
+  int updated = 0;
+  uint64_t nextUpdated = iclock64();
+  if (nextUpdated - lastUpdated[i] > MIN_UPDATE_INTERVAL_US)
+    force = 1;
+
+  if (vm == VIEW_MODE_TOP_BOT) {
+    force = 1;
+    updated |= hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400, 240, SCREEN_TOP, i, force);
+    updated |= hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT, i, force);
+  } else if (vm == VIEW_MODE_BOT)
+    updated = hr_draw_screen(&buffer_ctx[1], 320, 240, 1, i, force);
+  else
+    updated = hr_draw_screen(&buffer_ctx[i], i == 0 ? 400 : 320, 240, i, i, force);
+
+  /* IMPORTANT: `nk_sdl_render` modifies some global OpenGL state
+    * with blending, scissor, face culling, depth test and viewport and
+    * defaults everything back into a default state.
+    * Make sure to either a.) save and restore or b.) reset your own state after
+    * rendering the UI. */
+  if (updated || force) {
+    if (i == 0) {
+      struct nk_context *ctx = nk_ctx;
+      rp_lock_wait_nk_lock();
+      if (!running)
+        return;
+
+      if (nk_input_current) {
+        nk_input_end(ctx);
+        nk_input_current = 0;
+      } else {
+        nk_input_begin(ctx);
+        nk_input_end(ctx);
+      }
+
+      guiMain(ctx);
+      nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
+
+      rp_lock_rel(nk_lock);
+    }
+    SDL_GL_SwapWindow(win[i]);
+    lastUpdated[i] = nextUpdated;
+
+    updateWindowsTitles(i);
+  }
+}
+
+static void *window_thread_func(void *arg)
+{
+  int i = (int)(uintptr_t)arg;
+  SDL_GL_MakeCurrent(win[i], glContext[i]);
+  while (running)
+    ThreadLoop(i);
+  return NULL;
 }
 
 static int acquire_sem(rp_sem_t *sem) {
@@ -2229,10 +2347,10 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, int top_bot, int frame_
   ctx->status = FBS_UPDATED;
   pthread_mutex_unlock(&ctx->status_lock);
 
-  pthread_mutex_lock(&gl_updated_mutex);
-  gl_updated = 1;
-  pthread_cond_signal(&gl_updated_cond);
-  pthread_mutex_unlock(&gl_updated_mutex);
+  pthread_mutex_lock(&ctx->decode_updated_mutex);
+  ctx->decode_updated = 1;
+  pthread_cond_signal(&ctx->decode_updated_cond);
+  pthread_mutex_unlock(&ctx->decode_updated_mutex);
 }
 
 uint8_t upscaled_u_image[400 * 240];
@@ -3185,9 +3303,12 @@ void *jpeg_decode_thread_func(void *)
       }
     }
 
-    FrameBufferContext *ctx = &buffer_ctx[ptr->top_bot];
-    sr_next(ptr->top_bot * FrameBufferCount + ctx->index_decode);
-    uint8_t *out = ctx->screen_decoded[ctx->index_decode];
+    int top_bot = ptr->top_bot;
+    FrameBufferContext *ctx = &buffer_ctx[top_bot];
+    int index = ctx->index_decode;
+    int tb = __atomic_load_n(&view_mode, __ATOMIC_RELAXED) == VIEW_MODE_SEPARATE ? top_bot : SCREEN_TOP;
+    sr_next((tb * SCREEN_COUNT + top_bot) * FrameBufferCount + index);
+    uint8_t *out = ctx->screen_decoded[index];
 
     int ret;
     if (ptr->is_kcp) {
@@ -3197,14 +3318,14 @@ void *jpeg_decode_thread_func(void *)
         restart_kcp = 1;
       } else {
         // err_log("%d\n", kcp_recv_info[ptr->kcp_w][ptr->kcp_queue_w].term_count);
-        handle_decode_frame_screen(ctx, ptr->top_bot, ptr->in_size, ptr->in_delay);
+        handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay);
       }
     } else {
       if (ptr->in) {
-        if (handle_decode(out, ptr->in, ptr->in_size, ptr->top_bot == 0 ? 400 : 320, 240) != 0) {
+        if (handle_decode(out, ptr->in, ptr->in_size, top_bot == 0 ? 400 : 320, 240) != 0) {
           err_log("recv decode error\n");
         } else {
-          handle_decode_frame_screen(ctx, ptr->top_bot, ptr->in_size, ptr->in_delay);
+          handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay);
         }
       }
     }
@@ -3222,7 +3343,7 @@ void receive_from_socket_loop(SOCKET s)
     kcp = ikcp_create(kcp_cid, 0);
     if (!kcp) {
       err_log("ikcp_create failed\n");
-      Sleep(250);
+      Sleep(RP_SOCKET_INTERVAL);
       continue;
     }
     init_kcp(kcp);
@@ -3290,7 +3411,7 @@ void receive_from_socket_loop(SOCKET s)
     }
 
     receive_from_socket(s);
-    // Sleep(250);
+    // Sleep(RP_SOCKET_INTERVAL);
 
     pthread_cancel(jpeg_decode_thread);
     pthread_join(jpeg_decode_thread, NULL);
@@ -3402,7 +3523,6 @@ int main(int argc, char *argv[])
   CoInitializeEx(NULL, COINIT_MULTITHREADED);
 #endif
   /* GUI */
-  struct nk_context *ctx;
   int ret;
 
   NK_UNUSED(argc);
@@ -3445,6 +3565,8 @@ int main(int argc, char *argv[])
     err_log("SDL_CreateWindow: %s\n", SDL_GetError());
     return -1;
   }
+  win_id[SCREEN_TOP] = SDL_GetWindowID(win[SCREEN_TOP]);
+
   win[SCREEN_BOT] = SDL_CreateWindow(TITLE,
                          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                          WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
@@ -3453,6 +3575,7 @@ int main(int argc, char *argv[])
     err_log("SDL_CreateWindow: %s\n", SDL_GetError());
     return -1;
   }
+  win_id[SCREEN_BOT] = SDL_GetWindowID(win[SCREEN_BOT]);
 
   glContext[SCREEN_TOP] = SDL_GL_CreateContext(win[SCREEN_TOP]);
   if (!glContext[SCREEN_TOP])
@@ -3499,9 +3622,7 @@ int main(int argc, char *argv[])
   glGetIntegerv(GL_MINOR_VERSION, &ogl_version_minor);
   err_log("ogl version: %d.%d\n", ogl_version_major, ogl_version_minor);
 
-  // SDL_GL_MakeCurrent(win[SCREEN_TOP], glContext[SCREEN_TOP]);
-
-  SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
+  // SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
   glContext[SCREEN_BOT] = SDL_GL_CreateContext(win[SCREEN_BOT]);
   if (!glContext[SCREEN_BOT])
   {
@@ -3518,9 +3639,10 @@ int main(int argc, char *argv[])
   }
 
   /* OpenGL setup */
+  SDL_GL_MakeCurrent(win[SCREEN_TOP], glContext[SCREEN_TOP]);
   glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
 
-  ctx = nk_sdl_init(win[SCREEN_TOP]);
+  struct nk_context *ctx = nk_ctx = nk_sdl_init(win[SCREEN_TOP]);
   /* Load Fonts: if none of these are loaded a default font will be used  */
   /* Load Cursor: if you uncomment cursor loading please hide the cursor */
   {
@@ -3545,36 +3667,44 @@ int main(int argc, char *argv[])
 
   sock_startup();
 
+  for (int j = 0; j < SCREEN_COUNT; ++j) {
+    SDL_GL_MakeCurrent(win[j], glContext[j]);
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      glGenTextures(1, &buffer_ctx[i].gl_tex_id[j]);
+
+      glGenTextures(1, &buffer_ctx[i].gl_tex_upscaled[j]);
+      glActiveTexture(GL_TEXTURE_2D);
+      glBindTexture(GL_TEXTURE_2D, buffer_ctx[i].gl_tex_upscaled[j]);
+      glTexImage2D(
+        GL_TEXTURE_2D, 0,
+        GL_INT_FORMAT, 240 * screen_upscale_factor,
+        (i == 0 ? 400 : 320) * screen_upscale_factor, 0,
+        GL_FORMAT, GL_UNSIGNED_BYTE,
+        0);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      glBindTexture(GL_TEXTURE_2D, 0);
+    }
+  }
+
   for (int i = 0; i < SCREEN_COUNT; ++i) {
-    glGenTextures(1, &buffer_ctx[i].gl_tex_id);
-
-    glGenTextures(1, &buffer_ctx[i].gl_tex_upscaled);
-    glActiveTexture(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, buffer_ctx[i].gl_tex_upscaled);
-    glTexImage2D(
-      GL_TEXTURE_2D, 0,
-      GL_INT_FORMAT, 240 * screen_upscale_factor,
-      (i == 0 ? 400 : 320) * screen_upscale_factor, 0,
-      GL_FORMAT, GL_UNSIGNED_BYTE,
-      0);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
-
     buffer_ctx[i].status_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     buffer_ctx[i].index_display = FBI_DISPLAY;
     buffer_ctx[i].index_done_decode_ready_display = FBI_IN_BETWEEN;
     buffer_ctx[i].index_decode = FBI_DECODE;
+
+    buffer_ctx[i].decode_updated_cond = PTHREAD_COND_INITIALIZER;
+    buffer_ctx[i].decode_updated_mutex = PTHREAD_MUTEX_INITIALIZER;
   }
 
   for (int j = 0; j < SCREEN_COUNT; ++j) {
+    SDL_GL_MakeCurrent(win[j], glContext[j]);
     for (int i = 0; i < SCREEN_COUNT; ++i) {
-      SDL_GL_MakeCurrent(win[j], glContext[j]);
       glGenFramebuffers(1, &buffer_ctx[i].gl_fbo_upscaled[j]);
       glBindFramebuffer(GL_DRAW_FRAMEBUFFER, buffer_ctx[i].gl_fbo_upscaled[j]);
-      glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, buffer_ctx[i].gl_tex_upscaled, 0);
+      glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, buffer_ctx[i].gl_tex_upscaled[j], 0);
       GLenum draw_buffer = GL_COLOR_ATTACHMENT0;
       glDrawBuffers(1, &draw_buffer);
       if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
@@ -3585,18 +3715,22 @@ int main(int argc, char *argv[])
     }
   }
 
-  gl_program = LoadProgram((const char *)vShaderStr, (const char *)fShaderStr);
-  gl_position_loc = glGetAttribLocation(gl_program, "a_position");
-  gl_tex_coord_loc = glGetAttribLocation(gl_program, "a_texCoord");
-  gl_sampler_loc = glGetUniformLocation(gl_program, "s_texture");
+  for (int i = 0; i < SCREEN_COUNT; ++i) {
+    SDL_GL_MakeCurrent(win[i], glContext[i]);
 
-  if (1) {
-    gl_fbo_program = LoadProgram((const char *)fbo_vShaderStr, (const char *)fbo_fShaderStr);
-    gl_fbo_position_loc = glGetAttribLocation(gl_fbo_program, "a_position");
-    gl_fbo_tex_coord_loc = glGetAttribLocation(gl_fbo_program, "a_texCoord");
-    gl_fbo_sampler_loc = glGetUniformLocation(gl_fbo_program, "s_texture");
-    if (0)
-      gl_fbo_tex_size_loc = glGetUniformLocation(gl_fbo_program, "v_texSize");
+    gl_program[i] = LoadProgram((const char *)vShaderStr, (const char *)fShaderStr);
+    gl_position_loc[i] = glGetAttribLocation(gl_program[i], "a_position");
+    gl_tex_coord_loc[i] = glGetAttribLocation(gl_program[i], "a_texCoord");
+    gl_sampler_loc[i] = glGetUniformLocation(gl_program[i], "s_texture");
+
+    if (1) {
+      gl_fbo_program[i] = LoadProgram((const char *)fbo_vShaderStr, (const char *)fbo_fShaderStr);
+      gl_fbo_position_loc[i] = glGetAttribLocation(gl_fbo_program[i], "a_position");
+      gl_fbo_tex_coord_loc[i] = glGetAttribLocation(gl_fbo_program[i], "a_texCoord");
+      gl_fbo_sampler_loc[i] = glGetUniformLocation(gl_fbo_program[i], "s_texture");
+      if (0)
+        gl_fbo_tex_size_loc[i] = glGetUniformLocation(gl_fbo_program[i], "v_texSize");
+    }
   }
 
   rpConfigSetDefault();
@@ -3637,6 +3771,22 @@ int main(int argc, char *argv[])
   SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED | ES_DISPLAY_REQUIRED);
 #endif
 
+  rp_lock_init(nk_lock);
+
+  SDL_GL_MakeCurrent(NULL, NULL);
+  pthread_t window_top_thread;
+  if ((ret = pthread_create(&window_top_thread, NULL, window_thread_func, (void *)SCREEN_TOP)))
+  {
+    err_log("window_top_thread create failed\n");
+    return -1;
+  }
+  pthread_t window_bot_thread;
+  if ((ret = pthread_create(&window_bot_thread, NULL, window_thread_func, (void *)SCREEN_BOT)))
+  {
+    err_log("window_bot_thread create failed\n");
+    return -1;
+  }
+
 #if defined(__EMSCRIPTEN__)
 #include <emscripten.h>
   emscripten_set_main_loop_arg(MainLoop, (void *)ctx, 0, nk_true);
@@ -3649,6 +3799,13 @@ int main(int argc, char *argv[])
   SetThreadExecutionState(ES_CONTINUOUS);
 #endif
 
+  pthread_cancel(window_bot_thread);
+  pthread_join(window_bot_thread, NULL);
+  pthread_cancel(window_top_thread);
+  pthread_join(window_top_thread, NULL);
+
+  rp_lock_close(nk_lock);
+
   pthread_cancel(udp_recv_thread);
   pthread_join(udp_recv_thread, NULL);
   pthread_cancel(menu_tcp_thread);
@@ -3659,16 +3816,22 @@ int main(int argc, char *argv[])
   rp_syn_close1(&jpeg_decode_queue);
   rp_sem_close(jpeg_decode_sem);
 
-  glDeleteProgram(gl_fbo_program);
-  glDeleteProgram(gl_program);
+  for (int i = 0; i < SCREEN_COUNT; ++i) {
+    SDL_GL_MakeCurrent(win[i], glContext[i]);
+    glDeleteProgram(gl_fbo_program[i]);
+    glDeleteProgram(gl_program[i]);
+  }
+
   for (int i = 0; i < SCREEN_COUNT; ++i) {
     pthread_mutex_destroy(&buffer_ctx[i].status_lock);
-
-    glDeleteTextures(1, &buffer_ctx[i].gl_tex_id);
-    for (int j = 0; j < SCREEN_COUNT; ++j) {
+  }
+  for (int j = 0; j < SCREEN_COUNT; ++j) {
+    SDL_GL_MakeCurrent(win[j], glContext[j]);
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      glDeleteTextures(1, &buffer_ctx[i].gl_tex_id[j]);
       glDeleteFramebuffers(1, &buffer_ctx[i].gl_fbo_upscaled[j]);
+      glDeleteTextures(1, &buffer_ctx[i].gl_tex_upscaled[j]);
     }
-    glDeleteTextures(1, &buffer_ctx[i].gl_tex_upscaled);
   }
 
   sock_cleanup();

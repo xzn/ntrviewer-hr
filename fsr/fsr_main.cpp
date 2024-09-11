@@ -124,17 +124,18 @@ struct fsr_last_t {
 
 std::vector<struct fsr_last_t> fsr_last;
 
-uint32_t fsrProgramEASU, fsrProgramRCAS;
+uint32_t fsrProgramEASU[SCREEN_COUNT], fsrProgramRCAS[SCREEN_COUNT];
 
-extern "C" GLuint fsr_main(int index, GLuint inputTexture, uint32_t in_w, uint32_t in_h, uint32_t out_w, uint32_t out_h, float rcasAtt) {
+extern "C" GLuint fsr_main(int tb, int top_bot, GLuint inputTexture, uint32_t in_w, uint32_t in_h, uint32_t out_w, uint32_t out_h, float rcasAtt) {
     const std::string baseDir = "fsr/";
 
-    if (!fsrProgramEASU)
-        fsrProgramEASU = createFSRComputeProgramEAUS(baseDir);
-    if (!fsrProgramRCAS)
-        fsrProgramRCAS = createFSRComputeProgramRCAS(baseDir);
+    if (!fsrProgramEASU[tb])
+        fsrProgramEASU[tb] = createFSRComputeProgramEAUS(baseDir);
+    if (!fsrProgramRCAS[tb])
+        fsrProgramRCAS[tb] = createFSRComputeProgramRCAS(baseDir);
     // uint32_t bilinearProgram = createBilinearComputeProgram(baseDir);
 
+    int index = (tb * SCREEN_COUNT) + top_bot;
     int min_size = index + 1;
     if (min_size > fsr_last.size()) {
         fsr_last.resize(min_size);
@@ -169,7 +170,7 @@ extern "C" GLuint fsr_main(int index, GLuint inputTexture, uint32_t in_w, uint32
     }
 
     // runBilinear(fsrData, bilinearProgram, fsrData_vbo, inputTexture, outputImage);
-    runFSR(outputExtent, fsrProgramEASU, fsrProgramRCAS, l->vbo, inputTexture, l->out_image);
+    runFSR(outputExtent, fsrProgramEASU[tb], fsrProgramRCAS[tb], l->vbo, inputTexture, l->out_image);
 
     return l->out_image;
 }
