@@ -1243,6 +1243,9 @@ static enum NK_NAV_FOCUS {
   NK_NAV_FOCUS_NAV,
 } nk_nav_focus;
 
+static int hide_windows = 0;
+static struct nk_style nk_style_current;
+
 static void do_nav_next(enum NK_FOCUS nk_focus)
 {
   if (nk_focus == nk_focus_current) {
@@ -1264,8 +1267,18 @@ static void do_nav_next(enum NK_FOCUS nk_focus)
         break;
 
       case NK_NAV_CANCEL:
+        if (nk_nav_focus == NK_NAV_FOCUS_NONE)
+          hide_windows = 1;
+        else
+          nk_nav_focus = NK_NAV_FOCUS_NONE;
+        break;
+
       case NK_NAV_CONFIRM:
-        nk_nav_focus = NK_NAV_FOCUS_NONE;
+        if (nk_focus == NK_FOCUS_NONE) {
+          nk_nav_focus = NK_NAV_FOCUS_NONE;
+        } else {
+          nk_nav_focus = nk_nav_focus == NK_NAV_FOCUS_NONE ? NK_NAV_FOCUS_NAV : NK_NAV_FOCUS_NONE;
+        }
         break;
 
       default:
@@ -1278,8 +1291,12 @@ static void do_nav_next(enum NK_FOCUS nk_focus)
 static void do_nav_property_next(struct nk_context *ctx, const char *name, enum NK_FOCUS nk_focus, int val)
 {
   if (check_next_property(ctx, name)) {
-    nk_focus_current = nk_focus;
-    nk_nav_focus = NK_NAV_FOCUS_NORMAL;
+    if (nk_nav_focus == NK_NAV_FOCUS_NAV) {
+      cancel_next_property(ctx);
+    } else {
+      nk_focus_current = nk_focus;
+      nk_nav_focus = NK_NAV_FOCUS_NORMAL;
+    }
   } else if (nk_focus_current == nk_focus && nk_nav_focus != NK_NAV_FOCUS_NONE) {
     focus_next_property(ctx, name, val);
     nk_nav_focus = NK_NAV_FOCUS_NORMAL;
@@ -1320,10 +1337,145 @@ static void check_nav_property_prev(struct nk_context *ctx, const char *name, en
   ctx->input.keyboard.keys[NK_KEY_ENTER].clicked = 0;
 }
 
-int hide_windows = 0;
+static void do_nav_combobox_next(struct nk_context *ctx, enum NK_FOCUS nk_focus, int *selected, int count)
+{
+  if (nk_focus_current == nk_focus && nk_nav_focus != NK_NAV_FOCUS_NONE) {
+    ctx->style.combo.border_color = ctx->style.text.color;
+    if (nk_input_is_key_pressed(&ctx->input, NK_KEY_DOWN)) {
+      ++*selected;
+      if (*selected >= count) {
+        *selected = 0;
+      }
+    } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_UP)) {
+      --*selected;
+      if (*selected < 0) {
+        *selected = count - 1;
+      }
+    }
+  }
+
+  do_nav_next(nk_focus);
+}
+
+static void set_nav_combobox_prev(enum NK_FOCUS nk_focus)
+{
+  nk_nav_focus = NK_NAV_FOCUS_NAV;
+  nk_focus_current = nk_focus;
+}
+
+static void check_nav_combobox_prev(struct nk_context *ctx)
+{
+  ctx->style.combo.border_color = nk_style_current.combo.border_color;
+}
+
+static bool do_nav_button_next(struct nk_context *ctx, enum NK_FOCUS nk_focus)
+{
+  bool ret = false;
+  if (nk_focus_current == nk_focus && nk_nav_focus != NK_NAV_FOCUS_NONE) {
+    ctx->style.button.border_color = ctx->style.text.color;
+    if (__atomic_load_n(&nk_nav_command, __ATOMIC_RELAXED) == NK_NAV_CONFIRM) {
+      ret = true;
+    }
+  }
+
+  if (ret) {
+    __atomic_store_n(&nk_nav_command, NK_NAV_NONE, __ATOMIC_RELAXED);
+  } else {
+    do_nav_next(nk_focus);
+  }
+
+  return ret;
+}
+
+static void set_nav_button_prev(enum NK_FOCUS nk_focus)
+{
+  nk_nav_focus = NK_NAV_FOCUS_NAV;
+  nk_focus_current = nk_focus;
+}
+
+static void check_nav_button_prev(struct nk_context *ctx)
+{
+  ctx->style.button.border_color = nk_style_current.button.border_color;
+}
+
+static nk_bool nk_nav_checkbox_val_current;
+static void do_nav_checkbox_next(struct nk_context *ctx, enum NK_FOCUS nk_focus, nk_bool *val)
+{
+  bool ret = false;
+  if (nk_focus_current == nk_focus && nk_nav_focus != NK_NAV_FOCUS_NONE) {
+    ctx->style.checkbox.cursor_hover.data.color = ctx->style.text.color;
+    ctx->style.checkbox.cursor_normal.data.color = ctx->style.text.color;
+    ctx->style.checkbox.border = 1.0f;
+    ctx->style.checkbox.border_color = ctx->style.text.color;
+    if (__atomic_load_n(&nk_nav_command, __ATOMIC_RELAXED) == NK_NAV_CONFIRM) {
+      ret = true;
+      *val = !*val;
+    }
+  }
+
+  if (ret) {
+    __atomic_store_n(&nk_nav_command, NK_NAV_NONE, __ATOMIC_RELAXED);
+  } else {
+    do_nav_next(nk_focus);
+  }
+
+  nk_nav_checkbox_val_current = *val;
+}
+
+static void check_nav_checkbox_prev(struct nk_context *ctx, enum NK_FOCUS nk_focus, nk_bool val)
+{
+  ctx->style.checkbox.border_color = nk_style_current.checkbox.border_color;
+  ctx->style.checkbox.border = nk_style_current.checkbox.border;
+  ctx->style.checkbox.cursor_normal.data.color = nk_style_current.checkbox.cursor_normal.data.color;
+  ctx->style.checkbox.cursor_hover.data.color = nk_style_current.checkbox.cursor_hover.data.color;
+
+  if (nk_nav_checkbox_val_current != val) {
+    nk_nav_focus = NK_NAV_FOCUS_NAV;
+    nk_focus_current = nk_focus;
+  }
+}
+
+static int nk_nav_slider_val_current;
+static void do_nav_slider_next(struct nk_context *ctx, enum NK_FOCUS nk_focus, int *val)
+{
+  if (nk_focus_current == nk_focus && nk_nav_focus != NK_NAV_FOCUS_NONE) {
+    ctx->style.slider.border = 1.0f;
+    ctx->style.slider.border_color = ctx->style.text.color;
+
+    if (nk_input_is_key_pressed(&ctx->input, NK_KEY_RIGHT)) {
+      ++*val;
+    } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_LEFT)){
+      --*val;
+    } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_DOWN)) {
+      *val += 5;
+    } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_UP)) {
+      *val -= 5;
+    } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_START)) {
+      *val = 0;
+    } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_END)) {
+      *val = INT_MAX;
+    }
+  }
+
+  do_nav_next(nk_focus);
+  nk_nav_slider_val_current = *val;
+}
+
+static void check_nav_slider_prev(struct nk_context *ctx, enum NK_FOCUS nk_focus, int val)
+{
+  ctx->style.slider.border_color = nk_style_current.slider.border_color;
+  ctx->style.slider.border = nk_style_current.slider.border;
+
+  if (nk_nav_slider_val_current != val) {
+    nk_nav_focus = NK_NAV_FOCUS_NAV;
+    nk_focus_current = nk_focus;
+  }
+}
+
 static void guiMain(struct nk_context *ctx)
 {
-  struct nk_style_item fixed_background = ctx->style.window.fixed_background;
+  const char *remote_play_wnd = "Remote Play";
+
   ctx->style.window.fixed_background = nk_style_item_hide();
   const char *background_wnd = "Background";
   if (nk_begin(ctx, background_wnd, nk_rect(0, 0, win_width[SCREEN_TOP], win_height[SCREEN_TOP]),
@@ -1333,19 +1485,27 @@ static void guiMain(struct nk_context *ctx)
         nk_input_has_mouse_click(&ctx->input, NK_BUTTON_LEFT))
     {
       hide_windows = !hide_windows;
+      if (!hide_windows)
+        nk_window_set_focus(ctx, remote_play_wnd);
     }
   }
   nk_end(ctx);
-  ctx->style.window.fixed_background = fixed_background;
+  ctx->style.window.fixed_background = nk_style_current.window.fixed_background;
+
+  int nav_command = __atomic_load_n(&nk_nav_command, __ATOMIC_RELAXED);
+  if (hide_windows && (nav_command == NK_NAV_CANCEL || nav_command == NK_NAV_CONFIRM)) {
+    hide_windows = 0;
+    __atomic_store_n(&nk_nav_command, NK_NAV_NONE, __ATOMIC_RELAXED);
+    nk_window_set_focus(ctx, remote_play_wnd);
+  }
 
   enum nk_show_states show_window = !hide_windows;
 
   static char msg_buf[250];
 
   /* GUI */
-  const char *remote_play_wnd = "Remote Play";
   if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 450, 495),
-               NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_TITLE))
+               NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_TITLE) && show_window)
   {
     do_nav_next(NK_FOCUS_NONE);
 
@@ -1359,9 +1519,11 @@ static void guiMain(struct nk_context *ctx)
       "Top Only",
       "Bottom Only"
     };
-    do_nav_next(NK_FOCUS_VIEW_MODE);
+    do_nav_combobox_next(ctx, NK_FOCUS_VIEW_MODE, &selected, sizeof(view_mode_options) / sizeof(*view_mode_options));
     nk_combobox(ctx, view_mode_options, sizeof(view_mode_options) / sizeof(*view_mode_options), &selected, 30, comboIPsSize);
+    check_nav_combobox_prev(ctx);
     if (selected != (int)view_mode) {
+      set_nav_combobox_prev(NK_FOCUS_VIEW_MODE);
       __atomic_store_n(&view_mode, selected, __ATOMIC_RELAXED);
       fullscreen = 0;
     }
@@ -1375,9 +1537,11 @@ static void guiMain(struct nk_context *ctx)
       "FSR",
       "Real-CUGAN + FSR",
     };
-    do_nav_next(NK_FOCUS_UPSCALING_FILTER);
+    do_nav_combobox_next(ctx, NK_FOCUS_UPSCALING_FILTER, &selected, sizeof(upscaling_filter_options) / sizeof(*upscaling_filter_options));
     nk_combobox(ctx, upscaling_filter_options, sizeof(upscaling_filter_options) / sizeof(*upscaling_filter_options), &selected, 30, comboIPsSize);
+    check_nav_combobox_prev(ctx);
     if (selected != upscaling_selected) {
+      set_nav_combobox_prev(NK_FOCUS_UPSCALING_FILTER);
       if (selected == 2) {
         if (!upscaling_filter_created) {
           if (sr_create() < 0) {
@@ -1419,13 +1583,20 @@ static void guiMain(struct nk_context *ctx)
     }
 
     nk_layout_row_dynamic(ctx, 30, 2);
-    if (nk_button_label(ctx, "Auto-Detect")) {
+    bool button_ret;
+    button_ret = do_nav_button_next(ctx, NK_FOCUS_IP_AUTO_DETECT);
+    if (nk_button_label(ctx, "Auto-Detect") || button_ret) {
       detect3DSIP();
       tryAutoSelectAdapterIP();
+      set_nav_button_prev(NK_FOCUS_IP_AUTO_DETECT);
     }
+    check_nav_button_prev(ctx);
     selected = selectedIP;
+    do_nav_combobox_next(ctx, NK_FOCUS_IP_COMBO, &selected, autoIPsCount);
     nk_combobox(ctx, (const char **)autoIPs, autoIPsCount, &selected, 30, comboIPsSize);
+    check_nav_combobox_prev(ctx);
     if (selected != selectedIP) {
+      set_nav_combobox_prev(NK_FOCUS_IP_COMBO);
       selectedIP = selected;
       if (selectedIP) {
         memcpy(ip_octets, autoIPsOctets[selectedIP], 4);
@@ -1436,8 +1607,11 @@ static void guiMain(struct nk_context *ctx)
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Viewer IP", NK_TEXT_CENTERED);
     selected = selectedAdaptor;
+    do_nav_combobox_next(ctx, NK_FOCUS_VIEWER_IP, &selected, adaptorIPsCount);
     nk_combobox(ctx, (const char **)adaptorIPs, adaptorIPsCount, &selected, 30, comboIPsSize);
+    check_nav_combobox_prev(ctx);
     if (selected != selectedAdaptor) {
+      set_nav_combobox_prev(NK_FOCUS_VIEWER_IP);
       selectedAdaptor = selected;
       if (selectedAdaptor == adaptorIPsCount - 2) {
         tryAutoSelectAdapterIP();
@@ -1448,29 +1622,39 @@ static void guiMain(struct nk_context *ctx)
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Viewer Port", NK_TEXT_CENTERED);
+    do_nav_property_next(ctx, nk_property_name, NK_FOCUS_VIEWER_PORT, ntr_rp_port);
     nk_property_int(ctx, nk_property_name, 1024, &ntr_rp_port, 65535, 1, 1);
+    check_nav_property_prev(ctx, nk_property_name, NK_FOCUS_VIEWER_PORT);
 
     nk_layout_row_dynamic(ctx, 30, 1);
     nk_label(ctx, "Press \"F\" to toggle fullscreen.", NK_TEXT_CENTERED);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Prioritize Top Screen", NK_TEXT_CENTERED);
+    do_nav_checkbox_next(ctx, NK_FOCUS_PRIORITY_SCREEN, &ntr_rp_priority);
     nk_checkbox_label(ctx, "", &ntr_rp_priority);
+    check_nav_checkbox_prev(ctx, NK_FOCUS_PRIORITY_SCREEN, ntr_rp_priority);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Priority Screen Factor", NK_TEXT_CENTERED);
+    do_nav_property_next(ctx, nk_property_name, NK_FOCUS_PRIORITY_FACTOR, ntr_rp_priority_factor);
     nk_property_int(ctx, nk_property_name, 0, &ntr_rp_priority_factor, 255, 1, 1);
+    check_nav_property_prev(ctx, nk_property_name, NK_FOCUS_PRIORITY_FACTOR);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     snprintf(msg_buf, sizeof(msg_buf), "JPEG Quality %d", ntr_rp_quality);
     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    do_nav_slider_next(ctx, NK_FOCUS_QUALITY, &ntr_rp_quality);
     nk_slider_int(ctx, 10, &ntr_rp_quality, 100, 1);
+    check_nav_slider_prev(ctx, NK_FOCUS_QUALITY, ntr_rp_quality);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     int qos = ntr_rp_qos * 128 * 1024;
     snprintf(msg_buf, sizeof(msg_buf), "QoS %d.%d MBps", qos / 1024 / 1024, qos / 1024 % 1024 / 128 * 125);
     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+    do_nav_slider_next(ctx, NK_FOCUS_BANDWIDTH_LIMIT, &ntr_rp_qos);
     nk_slider_int(ctx, 4, &ntr_rp_qos, 20, 1);
+    check_nav_slider_prev(ctx, NK_FOCUS_BANDWIDTH_LIMIT, ntr_rp_qos);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Reliable Stream", NK_TEXT_CENTERED);
@@ -1480,18 +1664,27 @@ static void guiMain(struct nk_context *ctx)
       "Off",
       "On",
     };
+    do_nav_combobox_next(ctx, NK_FOCUS_RELIABLE_STREAM, &selected, sizeof(reliable_stream_options) / sizeof(*reliable_stream_options));
     nk_combobox(ctx, reliable_stream_options, sizeof(reliable_stream_options) / sizeof(*reliable_stream_options), &selected, 30, comboRSSize);
+    check_nav_combobox_prev(ctx);
     if (selected != (int)ntr_kcp) {
+      set_nav_combobox_prev(NK_FOCUS_RELIABLE_STREAM);
       ntr_kcp = selected;
     }
 
     nk_layout_row_dynamic(ctx, 30, 2);
-    if (nk_button_label(ctx, "Default"))
+    button_ret = do_nav_button_next(ctx, NK_FOCUS_DEFAULT);
+    if (nk_button_label(ctx, "Default") || button_ret)
     {
       rpConfigSetDefault();
+      set_nav_button_prev(NK_FOCUS_DEFAULT);
     }
-    if (nk_button_label(ctx, "Connect"))
+    check_nav_button_prev(ctx);
+
+    button_ret = do_nav_button_next(ctx, NK_FOCUS_CONNECT);
+    if (nk_button_label(ctx, "Connect") || button_ret)
     {
+      set_nav_button_prev(NK_FOCUS_CONNECT);
       if (menu_work_state == CS_DISCONNECTED)
       {
         menu_work_state = CS_CONNECTING;
@@ -1503,13 +1696,14 @@ static void guiMain(struct nk_context *ctx)
       }
       restart_kcp = 1;
     }
+    check_nav_button_prev(ctx);
   }
   nk_end(ctx);
   nk_window_show(ctx, remote_play_wnd, show_window);
 
   const char *debug_msg_wnd = "Debug";
   if (nk_begin(ctx, debug_msg_wnd, nk_rect(475, 10, 150, 250),
-               NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE))
+               NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE) && show_window)
   {
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Menu", NK_TEXT_CENTERED);
@@ -1545,7 +1739,8 @@ static void guiMain(struct nk_context *ctx)
   nk_window_show(ctx, debug_msg_wnd, show_window);
 
   // HACK to ensure Remote Play config window has keyboard focus
-  nk_window_set_focus(ctx, remote_play_wnd);
+  if (nk_window_is_active(ctx, debug_msg_wnd))
+    nk_window_set_focus(ctx, remote_play_wnd);
 }
 
 #ifdef USE_OGL_ES
@@ -2382,6 +2577,7 @@ MainLoop(void *loopArg)
 
             case SDLK_SPACE:
             case SDLK_RETURN:
+            case SDLK_KP_ENTER:
               __atomic_store_n(&nk_nav_command, NK_NAV_CONFIRM, __ATOMIC_RELAXED);
               goto skip_evt;
 
@@ -3893,6 +4089,7 @@ int main(int argc, char *argv[])
   // set_style(ctx, THEME_RED);
   // set_style(ctx, THEME_BLUE);
   set_style(ctx, THEME_DARK);
+  nk_style_current = ctx->style;
 
   sock_startup();
 
