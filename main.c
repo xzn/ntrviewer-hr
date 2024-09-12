@@ -4121,8 +4121,8 @@ int main(int argc, char *argv[])
     buffer_ctx[i].index_done_decode_ready_display = FBI_IN_BETWEEN;
     buffer_ctx[i].index_decode = FBI_DECODE;
 
-    buffer_ctx[i].decode_updated_cond = PTHREAD_COND_INITIALIZER;
-    buffer_ctx[i].decode_updated_mutex = PTHREAD_MUTEX_INITIALIZER;
+    buffer_ctx[i].decode_updated_cond = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
+    buffer_ctx[i].decode_updated_mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
   }
 
   for (int j = 0; j < SCREEN_COUNT; ++j) {
