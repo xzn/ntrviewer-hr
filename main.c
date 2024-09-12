@@ -4279,7 +4279,7 @@ int main(int argc, char *argv[])
   SetThreadExecutionState(ES_CONTINUOUS);
 #endif
 
-  // Apprently cancelling a thread that has OpenGL stuff causes hangs, so let them exit on their own.
+  // Apparently cancelling a thread that has OpenGL stuff causes hangs, so let them exit on their own.
 
   // pthread_cancel(window_bot_thread);
   pthread_join(window_bot_thread, NULL);
