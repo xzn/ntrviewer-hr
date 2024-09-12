@@ -178,6 +178,66 @@ static inline uint32_t iclock()
   return (uint32_t)(iclock64() & 0xfffffffful);
 }
 
+static struct timespec clock_realtime_abs_ns_from_now(long ns) {
+  struct timespec to;
+  if (clock_gettime(CLOCK_REALTIME, &to) != 0) {
+    running = 0;
+    return (struct timespec){ 0, 0 };
+  }
+  to.tv_nsec += ns;
+  to.tv_sec += to.tv_nsec / 1000000000;
+  to.tv_nsec %= 1000000000;
+
+  return to;
+}
+
+static bool pthread_mutex_lock_loop(pthread_mutex_t *mutex) {
+  while (running) {
+    struct timespec to = clock_realtime_abs_ns_from_now(NWM_THREAD_WAIT_NS);
+    int ret = pthread_mutex_timedlock(mutex, &to);
+    if (ret) {
+      if (ret != ETIMEDOUT) {
+        err_log("pthread_mutex_timedlock error: %d", ret);
+        running = 0;
+        return false;
+      }
+    } else {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void pthread_cond_mutex_flag_signal(int *flag, pthread_cond_t *cond, pthread_mutex_t *mutex) {
+  if (!pthread_mutex_lock_loop(mutex)) {
+    return;
+  }
+  __atomic_store_n(flag, 1, __ATOMIC_RELAXED);
+  pthread_cond_signal(cond);
+  pthread_mutex_unlock(mutex);
+}
+
+static bool pthread_cond_mutex_flag_lock(int *flag, pthread_cond_t *cond, pthread_mutex_t *mutex) {
+  if (!pthread_mutex_lock_loop(mutex)) {
+    return false;
+  }
+  while (!__atomic_load_n(flag,  __ATOMIC_RELAXED)) {
+    if (!running) {
+      return false;
+    }
+    struct timespec to = clock_realtime_abs_ns_from_now(NWM_THREAD_WAIT_NS);
+    int ret = pthread_cond_timedwait(cond, mutex, &to);
+    if (ret) {
+      if (ret != ETIMEDOUT) {
+        err_log("pthread_cond_timedwait error: %d", ret);
+        running = 0;
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 //! 8 bit unsigned integer.
 typedef uint8_t		byte;
 
@@ -214,7 +274,7 @@ typedef int64_t		s64;
 
 #define FRAME_STAT_EVERY_X_US 1000000
 char window_title_with_fps[500];
-uint64_t window_title_last_tick[SCREEN_COUNT];
+uint64_t window_title_last_tick;
 int frame_rate_decoded_tracker[SCREEN_COUNT] = {};
 int frame_rate_displayed_tracker[SCREEN_COUNT] = {};
 int frame_size_tracker[SCREEN_COUNT] = {};
@@ -290,8 +350,6 @@ typedef enum {
 } view_mode_t;
 static view_mode_t view_mode;
 static int fullscreen;
-static int fullscreen_index;
-static int fullscreen_count;
 
 static atomic_uint_fast8_t ip_octets[4];
 
@@ -1115,42 +1173,39 @@ static void getAdapterIPs(void) {
 }
 #endif
 
-static void updateViewMode(int i, view_mode_t vm) {
+static void updateViewMode(view_mode_t vm) {
   switch (vm) {
     case VIEW_MODE_TOP_BOT:
     case VIEW_MODE_TOP:
     case VIEW_MODE_BOT:
-      if (i == SCREEN_BOT) SDL_HideWindow(win[i]);
+      SDL_HideWindow(win[SCREEN_BOT]);
       break;
 
     case VIEW_MODE_SEPARATE:
-      if (i == SCREEN_BOT) SDL_ShowWindow(win[i]);
+      SDL_ShowWindow(win[SCREEN_BOT]);
       break;
   }
 
-  SDL_SetWindowFullscreen(win[i], 0);
-  SDL_RestoreWindow(win[i]);
+  SDL_SetWindowFullscreen(win[SCREEN_TOP], 0);
+  SDL_RestoreWindow(win[SCREEN_TOP]);
+  SDL_SetWindowFullscreen(win[SCREEN_BOT], 0);
+  SDL_RestoreWindow(win[SCREEN_BOT]);
   switch (vm) {
     case VIEW_MODE_TOP_BOT:
-      if (i == SCREEN_TOP)
-        SDL_SetWindowSize(win[i], WINDOW_WIDTH, WINDOW_HEIGHT);
+      SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT);
       break;
 
     case VIEW_MODE_TOP:
-      if (i == SCREEN_TOP)
-        SDL_SetWindowSize(win[i], WINDOW_WIDTH, WINDOW_HEIGHT12);
+      SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT12);
       break;
 
     case VIEW_MODE_BOT:
-      if (i == SCREEN_TOP)
-        SDL_SetWindowSize(win[i], WINDOW_WIDTH2, WINDOW_HEIGHT12);
+      SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH2, WINDOW_HEIGHT12);
       break;
 
     case VIEW_MODE_SEPARATE:
-      if (i == SCREEN_TOP)
-        SDL_SetWindowSize(win[i], WINDOW_WIDTH, WINDOW_HEIGHT12);
-      else
-        SDL_SetWindowSize(win[i], WINDOW_WIDTH2, WINDOW_HEIGHT12);
+      SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT12);
+      SDL_SetWindowSize(win[SCREEN_BOT], WINDOW_WIDTH2, WINDOW_HEIGHT12);
       break;
   }
 }
@@ -2339,7 +2394,8 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
 
 static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot, int tb, int force)
 {
-  pthread_mutex_lock(&ctx->status_lock);
+  if (!pthread_mutex_lock_loop(&ctx->status_lock))
+    return 0;
   enum FrameBufferStatus status = ctx->status;
   if (ctx->status == FBS_UPDATED) {
     int index = ctx->index_done_decode_ready_display;
@@ -2369,6 +2425,12 @@ static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int to
   }
 }
 
+static double kcp_get_connection_quality(void)
+{
+  int input_count = __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED);
+  return input_count ? (double)__atomic_load_n(&kcp_recv_pid_count, __ATOMIC_RELAXED) / input_count * 100 : 0.0;
+}
+
 static void kcpUpdateWindowTitle(SDL_Window *win, int tick_diff)
 {
   snprintf(window_title_with_fps, sizeof(window_title_with_fps),
@@ -2381,7 +2443,7 @@ static void kcpUpdateWindowTitle(SDL_Window *win, int tick_diff)
     __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_BOT], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
     __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_TOP], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
     __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_BOT], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-    (double)__atomic_load_n(&kcp_recv_pid_count, __ATOMIC_RELAXED) / __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED) * 100
+    kcp_get_connection_quality()
     // __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED),
     // __atomic_load_n(&kcp_input_fid_count, __ATOMIC_RELAXED),
     // __atomic_load_n(&kcp_input_pid_count, __ATOMIC_RELAXED),
@@ -2402,7 +2464,7 @@ static void kcpUpdateWindowsTitles(int tb, int top_bot, int tick_diff)
       TITLE " (FPS %03d | %03d)",
     __atomic_load_n(&frame_rate_decoded_tracker[top_bot], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
     __atomic_load_n(&frame_rate_displayed_tracker[top_bot], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
-    (double)__atomic_load_n(&kcp_recv_pid_count, __ATOMIC_RELAXED) / __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED) * 100
+    kcp_get_connection_quality()
     // __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED),
     // __atomic_load_n(&kcp_input_fid_count, __ATOMIC_RELAXED),
     // __atomic_load_n(&kcp_input_pid_count, __ATOMIC_RELAXED),
@@ -2411,40 +2473,38 @@ static void kcpUpdateWindowsTitles(int tb, int top_bot, int tick_diff)
   SDL_SetWindowTitle(win[tb], window_title_with_fps);
 }
 
-static void updateWindowsTitles(int i)
+static void updateWindowsTitles(void)
 {
   uint64_t next_tick = iclock64();
-  uint64_t tick_diff = next_tick - window_title_last_tick[i];
+  uint64_t tick_diff = next_tick - window_title_last_tick;
   if (tick_diff >= FRAME_STAT_EVERY_X_US) {
     int frame_fully_received = __atomic_load_n(&frame_fully_received_tracker, __ATOMIC_RELAXED);
     int frame_lost = __atomic_load_n(&frame_lost_tracker, __ATOMIC_RELAXED);
-    double packet_rate = (double)frame_fully_received / (frame_fully_received + frame_lost) * 100;
+    double packet_rate = frame_fully_received ? (double)frame_fully_received / (frame_fully_received + frame_lost) * 100 : 0.0;
 
     int vm = __atomic_load_n(&view_mode, __ATOMIC_RELAXED);
 
     if (vm == VIEW_MODE_TOP_BOT) {
-      if (i == SCREEN_TOP) {
-        if (kcp_active) {
-          kcpUpdateWindowTitle(win[i], (int)tick_diff);
-        } else {
-          snprintf(window_title_with_fps, sizeof(window_title_with_fps),
-            TITLE " (FPS %03d %03d | %03d %03d)"
-            " (Packet Rate %.1f%%)"
-            // " (Size %06d %06d) (Packet time %04d %04d)"
-            " [Compatibility Mode]"
-            ,
-            __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_TOP], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-            __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_BOT], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-            __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_TOP], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-            __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_BOT], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-            packet_rate
-            // __atomic_load_n(&frame_size_tracker[SCREEN_TOP], __ATOMIC_RELAXED),
-            // __atomic_load_n(&frame_size_tracker[SCREEN_BOT], __ATOMIC_RELAXED),
-            // __atomic_load_n(&delay_between_packet_tracker[SCREEN_TOP], __ATOMIC_RELAXED),
-            // __atomic_load_n(&delay_between_packet_tracker[SCREEN_BOT], __ATOMIC_RELAXED)
-          );
-          SDL_SetWindowTitle(win[i], window_title_with_fps);
-        }
+      if (kcp_active) {
+        kcpUpdateWindowTitle(win[SCREEN_TOP], (int)tick_diff);
+      } else {
+        snprintf(window_title_with_fps, sizeof(window_title_with_fps),
+          TITLE " (FPS %03d %03d | %03d %03d)"
+          " (Packet Rate %.1f%%)"
+          // " (Size %06d %06d) (Packet time %04d %04d)"
+          " [Compatibility Mode]"
+          ,
+          __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_TOP], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+          __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_BOT], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+          __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_TOP], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+          __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_BOT], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+          packet_rate
+          // __atomic_load_n(&frame_size_tracker[SCREEN_TOP], __ATOMIC_RELAXED),
+          // __atomic_load_n(&frame_size_tracker[SCREEN_BOT], __ATOMIC_RELAXED),
+          // __atomic_load_n(&delay_between_packet_tracker[SCREEN_TOP], __ATOMIC_RELAXED),
+          // __atomic_load_n(&delay_between_packet_tracker[SCREEN_BOT], __ATOMIC_RELAXED)
+        );
+        SDL_SetWindowTitle(win[SCREEN_TOP], window_title_with_fps);
       }
     } else {
       for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
@@ -2453,28 +2513,26 @@ static void updateWindowsTitles(int i)
           tb = SCREEN_TOP;
           top_bot = SCREEN_BOT;
         }
-        if (i == tb) {
-          if (kcp_active) {
-            kcpUpdateWindowsTitles(tb, top_bot, (int)tick_diff);
-          } else {
-            snprintf(window_title_with_fps, sizeof(window_title_with_fps),
-              tb == SCREEN_TOP ?
-                TITLE " (FPS %03d | %03d) "
-                " (Packet Rate %.1f%%)"
-                // "(Size %06d) (Packet time %04d)"
-                " [Compatibility Mode]"
-                :
-                TITLE " (FPS %03d | %03d) "
-                // "(Size %06d) (Packet time %04d)"
-              ,
-              __atomic_load_n(&frame_rate_decoded_tracker[top_bot], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-              __atomic_load_n(&frame_rate_displayed_tracker[top_bot], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-              packet_rate
-              // __atomic_load_n(&frame_size_tracker[top_bot], __ATOMIC_RELAXED),
-              // __atomic_load_n(&delay_between_packet_tracker[top_bot], __ATOMIC_RELAXED)
-            );
-            SDL_SetWindowTitle(win[tb], window_title_with_fps);
-          }
+        if (kcp_active) {
+          kcpUpdateWindowsTitles(tb, top_bot, (int)tick_diff);
+        } else {
+          snprintf(window_title_with_fps, sizeof(window_title_with_fps),
+            tb == SCREEN_TOP ?
+              TITLE " (FPS %03d | %03d) "
+              " (Packet Rate %.1f%%)"
+              // "(Size %06d) (Packet time %04d)"
+              " [Compatibility Mode]"
+              :
+              TITLE " (FPS %03d | %03d) "
+              // "(Size %06d) (Packet time %04d)"
+            ,
+            __atomic_load_n(&frame_rate_decoded_tracker[top_bot], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+            __atomic_load_n(&frame_rate_displayed_tracker[top_bot], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+            packet_rate
+            // __atomic_load_n(&frame_size_tracker[top_bot], __ATOMIC_RELAXED),
+            // __atomic_load_n(&delay_between_packet_tracker[top_bot], __ATOMIC_RELAXED)
+          );
+          SDL_SetWindowTitle(win[tb], window_title_with_fps);
         }
         if (vm != VIEW_MODE_SEPARATE) {
           break;
@@ -2482,52 +2540,36 @@ static void updateWindowsTitles(int i)
       }
     }
 
-    window_title_last_tick[i] = next_tick;
+    window_title_last_tick = next_tick;
     for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
-      if (vm == VIEW_MODE_SEPARATE) {
-        if (top_bot != i) {
-          continue;
-        }
-      }
       __atomic_store_n(&frame_rate_decoded_tracker[top_bot], 0, __ATOMIC_RELAXED);
       __atomic_store_n(&frame_rate_displayed_tracker[top_bot], 0, __ATOMIC_RELAXED);
       __atomic_store_n(&frame_size_tracker[top_bot], 0, __ATOMIC_RELAXED);
       __atomic_store_n(&delay_between_packet_tracker[top_bot], 0, __ATOMIC_RELAXED);
     }
-    if (i == SCREEN_TOP) {
-      __atomic_store_n(&kcp_input_count, 0, __ATOMIC_RELAXED);
-      __atomic_store_n(&kcp_input_fid_count, 0, __ATOMIC_RELAXED);
-      __atomic_store_n(&kcp_input_pid_count, 0, __ATOMIC_RELAXED);
-      __atomic_store_n(&kcp_recv_pid_count, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&kcp_input_count, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&kcp_input_fid_count, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&kcp_input_pid_count, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&kcp_recv_pid_count, 0, __ATOMIC_RELAXED);
 
-      __atomic_store_n(&frame_fully_received_tracker, 0, __ATOMIC_RELAXED);
-      __atomic_store_n(&frame_lost_tracker, 0, __ATOMIC_RELAXED);
-    }
+    __atomic_store_n(&frame_fully_received_tracker, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&frame_lost_tracker, 0, __ATOMIC_RELAXED);
   }
 }
 
+static view_mode_t prev_view_mode;
+static int prev_fullscreen;
 static uint64_t lastUpdated[SCREEN_COUNT];
-static rp_lock_t nk_lock;
 static int nk_input_current;
+static pthread_mutex_t nk_input_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static void rp_lock_wait_nk_lock(void)
-{
-  while (running) {
-    struct timespec to;
-    clock_gettime(CLOCK_REALTIME, &to);
-    to.tv_nsec += NWM_THREAD_WAIT_NS;
-    to.tv_sec += to.tv_nsec / 1000000000;
-    to.tv_nsec %= 1000000000;
-    int ret = rp_lock_wait(nk_lock, &to);
-    if (ret == 0) {
-      break;
-    }
-    if (ret != ETIMEDOUT) {
-      err_log("nk_lock lock error\n");
-      running = 0;
-    }
-  }
-}
+static int gl_swapbuffer_flag;
+static pthread_cond_t gl_swapbuffer_cond = PTHREAD_COND_INITIALIZER;
+static pthread_mutex_t gl_swapbuffer_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static int gl_render_flag;
+static pthread_cond_t gl_render_cond = PTHREAD_COND_INITIALIZER;
+static pthread_mutex_t gl_render_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void
 MainLoop(void *loopArg)
@@ -2536,7 +2578,7 @@ MainLoop(void *loopArg)
 
   /* Input */
   SDL_Event evt;
-  while (SDL_WaitEventTimeout(&evt, REST_EVERY_MS))
+  while (SDL_PollEvent(&evt))
   {
     if (
       evt.type == SDL_QUIT ||
@@ -2588,25 +2630,46 @@ MainLoop(void *loopArg)
           break;
       }
 
-      rp_lock_wait_nk_lock();
-      if (!running)
+      if (!pthread_mutex_lock_loop(&nk_input_lock))
         return;
-
       if (!nk_input_current) {
         nk_input_begin(ctx);
         nk_input_current = 1;
       }
       nk_sdl_handle_event(&evt);
-
-      rp_lock_rel(nk_lock);
+      pthread_mutex_unlock(&nk_input_lock);
 
 skip_evt:
     }
   }
-}
 
-static view_mode_t prev_view_mode[SCREEN_COUNT];
-static int prev_fullscreen[SCREEN_COUNT];
+  view_mode_t vm = __atomic_load_n(&view_mode, __ATOMIC_RELAXED);
+  if (prev_view_mode != vm) {
+    updateViewMode(vm);
+    prev_view_mode = vm;
+  }
+
+  if (prev_fullscreen != fullscreen) {
+    if (fullscreen) {
+      SDL_SetWindowFullscreen(win[SCREEN_TOP], SDL_WINDOW_FULLSCREEN_DESKTOP);
+      if (SDL_GetWindowDisplayIndex(win[SCREEN_TOP]) != SDL_GetWindowDisplayIndex(win[SCREEN_BOT])) {
+        SDL_SetWindowFullscreen(win[SCREEN_BOT], SDL_WINDOW_FULLSCREEN_DESKTOP);
+      }
+    } else {
+      updateViewMode(vm);
+    }
+    prev_fullscreen = fullscreen;
+  }
+
+  updateWindowsTitles();
+
+  pthread_cond_mutex_flag_signal(&gl_swapbuffer_flag, &gl_swapbuffer_cond, &gl_swapbuffer_mutex);
+
+  if (!pthread_cond_mutex_flag_lock(&gl_render_flag, &gl_render_cond, &gl_render_mutex))
+    return;
+  gl_render_flag = 0;
+  pthread_mutex_unlock(&gl_render_mutex);
+}
 
 static void
 ThreadLoop(int i)
@@ -2617,34 +2680,9 @@ ThreadLoop(int i)
   if (vm != VIEW_MODE_SEPARATE)
     screen_count = 1;
 
-  if (prev_view_mode[i] != vm) {
-    updateViewMode(i, vm);
-    prev_view_mode[i] = vm;
-  }
-
   if (i >= screen_count) {
     Sleep(REST_EVERY_MS);
     return;
-  }
-
-  if (prev_fullscreen[i] != fullscreen) {
-    if (fullscreen) {
-      if (__atomic_load_n(&fullscreen_count, __ATOMIC_ACQUIRE) == i) {
-        if (i == SCREEN_TOP) {
-          __atomic_store_n(&fullscreen_index, SDL_GetWindowDisplayIndex(win[i]), __ATOMIC_RELEASE);
-        } else if (__atomic_load_n(&fullscreen_index, __ATOMIC_ACQUIRE) == SDL_GetWindowDisplayIndex(win[i])) {
-          goto skip_fullscreen;
-        }
-        SDL_SetWindowFullscreen(win[i], SDL_WINDOW_FULLSCREEN_DESKTOP);
-skip_fullscreen:
-        __atomic_store_n(&fullscreen_count, i + 1, __ATOMIC_RELEASE);
-        prev_fullscreen[i] = fullscreen;
-      }
-    } else {
-      fullscreen_count = 0;
-      updateViewMode(i, vm);
-      prev_fullscreen[i] = fullscreen;
-    }
   }
 
   float bg[4];
@@ -2660,19 +2698,22 @@ skip_fullscreen:
 #define MIN_UPDATE_INTERVAL_US (33333)
 
   int force = 0;
-  pthread_mutex_lock(&buffer_ctx[i].decode_updated_mutex);
+  struct timespec to = clock_realtime_abs_ns_from_now(MIN_UPDATE_INTERVAL_US * 1000);
+  if (!pthread_mutex_lock_loop(&buffer_ctx[i].decode_updated_mutex))
+    return;
   while (!buffer_ctx[i].decode_updated) {
     if (!running) {
       return;
     }
-    struct timespec to;
-    clock_gettime(CLOCK_REALTIME, &to);
-    to.tv_nsec += MIN_UPDATE_INTERVAL_US * 1000;
-    to.tv_sec += to.tv_nsec / 1000000000;
-    to.tv_nsec %= 1000000000;
-    if (ETIMEDOUT == pthread_cond_timedwait(&buffer_ctx[i].decode_updated_cond, &buffer_ctx[i].decode_updated_mutex, &to)) {
-      force = 1;
-      break;
+    int ret;
+    if ((ret = pthread_cond_timedwait(&buffer_ctx[i].decode_updated_cond, &buffer_ctx[i].decode_updated_mutex, &to))) {
+      if (ret == ETIMEDOUT) {
+        force = 1;
+        break;
+      } else {
+        err_log("decode_updated_cond wait error: %d\n", ret);
+        return;
+      }
     }
   }
   buffer_ctx[i].decode_updated = 0;
@@ -2700,36 +2741,52 @@ skip_fullscreen:
   if (updated || force) {
     if (i == 0) {
       struct nk_context *ctx = nk_ctx;
-      rp_lock_wait_nk_lock();
-      if (!running)
-        return;
 
+      if (!pthread_mutex_lock_loop(&nk_input_lock))
+        return;
       if (nk_input_current) {
         nk_input_end(ctx);
-        nk_input_current = 0;
       } else {
         nk_input_begin(ctx);
         nk_input_end(ctx);
       }
+      nk_input_current = 0;
 
       guiMain(ctx);
-      nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
-
-      rp_lock_rel(nk_lock);
+      pthread_mutex_unlock(&nk_input_lock);
     }
-    SDL_GL_SwapWindow(win[i]);
-    lastUpdated[i] = nextUpdated;
 
-    updateWindowsTitles(i);
+    if (!pthread_cond_mutex_flag_lock(&gl_swapbuffer_flag, &gl_swapbuffer_cond, &gl_swapbuffer_mutex))
+      return;
+    gl_swapbuffer_flag = 0;
+
+    if (i == 0) {
+      nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
+    }
+    // pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+    SDL_GL_SwapWindow(win[i]);
+    // pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+    pthread_mutex_unlock(&gl_swapbuffer_mutex);
+
+    pthread_cond_mutex_flag_signal(&gl_render_flag, &gl_render_cond, &gl_render_mutex);
+
+    lastUpdated[i] = nextUpdated;
   }
 }
+
+// static void sdl_gl_makecurrent_null(void *)
+// {
+//   SDL_GL_MakeCurrent(NULL, NULL);
+// }
 
 static void *window_thread_func(void *arg)
 {
   int i = (int)(uintptr_t)arg;
   SDL_GL_MakeCurrent(win[i], glContext[i]);
+  // pthread_cleanup_push(sdl_gl_makecurrent_null, NULL);
   while (running)
     ThreadLoop(i);
+  // pthread_cleanup_pop(1);
   return NULL;
 }
 
@@ -2761,17 +2818,15 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, int top_bot, int frame_
     __atomic_store_n(&delay_between_packet_tracker[top_bot], delay_between_packet, __ATOMIC_RELAXED);
   }
 
-  pthread_mutex_lock(&ctx->status_lock);
+  if (!pthread_mutex_lock_loop(&ctx->status_lock))
+    return;
   int index = ctx->index_done_decode_ready_display;
   ctx->index_done_decode_ready_display = ctx->index_decode;
   ctx->index_decode = index;
   ctx->status = FBS_UPDATED;
   pthread_mutex_unlock(&ctx->status_lock);
 
-  pthread_mutex_lock(&ctx->decode_updated_mutex);
-  ctx->decode_updated = 1;
-  pthread_cond_signal(&ctx->decode_updated_cond);
-  pthread_mutex_unlock(&ctx->decode_updated_mutex);
+  pthread_cond_mutex_flag_signal(&ctx->decode_updated, &ctx->decode_updated_cond, &ctx->decode_updated_mutex);
 }
 
 uint8_t upscaled_u_image[400 * 240];
@@ -4197,8 +4252,6 @@ int main(int argc, char *argv[])
   SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED | ES_DISPLAY_REQUIRED);
 #endif
 
-  rp_lock_init(nk_lock);
-
   SDL_GL_MakeCurrent(NULL, NULL);
   pthread_t window_top_thread;
   if ((ret = pthread_create(&window_top_thread, NULL, window_thread_func, (void *)SCREEN_TOP)))
@@ -4230,8 +4283,6 @@ int main(int argc, char *argv[])
   pthread_cancel(window_top_thread);
   pthread_join(window_top_thread, NULL);
 
-  rp_lock_close(nk_lock);
-
   pthread_cancel(udp_recv_thread);
   pthread_join(udp_recv_thread, NULL);
   pthread_cancel(menu_tcp_thread);
@@ -4242,34 +4293,34 @@ int main(int argc, char *argv[])
   rp_syn_close1(&jpeg_decode_queue);
   rp_sem_close(jpeg_decode_sem);
 
-  for (int i = 0; i < SCREEN_COUNT; ++i) {
-    SDL_GL_MakeCurrent(win[i], glContext[i]);
-    glDeleteProgram(gl_fbo_program[i]);
-    glDeleteProgram(gl_program[i]);
-  }
+  // for (int i = 0; i < SCREEN_COUNT; ++i) {
+  //   SDL_GL_MakeCurrent(win[i], glContext[i]);
+  //   glDeleteProgram(gl_fbo_program[i]);
+  //   glDeleteProgram(gl_program[i]);
+  // }
 
   for (int i = 0; i < SCREEN_COUNT; ++i) {
     pthread_mutex_destroy(&buffer_ctx[i].status_lock);
   }
-  for (int j = 0; j < SCREEN_COUNT; ++j) {
-    SDL_GL_MakeCurrent(win[j], glContext[j]);
-    for (int i = 0; i < SCREEN_COUNT; ++i) {
-      glDeleteTextures(1, &buffer_ctx[i].gl_tex_id[j]);
-      glDeleteFramebuffers(1, &buffer_ctx[i].gl_fbo_upscaled[j]);
-      glDeleteTextures(1, &buffer_ctx[i].gl_tex_upscaled[j]);
-    }
-  }
+  // for (int j = 0; j < SCREEN_COUNT; ++j) {
+  //   SDL_GL_MakeCurrent(win[j], glContext[j]);
+  //   for (int i = 0; i < SCREEN_COUNT; ++i) {
+  //     glDeleteTextures(1, &buffer_ctx[i].gl_tex_id[j]);
+  //     glDeleteFramebuffers(1, &buffer_ctx[i].gl_fbo_upscaled[j]);
+  //     glDeleteTextures(1, &buffer_ctx[i].gl_tex_upscaled[j]);
+  //   }
+  // }
 
   sock_cleanup();
   nk_sdl_shutdown();
   if (upscaling_filter_created)
     sr_destroy();
 
-  SDL_GL_DeleteContext(glContext[SCREEN_BOT]);
-  SDL_GL_DeleteContext(glContext[SCREEN_TOP]);
-  SDL_DestroyWindow(win[SCREEN_BOT]);
-  SDL_DestroyWindow(win[SCREEN_TOP]);
-  SDL_Quit();
+  // SDL_GL_DeleteContext(glContext[SCREEN_BOT]);
+  // SDL_GL_DeleteContext(glContext[SCREEN_TOP]);
+  // SDL_DestroyWindow(win[SCREEN_BOT]);
+  // SDL_DestroyWindow(win[SCREEN_TOP]);
+  // SDL_Quit();
 
   return 0;
 }
