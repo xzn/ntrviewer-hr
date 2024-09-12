@@ -2787,6 +2787,7 @@ static void *window_thread_func(void *arg)
   while (running)
     ThreadLoop(i);
   // pthread_cleanup_pop(1);
+  SDL_GL_MakeCurrent(NULL, NULL);
   return NULL;
 }
 
@@ -4278,9 +4279,11 @@ int main(int argc, char *argv[])
   SetThreadExecutionState(ES_CONTINUOUS);
 #endif
 
-  pthread_cancel(window_bot_thread);
+  // Apprently cancelling a thread that has OpenGL stuff causes hangs, so let them exit on their own.
+
+  // pthread_cancel(window_bot_thread);
   pthread_join(window_bot_thread, NULL);
-  pthread_cancel(window_top_thread);
+  // pthread_cancel(window_top_thread);
   pthread_join(window_top_thread, NULL);
 
   pthread_cancel(udp_recv_thread);
@@ -4293,34 +4296,34 @@ int main(int argc, char *argv[])
   rp_syn_close1(&jpeg_decode_queue);
   rp_sem_close(jpeg_decode_sem);
 
-  // for (int i = 0; i < SCREEN_COUNT; ++i) {
-  //   SDL_GL_MakeCurrent(win[i], glContext[i]);
-  //   glDeleteProgram(gl_fbo_program[i]);
-  //   glDeleteProgram(gl_program[i]);
-  // }
+  for (int i = 0; i < SCREEN_COUNT; ++i) {
+    SDL_GL_MakeCurrent(win[i], glContext[i]);
+    glDeleteProgram(gl_fbo_program[i]);
+    glDeleteProgram(gl_program[i]);
+  }
 
   for (int i = 0; i < SCREEN_COUNT; ++i) {
     pthread_mutex_destroy(&buffer_ctx[i].status_lock);
   }
-  // for (int j = 0; j < SCREEN_COUNT; ++j) {
-  //   SDL_GL_MakeCurrent(win[j], glContext[j]);
-  //   for (int i = 0; i < SCREEN_COUNT; ++i) {
-  //     glDeleteTextures(1, &buffer_ctx[i].gl_tex_id[j]);
-  //     glDeleteFramebuffers(1, &buffer_ctx[i].gl_fbo_upscaled[j]);
-  //     glDeleteTextures(1, &buffer_ctx[i].gl_tex_upscaled[j]);
-  //   }
-  // }
+  for (int j = 0; j < SCREEN_COUNT; ++j) {
+    SDL_GL_MakeCurrent(win[j], glContext[j]);
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      glDeleteTextures(1, &buffer_ctx[i].gl_tex_id[j]);
+      glDeleteFramebuffers(1, &buffer_ctx[i].gl_fbo_upscaled[j]);
+      glDeleteTextures(1, &buffer_ctx[i].gl_tex_upscaled[j]);
+    }
+  }
 
   sock_cleanup();
   nk_sdl_shutdown();
   if (upscaling_filter_created)
     sr_destroy();
 
-  // SDL_GL_DeleteContext(glContext[SCREEN_BOT]);
-  // SDL_GL_DeleteContext(glContext[SCREEN_TOP]);
-  // SDL_DestroyWindow(win[SCREEN_BOT]);
-  // SDL_DestroyWindow(win[SCREEN_TOP]);
-  // SDL_Quit();
+  SDL_GL_DeleteContext(glContext[SCREEN_BOT]);
+  SDL_GL_DeleteContext(glContext[SCREEN_TOP]);
+  SDL_DestroyWindow(win[SCREEN_BOT]);
+  SDL_DestroyWindow(win[SCREEN_TOP]);
+  SDL_Quit();
 
   return 0;
 }
