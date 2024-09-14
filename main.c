@@ -58,6 +58,7 @@ void Sleep(int milliseconds) {
 #include "realcugan-ncnn-vulkan/lib.h"
 #include "main.h"
 #include "rp_syn.h"
+#include <SDL2/SDL_syswm.h>
 
 rp_sem_t jpeg_decode_sem;
 struct rp_syn_comp_func_t jpeg_decode_queue;
@@ -181,6 +182,7 @@ static inline uint32_t iclock()
 static struct timespec clock_realtime_abs_ns_from_now(long ns) {
   struct timespec to;
   if (clock_gettime(CLOCK_REALTIME, &to) != 0) {
+    err_log("clock_gettime failed\n");
     running = 0;
     return (struct timespec){ 0, 0 };
   }
@@ -217,12 +219,14 @@ static void pthread_cond_mutex_flag_signal(int *flag, pthread_cond_t *cond, pthr
   pthread_mutex_unlock(mutex);
 }
 
+#ifndef _WIN32
 static bool pthread_cond_mutex_flag_lock(int *flag, pthread_cond_t *cond, pthread_mutex_t *mutex) {
   if (!pthread_mutex_lock_loop(mutex)) {
     return false;
   }
   while (!__atomic_load_n(flag,  __ATOMIC_RELAXED)) {
     if (!running) {
+      pthread_mutex_unlock(mutex);
       return false;
     }
     struct timespec to = clock_realtime_abs_ns_from_now(NWM_THREAD_WAIT_NS);
@@ -231,12 +235,14 @@ static bool pthread_cond_mutex_flag_lock(int *flag, pthread_cond_t *cond, pthrea
       if (ret != ETIMEDOUT) {
         err_log("pthread_cond_timedwait error: %d", ret);
         running = 0;
+        pthread_mutex_unlock(mutex);
         return false;
       }
     }
   }
   return true;
 }
+#endif
 
 //! 8 bit unsigned integer.
 typedef uint8_t		byte;
@@ -2563,6 +2569,7 @@ static uint64_t lastUpdated[SCREEN_COUNT];
 static int nk_input_current;
 static pthread_mutex_t nk_input_lock = PTHREAD_MUTEX_INITIALIZER;
 
+#ifndef _WIN32
 static int gl_swapbuffer_flag;
 static pthread_cond_t gl_swapbuffer_cond = PTHREAD_COND_INITIALIZER;
 static pthread_mutex_t gl_swapbuffer_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -2570,6 +2577,7 @@ static pthread_mutex_t gl_swapbuffer_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int gl_render_flag;
 static pthread_cond_t gl_render_cond = PTHREAD_COND_INITIALIZER;
 static pthread_mutex_t gl_render_mutex = PTHREAD_MUTEX_INITIALIZER;
+#endif
 
 static void
 MainLoop(void *loopArg)
@@ -2663,13 +2671,17 @@ skip_evt:
 
   updateWindowsTitles();
 
+#ifndef _WIN32
   pthread_cond_mutex_flag_signal(&gl_swapbuffer_flag, &gl_swapbuffer_cond, &gl_swapbuffer_mutex);
 
   if (!pthread_cond_mutex_flag_lock(&gl_render_flag, &gl_render_cond, &gl_render_mutex))
     return;
   gl_render_flag = 0;
   pthread_mutex_unlock(&gl_render_mutex);
+#endif
 }
+
+static struct nk_color nk_window_bgcolor = { 28, 48, 62, 255 };
 
 static void
 ThreadLoop(int i)
@@ -2686,7 +2698,7 @@ ThreadLoop(int i)
   }
 
   float bg[4];
-  nk_color_fv(bg, nk_rgb(28, 48, 62));
+  nk_color_fv(bg, nk_window_bgcolor);
   // SDL_GetWindowSize(win[i], &win_width[i], &win_height[i]);
   SDL_GL_GetDrawableSize(win[i], &win_width[i], &win_height[i]);
 
@@ -2756,20 +2768,21 @@ ThreadLoop(int i)
       pthread_mutex_unlock(&nk_input_lock);
     }
 
+#ifndef _WIN32
     if (!pthread_cond_mutex_flag_lock(&gl_swapbuffer_flag, &gl_swapbuffer_cond, &gl_swapbuffer_mutex))
       return;
     gl_swapbuffer_flag = 0;
-
+    pthread_mutex_unlock(&gl_swapbuffer_mutex);
+#endif
     if (i == 0) {
       nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
     }
     // pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
     SDL_GL_SwapWindow(win[i]);
     // pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
-    pthread_mutex_unlock(&gl_swapbuffer_mutex);
-
+#ifndef _WIN32
     pthread_cond_mutex_flag_signal(&gl_render_flag, &gl_render_cond, &gl_render_mutex);
-
+#endif
     lastUpdated[i] = nextUpdated;
   }
 }
@@ -2795,11 +2808,7 @@ static int acquire_sem(rp_sem_t *sem) {
   while (1) {
     if (!running)
       return -1;
-    struct timespec to;
-    clock_gettime(CLOCK_REALTIME, &to);
-    to.tv_nsec += NWM_THREAD_WAIT_NS;
-    to.tv_sec += to.tv_nsec / 1000000000;
-    to.tv_nsec %= 1000000000;
+    struct timespec to = clock_realtime_abs_ns_from_now(NWM_THREAD_WAIT_NS);
     int res = rp_sem_wait(*sem, &to);
     if (res == 0)
       return 0;
@@ -4058,6 +4067,17 @@ int main(int argc, char *argv[])
   }
   win_id[SCREEN_BOT] = SDL_GetWindowID(win[SCREEN_BOT]);
 
+  SDL_SysWMinfo wmInfo[SCREEN_COUNT];
+  HWND hwnd[SCREEN_COUNT];
+
+  SDL_VERSION(&wmInfo[SCREEN_TOP].version);
+  SDL_GetWindowWMInfo(win[SCREEN_TOP], &wmInfo[SCREEN_TOP]);
+  hwnd[SCREEN_TOP] = wmInfo[SCREEN_TOP].info.win.window;
+
+  SDL_VERSION(&wmInfo[SCREEN_BOT].version);
+  SDL_GetWindowWMInfo(win[SCREEN_BOT], &wmInfo[SCREEN_BOT]);
+  hwnd[SCREEN_BOT] = wmInfo[SCREEN_BOT].info.win.window;
+
   glContext[SCREEN_TOP] = SDL_GL_CreateContext(win[SCREEN_TOP]);
   if (!glContext[SCREEN_TOP])
   {
@@ -4146,6 +4166,11 @@ int main(int argc, char *argv[])
   // set_style(ctx, THEME_BLUE);
   set_style(ctx, THEME_DARK);
   nk_style_current = ctx->style;
+
+  HBRUSH brush = CreateSolidBrush(
+      RGB(nk_window_bgcolor.r, nk_window_bgcolor.g, nk_window_bgcolor.b));
+  SetClassLongPtr(hwnd[SCREEN_TOP], GCLP_HBRBACKGROUND, (LONG_PTR)brush);
+  SetClassLongPtr(hwnd[SCREEN_BOT], GCLP_HBRBACKGROUND, (LONG_PTR)brush);
 
   sock_startup();
 
