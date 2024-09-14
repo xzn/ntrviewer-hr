@@ -219,7 +219,7 @@ static void pthread_cond_mutex_flag_signal(int *flag, pthread_cond_t *cond, pthr
   pthread_mutex_unlock(mutex);
 }
 
-#ifndef _WIN32
+#ifdef SDL_GL_SYNC
 static bool pthread_cond_mutex_flag_lock(int *flag, pthread_cond_t *cond, pthread_mutex_t *mutex) {
   if (!pthread_mutex_lock_loop(mutex)) {
     return false;
@@ -2570,6 +2570,10 @@ static int nk_input_current;
 static pthread_mutex_t nk_input_lock = PTHREAD_MUTEX_INITIALIZER;
 
 #ifndef _WIN32
+// #define SDL_GL_SYNC
+#endif
+
+#ifdef SDL_GL_SYNC
 static int gl_swapbuffer_flag;
 static pthread_cond_t gl_swapbuffer_cond = PTHREAD_COND_INITIALIZER;
 static pthread_mutex_t gl_swapbuffer_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -2671,7 +2675,7 @@ skip_evt:
 
   updateWindowsTitles();
 
-#ifndef _WIN32
+#ifdef SDL_GL_SYNC
   pthread_cond_mutex_flag_signal(&gl_swapbuffer_flag, &gl_swapbuffer_cond, &gl_swapbuffer_mutex);
 
   if (!pthread_cond_mutex_flag_lock(&gl_render_flag, &gl_render_cond, &gl_render_mutex))
@@ -2768,7 +2772,7 @@ ThreadLoop(int i)
       pthread_mutex_unlock(&nk_input_lock);
     }
 
-#ifndef _WIN32
+#ifdef SDL_GL_SYNC
     if (!pthread_cond_mutex_flag_lock(&gl_swapbuffer_flag, &gl_swapbuffer_cond, &gl_swapbuffer_mutex))
       return;
     gl_swapbuffer_flag = 0;
@@ -2780,7 +2784,7 @@ ThreadLoop(int i)
     // pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
     SDL_GL_SwapWindow(win[i]);
     // pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
-#ifndef _WIN32
+#ifdef SDL_GL_SYNC
     pthread_cond_mutex_flag_signal(&gl_render_flag, &gl_render_cond, &gl_render_mutex);
 #endif
     lastUpdated[i] = nextUpdated;
@@ -4067,6 +4071,7 @@ int main(int argc, char *argv[])
   }
   win_id[SCREEN_BOT] = SDL_GetWindowID(win[SCREEN_BOT]);
 
+#ifdef _WIN32
   SDL_SysWMinfo wmInfo[SCREEN_COUNT];
   HWND hwnd[SCREEN_COUNT];
 
@@ -4077,6 +4082,7 @@ int main(int argc, char *argv[])
   SDL_VERSION(&wmInfo[SCREEN_BOT].version);
   SDL_GetWindowWMInfo(win[SCREEN_BOT], &wmInfo[SCREEN_BOT]);
   hwnd[SCREEN_BOT] = wmInfo[SCREEN_BOT].info.win.window;
+#endif
 
   glContext[SCREEN_TOP] = SDL_GL_CreateContext(win[SCREEN_TOP]);
   if (!glContext[SCREEN_TOP])
@@ -4167,10 +4173,12 @@ int main(int argc, char *argv[])
   set_style(ctx, THEME_DARK);
   nk_style_current = ctx->style;
 
+#ifdef _WIN32
   HBRUSH brush = CreateSolidBrush(
       RGB(nk_window_bgcolor.r, nk_window_bgcolor.g, nk_window_bgcolor.b));
   SetClassLongPtr(hwnd[SCREEN_TOP], GCLP_HBRBACKGROUND, (LONG_PTR)brush);
   SetClassLongPtr(hwnd[SCREEN_BOT], GCLP_HBRBACKGROUND, (LONG_PTR)brush);
+#endif
 
   sock_startup();
 
