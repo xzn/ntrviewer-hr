@@ -24,14 +24,15 @@
 #include "filesystem_utils.h"
 #include "../fsr/fsr_main.h"
 
-#define REALCUGAN_WORK_COUNT (2)
+// From fsr_main.h there can be two displays per context waiting to be upscaled.
+// This need to be one more than that to avoid flickering image.
+#define REALCUGAN_WORK_COUNT (3)
 
 static RealCUGAN* realcugan[SCREEN_COUNT * REALCUGAN_WORK_COUNT];
 static int realcugan_indices[SCREEN_COUNT * SCREEN_COUNT * FrameBufferCount];
 static int realcugan_work_indices[SCREEN_COUNT];
 static std::vector<std::unique_ptr<std::mutex>> realcugan_locks;
 static bool realcugan_support_ext_mem;
-static const int scale = 2;
 
 static int realcugan_size()
 {
@@ -59,6 +60,7 @@ extern "C" int realcugan_create()
     int syncgap = 3;
     // int syncgap = 0;
     int tta_mode = 0;
+    int scale = REALCUGAN_SCALE;
 
     if (noise < -1 || noise > 3)
     {
@@ -274,7 +276,6 @@ extern "C" int realcugan_create()
         return -1;
     }
 
-
     // Tested on AMD and NVIDIA for now
     bool supported_gpu_vendor = vkdev->info.vendor_id() == 0x1002 || vkdev->info.vendor_id() == 0x10de;
     supported_gpu_vendor = 1;
@@ -308,7 +309,7 @@ extern "C" int realcugan_create()
 extern "C" GLuint realcugan_run(int tb, int index, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, GLuint *gl_sem, GLuint *gl_sem_next, bool *dim3, bool *success)
 {
     ncnn::Mat inimage = ncnn::Mat(w, h, (void*)indata, (size_t)c, c);
-    ncnn::Mat outimage = ncnn::Mat(w * scale, h * scale, (void*)outdata, (size_t)c, c);
+    ncnn::Mat outimage = ncnn::Mat(w * REALCUGAN_SCALE, h * REALCUGAN_SCALE, (void*)outdata, (size_t)c, c);
 
     int locks_index = realcugan_index(tb, index, 1);
     if (locks_index + 1 > realcugan_locks.size()) {

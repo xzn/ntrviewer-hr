@@ -13,9 +13,10 @@ enum {
 enum FrameBufferIndexInit
 {
   FBI_DECODE,
-  FBI_IN_BETWEEN,
+  FBI_READY_DISPLAY,
+  FBI_READY_DISPLAY_2,
   FBI_DISPLAY,
-  FBI_UPSCALING,
+  FBI_DISPLAY_2,
   FBI_COUNT,
 };
 

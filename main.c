@@ -1,5 +1,5 @@
 #if 1
-#define screen_upscale_factor (2)
+#define screen_upscale_factor REALCUGAN_SCALE
 #define sr_create realcugan_create
 #define sr_run realcugan_run
 #define sr_next realcugan_next
@@ -300,9 +300,10 @@ int frame_lost_tracker;
 
 enum FrameBufferStatus
 {
-  FBS_NOT_AVAIL,
-  FBS_UPDATED,
+  FBS_NOT_AVAIL = -1,
   FBS_NOT_UPDATED,
+  FBS_UPDATED,
+  FBS_UPDATED_2,
 };
 
 /* Platform */
@@ -2043,10 +2044,11 @@ typedef struct _FrameBufferContext
 
   pthread_mutex_t status_lock;
   enum FrameBufferStatus status;
+  int index_display_2;
   int index_display;
-  int index_done_decode_ready_display;
+  int index_ready_display_2;
+  int index_ready_display;
   int index_decode;
-  int index_upscaling;
   uint8_t *prev_data;
   GLuint prev_tex_upscaled[SCREEN_COUNT], prev_tex_fsr[SCREEN_COUNT];
   int prev_ctx_width, prev_ctx_height;
@@ -2368,15 +2370,21 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
 
 static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot, int tb, int force)
 {
-  sr_next(tb, top_bot * FrameBufferCount + ctx->index_upscaling);
+  sr_next(tb, top_bot * FrameBufferCount + ctx->index_display_2);
 
   if (!pthread_mutex_lock_loop(&ctx->status_lock))
     return 0;
   enum FrameBufferStatus status = ctx->status;
-  if (ctx->status == FBS_UPDATED) {
-    int index = ctx->index_done_decode_ready_display;
-    ctx->index_done_decode_ready_display = ctx->index_upscaling;
-    ctx->index_upscaling = ctx->index_display;
+  if (ctx->status == FBS_UPDATED_2) {
+    int index = ctx->index_ready_display_2;
+    ctx->index_ready_display_2 = ctx->index_display_2;
+    ctx->index_display_2 = ctx->index_display;
+    ctx->index_display = index;
+    ctx->status = FBS_UPDATED;
+  } else if (ctx->status == FBS_UPDATED) {
+    int index = ctx->index_ready_display;
+    ctx->index_ready_display = ctx->index_display_2;
+    ctx->index_display_2 = ctx->index_display;
     ctx->index_display = index;
     ctx->status = FBS_NOT_UPDATED;
   }
@@ -2388,7 +2396,7 @@ static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int to
 
   uint8_t *data = ctx->screen_decoded[index_display];
   ctx->prev_data = data;
-  if (status == FBS_UPDATED)
+  if (status >= FBS_UPDATED)
   {
     __atomic_add_fetch(&frame_rate_displayed_tracker[top_bot], 1, __ATOMIC_RELAXED);
     do_hr_draw_screen(ctx, data, width, height, top_bot, tb, index_display);
@@ -2611,7 +2619,8 @@ ThreadLoop(int i)
 
   int force = 0;
 #ifndef SDL_GL_SINGLE_THREAD
-  if (!decode_cond_wait(&buffer_ctx[i].decode_updated, &buffer_ctx[i].decode_updated_cond, &buffer_ctx[i].decode_updated_mutex, &force))
+  int tb = vm == VIEW_MODE_BOT ? SCREEN_BOT : i;
+  if (!decode_cond_wait(&buffer_ctx[tb].decode_updated, &buffer_ctx[tb].decode_updated_cond, &buffer_ctx[tb].decode_updated_mutex, &force))
     return;
 #else
   if (i == SCREEN_TOP && !decode_cond_wait(&decode_updated, &decode_updated_cond, &decode_updated_mutex, &force))
@@ -2628,7 +2637,7 @@ ThreadLoop(int i)
     updated |= hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400, 240, SCREEN_TOP, i, force);
     updated |= hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT, i, force);
   } else if (vm == VIEW_MODE_BOT)
-    updated = hr_draw_screen(&buffer_ctx[1], 320, 240, 1, i, force);
+    updated = hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, 1, i, force);
   else
     updated = hr_draw_screen(&buffer_ctx[i], i == 0 ? 400 : 320, 240, i, i, force);
 
@@ -2816,7 +2825,7 @@ static int acquire_sem(rp_sem_t *sem) {
   }
 }
 
-void handle_decode_frame_screen(FrameBufferContext *ctx, int top_bot, int frame_size, int delay_between_packet)
+void handle_decode_frame_screen(FrameBufferContext *ctx, int top_bot, int frame_size, int delay_between_packet, FrameBufferContext *ctx_sync)
 {
   __atomic_add_fetch(&frame_rate_decoded_tracker[top_bot], 1, __ATOMIC_RELAXED);
   if (__atomic_load_n(&frame_size_tracker[top_bot], __ATOMIC_RELAXED) < frame_size) {
@@ -2828,14 +2837,27 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, int top_bot, int frame_
 
   if (!pthread_mutex_lock_loop(&ctx->status_lock))
     return;
-  int index = ctx->index_done_decode_ready_display;
-  ctx->index_done_decode_ready_display = ctx->index_decode;
-  ctx->index_decode = index;
-  ctx->status = FBS_UPDATED;
+  // ctx_sync is set when view mode is top and bot in one window.
+  // we can use this check to enable "triple buffering" only when the update rate is likely to exceed monitor refresh rate.
+  if (/* ctx_sync && */ctx->status >= FBS_UPDATED) {
+    int index = ctx->index_ready_display_2;
+    ctx->index_ready_display_2 = ctx->index_ready_display;
+    ctx->index_ready_display = ctx->index_decode;
+    ctx->index_decode = index;
+    ctx->status = FBS_UPDATED_2;
+  } else {
+    int index = ctx->index_ready_display;
+    ctx->index_ready_display = ctx->index_decode;
+    ctx->index_decode = index;
+    ctx->status = FBS_UPDATED;
+  }
   pthread_mutex_unlock(&ctx->status_lock);
 
 #ifndef SDL_GL_SINGLE_THREAD
-  pthread_cond_mutex_flag_signal(&ctx->decode_updated, &ctx->decode_updated_cond, &ctx->decode_updated_mutex);
+  if (ctx_sync)
+    pthread_cond_mutex_flag_signal(&ctx_sync->decode_updated, &ctx_sync->decode_updated_cond, &ctx_sync->decode_updated_mutex);
+  else
+    pthread_cond_mutex_flag_signal(&ctx->decode_updated, &ctx->decode_updated_cond, &ctx->decode_updated_mutex);
 #else
   pthread_cond_mutex_flag_signal(&decode_updated, &decode_updated_cond, &decode_updated_mutex);
 #endif
@@ -3798,6 +3820,9 @@ void *jpeg_decode_thread_func(void *)
     // sr_next(tb, top_bot * FrameBufferCount + index);
     uint8_t *out = ctx->screen_decoded[index];
 
+    view_mode_t vm = __atomic_load_n(&view_mode, __ATOMIC_RELAXED);
+    FrameBufferContext *ctx_sync = vm == VIEW_MODE_TOP_BOT ? &buffer_ctx[SCREEN_TOP] : NULL;
+
     int ret;
     if (ptr->is_kcp) {
       // err_log("%d %d\n", ptr->kcp_w, ptr->kcp_queue_w);
@@ -3806,7 +3831,7 @@ void *jpeg_decode_thread_func(void *)
         restart_kcp = 1;
       } else {
         // err_log("%d\n", kcp_recv_info[ptr->kcp_w][ptr->kcp_queue_w].term_count);
-        handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay);
+        handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay, ctx_sync);
       }
     } else {
       if (ptr->in) {
@@ -3814,7 +3839,7 @@ void *jpeg_decode_thread_func(void *)
           err_log("recv decode error\n");
           __atomic_add_fetch(&frame_lost_tracker, 1, __ATOMIC_RELAXED);
         } else {
-          handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay);
+          handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay, ctx_sync);
           __atomic_add_fetch(&frame_fully_received_tracker, 1, __ATOMIC_RELAXED);
         }
       } else {
@@ -3849,11 +3874,12 @@ void receive_from_socket_loop(SOCKET s)
     }
 
     // err_log("new connection\n");
-    // for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
-    //   buffer_ctx[top_bot].status = FBS_NOT_AVAIL;
-    //   buffer_ctx[top_bot].prev_data = NULL;
-    //   buffer_ctx[top_bot].prev_tex = 0;
-    // }
+    for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
+      if (!pthread_mutex_lock_loop(&buffer_ctx[top_bot].status_lock))
+        return;
+      buffer_ctx[top_bot].status = FBS_NOT_AVAIL;
+      pthread_mutex_unlock(&buffer_ctx[top_bot].status_lock);
+    }
     for (int i = 0; i < rp_work_count; ++i) {
       recv_end[i] = 2;
     }
@@ -4208,10 +4234,11 @@ int main(int argc, char *argv[])
 
   for (int i = 0; i < SCREEN_COUNT; ++i) {
     buffer_ctx[i].status_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    buffer_ctx[i].index_display_2 = FBI_DISPLAY_2;
     buffer_ctx[i].index_display = FBI_DISPLAY;
-    buffer_ctx[i].index_done_decode_ready_display = FBI_IN_BETWEEN;
+    buffer_ctx[i].index_ready_display_2 = FBI_READY_DISPLAY_2;
+    buffer_ctx[i].index_ready_display = FBI_READY_DISPLAY;
     buffer_ctx[i].index_decode = FBI_DECODE;
-    buffer_ctx[i].index_upscaling = FBI_UPSCALING;
 
 #ifndef SDL_GL_SINGLE_THREAD
     buffer_ctx[i].decode_updated_cond = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
