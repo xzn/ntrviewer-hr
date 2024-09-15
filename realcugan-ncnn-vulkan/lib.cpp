@@ -24,11 +24,9 @@
 #include "filesystem_utils.h"
 #include "../fsr/fsr_main.h"
 
-// From fsr_main.h there can be two displays per context waiting to be upscaled.
-// This need to be one more than that to avoid flickering image.
-#define REALCUGAN_WORK_COUNT (3)
+#define REALCUGAN_WORK_COUNT (2)
 
-static RealCUGAN* realcugan[SCREEN_COUNT * REALCUGAN_WORK_COUNT];
+static RealCUGAN* realcugan[SCREEN_COUNT * SCREEN_COUNT * REALCUGAN_WORK_COUNT];
 static int realcugan_indices[SCREEN_COUNT * SCREEN_COUNT * FrameBufferCount];
 static int realcugan_work_indices[SCREEN_COUNT];
 static std::vector<std::unique_ptr<std::mutex>> realcugan_locks;
@@ -41,12 +39,11 @@ static int realcugan_size()
 
 static int realcugan_index(int tb, int index, int next)
 {
-    index = tb * SCREEN_COUNT * FrameBufferCount + index;
     if (next) {
         ++realcugan_work_indices[tb];
         realcugan_work_indices[tb] %= REALCUGAN_WORK_COUNT;
 
-        realcugan_indices[index] = tb * REALCUGAN_WORK_COUNT + realcugan_work_indices[tb];
+        realcugan_indices[index] = (tb * SCREEN_COUNT + index / FrameBufferCount) * REALCUGAN_WORK_COUNT + realcugan_work_indices[tb];
     }
     return realcugan_support_ext_mem ? realcugan_indices[index] : 0;
 }
@@ -291,6 +288,11 @@ extern "C" int realcugan_create()
         if (realcugan[j]) {
             delete realcugan[j];
         }
+        int tb = j / (SCREEN_COUNT * REALCUGAN_WORK_COUNT);
+        int top_bot = j % (SCREEN_COUNT * REALCUGAN_WORK_COUNT) / REALCUGAN_WORK_COUNT;
+        if (tb == SCREEN_BOT && top_bot == SCREEN_TOP)
+            continue;
+
         realcugan[j] = new RealCUGAN(gpuid[i], tta_mode);
         realcugan[j]->load(paramfullpath, modelfullpath);
         realcugan[j]->noise = noise;
@@ -364,11 +366,12 @@ extern "C" void realcugan_next(int tb, int index)
 
 extern "C" void realcugan_destroy()
 {
+    for (int j = 0; j < SCREEN_COUNT * SCREEN_COUNT * FrameBufferCount; ++j) {
+        realcugan_next(j / (SCREEN_COUNT * FrameBufferCount), j % (SCREEN_COUNT * FrameBufferCount));
+    }
+
     for (int j = 0; j < realcugan_size(); ++j) {
         if (realcugan[j]) {
-            for (int i = 0; i < realcugan[j]->out_gpu_tex.size(); ++i) {
-                realcugan_next(j, i);
-            }
             delete realcugan[j];
             realcugan[j] = nullptr;
         }

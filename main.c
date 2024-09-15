@@ -3816,8 +3816,6 @@ void *jpeg_decode_thread_func(void *)
     int top_bot = ptr->top_bot;
     FrameBufferContext *ctx = &buffer_ctx[top_bot];
     int index = ctx->index_decode;
-    // int tb = __atomic_load_n(&view_mode, __ATOMIC_RELAXED) == VIEW_MODE_SEPARATE ? top_bot : SCREEN_TOP;
-    // sr_next(tb, top_bot * FrameBufferCount + index);
     uint8_t *out = ctx->screen_decoded[index];
 
     view_mode_t vm = __atomic_load_n(&view_mode, __ATOMIC_RELAXED);
