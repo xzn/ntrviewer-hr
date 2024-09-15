@@ -68,6 +68,10 @@ struct rp_syn_comp_func_t jpeg_decode_queue;
 // #define USE_OGL_ES
 // #define PRINT_PACKET_LOSS_INFO
 
+#if defined(USE_ANGLE) && defined(_WIN32)
+#define SDL_GL_SINGLE_THREAD
+#endif
+
 #define GL_CHANNELS_N 4
 #define GL_FORMAT GL_RGBA
 #define GL_INT_FORMAT GL_RGBA8
@@ -179,8 +183,10 @@ static inline uint32_t iclock()
   return (uint32_t)(iclock64() & 0xfffffffful);
 }
 
+// #ifndef SDL_GL_SINGLE_THREAD
 // #ifndef _WIN32
 // #define SDL_GL_SYNC
+// #endif
 // #endif
 
 static struct timespec clock_realtime_abs_ns_from_now(long ns) {
@@ -1809,53 +1815,64 @@ static void guiMain(struct nk_context *ctx)
 }
 
 #ifdef USE_OGL_ES
-#define GLSL_VERSION "#version 100\n" "precision mediump float; \n"
+#define GLSL_VERSION "#version 100\n" "precision highp float;\n"
 #else
 #define GLSL_VERSION "#version 110\n"
 #endif
 static GLbyte vShaderStr[] =
     GLSL_VERSION
-    "attribute vec4 a_position; \n"
-    "attribute vec2 a_texCoord; \n"
-    "varying vec2 v_texCoord; \n"
-    "void main() \n"
-    "{ \n"
-    " gl_Position = a_position; \n"
-    " v_texCoord = a_texCoord; \n"
-    "} \n";
+    "attribute vec4 a_position;\n"
+    "attribute vec2 a_texCoord;\n"
+    "varying vec2 v_texCoord;\n"
+    "void main()\n"
+    "{\n"
+    " gl_Position = a_position;\n"
+    " v_texCoord = a_texCoord;\n"
+    "}\n";
 
 static GLbyte fShaderStr[] =
     GLSL_VERSION
-    "varying vec2 v_texCoord; \n"
-    "uniform sampler2D s_texture; \n"
-    "void main() \n"
-    "{ \n"
-    " gl_FragColor = texture2D(s_texture, v_texCoord); \n"
-    "} \n";
+    "varying vec2 v_texCoord;\n"
+    "uniform sampler2D s_texture;\n"
+    "void main()\n"
+    "{\n"
+    " gl_FragColor = texture2D(s_texture, v_texCoord);\n"
+    "}\n";
 
 #ifdef USE_OGL_ES
-#define GLSL_FBO_VERSION "#version 300 es\n" "precision mediump float; \n"
+#define GLSL_FBO_VERSION "#version 300 es\n" "precision highp float;\n" "precision highp sampler3D;\n"
+#define GLSL_FBO_ATTRIBUTE "in"
+#define GLSL_FBO_VS_VARYING "out"
+#define GLSL_FBO_FS_VARYING "in"
+#define GLSL_FBO_OUT_FRAG_COLOR "out vec4 " GLSL_FBO_FRAG_COLOR ";\n"
+#define GLSL_FBO_FRAG_COLOR "fragColor"
 #else
 #define GLSL_FBO_VERSION "#version 130\n"
+#define GLSL_FBO_ATTRIBUTE "attribute"
+#define GLSL_FBO_VS_VARYING "varying"
+#define GLSL_FBO_FS_VARYING "varying"
+#define GLSL_FBO_OUT_FRAG_COLOR ""
+#define GLSL_FBO_FRAG_COLOR "gl_FragColor"
 #endif
 static GLbyte fbo_vShaderStr[] =
     GLSL_FBO_VERSION
-    "attribute vec4 a_position; \n"
-    "attribute vec2 a_texCoord; \n"
-    "varying vec2 v_texCoord; \n"
-    "void main() \n"
-    "{ \n"
-    " gl_Position = a_position; \n"
-    " v_texCoord = a_texCoord; \n"
-    "} \n";
+    GLSL_FBO_ATTRIBUTE " vec4 a_position;\n"
+    GLSL_FBO_ATTRIBUTE " vec2 a_texCoord;\n"
+    GLSL_FBO_VS_VARYING " vec2 v_texCoord;\n"
+    "void main()\n"
+    "{\n"
+    " gl_Position = a_position;\n"
+    " v_texCoord = a_texCoord;\n"
+    "}\n";
 
 static GLbyte fbo_fShaderStr[] =
     GLSL_FBO_VERSION
-    "varying vec2 v_texCoord; \n"
-    "uniform sampler3D s_texture; \n"
-    "void main() \n"
-    "{ \n"
-    " gl_FragColor = vec4("
+    GLSL_FBO_FS_VARYING " vec2 v_texCoord;\n"
+    "uniform sampler3D s_texture;\n"
+    GLSL_FBO_OUT_FRAG_COLOR
+    "void main()\n"
+    "{\n"
+    " " GLSL_FBO_FRAG_COLOR " = vec4("
 #ifdef _WIN32
         "texture(s_texture, vec3(v_texCoord, 2.0 / 3.0)).x / 255.0,"
         "texture(s_texture, vec3(v_texCoord, 1.0 / 3.0)).x / 255.0,"
@@ -1867,7 +1884,7 @@ static GLbyte fbo_fShaderStr[] =
 #endif
         "texture(s_texture, vec3(v_texCoord, 1.0)).x / 255.0"
         ");\n"
-    "} \n";
+    "}\n";
 
 static GLfloat fbo_vVertices_pos[4][3] = {
     { -1.f, -1.f, 0.0f }, // Position 1
@@ -2034,10 +2051,18 @@ typedef struct _FrameBufferContext
   GLuint prev_tex_upscaled[SCREEN_COUNT], prev_tex_fsr[SCREEN_COUNT];
   int prev_ctx_width, prev_ctx_height;
 
+#ifndef SDL_GL_SINGLE_THREAD
   int decode_updated;
   pthread_cond_t decode_updated_cond;
   pthread_mutex_t decode_updated_mutex;
+#endif
 } FrameBufferContext;
+
+#ifdef SDL_GL_SINGLE_THREAD
+int decode_updated;
+pthread_cond_t decode_updated_cond = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t decode_updated_mutex = PTHREAD_MUTEX_INITIALIZER;
+#endif
 
 FrameBufferContext buffer_ctx[SCREEN_COUNT];
 
@@ -2525,6 +2550,132 @@ static pthread_cond_t gl_render_cond = PTHREAD_COND_INITIALIZER;
 static pthread_mutex_t gl_render_mutex = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
+static struct nk_color nk_window_bgcolor = { 28, 48, 62, 255 };
+
+#define MIN_UPDATE_INTERVAL_US (33333)
+
+static bool decode_cond_wait(int *updated, pthread_cond_t *cond, pthread_mutex_t *mutex, int *force)
+{
+  struct timespec to = clock_realtime_abs_ns_from_now(MIN_UPDATE_INTERVAL_US * 1000);
+  if (!pthread_mutex_lock_loop(mutex))
+    return false;
+  while (!*updated) {
+    if (!running) {
+      pthread_mutex_unlock(mutex);
+      return false;
+    }
+    int ret;
+    if ((ret = pthread_cond_timedwait(cond, mutex, &to))) {
+      if (ret == ETIMEDOUT) {
+        *force = 1;
+        break;
+      } else {
+        err_log("decode_updated_cond wait error: %d\n", ret);
+        pthread_mutex_unlock(mutex);
+        return false;
+      }
+    }
+  }
+  *updated = 0;
+  pthread_mutex_unlock(mutex);
+  return true;
+}
+
+static void
+ThreadLoop(int i)
+{
+  /* Draw */
+  int screen_count = SCREEN_COUNT;
+  view_mode_t vm = __atomic_load_n(&view_mode, __ATOMIC_RELAXED);
+  if (vm != VIEW_MODE_SEPARATE)
+    screen_count = 1;
+
+  if (i >= screen_count) {
+#ifndef SDL_GL_SINGLE_THREAD
+    Sleep(REST_EVERY_MS);
+#endif
+    return;
+  }
+
+  float bg[4];
+  nk_color_fv(bg, nk_window_bgcolor);
+  // SDL_GetWindowSize(win[i], &win_width[i], &win_height[i]);
+  SDL_GL_GetDrawableSize(win[i], &win_width[i], &win_height[i]);
+
+#ifdef SDL_GL_SINGLE_THREAD
+  SDL_GL_MakeCurrent(win[i], glContext[i]);
+#endif
+  glViewport(0, 0, win_width[i], win_height[i]);
+  glClearColor(bg[0], bg[1], bg[2], bg[3]);
+  glClear(GL_COLOR_BUFFER_BIT);
+
+  int force = 0;
+#ifndef SDL_GL_SINGLE_THREAD
+  if (!decode_cond_wait(&buffer_ctx[i].decode_updated, &buffer_ctx[i].decode_updated_cond, &buffer_ctx[i].decode_updated_mutex, &force))
+    return;
+#else
+  if (i == SCREEN_TOP && !decode_cond_wait(&decode_updated, &decode_updated_cond, &decode_updated_mutex, &force))
+    return;
+#endif
+
+  int updated = 0;
+  uint64_t nextUpdated = iclock64();
+  if (nextUpdated - lastUpdated[i] > MIN_UPDATE_INTERVAL_US)
+    force = 1;
+
+  if (vm == VIEW_MODE_TOP_BOT) {
+    force = 1;
+    updated |= hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400, 240, SCREEN_TOP, i, force);
+    updated |= hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT, i, force);
+  } else if (vm == VIEW_MODE_BOT)
+    updated = hr_draw_screen(&buffer_ctx[1], 320, 240, 1, i, force);
+  else
+    updated = hr_draw_screen(&buffer_ctx[i], i == 0 ? 400 : 320, 240, i, i, force);
+
+  /* IMPORTANT: `nk_sdl_render` modifies some global OpenGL state
+    * with blending, scissor, face culling, depth test and viewport and
+    * defaults everything back into a default state.
+    * Make sure to either a.) save and restore or b.) reset your own state after
+    * rendering the UI. */
+  if (updated || force) {
+    if (i == 0) {
+      struct nk_context *ctx = nk_ctx;
+
+      if (!pthread_mutex_lock_loop(&nk_input_lock))
+        return;
+      if (nk_input_current) {
+        // nk_sdl_handle_grab();
+        nk_input_end(ctx);
+      } else {
+        nk_input_begin(ctx);
+        // nk_sdl_handle_grab();
+        nk_input_end(ctx);
+      }
+      nk_input_current = 0;
+
+      guiMain(ctx);
+      pthread_mutex_unlock(&nk_input_lock);
+    }
+
+#ifdef SDL_GL_SYNC
+    if (!pthread_cond_mutex_flag_lock(&gl_swapbuffer_flag, &gl_swapbuffer_cond, &gl_swapbuffer_mutex))
+      return;
+    gl_swapbuffer_flag = 0;
+    pthread_mutex_unlock(&gl_swapbuffer_mutex);
+#endif
+    if (i == 0) {
+      nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
+    }
+    // pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+    SDL_GL_SwapWindow(win[i]);
+    // pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+#ifdef SDL_GL_SYNC
+    pthread_cond_mutex_flag_signal(&gl_render_flag, &gl_render_cond, &gl_render_mutex);
+#endif
+    lastUpdated[i] = nextUpdated;
+  }
+}
+
 static void
 MainLoop(void *loopArg)
 {
@@ -2617,6 +2768,11 @@ skip_evt:
 
   updateWindowsTitles();
 
+#ifdef SDL_GL_SINGLE_THREAD
+  for (int i = 0; i < SCREEN_COUNT; ++i)
+    ThreadLoop(i);
+#endif
+
 #ifdef SDL_GL_SYNC
   pthread_cond_mutex_flag_signal(&gl_swapbuffer_flag, &gl_swapbuffer_cond, &gl_swapbuffer_mutex);
 
@@ -2627,114 +2783,7 @@ skip_evt:
 #endif
 }
 
-static struct nk_color nk_window_bgcolor = { 28, 48, 62, 255 };
-
-static void
-ThreadLoop(int i)
-{
-  /* Draw */
-  int screen_count = SCREEN_COUNT;
-  view_mode_t vm = __atomic_load_n(&view_mode, __ATOMIC_RELAXED);
-  if (vm != VIEW_MODE_SEPARATE)
-    screen_count = 1;
-
-  if (i >= screen_count) {
-    Sleep(REST_EVERY_MS);
-    return;
-  }
-
-  float bg[4];
-  nk_color_fv(bg, nk_window_bgcolor);
-  // SDL_GetWindowSize(win[i], &win_width[i], &win_height[i]);
-  SDL_GL_GetDrawableSize(win[i], &win_width[i], &win_height[i]);
-
-  // SDL_GL_MakeCurrent(win[i], glContext[i]);
-  glViewport(0, 0, win_width[i], win_height[i]);
-  glClearColor(bg[0], bg[1], bg[2], bg[3]);
-  glClear(GL_COLOR_BUFFER_BIT);
-
-#define MIN_UPDATE_INTERVAL_US (33333)
-
-  int force = 0;
-  struct timespec to = clock_realtime_abs_ns_from_now(MIN_UPDATE_INTERVAL_US * 1000);
-  if (!pthread_mutex_lock_loop(&buffer_ctx[i].decode_updated_mutex))
-    return;
-  while (!buffer_ctx[i].decode_updated) {
-    if (!running) {
-      return;
-    }
-    int ret;
-    if ((ret = pthread_cond_timedwait(&buffer_ctx[i].decode_updated_cond, &buffer_ctx[i].decode_updated_mutex, &to))) {
-      if (ret == ETIMEDOUT) {
-        force = 1;
-        break;
-      } else {
-        err_log("decode_updated_cond wait error: %d\n", ret);
-        return;
-      }
-    }
-  }
-  buffer_ctx[i].decode_updated = 0;
-  pthread_mutex_unlock(&buffer_ctx[i].decode_updated_mutex);
-
-  int updated = 0;
-  uint64_t nextUpdated = iclock64();
-  if (nextUpdated - lastUpdated[i] > MIN_UPDATE_INTERVAL_US)
-    force = 1;
-
-  if (vm == VIEW_MODE_TOP_BOT) {
-    force = 1;
-    updated |= hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400, 240, SCREEN_TOP, i, force);
-    updated |= hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT, i, force);
-  } else if (vm == VIEW_MODE_BOT)
-    updated = hr_draw_screen(&buffer_ctx[1], 320, 240, 1, i, force);
-  else
-    updated = hr_draw_screen(&buffer_ctx[i], i == 0 ? 400 : 320, 240, i, i, force);
-
-  /* IMPORTANT: `nk_sdl_render` modifies some global OpenGL state
-    * with blending, scissor, face culling, depth test and viewport and
-    * defaults everything back into a default state.
-    * Make sure to either a.) save and restore or b.) reset your own state after
-    * rendering the UI. */
-  if (updated || force) {
-    if (i == 0) {
-      struct nk_context *ctx = nk_ctx;
-
-      if (!pthread_mutex_lock_loop(&nk_input_lock))
-        return;
-      if (nk_input_current) {
-        // nk_sdl_handle_grab();
-        nk_input_end(ctx);
-      } else {
-        nk_input_begin(ctx);
-        // nk_sdl_handle_grab();
-        nk_input_end(ctx);
-      }
-      nk_input_current = 0;
-
-      guiMain(ctx);
-      pthread_mutex_unlock(&nk_input_lock);
-    }
-
-#ifdef SDL_GL_SYNC
-    if (!pthread_cond_mutex_flag_lock(&gl_swapbuffer_flag, &gl_swapbuffer_cond, &gl_swapbuffer_mutex))
-      return;
-    gl_swapbuffer_flag = 0;
-    pthread_mutex_unlock(&gl_swapbuffer_mutex);
-#endif
-    if (i == 0) {
-      nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
-    }
-    // pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
-    SDL_GL_SwapWindow(win[i]);
-    // pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
-#ifdef SDL_GL_SYNC
-    pthread_cond_mutex_flag_signal(&gl_render_flag, &gl_render_cond, &gl_render_mutex);
-#endif
-    lastUpdated[i] = nextUpdated;
-  }
-}
-
+#ifndef SDL_GL_SINGLE_THREAD
 // static void sdl_gl_makecurrent_null(void *)
 // {
 //   SDL_GL_MakeCurrent(NULL, NULL);
@@ -2751,6 +2800,7 @@ static void *window_thread_func(void *arg)
   SDL_GL_MakeCurrent(NULL, NULL);
   return NULL;
 }
+#endif
 
 static int acquire_sem(rp_sem_t *sem) {
   while (1) {
@@ -2784,7 +2834,11 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, int top_bot, int frame_
   ctx->status = FBS_UPDATED;
   pthread_mutex_unlock(&ctx->status_lock);
 
+#ifndef SDL_GL_SINGLE_THREAD
   pthread_cond_mutex_flag_signal(&ctx->decode_updated, &ctx->decode_updated_cond, &ctx->decode_updated_mutex);
+#else
+  pthread_cond_mutex_flag_signal(&decode_updated, &decode_updated_cond, &decode_updated_mutex);
+#endif
 }
 
 uint8_t upscaled_u_image[400 * 240];
@@ -4075,7 +4129,9 @@ int main(int argc, char *argv[])
   glGetIntegerv(GL_MINOR_VERSION, &ogl_version_minor);
   err_log("ogl version: %d.%d\n", ogl_version_major, ogl_version_minor);
 
-  // SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
+#ifdef SDL_GL_SINGLE_THREAD
+  SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
+#endif
   glContext[SCREEN_BOT] = SDL_GL_CreateContext(win[SCREEN_BOT]);
   if (!glContext[SCREEN_BOT])
   {
@@ -4157,8 +4213,10 @@ int main(int argc, char *argv[])
     buffer_ctx[i].index_decode = FBI_DECODE;
     buffer_ctx[i].index_upscaling = FBI_UPSCALING;
 
+#ifndef SDL_GL_SINGLE_THREAD
     buffer_ctx[i].decode_updated_cond = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
     buffer_ctx[i].decode_updated_mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+#endif
   }
 
   for (int j = 0; j < SCREEN_COUNT; ++j) {
@@ -4231,6 +4289,7 @@ int main(int argc, char *argv[])
   SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED | ES_DISPLAY_REQUIRED);
 #endif
 
+#ifndef SDL_GL_SINGLE_THREAD
   SDL_GL_MakeCurrent(NULL, NULL);
   pthread_t window_top_thread;
   if ((ret = pthread_create(&window_top_thread, NULL, window_thread_func, (void *)SCREEN_TOP)))
@@ -4244,6 +4303,7 @@ int main(int argc, char *argv[])
     err_log("window_bot_thread create failed\n");
     return -1;
   }
+#endif
 
 #if defined(__EMSCRIPTEN__)
 #include <emscripten.h>
@@ -4259,10 +4319,12 @@ int main(int argc, char *argv[])
 
   // Apparently cancelling a thread that has OpenGL stuff causes hangs, so let them exit on their own.
 
+#ifndef SDL_GL_SINGLE_THREAD
   // pthread_cancel(window_bot_thread);
   pthread_join(window_bot_thread, NULL);
   // pthread_cancel(window_top_thread);
   pthread_join(window_top_thread, NULL);
+#endif
 
   pthread_cancel(udp_recv_thread);
   pthread_join(udp_recv_thread, NULL);
