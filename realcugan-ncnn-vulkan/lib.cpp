@@ -24,7 +24,11 @@
 #include "filesystem_utils.h"
 #include "../fsr/fsr_main.h"
 
-static RealCUGAN* realcugan[SCREEN_COUNT * SCREEN_COUNT * FrameBufferCount];
+#define REALCUGAN_WORK_COUNT (2)
+
+static RealCUGAN* realcugan[SCREEN_COUNT * REALCUGAN_WORK_COUNT];
+static int realcugan_indices[SCREEN_COUNT * SCREEN_COUNT * FrameBufferCount];
+static int realcugan_work_indices[SCREEN_COUNT];
 static std::vector<std::unique_ptr<std::mutex>> realcugan_locks;
 static bool realcugan_support_ext_mem;
 static const int scale = 2;
@@ -34,9 +38,16 @@ static int realcugan_size()
     return realcugan_support_ext_mem ? sizeof(realcugan) / sizeof(realcugan[0]) : 1;
 }
 
-static int realcugan_index(int tb, int index)
+static int realcugan_index(int tb, int index, int next)
 {
-    return realcugan_support_ext_mem ? tb * SCREEN_COUNT * FrameBufferCount + index : 0;
+    index = tb * SCREEN_COUNT * FrameBufferCount + index;
+    if (next) {
+        ++realcugan_work_indices[tb];
+        realcugan_work_indices[tb] %= REALCUGAN_WORK_COUNT;
+
+        realcugan_indices[index] = tb * REALCUGAN_WORK_COUNT + realcugan_work_indices[tb];
+    }
+    return realcugan_support_ext_mem ? realcugan_indices[index] : 0;
 }
 
 extern "C" int realcugan_create()
@@ -299,7 +310,7 @@ extern "C" GLuint realcugan_run(int tb, int index, int w, int h, int c, const un
     ncnn::Mat inimage = ncnn::Mat(w, h, (void*)indata, (size_t)c, c);
     ncnn::Mat outimage = ncnn::Mat(w * scale, h * scale, (void*)outdata, (size_t)c, c);
 
-    int locks_index = realcugan_index(tb, index);
+    int locks_index = realcugan_index(tb, index, 1);
     if (locks_index + 1 > realcugan_locks.size()) {
         realcugan_locks.resize(locks_index + 1);
     }
@@ -328,7 +339,7 @@ extern "C" GLuint realcugan_run(int tb, int index, int w, int h, int c, const un
 
 extern "C" void realcugan_next(int tb, int index)
 {
-    int locks_index = realcugan_index(tb, index);
+    int locks_index = realcugan_index(tb, index, 0);
     if (!realcugan[locks_index] || 0 >= realcugan[locks_index]->out_gpu_tex.size()) {
         return;
     }
