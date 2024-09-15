@@ -80,20 +80,6 @@ RealCUGAN::RealCUGAN(int gpuid, bool _tta_mode, int num_threads)
     bicubic_4x = 0;
     tta_mode = _tta_mode;
 
-    // Tested on AMD and NVIDIA for now
-    // bool supported_gpu_vendor = vkdev->info.vendor_id() == 0x1002 || vkdev->info.vendor_id() == 0x10de;
-    bool supported_gpu_vendor = 1;
-    // fprintf(stderr, "GPU vendor id: 0x%x\n", (unsigned)vkdev->info.vendor_id());
-    support_ext_mem = supported_gpu_vendor && ncnn::support_VK_KHR_external_memory_capabilities &&
-#if _WIN32
-        vkdev->info.support_VK_KHR_external_memory() && vkdev->info.support_VK_KHR_external_memory_win32() &&
-        GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_win32;
-#else
-        vkdev->info.support_VK_KHR_external_memory() && vkdev->info.support_VK_KHR_external_memory_fd() &&
-        GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_fd;
-#endif
-    tiling_linear = false;
-
     blob_vkallocator = vkdev->acquire_blob_allocator();
     staging_vkallocator = vkdev->acquire_staging_allocator();
 }

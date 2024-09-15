@@ -24,9 +24,20 @@
 #include "filesystem_utils.h"
 #include "../fsr/fsr_main.h"
 
-static RealCUGAN* realcugan[SCREEN_COUNT];
+static RealCUGAN* realcugan[SCREEN_COUNT * SCREEN_COUNT * FrameBufferCount];
 static std::vector<std::unique_ptr<std::mutex>> realcugan_locks;
+static bool realcugan_support_ext_mem;
 static const int scale = 2;
+
+static int realcugan_size()
+{
+    return realcugan_support_ext_mem ? sizeof(realcugan) / sizeof(realcugan[0]) : 1;
+}
+
+static int realcugan_index(int tb, int index)
+{
+    return realcugan_support_ext_mem ? tb * SCREEN_COUNT * FrameBufferCount + index : 0;
+}
 
 extern "C" int realcugan_create()
 {
@@ -238,7 +249,33 @@ extern "C" int realcugan_create()
         return -1;
     }
 
-    for (int j = 0; j < SCREEN_COUNT; ++j) {
+    ncnn::VulkanDevice *vkdev = ncnn::get_gpu_device(gpuid[i]);
+    if (!vkdev) {
+        fprintf(stderr, "no gpu vulkan device found\n");
+
+        ncnn::destroy_gpu_instance();
+        return -1;
+    }
+    if (tilesize[i] < 400) {
+        fprintf(stderr, "insufficient vram\n");
+
+        ncnn::destroy_gpu_instance();
+        return -1;
+    }
+
+
+    // Tested on AMD and NVIDIA for now
+    bool supported_gpu_vendor = vkdev->info.vendor_id() == 0x1002 || vkdev->info.vendor_id() == 0x10de;
+    supported_gpu_vendor = 1;
+    realcugan_support_ext_mem = supported_gpu_vendor && ncnn::support_VK_KHR_external_memory_capabilities &&
+        vkdev->info.support_VK_KHR_external_memory() && GLAD_GL_EXT_memory_object &&
+#if _WIN32
+        vkdev->info.support_VK_KHR_external_memory_win32() && GLAD_GL_EXT_memory_object_win32;
+#else
+        vkdev->info.support_VK_KHR_external_memory_fd() && GLAD_GL_EXT_memory_object_fd;
+#endif
+
+    for (int j = 0; j < realcugan_size(); ++j) {
         if (realcugan[j]) {
             delete realcugan[j];
         }
@@ -249,6 +286,9 @@ extern "C" int realcugan_create()
         realcugan[j]->tilesize = tilesize[i];
         realcugan[j]->prepadding = prepadding;
         realcugan[j]->syncgap = syncgap;
+
+        realcugan[j]->support_ext_mem = realcugan_support_ext_mem;
+        realcugan[j]->tiling_linear = false;
     }
 
     return 0;
@@ -259,7 +299,7 @@ extern "C" GLuint realcugan_run(int tb, int index, int w, int h, int c, const un
     ncnn::Mat inimage = ncnn::Mat(w, h, (void*)indata, (size_t)c, c);
     ncnn::Mat outimage = ncnn::Mat(w * scale, h * scale, (void*)outdata, (size_t)c, c);
 
-    int locks_index = tb * SCREEN_COUNT * FrameBufferCount + index;
+    int locks_index = realcugan_index(tb, index);
     if (locks_index + 1 > realcugan_locks.size()) {
         realcugan_locks.resize(locks_index + 1);
     }
@@ -269,7 +309,7 @@ extern "C" GLuint realcugan_run(int tb, int index, int w, int h, int c, const un
     }
 
     realcugan_locks[locks_index]->lock();
-    if (realcugan[tb]->process(index, inimage, outimage) != 0) {
+    if (realcugan[locks_index]->process(0, inimage, outimage) != 0) {
         realcugan_locks[locks_index]->unlock();
 
         *success = false;
@@ -277,7 +317,7 @@ extern "C" GLuint realcugan_run(int tb, int index, int w, int h, int c, const un
     }
     realcugan_locks[locks_index]->unlock();
 
-    OutVkImageMat *out = realcugan[tb]->out_gpu_tex[index];
+    OutVkImageMat *out = realcugan[locks_index]->out_gpu_tex[0];
     GLuint tex = out->gl_texture;
     *gl_sem = out->gl_sem;
     *gl_sem_next = out->gl_sem_next;
@@ -288,19 +328,19 @@ extern "C" GLuint realcugan_run(int tb, int index, int w, int h, int c, const un
 
 extern "C" void realcugan_next(int tb, int index)
 {
-    if (!realcugan[tb] || index >= realcugan[tb]->out_gpu_tex.size()) {
+    int locks_index = realcugan_index(tb, index);
+    if (!realcugan[locks_index] || 0 >= realcugan[locks_index]->out_gpu_tex.size()) {
         return;
     }
-    OutVkImageMat *out = realcugan[tb]->out_gpu_tex[index];
+    OutVkImageMat *out = realcugan[locks_index]->out_gpu_tex[0];
     if (!out || !out->first_subseq) {
         return;
     }
 
     if (out->need_wait) {
-        int locks_index = tb * SCREEN_COUNT * FrameBufferCount + index;
         realcugan_locks[locks_index]->lock();
         if (out->need_wait) {
-            VkResult ret = ncnn::vkWaitForFences(realcugan[tb]->vkdev->vkdevice(), 1, &out->fence, VK_TRUE, (uint64_t)-1);
+            VkResult ret = ncnn::vkWaitForFences(realcugan[locks_index]->vkdev->vkdevice(), 1, &out->fence, VK_TRUE, (uint64_t)-1);
             if (ret != VK_SUCCESS) {
                 NCNN_LOGE("vkWaitForFences failed %d", ret);
             }
@@ -312,7 +352,7 @@ extern "C" void realcugan_next(int tb, int index)
 
 extern "C" void realcugan_destroy()
 {
-    for (int j = 0; j < SCREEN_COUNT; ++j) {
+    for (int j = 0; j < realcugan_size(); ++j) {
         if (realcugan[j]) {
             for (int i = 0; i < realcugan[j]->out_gpu_tex.size(); ++i) {
                 realcugan_next(j, i);
