@@ -121,17 +121,17 @@ int RealCUGAN::load(const std::string& parampath, const std::string& modelpath)
 #endif
 {
     net.opt.use_vulkan_compute = vkdev ? true : false;
-#if 1
-    net.opt.use_fp16_packed = true;
-    net.opt.use_fp16_storage = vkdev ? true : false;
-    net.opt.use_fp16_arithmetic = false;
-    net.opt.use_int8_storage = true;
-#else
-    net.opt.use_fp16_packed = false;
-    net.opt.use_fp16_storage = false;
-    net.opt.use_fp16_arithmetic = false;
-    net.opt.use_int8_storage = false;
-#endif
+    if (!vkdev || (vkdev->info.support_fp16_packed() && vkdev->info.support_fp16_storage() && vkdev->info.support_int8_storage())) {
+        net.opt.use_fp16_packed = true;
+        net.opt.use_fp16_storage = vkdev ? true : false;
+        net.opt.use_fp16_arithmetic = false;
+        net.opt.use_int8_storage = true;
+    } else {
+        net.opt.use_fp16_packed = false;
+        net.opt.use_fp16_storage = false;
+        net.opt.use_fp16_arithmetic = false;
+        net.opt.use_int8_storage = false;
+    }
     net.set_vulkan_device(vkdev);
 
 #if _WIN32
