@@ -808,6 +808,8 @@ int RealCUGAN::process(int index, const ncnn::Mat& inimage, ncnn::Mat& outimage)
 
             cmd.submit_and_wait();
 
+            out_gpu_tex[index]->first_subseq = true;
+
             if (!(opt.use_fp16_storage && opt.use_int8_storage))
             {
                 if (channels == 3)

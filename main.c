@@ -179,6 +179,10 @@ static inline uint32_t iclock()
   return (uint32_t)(iclock64() & 0xfffffffful);
 }
 
+// #ifndef _WIN32
+// #define SDL_GL_SYNC
+// #endif
+
 static struct timespec clock_realtime_abs_ns_from_now(long ns) {
   struct timespec to;
   if (clock_gettime(CLOCK_REALTIME, &to) != 0) {
@@ -1829,38 +1833,10 @@ static GLbyte fShaderStr[] =
     " gl_FragColor = texture2D(s_texture, v_texCoord); \n"
     "} \n";
 
-#if 0
 #ifdef USE_OGL_ES
-#define GLSL_FBO_VERSION "#version 320 es\n" "precision mediump float; \n"
+#define GLSL_FBO_VERSION "#version 300 es\n" "precision mediump float; \n"
 #else
-#define GLSL_FBO_VERSION "#version 430\n"
-#endif
-static GLbyte fbo_vShaderStr[] =
-    GLSL_FBO_VERSION
-    "in vec4 a_position; \n"
-    "in vec2 a_texCoord; \n"
-    "out vec2 v_texCoord; \n"
-    "void main() \n"
-    "{ \n"
-    " gl_Position = a_position; \n"
-    " v_texCoord = a_texCoord; \n"
-    "} \n";
-
-static GLbyte fbo_fShaderStr[] =
-    GLSL_FBO_VERSION
-    "in vec2 v_texCoord; \n"
-    "uniform samplerBuffer mediump s_texture; \n"
-    "uniform int v_texSize; \n"
-    "out vec4 outColor; \n"
-    "void main() \n"
-    "{ \n"
-    " outColor = texelFetch(s_texture, int(v_texCoord.y) * v_texSize + int(v_texCoord.x)); \n"
-    "} \n";
-#else
-#ifdef USE_OGL_ES
-#define GLSL_FBO_VERSION "#version 100 es\n" "precision mediump float; \n"
-#else
-#define GLSL_FBO_VERSION "#version 110\n"
+#define GLSL_FBO_VERSION "#version 130\n"
 #endif
 static GLbyte fbo_vShaderStr[] =
     GLSL_FBO_VERSION
@@ -1881,18 +1857,17 @@ static GLbyte fbo_fShaderStr[] =
     "{ \n"
     " gl_FragColor = vec4("
 #ifdef _WIN32
-        "texture3D(s_texture, vec3(v_texCoord, 2.0 / 3.0)).x / 255.0,"
-        "texture3D(s_texture, vec3(v_texCoord, 1.0 / 3.0)).x / 255.0,"
-        "texture3D(s_texture, vec3(v_texCoord, 0.0)).x / 255.0,"
+        "texture(s_texture, vec3(v_texCoord, 2.0 / 3.0)).x / 255.0,"
+        "texture(s_texture, vec3(v_texCoord, 1.0 / 3.0)).x / 255.0,"
+        "texture(s_texture, vec3(v_texCoord, 0.0)).x / 255.0,"
 #else
-        "texture3D(s_texture, vec3(v_texCoord, 0.0)).x / 255.0,"
-        "texture3D(s_texture, vec3(v_texCoord, 1.0 / 3.0)).x / 255.0,"
-        "texture3D(s_texture, vec3(v_texCoord, 2.0 / 3.0)).x / 255.0,"
+        "texture(s_texture, vec3(v_texCoord, 0.0)).x / 255.0,"
+        "texture(s_texture, vec3(v_texCoord, 1.0 / 3.0)).x / 255.0,"
+        "texture(s_texture, vec3(v_texCoord, 2.0 / 3.0)).x / 255.0,"
 #endif
-        "texture3D(s_texture, vec3(v_texCoord, 1.0)).x / 255.0"
+        "texture(s_texture, vec3(v_texCoord, 1.0)).x / 255.0"
         ");\n"
     "} \n";
-#endif
 
 static GLfloat fbo_vVertices_pos[4][3] = {
     { -1.f, -1.f, 0.0f }, // Position 1
@@ -2039,7 +2014,6 @@ GLuint gl_fbo_program[SCREEN_COUNT];
 GLint gl_fbo_position_loc[SCREEN_COUNT];
 GLint gl_fbo_tex_coord_loc[SCREEN_COUNT];
 GLint gl_fbo_sampler_loc[SCREEN_COUNT];
-GLint gl_fbo_tex_size_loc[SCREEN_COUNT];
 
 typedef struct _FrameBufferContext
 {
@@ -2055,6 +2029,7 @@ typedef struct _FrameBufferContext
   int index_display;
   int index_done_decode_ready_display;
   int index_decode;
+  int index_upscaling;
   uint8_t *prev_data;
   GLuint prev_tex_upscaled[SCREEN_COUNT], prev_tex_fsr[SCREEN_COUNT];
   int prev_ctx_width, prev_ctx_height;
@@ -2197,22 +2172,22 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
       } else {
         glActiveTexture(GL_TEXTURE0);
 
-        if (0) {
-          glBindTexture(GL_TEXTURE_BUFFER, tex_upscaled);
+        if (dim3) {
+          glBindTexture(GL_TEXTURE_3D, tex_upscaled);
           glBindFramebuffer(GL_DRAW_FRAMEBUFFER, ctx->gl_fbo_upscaled[tb]);
           glViewport(0, 0, height * scale, width * scale);
           glDisable(GL_CULL_FACE);
           glDisable(GL_DEPTH_TEST);
 
           glUseProgram(gl_fbo_program[tb]);
-          fbo_vVertices_tex_coord[0][0] = 0.5;
-          fbo_vVertices_tex_coord[0][1] = 0.5;
-          fbo_vVertices_tex_coord[1][0] = 0.5;
-          fbo_vVertices_tex_coord[1][1] = width * scale - 0.5;
-          fbo_vVertices_tex_coord[2][0] = height * scale - 0.5;
-          fbo_vVertices_tex_coord[2][1] = 0.5;
-          fbo_vVertices_tex_coord[3][0] = height * scale - 0.5;
-          fbo_vVertices_tex_coord[3][1] = width * scale - 0.5;
+          fbo_vVertices_tex_coord[0][0] = 0;
+          fbo_vVertices_tex_coord[0][1] = 0;
+          fbo_vVertices_tex_coord[1][0] = 0;
+          fbo_vVertices_tex_coord[1][1] = 1;
+          fbo_vVertices_tex_coord[2][0] = 1;
+          fbo_vVertices_tex_coord[2][1] = 0;
+          fbo_vVertices_tex_coord[3][0] = 1;
+          fbo_vVertices_tex_coord[3][1] = 1;
 
           glVertexAttribPointer(gl_fbo_position_loc[tb], 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_pos), fbo_vVertices_pos);
           glVertexAttribPointer(gl_fbo_tex_coord_loc[tb], 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_tex_coord), fbo_vVertices_tex_coord);
@@ -2220,54 +2195,22 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
           glEnableVertexAttribArray(gl_fbo_tex_coord_loc[tb]);
 
           glUniform1i(gl_fbo_sampler_loc[tb], 0);
-          glUniform1i(gl_fbo_tex_size_loc[tb], height * scale);
+
+          if (gl_sem) {
+            GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
+            glWaitSemaphoreEXT(gl_sem, 0, NULL, 1, &tex_upscaled, &layout);
+          }
           glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, fbo_indices);
+          if (gl_sem && gl_sem_next) {
+            GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
+            glSignalSemaphoreEXT(gl_sem_next, 0, NULL, 1, &tex_upscaled, &layout);
+          }
 
           glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled[tb]);
           tex = ctx->gl_tex_upscaled[tb];
         } else {
-          if (dim3) {
-            glBindTexture(GL_TEXTURE_3D, tex_upscaled);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, ctx->gl_fbo_upscaled[tb]);
-            glViewport(0, 0, height * scale, width * scale);
-            glDisable(GL_CULL_FACE);
-            glDisable(GL_DEPTH_TEST);
-
-            glUseProgram(gl_fbo_program[tb]);
-            fbo_vVertices_tex_coord[0][0] = 0;
-            fbo_vVertices_tex_coord[0][1] = 0;
-            fbo_vVertices_tex_coord[1][0] = 0;
-            fbo_vVertices_tex_coord[1][1] = 1;
-            fbo_vVertices_tex_coord[2][0] = 1;
-            fbo_vVertices_tex_coord[2][1] = 0;
-            fbo_vVertices_tex_coord[3][0] = 1;
-            fbo_vVertices_tex_coord[3][1] = 1;
-
-            glVertexAttribPointer(gl_fbo_position_loc[tb], 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_pos), fbo_vVertices_pos);
-            glVertexAttribPointer(gl_fbo_tex_coord_loc[tb], 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_tex_coord), fbo_vVertices_tex_coord);
-            glEnableVertexAttribArray(gl_fbo_position_loc[tb]);
-            glEnableVertexAttribArray(gl_fbo_tex_coord_loc[tb]);
-
-            glUniform1i(gl_fbo_sampler_loc[tb], 0);
-            if (0)
-              glUniform1i(gl_fbo_tex_size_loc[tb], height * scale);
-
-            if (gl_sem) {
-              GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
-              glWaitSemaphoreEXT(gl_sem, 0, NULL, 1, &tex_upscaled, &layout);
-            }
-            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, fbo_indices);
-            if (gl_sem && gl_sem_next) {
-              GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
-              glSignalSemaphoreEXT(gl_sem_next, 0, NULL, 1, &tex_upscaled, &layout);
-            }
-
-            glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled[tb]);
-            tex = ctx->gl_tex_upscaled[tb];
-          } else {
-            glBindTexture(GL_TEXTURE_2D, tex_upscaled);
-            tex = tex_upscaled;
-          }
+          glBindTexture(GL_TEXTURE_2D, tex_upscaled);
+          tex = tex_upscaled;
         }
       }
     }
@@ -2400,12 +2343,15 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
 
 static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot, int tb, int force)
 {
+  sr_next(tb, top_bot * FrameBufferCount + ctx->index_upscaling);
+
   if (!pthread_mutex_lock_loop(&ctx->status_lock))
     return 0;
   enum FrameBufferStatus status = ctx->status;
   if (ctx->status == FBS_UPDATED) {
     int index = ctx->index_done_decode_ready_display;
-    ctx->index_done_decode_ready_display = ctx->index_display;
+    ctx->index_done_decode_ready_display = ctx->index_upscaling;
+    ctx->index_upscaling = ctx->index_display;
     ctx->index_display = index;
     ctx->status = FBS_NOT_UPDATED;
   }
@@ -2568,10 +2514,6 @@ static int prev_fullscreen;
 static uint64_t lastUpdated[SCREEN_COUNT];
 static int nk_input_current;
 static pthread_mutex_t nk_input_lock = PTHREAD_MUTEX_INITIALIZER;
-
-#ifndef _WIN32
-// #define SDL_GL_SYNC
-#endif
 
 #ifdef SDL_GL_SYNC
 static int gl_swapbuffer_flag;
@@ -2761,9 +2703,11 @@ ThreadLoop(int i)
       if (!pthread_mutex_lock_loop(&nk_input_lock))
         return;
       if (nk_input_current) {
+        // nk_sdl_handle_grab();
         nk_input_end(ctx);
       } else {
         nk_input_begin(ctx);
+        // nk_sdl_handle_grab();
         nk_input_end(ctx);
       }
       nk_input_current = 0;
@@ -3796,8 +3740,8 @@ void *jpeg_decode_thread_func(void *)
     int top_bot = ptr->top_bot;
     FrameBufferContext *ctx = &buffer_ctx[top_bot];
     int index = ctx->index_decode;
-    int tb = __atomic_load_n(&view_mode, __ATOMIC_RELAXED) == VIEW_MODE_SEPARATE ? top_bot : SCREEN_TOP;
-    sr_next(tb, top_bot * FrameBufferCount + index);
+    // int tb = __atomic_load_n(&view_mode, __ATOMIC_RELAXED) == VIEW_MODE_SEPARATE ? top_bot : SCREEN_TOP;
+    // sr_next(tb, top_bot * FrameBufferCount + index);
     uint8_t *out = ctx->screen_decoded[index];
 
     int ret;
@@ -4043,7 +3987,9 @@ int main(int argc, char *argv[])
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
 #else
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+  // SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+  // SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
 #endif
 #ifdef GL_DEBUG
@@ -4209,6 +4155,7 @@ int main(int argc, char *argv[])
     buffer_ctx[i].index_display = FBI_DISPLAY;
     buffer_ctx[i].index_done_decode_ready_display = FBI_IN_BETWEEN;
     buffer_ctx[i].index_decode = FBI_DECODE;
+    buffer_ctx[i].index_upscaling = FBI_UPSCALING;
 
     buffer_ctx[i].decode_updated_cond = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
     buffer_ctx[i].decode_updated_mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
@@ -4243,8 +4190,6 @@ int main(int argc, char *argv[])
       gl_fbo_position_loc[i] = glGetAttribLocation(gl_fbo_program[i], "a_position");
       gl_fbo_tex_coord_loc[i] = glGetAttribLocation(gl_fbo_program[i], "a_texCoord");
       gl_fbo_sampler_loc[i] = glGetUniformLocation(gl_fbo_program[i], "s_texture");
-      if (0)
-        gl_fbo_tex_size_loc[i] = glGetUniformLocation(gl_fbo_program[i], "v_texSize");
     }
   }
 
