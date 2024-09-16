@@ -66,6 +66,9 @@ struct rp_syn_comp_func_t jpeg_decode_queue;
 // #define GL_DEBUG
 // #define USE_ANGLE
 // #define USE_OGL_ES
+#ifndef USE_OGL_ES
+#define USE_VAO
+#endif
 // #define PRINT_PACKET_LOSS_INFO
 
 #if defined(USE_ANGLE) && defined(_WIN32)
@@ -312,6 +315,16 @@ Uint32 win_id[SCREEN_COUNT];
 SDL_GLContext glContext[SCREEN_COUNT];
 int win_width[SCREEN_COUNT], win_height[SCREEN_COUNT];
 int ogl_version_major, ogl_version_minor;
+
+#ifdef USE_VAO
+GLuint glVao[SCREEN_COUNT];
+GLuint glVbo[SCREEN_COUNT];
+GLuint glEbo[SCREEN_COUNT];
+
+GLuint glFboVao[SCREEN_COUNT];
+GLuint glFboVbo[SCREEN_COUNT];
+GLuint glFboEbo[SCREEN_COUNT];
+#endif
 
 enum ConnectionState
 {
@@ -1821,103 +1834,93 @@ static void guiMain(struct nk_context *ctx)
 #define GLSL_VERSION "#version 110\n"
 #endif
 static GLbyte vShaderStr[] =
-    GLSL_VERSION
-    "attribute vec4 a_position;\n"
-    "attribute vec2 a_texCoord;\n"
-    "varying vec2 v_texCoord;\n"
-    "void main()\n"
-    "{\n"
-    " gl_Position = a_position;\n"
-    " v_texCoord = a_texCoord;\n"
-    "}\n";
+  GLSL_VERSION
+  "attribute vec4 a_position;\n"
+  "attribute vec2 a_texCoord;\n"
+  "varying vec2 v_texCoord;\n"
+  "void main()\n"
+  "{\n"
+  " gl_Position = a_position;\n"
+  " v_texCoord = a_texCoord;\n"
+  "}\n";
 
 static GLbyte fShaderStr[] =
-    GLSL_VERSION
-    "varying vec2 v_texCoord;\n"
-    "uniform sampler2D s_texture;\n"
-    "void main()\n"
-    "{\n"
-    " gl_FragColor = texture2D(s_texture, v_texCoord);\n"
-    "}\n";
+  GLSL_VERSION
+  "varying vec2 v_texCoord;\n"
+  "uniform sampler2D s_texture;\n"
+  "void main()\n"
+  "{\n"
+  " gl_FragColor = texture2D(s_texture, v_texCoord);\n"
+  "}\n";
 
 #ifdef USE_OGL_ES
 #define GLSL_FBO_VERSION "#version 300 es\n" "precision highp float;\n" "precision highp sampler3D;\n"
-#define GLSL_FBO_ATTRIBUTE "in"
-#define GLSL_FBO_VS_VARYING "out"
-#define GLSL_FBO_FS_VARYING "in"
-#define GLSL_FBO_OUT_FRAG_COLOR "out vec4 " GLSL_FBO_FRAG_COLOR ";\n"
-#define GLSL_FBO_FRAG_COLOR "fragColor"
 #else
 #define GLSL_FBO_VERSION "#version 130\n"
-#define GLSL_FBO_ATTRIBUTE "attribute"
-#define GLSL_FBO_VS_VARYING "varying"
-#define GLSL_FBO_FS_VARYING "varying"
-#define GLSL_FBO_OUT_FRAG_COLOR ""
-#define GLSL_FBO_FRAG_COLOR "gl_FragColor"
 #endif
 static GLbyte fbo_vShaderStr[] =
-    GLSL_FBO_VERSION
-    GLSL_FBO_ATTRIBUTE " vec4 a_position;\n"
-    GLSL_FBO_ATTRIBUTE " vec2 a_texCoord;\n"
-    GLSL_FBO_VS_VARYING " vec2 v_texCoord;\n"
-    "void main()\n"
-    "{\n"
-    " gl_Position = a_position;\n"
-    " v_texCoord = a_texCoord;\n"
-    "}\n";
+  GLSL_FBO_VERSION
+  "in vec4 a_position;\n"
+  "in vec2 a_texCoord;\n"
+  "out vec2 v_texCoord;\n"
+  "void main()\n"
+  "{\n"
+  " gl_Position = a_position;\n"
+  " v_texCoord = a_texCoord;\n"
+  "}\n";
 
 static GLbyte fbo_fShaderStr[] =
-    GLSL_FBO_VERSION
-    GLSL_FBO_FS_VARYING " vec2 v_texCoord;\n"
-    "uniform sampler3D s_texture;\n"
-    GLSL_FBO_OUT_FRAG_COLOR
-    "void main()\n"
-    "{\n"
-    " " GLSL_FBO_FRAG_COLOR " = vec4("
+  GLSL_FBO_VERSION
+  "in vec2 v_texCoord;\n"
+  "uniform sampler3D s_texture;\n"
+  "out vec4 fragColor;\n"
+  "void main()\n"
+  "{\n"
+  " fragColor = vec4("
 #ifdef _WIN32
-        "texture(s_texture, vec3(v_texCoord, 2.0 / 3.0)).x / 255.0,"
-        "texture(s_texture, vec3(v_texCoord, 1.0 / 3.0)).x / 255.0,"
-        "texture(s_texture, vec3(v_texCoord, 0.0)).x / 255.0,"
+    "texture(s_texture, vec3(v_texCoord, 2.0 / 3.0)).x / 255.0,"
+    "texture(s_texture, vec3(v_texCoord, 1.0 / 3.0)).x / 255.0,"
+    "texture(s_texture, vec3(v_texCoord, 0.0)).x / 255.0,"
 #else
-        "texture(s_texture, vec3(v_texCoord, 0.0)).x / 255.0,"
-        "texture(s_texture, vec3(v_texCoord, 1.0 / 3.0)).x / 255.0,"
-        "texture(s_texture, vec3(v_texCoord, 2.0 / 3.0)).x / 255.0,"
+    "texture(s_texture, vec3(v_texCoord, 0.0)).x / 255.0,"
+    "texture(s_texture, vec3(v_texCoord, 1.0 / 3.0)).x / 255.0,"
+    "texture(s_texture, vec3(v_texCoord, 2.0 / 3.0)).x / 255.0,"
 #endif
-        "texture(s_texture, vec3(v_texCoord, 1.0)).x / 255.0"
-        ");\n"
-    "}\n";
+    "texture(s_texture, vec3(v_texCoord, 1.0)).x / 255.0"
+    ");\n"
+  "}\n";
 
 static GLfloat fbo_vVertices_pos[4][3] = {
-    { -1.f, -1.f, 0.0f }, // Position 1
-    { -1.f, 1.f, 0.0f },  // Position 0
-    { 1.f, -1.f, 0.0f },  // Position 2
-    { 1.f, 1.f, 0.0f },   // Position 3
+  { -1.f, -1.f, 0.0f }, // Position 1
+  { -1.f, 1.f, 0.0f },  // Position 0
+  { 1.f, -1.f, 0.0f },  // Position 2
+  { 1.f, 1.f, 0.0f },   // Position 3
 };
 
 static GLfloat fbo_vVertices_tex_coord[4][2] = {
-    { 1.0f, 0.0f }, // TexCoord 2
-    { 0.0f, 0.0f }, // TexCoord 1
-    { 0.0f, 1.0f }, // TexCoord 0
-    { 1.0f, 1.0f }, // TexCoord 3
+  { 0.0f, 0.0f }, // TexCoord 2
+  { 0.0f, 1.0f }, // TexCoord 1
+  { 1.0f, 0.0f }, // TexCoord 0
+  { 1.0f, 1.0f }, // TexCoord 3
 };
 static GLushort fbo_indices[] =
-    {0, 1, 2, 1, 2, 3};
+  {0, 1, 2, 1, 2, 3};
 
 // static GLfloat vVertices_pos[4][3] = {
-//     { -0.5f, 0.5f, 0.0f },  // Position 0
-//     { -0.5f, -0.5f, 0.0f }, // Position 1
-//     { 0.5f, -0.5f, 0.0f },  // Position 2
-//     { 0.5f, 0.5f, 0.0f },   // Position 3
+//   { -0.5f, 0.5f, 0.0f },  // Position 0
+//   { -0.5f, -0.5f, 0.0f }, // Position 1
+//   { 0.5f, -0.5f, 0.0f },  // Position 2
+//   { 0.5f, 0.5f, 0.0f },   // Position 3
 // };
 
 static GLfloat vVertices_tex_coord[4][2] = {
-    { 1.0f, 0.0f }, // TexCoord 2
-    { 0.0f, 0.0f }, // TexCoord 1
-    { 0.0f, 1.0f }, // TexCoord 0
-    { 1.0f, 1.0f }, // TexCoord 3
+  { 1.0f, 0.0f }, // TexCoord 2
+  { 0.0f, 0.0f }, // TexCoord 1
+  { 0.0f, 1.0f }, // TexCoord 0
+  { 1.0f, 1.0f }, // TexCoord 3
 };
 static GLushort indices[] =
-    {0, 1, 2, 0, 2, 3};
+  {0, 1, 2, 0, 2, 3};
 
 static GLuint loadShader(GLenum type, const char *shaderSrc)
 {
@@ -2068,6 +2071,13 @@ pthread_mutex_t decode_updated_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 FrameBufferContext buffer_ctx[SCREEN_COUNT];
 
+#ifdef USE_VAO
+struct vao_vertice_t {
+  GLfloat pos[3];
+  GLfloat tex_coord[2];
+};
+#endif
+
 static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot, int tb, int index)
 {
   double ctx_left_f;
@@ -2156,6 +2166,14 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
   vVertices_pos[3][0] = ctx_right_f;
   vVertices_pos[3][1] = ctx_top_f;
 
+#ifdef USE_VAO
+  struct vao_vertice_t vertices[4];
+  for (int i = 0; i < 4; ++i) {
+    memcpy(vertices[i].pos, vVertices_pos[i], sizeof(vertices[i].pos));
+    memcpy(vertices[i].tex_coord, vVertices_tex_coord[i], sizeof(vertices[i].tex_coord));
+  }
+#endif
+
   nk_bool upscaled = screen_upscale_factor > 1 && upscaling_filter && upscaling_filter_created;
   int scale = upscaled ? screen_upscale_factor : 1;
   GLuint tex = upscaled ? ctx->gl_tex_upscaled[tb] : ctx->gl_tex_id[tb];
@@ -2207,19 +2225,17 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
           glDisable(GL_DEPTH_TEST);
 
           glUseProgram(gl_fbo_program[tb]);
-          fbo_vVertices_tex_coord[0][0] = 0;
-          fbo_vVertices_tex_coord[0][1] = 0;
-          fbo_vVertices_tex_coord[1][0] = 0;
-          fbo_vVertices_tex_coord[1][1] = 1;
-          fbo_vVertices_tex_coord[2][0] = 1;
-          fbo_vVertices_tex_coord[2][1] = 0;
-          fbo_vVertices_tex_coord[3][0] = 1;
-          fbo_vVertices_tex_coord[3][1] = 1;
 
-          glVertexAttribPointer(gl_fbo_position_loc[tb], 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_pos), fbo_vVertices_pos);
-          glVertexAttribPointer(gl_fbo_tex_coord_loc[tb], 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_tex_coord), fbo_vVertices_tex_coord);
+#ifdef USE_VAO
+          glBindVertexArray(glFboVao[tb]);
+          glBindBuffer(GL_ARRAY_BUFFER, glFboVbo[tb]);
+          glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, glFboEbo[tb]);
+#else
           glEnableVertexAttribArray(gl_fbo_position_loc[tb]);
           glEnableVertexAttribArray(gl_fbo_tex_coord_loc[tb]);
+          glVertexAttribPointer(gl_fbo_position_loc[tb], 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_pos), fbo_vVertices_pos);
+          glVertexAttribPointer(gl_fbo_tex_coord_loc[tb], 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_tex_coord), fbo_vVertices_tex_coord);
+#endif
 
           glUniform1i(gl_fbo_sampler_loc[tb], 0);
 
@@ -2227,7 +2243,11 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
             GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
             glWaitSemaphoreEXT(gl_sem, 0, NULL, 1, &tex_upscaled, &layout);
           }
+#ifdef USE_VAO
+          glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+#else
           glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, fbo_indices);
+#endif
           if (gl_sem && gl_sem_next) {
             GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
             glSignalSemaphoreEXT(gl_sem_next, 0, NULL, 1, &tex_upscaled, &layout);
@@ -2324,11 +2344,18 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     }
 
     glUseProgram(gl_program[tb]);
-    glVertexAttribPointer(gl_position_loc[tb], 3, GL_FLOAT, GL_FALSE, sizeof(*vVertices_pos), vVertices_pos);
-    glVertexAttribPointer(gl_tex_coord_loc[tb], 2, GL_FLOAT, GL_FALSE, sizeof(*vVertices_tex_coord), vVertices_tex_coord);
 
+#ifdef USE_VAO
+    glBindVertexArray(glVao[tb]);
+    glBindBuffer(GL_ARRAY_BUFFER, glVbo[tb]);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, glEbo[tb]);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
+#else
     glEnableVertexAttribArray(gl_position_loc[tb]);
     glEnableVertexAttribArray(gl_tex_coord_loc[tb]);
+    glVertexAttribPointer(gl_position_loc[tb], 3, GL_FLOAT, GL_FALSE, sizeof(*vVertices_pos), vVertices_pos);
+    glVertexAttribPointer(gl_tex_coord_loc[tb], 2, GL_FLOAT, GL_FALSE, sizeof(*vVertices_tex_coord), vVertices_tex_coord);
+#endif
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -2337,14 +2364,25 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     glGenerateMipmap(GL_TEXTURE_2D);
 
     glUniform1i(gl_sampler_loc[tb], 0);
+#ifdef USE_VAO
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+#else
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+#endif
   } else {
     glUseProgram(gl_program[tb]);
-    glVertexAttribPointer(gl_position_loc[tb], 3, GL_FLOAT, GL_FALSE, sizeof(*vVertices_pos), vVertices_pos);
-    glVertexAttribPointer(gl_tex_coord_loc[tb], 2, GL_FLOAT, GL_FALSE, sizeof(*vVertices_tex_coord), vVertices_tex_coord);
 
+#ifdef USE_VAO
+    glBindVertexArray(glVao[tb]);
+    glBindBuffer(GL_ARRAY_BUFFER, glVbo[tb]);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, glEbo[tb]);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
+#else
     glEnableVertexAttribArray(gl_position_loc[tb]);
     glEnableVertexAttribArray(gl_tex_coord_loc[tb]);
+    glVertexAttribPointer(gl_position_loc[tb], 3, GL_FLOAT, GL_FALSE, sizeof(*vVertices_pos), vVertices_pos);
+    glVertexAttribPointer(gl_tex_coord_loc[tb], 2, GL_FLOAT, GL_FALSE, sizeof(*vVertices_tex_coord), vVertices_tex_coord);
+#endif
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -2358,7 +2396,11 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
       GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
       glWaitSemaphoreEXT(gl_sem, 0, NULL, 1, &tex_upscaled, &layout);
     }
+#ifdef USE_VAO
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+#else
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+#endif
     if (!dim3 && tex_upscaled && gl_sem && gl_sem_next) {
       GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
       glSignalSemaphoreEXT(gl_sem_next, 0, NULL, 1, &tex_upscaled, &layout);
@@ -2825,7 +2867,7 @@ static int acquire_sem(rp_sem_t *sem) {
   }
 }
 
-void handle_decode_frame_screen(FrameBufferContext *ctx, int top_bot, int frame_size, int delay_between_packet, FrameBufferContext *ctx_sync)
+void handle_decode_frame_screen(FrameBufferContext *ctx, int top_bot, int frame_size, int delay_between_packet, __attribute__ ((unused)) FrameBufferContext *ctx_sync)
 {
   __atomic_add_fetch(&frame_rate_decoded_tracker[top_bot], 1, __ATOMIC_RELAXED);
   if (__atomic_load_n(&frame_size_tracker[top_bot], __ATOMIC_RELAXED) < frame_size) {
@@ -4065,7 +4107,7 @@ int main(int argc, char *argv[])
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
 #else
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
   // SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
   // SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
@@ -4214,7 +4256,7 @@ int main(int argc, char *argv[])
       glGenTextures(1, &buffer_ctx[i].gl_tex_id[j]);
 
       glGenTextures(1, &buffer_ctx[i].gl_tex_upscaled[j]);
-      glActiveTexture(GL_TEXTURE_2D);
+      glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_2D, buffer_ctx[i].gl_tex_upscaled[j]);
       glTexImage2D(
         GL_TEXTURE_2D, 0,
@@ -4260,20 +4302,56 @@ int main(int argc, char *argv[])
     }
   }
 
-  for (int i = 0; i < SCREEN_COUNT; ++i) {
-    SDL_GL_MakeCurrent(win[i], glContext[i]);
+  for (int j = 0; j < SCREEN_COUNT; ++j) {
+    SDL_GL_MakeCurrent(win[j], glContext[j]);
 
-    gl_program[i] = LoadProgram((const char *)vShaderStr, (const char *)fShaderStr);
-    gl_position_loc[i] = glGetAttribLocation(gl_program[i], "a_position");
-    gl_tex_coord_loc[i] = glGetAttribLocation(gl_program[i], "a_texCoord");
-    gl_sampler_loc[i] = glGetUniformLocation(gl_program[i], "s_texture");
+    gl_program[j] = LoadProgram((const char *)vShaderStr, (const char *)fShaderStr);
+    gl_position_loc[j] = glGetAttribLocation(gl_program[j], "a_position");
+    gl_tex_coord_loc[j] = glGetAttribLocation(gl_program[j], "a_texCoord");
+    gl_sampler_loc[j] = glGetUniformLocation(gl_program[j], "s_texture");
 
     if (1) {
-      gl_fbo_program[i] = LoadProgram((const char *)fbo_vShaderStr, (const char *)fbo_fShaderStr);
-      gl_fbo_position_loc[i] = glGetAttribLocation(gl_fbo_program[i], "a_position");
-      gl_fbo_tex_coord_loc[i] = glGetAttribLocation(gl_fbo_program[i], "a_texCoord");
-      gl_fbo_sampler_loc[i] = glGetUniformLocation(gl_fbo_program[i], "s_texture");
+      gl_fbo_program[j] = LoadProgram((const char *)fbo_vShaderStr, (const char *)fbo_fShaderStr);
+      gl_fbo_position_loc[j] = glGetAttribLocation(gl_fbo_program[j], "a_position");
+      gl_fbo_tex_coord_loc[j] = glGetAttribLocation(gl_fbo_program[j], "a_texCoord");
+      gl_fbo_sampler_loc[j] = glGetUniformLocation(gl_fbo_program[j], "s_texture");
     }
+
+#ifdef USE_VAO
+    glGenVertexArrays(1, &glVao[j]);
+    glGenBuffers(1, &glVbo[j]);
+    glGenBuffers(1, &glEbo[j]);
+
+    glGenVertexArrays(1, &glFboVao[j]);
+    glGenBuffers(1, &glFboVbo[j]);
+    glGenBuffers(1, &glFboEbo[j]);
+
+    glBindVertexArray(glVao[j]);
+    glBindBuffer(GL_ARRAY_BUFFER, glVbo[j]);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, glEbo[j]);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+
+    glEnableVertexAttribArray(gl_position_loc[j]);
+    glEnableVertexAttribArray(gl_tex_coord_loc[j]);
+    glVertexAttribPointer(gl_position_loc[j], 3, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, pos));
+    glVertexAttribPointer(gl_tex_coord_loc[j], 2, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, tex_coord));
+
+    glBindVertexArray(glFboVao[j]);
+    glBindBuffer(GL_ARRAY_BUFFER, glFboVbo[j]);
+    struct vao_vertice_t fbo_vertices[4];
+    for (int i = 0; i < 4; ++i) {
+      memcpy(fbo_vertices[i].pos, fbo_vVertices_pos[i], sizeof(fbo_vertices[i].pos));
+      memcpy(fbo_vertices[i].tex_coord, fbo_vVertices_tex_coord[i], sizeof(fbo_vertices[i].tex_coord));
+    }
+    glBufferData(GL_ARRAY_BUFFER, sizeof(fbo_vertices), fbo_vertices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, glFboEbo[j]);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(fbo_indices), fbo_indices, GL_STATIC_DRAW);
+
+    glEnableVertexAttribArray(gl_fbo_position_loc[j]);
+    glEnableVertexAttribArray(gl_fbo_tex_coord_loc[j]);
+    glVertexAttribPointer(gl_fbo_position_loc[j], 3, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, pos));
+    glVertexAttribPointer(gl_fbo_tex_coord_loc[j], 2, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, tex_coord));
+#endif
   }
 
   rpConfigSetDefault();
@@ -4361,10 +4439,18 @@ int main(int argc, char *argv[])
   rp_syn_close1(&jpeg_decode_queue);
   rp_sem_close(jpeg_decode_sem);
 
-  for (int i = 0; i < SCREEN_COUNT; ++i) {
-    SDL_GL_MakeCurrent(win[i], glContext[i]);
-    glDeleteProgram(gl_fbo_program[i]);
-    glDeleteProgram(gl_program[i]);
+  for (int j = 0; j < SCREEN_COUNT; ++j) {
+    SDL_GL_MakeCurrent(win[j], glContext[j]);
+#ifdef USE_VAO
+    glDeleteBuffers(1, &glVbo[j]);
+    glDeleteBuffers(1, &glEbo[j]);
+    glDeleteBuffers(1, &glFboVbo[j]);
+    glDeleteBuffers(1, &glFboEbo[j]);
+    glDeleteVertexArrays(1, &glVao[j]);
+    glDeleteVertexArrays(1, &glFboVao[j]);
+#endif
+    glDeleteProgram(gl_fbo_program[j]);
+    glDeleteProgram(gl_program[j]);
   }
 
   for (int i = 0; i < SCREEN_COUNT; ++i) {
