@@ -1,20 +1,3 @@
-#if 1
-#define screen_upscale_factor REALCUGAN_SCALE
-#define sr_create realcugan_create
-#define sr_run realcugan_run
-#define sr_next realcugan_next
-#define sr_destroy realcugan_destroy
-#else
-#define screen_upscale_factor (1)
-#define sr_create(...) (0)
-#define sr_run(...) (0)
-#define sr_next(...) ((void)0)
-#define sr_destroy(...) ((void)0)
-#endif
-
-#define HR_MAX(a, b) ((a) > (b) ? (a) : (b))
-#define HR_MIN(a, b) ((a) < (b) ? (a) : (b))
-
 #ifdef _WIN32
 #define WINVER _WIN32_WINNT_WINBLUE
 #define _WIN32_WINNT _WIN32_WINNT_WINBLUE
@@ -63,6 +46,7 @@ void Sleep(int milliseconds) {
 rp_sem_t jpeg_decode_sem;
 struct rp_syn_comp_func_t jpeg_decode_queue;
 
+// #define USE_SDL_RENDERER
 // #define GL_DEBUG
 // #define USE_ANGLE
 // #define USE_OGL_ES
@@ -71,7 +55,24 @@ struct rp_syn_comp_func_t jpeg_decode_queue;
 #endif
 // #define PRINT_PACKET_LOSS_INFO
 
-#if defined(USE_ANGLE) && defined(_WIN32)
+#ifndef USE_SDL_RENDERER
+#define screen_upscale_factor REALCUGAN_SCALE
+#define sr_create realcugan_create
+#define sr_run realcugan_run
+#define sr_next realcugan_next
+#define sr_destroy realcugan_destroy
+#else
+#define screen_upscale_factor (1)
+#define sr_create(...) (0)
+#define sr_run(...) (0)
+#define sr_next(...) ((void)0)
+#define sr_destroy(...) ((void)0)
+#endif
+
+#define HR_MAX(a, b) ((a) > (b) ? (a) : (b))
+#define HR_MIN(a, b) ((a) < (b) ? (a) : (b))
+
+#if defined(USE_SDL_RENDERER) || (defined(USE_ANGLE) && defined(_WIN32))
 #define SDL_GL_SINGLE_THREAD
 #endif
 
@@ -312,7 +313,12 @@ enum FrameBufferStatus
 /* Platform */
 SDL_Window *win[SCREEN_COUNT];
 Uint32 win_id[SCREEN_COUNT];
+#ifdef USE_SDL_RENDERER
+SDL_Renderer *sdlRenderer[SCREEN_COUNT];
+SDL_Texture *sdlTexture[SCREEN_COUNT][SCREEN_COUNT];
+#else
 SDL_GLContext glContext[SCREEN_COUNT];
+#endif
 int win_width[SCREEN_COUNT], win_height[SCREEN_COUNT];
 int ogl_version_major, ogl_version_minor;
 
@@ -369,9 +375,11 @@ static int ntr_rp_port = 8001;
 static int ntr_rp_port_changed;
 static int ntr_rp_bound_port;
 
+#ifndef USE_SDL_RENDERER
 static nk_bool fsr_filter;
 static nk_bool upscaling_filter;
 static nk_bool upscaling_filter_created;
+#endif
 typedef enum {
   VIEW_MODE_TOP_BOT,
   VIEW_MODE_SEPARATE,
@@ -1302,7 +1310,9 @@ static nk_bool check_next_property(struct nk_context *ctx, const char *name)
 static enum NK_FOCUS {
   NK_FOCUS_NONE,
   NK_FOCUS_VIEW_MODE,
+#ifndef USE_SDL_RENDERER
   NK_FOCUS_UPSCALING_FILTER,
+#endif
   NK_FOCUS_IP_OCTET_0,
   NK_FOCUS_IP_OCTET_1,
   NK_FOCUS_IP_OCTET_2,
@@ -1613,6 +1623,7 @@ static void guiMain(struct nk_context *ctx)
       fullscreen = 0;
     }
 
+#ifndef USE_SDL_RENDERER
     nk_layout_row_dynamic(ctx, 30, 2);
     nk_label(ctx, "Upscaling Filter", NK_TEXT_CENTERED);
     int upscaling_selected = upscaling_filter ? 2 : fsr_filter ? 1 : 0;
@@ -1651,6 +1662,8 @@ static void guiMain(struct nk_context *ctx)
         fsr_filter = 0;
       }
     }
+#endif
+
     nk_layout_row_dynamic(ctx, 30, 5);
     nk_label(ctx, "3DS IP", NK_TEXT_CENTERED);
 
@@ -1828,6 +1841,7 @@ static void guiMain(struct nk_context *ctx)
     nk_window_set_focus(ctx, remote_play_wnd);
 }
 
+#ifndef USE_SDL_RENDERER
 #ifdef USE_OGL_ES
 #define GLSL_VERSION "#version 100\n" "precision highp float;\n"
 #else
@@ -1965,7 +1979,7 @@ static GLuint loadShader(GLenum type, const char *shaderSrc)
   return shader;
 }
 
-GLuint LoadProgram(const char *vertShaderSrc, const char *fragShaderSrc)
+static GLuint LoadProgram(const char *vertShaderSrc, const char *fragShaderSrc)
 {
   GLuint vertexShader;
   GLuint fragmentShader;
@@ -2035,6 +2049,7 @@ GLuint gl_fbo_program[SCREEN_COUNT];
 GLint gl_fbo_position_loc[SCREEN_COUNT];
 GLint gl_fbo_tex_coord_loc[SCREEN_COUNT];
 GLint gl_fbo_sampler_loc[SCREEN_COUNT];
+#endif
 
 typedef struct _FrameBufferContext
 {
@@ -2078,6 +2093,81 @@ struct vao_vertice_t {
 };
 #endif
 
+#ifdef USE_SDL_RENDERER
+static void do_hr_draw_screen(__attribute__ ((unused)) FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot, int tb, __attribute__ ((unused)) int index)
+{
+  if (data) {
+    void *pixels;
+    int pitch;
+    if (SDL_LockTexture(sdlTexture[tb][top_bot], NULL, &pixels, &pitch) < 0) {
+      err_log("SDL_LockTexture: %s\n", SDL_GetError());
+      return;
+    }
+
+    uint8_t *dst = pixels;
+    const int bpp = 4;
+    for (int x = 0; x < width; ++x) {
+      for (int y = 0; y < height; ++y) {
+        memcpy(dst + y * pitch + x * bpp, data + x * height * bpp + (height - y - 1) * bpp, bpp);
+      }
+    }
+
+    SDL_UnlockTexture(sdlTexture[tb][top_bot]);
+  }
+
+  int ctx_left;
+  int ctx_top;
+  int ctx_width;
+  int ctx_height;
+  // int tb;
+  view_mode_t vm = __atomic_load_n(&view_mode, __ATOMIC_RELAXED);
+  if (vm == VIEW_MODE_TOP_BOT) {
+    // tb = SCREEN_TOP;
+
+    ctx_height = (double)win_height[tb] / 2;
+    if ((double)win_width[tb] / width * height > ctx_height)
+    {
+      ctx_width = (double)ctx_height / height * width;
+      ctx_left = (double)(win_width[tb] - ctx_width) / 2;
+      ctx_top = 0;
+    }
+    else
+    {
+      ctx_height = (double)win_width[tb] / width * height;
+      ctx_left = 0;
+      ctx_width = win_width[tb];
+      ctx_top = (double)win_height[tb] / 2 - ctx_height;
+    }
+
+    if (top_bot != SCREEN_TOP)
+    {
+      ctx_top = (double)win_height[tb] / 2;
+    }
+  } else {
+    // tb = top_bot;
+    // if (vm == VIEW_MODE_BOT)
+      // tb = SCREEN_TOP;
+
+    ctx_height = (double)win_height[tb];
+    if ((double)win_width[tb] / width * height > ctx_height)
+    {
+      ctx_width = (double)ctx_height / height * width;
+      ctx_left = (double)(win_width[tb] - ctx_width) / 2;
+      ctx_top = 0;
+    }
+    else
+    {
+      ctx_height = (double)win_width[tb] / width * height;
+      ctx_left = 0;
+      ctx_width = win_width[tb];
+      ctx_top = ((double)win_height[tb] - ctx_height) / 2;
+    }
+  }
+
+  SDL_Rect rect = { ctx_left, ctx_top, ctx_width, ctx_height };
+  SDL_RenderCopy(sdlRenderer[tb], sdlTexture[tb][top_bot], NULL, &rect);
+}
+#else
 static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot, int tb, int index)
 {
   double ctx_left_f;
@@ -2409,6 +2499,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     ctx->prev_ctx_height = ctx->prev_ctx_width = ctx->prev_tex_fsr[tb] = 0;
   }
 }
+#endif
 
 static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot, int tb, int force)
 {
@@ -2588,7 +2679,9 @@ static view_mode_t prev_view_mode;
 static int prev_fullscreen;
 static uint64_t lastUpdated[SCREEN_COUNT];
 static int nk_input_current;
+#ifndef SDL_GL_SINGLE_THREAD
 static pthread_mutex_t nk_input_lock = PTHREAD_MUTEX_INITIALIZER;
+#endif
 
 #ifdef SDL_GL_SYNC
 static int gl_swapbuffer_flag;
@@ -2631,6 +2724,10 @@ static bool decode_cond_wait(int *updated, pthread_cond_t *cond, pthread_mutex_t
   return true;
 }
 
+#ifdef USE_SDL_RENDERER
+float font_scale;
+#endif
+
 static void
 ThreadLoop(int i)
 {
@@ -2649,6 +2746,43 @@ ThreadLoop(int i)
 
   float bg[4];
   nk_color_fv(bg, nk_window_bgcolor);
+#ifdef USE_SDL_RENDERER
+  /* scale the renderer output for High-DPI displays */
+  {
+    int render_w, render_h;
+    float scale_x, scale_y;
+    SDL_GetRendererOutputSize(sdlRenderer[i], &render_w, &render_h);
+    SDL_GetWindowSize(win[i], &win_width[i], &win_height[i]);
+    scale_x = (float)(render_w) / (float)(win_width[i]);
+    scale_y = (float)(render_h) / (float)(win_height[i]);
+    SDL_RenderSetScale(sdlRenderer[i], scale_x, scale_y);
+    if (i == SCREEN_TOP && font_scale != scale_y) {
+      font_scale = scale_y;
+
+      struct nk_context *ctx = nk_ctx;
+
+      /* Load Fonts: if none of these are loaded a default font will be used  */
+      /* Load Cursor: if you uncomment cursor loading please hide the cursor */
+      struct nk_font_atlas *atlas;
+      struct nk_font_config config = nk_font_config(0);
+      struct nk_font *font;
+
+      /* set up the font atlas and add desired font; note that font sizes are
+        * multiplied by font_scale to produce better results at higher DPIs */
+      nk_sdl_font_stash_begin(&atlas);
+      font = nk_font_atlas_add_default(atlas, 13 * font_scale, &config);
+      nk_sdl_font_stash_end();
+
+      /* this hack makes the font appear to be scaled down to the desired
+        * size and is only necessary when font_scale > 1 */
+      font->handle.height /= font_scale;
+      /*nk_style_load_all_cursors(ctx, atlas->cursors);*/
+      nk_style_set_font(ctx, &font->handle);
+    }
+  }
+  SDL_SetRenderDrawColor(sdlRenderer[i], bg[0]* 255, bg[1] * 255, bg[2] * 255, bg[3] * 255);
+  SDL_RenderClear(sdlRenderer[i]);
+#else
   // SDL_GetWindowSize(win[i], &win_width[i], &win_height[i]);
   SDL_GL_GetDrawableSize(win[i], &win_width[i], &win_height[i]);
 
@@ -2658,6 +2792,7 @@ ThreadLoop(int i)
   glViewport(0, 0, win_width[i], win_height[i]);
   glClearColor(bg[0], bg[1], bg[2], bg[3]);
   glClear(GL_COLOR_BUFFER_BIT);
+#endif
 
   int force = 0;
 #ifndef SDL_GL_SINGLE_THREAD
@@ -2692,8 +2827,10 @@ ThreadLoop(int i)
     if (i == 0) {
       struct nk_context *ctx = nk_ctx;
 
+#ifndef SDL_GL_SINGLE_THREAD
       if (!pthread_mutex_lock_loop(&nk_input_lock))
         return;
+#endif
       if (nk_input_current) {
         // nk_sdl_handle_grab();
         nk_input_end(ctx);
@@ -2705,7 +2842,9 @@ ThreadLoop(int i)
       nk_input_current = 0;
 
       guiMain(ctx);
+#ifndef SDL_GL_SINGLE_THREAD
       pthread_mutex_unlock(&nk_input_lock);
+#endif
     }
 
 #ifdef SDL_GL_SYNC
@@ -2714,12 +2853,21 @@ ThreadLoop(int i)
     gl_swapbuffer_flag = 0;
     pthread_mutex_unlock(&gl_swapbuffer_mutex);
 #endif
+
+#ifdef USE_SDL_RENDERER
+    if (i == 0) {
+      nk_sdl_render(NK_ANTI_ALIASING_ON);
+    }
+    SDL_RenderPresent(sdlRenderer[i]);
+#else
     if (i == 0) {
       nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
     }
     // pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
     SDL_GL_SwapWindow(win[i]);
     // pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+#endif
+
 #ifdef SDL_GL_SYNC
     pthread_cond_mutex_flag_signal(&gl_render_flag, &gl_render_cond, &gl_render_mutex);
 #endif
@@ -2786,14 +2934,18 @@ MainLoop(void *loopArg)
           break;
       }
 
+#ifndef SDL_GL_SINGLE_THREAD
       if (!pthread_mutex_lock_loop(&nk_input_lock))
         return;
+#endif
       if (!nk_input_current) {
         nk_input_begin(ctx);
         nk_input_current = 1;
       }
       nk_sdl_handle_event(&evt);
+#ifndef SDL_GL_SINGLE_THREAD
       pthread_mutex_unlock(&nk_input_lock);
+#endif
 
 skip_evt:
     }
@@ -4090,6 +4242,9 @@ int main(int argc, char *argv[])
   SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "0");
   SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
   SDL_SetHint(SDL_HINT_WINDOWS_DPI_SCALING, "1");
+#ifdef USE_SDL_RENDERER
+  SDL_Init(SDL_INIT_VIDEO);
+#else
 #ifdef USE_ANGLE
   SDL_SetHint(SDL_HINT_OPENGL_ES_DRIVER, "1");
 #else
@@ -4116,10 +4271,16 @@ int main(int argc, char *argv[])
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_DEBUG_FLAG);
 #endif
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+#endif
+
+  Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE;
+#ifndef USE_SDL_RENDERER
+  win_flags |= SDL_WINDOW_OPENGL;
+#endif
 
   win[SCREEN_TOP] = SDL_CreateWindow(TITLE,
                          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                         WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
+                         WINDOW_WIDTH, WINDOW_HEIGHT, win_flags);
   if (!win[SCREEN_TOP])
   {
     err_log("SDL_CreateWindow: %s\n", SDL_GetError());
@@ -4129,7 +4290,7 @@ int main(int argc, char *argv[])
 
   win[SCREEN_BOT] = SDL_CreateWindow(TITLE,
                          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                         WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
+                         WINDOW_WIDTH, WINDOW_HEIGHT, win_flags | SDL_WINDOW_HIDDEN);
   if (!win[SCREEN_BOT])
   {
     err_log("SDL_CreateWindow: %s\n", SDL_GetError());
@@ -4150,6 +4311,35 @@ int main(int argc, char *argv[])
   hwnd[SCREEN_BOT] = wmInfo[SCREEN_BOT].info.win.window;
 #endif
 
+#ifdef USE_SDL_RENDERER
+  Uint32 renderer_flags = SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC;
+  sdlRenderer[SCREEN_TOP] = SDL_CreateRenderer(win[SCREEN_TOP], -1, renderer_flags);
+  if (!sdlRenderer[SCREEN_TOP])
+  {
+    err_log("SDL_CreateRenderer: %s\n", SDL_GetError());
+    return -1;
+  }
+
+  sdlRenderer[SCREEN_BOT] = SDL_CreateRenderer(win[SCREEN_BOT], -1, renderer_flags);
+  if (!sdlRenderer[SCREEN_BOT])
+  {
+    err_log("SDL_CreateRenderer: %s\n", SDL_GetError());
+    return -1;
+  }
+
+  SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
+  for (int j = 0; j < SCREEN_COUNT; ++j) {
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      sdlTexture[j][i] = SDL_CreateTexture(sdlRenderer[j], SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, i == SCREEN_TOP ? 400 : 320, 240);
+      if (!sdlTexture[j][i]) {
+        err_log("SDL_CreateTexture: %s\n", SDL_GetError());
+        return -1;
+      }
+    }
+  }
+
+  struct nk_context *ctx = nk_ctx = nk_sdl_init(win[SCREEN_TOP], sdlRenderer[SCREEN_TOP]);
+#else
   glContext[SCREEN_TOP] = SDL_GL_CreateContext(win[SCREEN_TOP]);
   if (!glContext[SCREEN_TOP])
   {
@@ -4196,7 +4386,7 @@ int main(int argc, char *argv[])
   err_log("ogl version: %d.%d\n", ogl_version_major, ogl_version_minor);
 
 #ifdef SDL_GL_SINGLE_THREAD
-  SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
+  SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);]
 #endif
   glContext[SCREEN_BOT] = SDL_GL_CreateContext(win[SCREEN_BOT]);
   if (!glContext[SCREEN_BOT])
@@ -4218,17 +4408,14 @@ int main(int argc, char *argv[])
   glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
 
   struct nk_context *ctx = nk_ctx = nk_sdl_init(win[SCREEN_TOP]);
+#endif
+
+
   /* Load Fonts: if none of these are loaded a default font will be used  */
   /* Load Cursor: if you uncomment cursor loading please hide the cursor */
   {
     struct nk_font_atlas *atlas;
     nk_sdl_font_stash_begin(&atlas);
-    /*struct nk_font *droid = nk_font_atlas_add_from_file(atlas, "../../../extra_font/DroidSans.ttf", 14, 0);*/
-    /*struct nk_font *roboto = nk_font_atlas_add_from_file(atlas, "../../../extra_font/Roboto-Regular.ttf", 16, 0);*/
-    /*struct nk_font *future = nk_font_atlas_add_from_file(atlas, "../../../extra_font/kenvector_future_thin.ttf", 13, 0);*/
-    /*struct nk_font *clean = nk_font_atlas_add_from_file(atlas, "../../../extra_font/ProggyClean.ttf", 12, 0);*/
-    /*struct nk_font *tiny = nk_font_atlas_add_from_file(atlas, "../../../extra_font/ProggyTiny.ttf", 10, 0);*/
-    /*struct nk_font *cousine = nk_font_atlas_add_from_file(atlas, "../../../extra_font/Cousine-Regular.ttf", 13, 0);*/
     nk_sdl_font_stash_end();
     /*nk_style_load_all_cursors(ctx, atlas->cursors);*/
     /*nk_style_set_font(ctx, &roboto->handle)*/;
@@ -4250,6 +4437,7 @@ int main(int argc, char *argv[])
 
   sock_startup();
 
+#ifndef USE_SDL_RENDERER
   for (int j = 0; j < SCREEN_COUNT; ++j) {
     SDL_GL_MakeCurrent(win[j], glContext[j]);
     for (int i = 0; i < SCREEN_COUNT; ++i) {
@@ -4270,20 +4458,6 @@ int main(int argc, char *argv[])
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
       glBindTexture(GL_TEXTURE_2D, 0);
     }
-  }
-
-  for (int i = 0; i < SCREEN_COUNT; ++i) {
-    buffer_ctx[i].status_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
-    buffer_ctx[i].index_display_2 = FBI_DISPLAY_2;
-    buffer_ctx[i].index_display = FBI_DISPLAY;
-    buffer_ctx[i].index_ready_display_2 = FBI_READY_DISPLAY_2;
-    buffer_ctx[i].index_ready_display = FBI_READY_DISPLAY;
-    buffer_ctx[i].index_decode = FBI_DECODE;
-
-#ifndef SDL_GL_SINGLE_THREAD
-    buffer_ctx[i].decode_updated_cond = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
-    buffer_ctx[i].decode_updated_mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
-#endif
   }
 
   for (int j = 0; j < SCREEN_COUNT; ++j) {
@@ -4351,6 +4525,21 @@ int main(int argc, char *argv[])
     glEnableVertexAttribArray(gl_fbo_tex_coord_loc[j]);
     glVertexAttribPointer(gl_fbo_position_loc[j], 3, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, pos));
     glVertexAttribPointer(gl_fbo_tex_coord_loc[j], 2, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, tex_coord));
+#endif
+  }
+#endif
+
+  for (int i = 0; i < SCREEN_COUNT; ++i) {
+    buffer_ctx[i].status_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    buffer_ctx[i].index_display_2 = FBI_DISPLAY_2;
+    buffer_ctx[i].index_display = FBI_DISPLAY;
+    buffer_ctx[i].index_ready_display_2 = FBI_READY_DISPLAY_2;
+    buffer_ctx[i].index_ready_display = FBI_READY_DISPLAY;
+    buffer_ctx[i].index_decode = FBI_DECODE;
+
+#ifndef SDL_GL_SINGLE_THREAD
+    buffer_ctx[i].decode_updated_cond = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
+    buffer_ctx[i].decode_updated_mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
 #endif
   }
 
@@ -4439,6 +4628,17 @@ int main(int argc, char *argv[])
   rp_syn_close1(&jpeg_decode_queue);
   rp_sem_close(jpeg_decode_sem);
 
+  for (int i = 0; i < SCREEN_COUNT; ++i) {
+    pthread_mutex_destroy(&buffer_ctx[i].status_lock);
+  }
+
+#ifdef USE_SDL_RENDERER
+  for (int j = 0; j < SCREEN_COUNT; ++j) {
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      SDL_DestroyTexture(sdlTexture[j][i]);
+    }
+  }
+#else
   for (int j = 0; j < SCREEN_COUNT; ++j) {
     SDL_GL_MakeCurrent(win[j], glContext[j]);
 #ifdef USE_VAO
@@ -4453,9 +4653,6 @@ int main(int argc, char *argv[])
     glDeleteProgram(gl_program[j]);
   }
 
-  for (int i = 0; i < SCREEN_COUNT; ++i) {
-    pthread_mutex_destroy(&buffer_ctx[i].status_lock);
-  }
   for (int j = 0; j < SCREEN_COUNT; ++j) {
     SDL_GL_MakeCurrent(win[j], glContext[j]);
     for (int i = 0; i < SCREEN_COUNT; ++i) {
@@ -4464,14 +4661,20 @@ int main(int argc, char *argv[])
       glDeleteTextures(1, &buffer_ctx[i].gl_tex_upscaled[j]);
     }
   }
+#endif
 
   sock_cleanup();
   nk_sdl_shutdown();
+
+#ifdef USE_SDL_RENDERER
+  SDL_DestroyRenderer(sdlRenderer[SCREEN_TOP]);
+  SDL_DestroyRenderer(sdlRenderer[SCREEN_BOT]);
+#else
   if (upscaling_filter_created)
     sr_destroy();
-
   SDL_GL_DeleteContext(glContext[SCREEN_BOT]);
   SDL_GL_DeleteContext(glContext[SCREEN_TOP]);
+#endif
   SDL_DestroyWindow(win[SCREEN_BOT]);
   SDL_DestroyWindow(win[SCREEN_TOP]);
   SDL_Quit();

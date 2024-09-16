@@ -1,4 +1,5 @@
 #define NK_IMPLEMENTATION
+#define NK_SDL_RENDERER_IMPLEMENTATION
 #include "main.h"
 
 char *nk_itoa_impl(char *s, long n) {

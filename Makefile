@@ -5,6 +5,7 @@ CPPFLAGS := -Iinclude
 CFLAGS := -Ofast -g -fno-strict-aliasing
 CFLAGS += -mssse3 -mavx2
 EMBED_JPEG_TURBO := 1
+USE_SDL_RENDERER := 0
 USE_OGL_ES := 0
 USE_ANGLE := 0
 GL_DEBUG := 0
@@ -12,19 +13,27 @@ GL_DEBUG := 0
 ifeq ($(OS),Windows_NT)
 	LDLIBS := -Llib -static -lmingw32 -lSDL2main -lSDL2
 	LDLIBS += -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8
-	LDLIBS += -lws2_32 -liphlpapi -lncnn -fopenmp
+	LDLIBS += -lws2_32 -liphlpapi
 
 	TARGET := ntrviewer.exe
 
 	NASM := -DWIN64 -fwin64
 else
-	LDLIBS := -static-libgcc -static-libstdc++ -Llib -Wl,-Bstatic -lSDL2 -lncnn -fopenmp
+	LDLIBS := -static-libgcc -static-libstdc++ -Llib -Wl,-Bstatic -lSDL2
 
 	TARGET := ntrviewer
 
 	NASM := -DELF -felf64
 endif
+
+ifeq ($(USE_SDL_RENDERER),1)
+GL_OBJ :=
+else
+GL_OBJ := realcugan.o realcugan_lib.o libGLAD.o fsr/fsr_main.o fsr/image_utils.o libNKSDL.o
+LDLIBS += -lncnn -fopenmp
 LDLIBS += -lglslang -lMachineIndependent -lOSDependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools
+endif
+
 # LDFLAGS := -s
 
 RM := rm
@@ -56,6 +65,10 @@ endif
 
 # LDLIBS += -Wl,-Bdynamic
 
+ifeq ($(USE_SDL_RENDERER),1)
+CPPFLAGS += -DUSE_SDL_RENDERER
+else
+
 ifeq ($(USE_OGL_ES),1)
 CPPFLAGS += -DUSE_OGL_ES
 
@@ -69,10 +82,12 @@ ifeq ($(GL_DEBUG),1)
 CPPFLAGS += -DGL_DEBUG
 endif
 
+endif
+
 FEC_SRC := $(wildcard fecal/*.cpp)
 FEC_OBJ := $(FEC_SRC:.cpp=.o)
 
-$(TARGET): main.o rp_syn.o ikcp.o realcugan.o realcugan_lib.o libNK.o libNKSDL.o libGLAD.o fsr/fsr_main.o fsr/image_utils.o $(JT_OBJ) $(JT_OBJ_S) $(FEC_OBJ)
+$(TARGET): main.o rp_syn.o ikcp.o libNK.o $(GL_OBJ) $(JT_OBJ) $(JT_OBJ_S) $(FEC_OBJ)
 	$(CXX) $^ -o $@ $(CFLAGS) $(LDLIBS) $(LDFLAGS)
 
 CC_JT = $(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo -Ijpeg_turbo/include -Wno-stringop-overflow

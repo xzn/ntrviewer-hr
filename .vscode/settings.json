@@ -5,7 +5,8 @@
         "_WIN32",
         "NK_IMPLEMENTATION",
         "NK_SDL_GL3_IMPLEMENTATION",
-        "NK_SDL_GLES2_IMPLEMENTATION"
+        "NK_SDL_GLES2_IMPLEMENTATION",
+        "NK_SDL_RENDERER_IMPLEMENTATION"
     ],
     "clangd.fallbackFlags": [
         "-I${workspaceFolder}/include"

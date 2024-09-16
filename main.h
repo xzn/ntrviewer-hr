@@ -28,10 +28,15 @@
 #define NK_INCLUDE_FONT_BAKING
 #define NK_INCLUDE_DEFAULT_FONT
 #include "nuklear.h"
+#ifdef USE_SDL_RENDERER
+#define NK_SDL_RENDERER_SDL_H <SDL2/SDL.h>
+#include "nuklear_sdl_renderer.h"
+#else
 #ifdef USE_OGL_ES
 #include "nuklear_sdl_gles2.h"
 #else
 #include "nuklear_sdl_gl3.h"
+#endif
 #endif
 
 extern int NK_PROPERTY_DEFAULT_IMPL;
