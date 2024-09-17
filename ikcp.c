@@ -346,7 +346,7 @@ static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT1
 		__atomic_add_fetch(&kcp_input_pid_count, 1, __ATOMIC_RELAXED);
 		kcp->input_pid = pid;
 	}
-	else if (((kcp->recv_pid - pid) & ((1 << PID_NBITS) - 1)) > (1 << (PID_NBITS - 2))) {
+	else if (((kcp->recv_pid - pid) & ((1 << PID_NBITS) - 1)) >= (1 << (PID_NBITS - 2))) {
 		err_log("bad kcp->recv_pid %d, pid %d, kcp->input_pid %d\n", (int)kcp->recv_pid, (int)pid, (int)kcp->input_pid);
 		return -3;
 	}
