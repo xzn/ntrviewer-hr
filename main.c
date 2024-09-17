@@ -323,8 +323,8 @@ int win_width[SCREEN_COUNT], win_height[SCREEN_COUNT];
 int ogl_version_major, ogl_version_minor;
 
 #ifdef USE_VAO
-GLuint glVao[SCREEN_COUNT];
-GLuint glVbo[SCREEN_COUNT];
+GLuint glVao[SCREEN_COUNT][SCREEN_COUNT];
+GLuint glVbo[SCREEN_COUNT][SCREEN_COUNT];
 GLuint glEbo[SCREEN_COUNT];
 
 GLuint glFboVao[SCREEN_COUNT];
@@ -2069,7 +2069,8 @@ typedef struct _FrameBufferContext
   int index_decode;
   uint8_t *prev_data;
   GLuint prev_tex_upscaled[SCREEN_COUNT], prev_tex_fsr[SCREEN_COUNT];
-  int prev_ctx_width, prev_ctx_height;
+  int prev_win_w, prev_win_h;
+  view_mode_t prev_vm;
 
 #ifndef SDL_GL_SINGLE_THREAD
   int decode_updated;
@@ -2410,7 +2411,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    if (data || !ctx->prev_tex_fsr[tb] || ctx->prev_ctx_width != ctx_width || ctx->prev_ctx_height != ctx_height) {
+    if (data || !ctx->prev_tex_fsr[tb] || ctx->prev_win_w != win_w || ctx->prev_win_h != win_h || ctx->prev_vm != vm) {
       if (!dim3 && tex_upscaled && gl_sem) {
         GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
         glWaitSemaphoreEXT(gl_sem, 0, NULL, 1, &tex_upscaled, &layout);
@@ -2418,8 +2419,6 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
       glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
       GLuint out_tex = fsr_main(tb, top_bot, tex, height * scale, width * scale, ctx_height, ctx_width, 0.25f);
       ctx->prev_tex_fsr[tb] = out_tex;
-      ctx->prev_ctx_width = ctx_width;
-      ctx->prev_ctx_height = ctx_height;
       glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
       if (!dim3 && tex_upscaled && gl_sem && gl_sem_next) {
         GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
@@ -2436,10 +2435,11 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     glUseProgram(gl_program[tb]);
 
 #ifdef USE_VAO
-    glBindVertexArray(glVao[tb]);
-    glBindBuffer(GL_ARRAY_BUFFER, glVbo[tb]);
+    glBindVertexArray(glVao[tb][top_bot]);
+    glBindBuffer(GL_ARRAY_BUFFER, glVbo[tb][top_bot]);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, glEbo[tb]);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
+    if (ctx->prev_win_w != win_w || ctx->prev_win_h != win_h || ctx->prev_vm != vm)
+      glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
 #else
     glEnableVertexAttribArray(gl_position_loc[tb]);
     glEnableVertexAttribArray(gl_tex_coord_loc[tb]);
@@ -2463,10 +2463,11 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     glUseProgram(gl_program[tb]);
 
 #ifdef USE_VAO
-    glBindVertexArray(glVao[tb]);
-    glBindBuffer(GL_ARRAY_BUFFER, glVbo[tb]);
+    glBindVertexArray(glVao[tb][top_bot]);
+    glBindBuffer(GL_ARRAY_BUFFER, glVbo[tb][top_bot]);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, glEbo[tb]);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
+    if (ctx->prev_win_w != win_w || ctx->prev_win_h != win_h || ctx->prev_vm != vm)
+      glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
 #else
     glEnableVertexAttribArray(gl_position_loc[tb]);
     glEnableVertexAttribArray(gl_tex_coord_loc[tb]);
@@ -2496,8 +2497,12 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
       glSignalSemaphoreEXT(gl_sem_next, 0, NULL, 1, &tex_upscaled, &layout);
     }
 
-    ctx->prev_ctx_height = ctx->prev_ctx_width = ctx->prev_tex_fsr[tb] = 0;
+    ctx->prev_tex_fsr[tb] = 0;
   }
+
+  ctx->prev_win_w = win_w;
+  ctx->prev_win_h = win_h;
+  ctx->prev_vm = vm;
 }
 #endif
 
@@ -4492,23 +4497,27 @@ int main(int argc, char *argv[])
     }
 
 #ifdef USE_VAO
-    glGenVertexArrays(1, &glVao[j]);
-    glGenBuffers(1, &glVbo[j]);
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      glGenVertexArrays(1, &glVao[j][i]);
+      glGenBuffers(1, &glVbo[j][i]);
+    }
     glGenBuffers(1, &glEbo[j]);
 
     glGenVertexArrays(1, &glFboVao[j]);
     glGenBuffers(1, &glFboVbo[j]);
     glGenBuffers(1, &glFboEbo[j]);
 
-    glBindVertexArray(glVao[j]);
-    glBindBuffer(GL_ARRAY_BUFFER, glVbo[j]);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, glEbo[j]);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
-
-    glEnableVertexAttribArray(gl_position_loc[j]);
-    glEnableVertexAttribArray(gl_tex_coord_loc[j]);
-    glVertexAttribPointer(gl_position_loc[j], 3, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, pos));
-    glVertexAttribPointer(gl_tex_coord_loc[j], 2, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, tex_coord));
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      glBindVertexArray(glVao[j][i]);
+      glBindBuffer(GL_ARRAY_BUFFER, glVbo[j][i]);
+      glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, glEbo[j]);
+      if (i == SCREEN_TOP)
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+      glEnableVertexAttribArray(gl_position_loc[j]);
+      glEnableVertexAttribArray(gl_tex_coord_loc[j]);
+      glVertexAttribPointer(gl_position_loc[j], 3, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, pos));
+      glVertexAttribPointer(gl_tex_coord_loc[j], 2, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, tex_coord));
+    }
 
     glBindVertexArray(glFboVao[j]);
     glBindBuffer(GL_ARRAY_BUFFER, glFboVbo[j]);
@@ -4642,11 +4651,15 @@ int main(int argc, char *argv[])
   for (int j = 0; j < SCREEN_COUNT; ++j) {
     SDL_GL_MakeCurrent(win[j], glContext[j]);
 #ifdef USE_VAO
-    glDeleteBuffers(1, &glVbo[j]);
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      glDeleteBuffers(1, &glVbo[j][i]);
+    }
     glDeleteBuffers(1, &glEbo[j]);
     glDeleteBuffers(1, &glFboVbo[j]);
     glDeleteBuffers(1, &glFboEbo[j]);
-    glDeleteVertexArrays(1, &glVao[j]);
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      glDeleteVertexArrays(1, &glVao[j][i]);
+    }
     glDeleteVertexArrays(1, &glFboVao[j]);
 #endif
     glDeleteProgram(gl_fbo_program[j]);
