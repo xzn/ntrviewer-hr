@@ -2551,7 +2551,8 @@ static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int to
 static double kcp_get_connection_quality(void)
 {
   int input_count = __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED);
-  return input_count ? (double)__atomic_load_n(&kcp_recv_pid_count, __ATOMIC_RELAXED) / input_count * 100 : 0.0;
+  double ret = input_count ? (double)__atomic_load_n(&kcp_recv_pid_count, __ATOMIC_RELAXED) / input_count : 0.0;
+  return ret * ret * 100;
 }
 
 static void kcpUpdateWindowTitle(SDL_Window *win, int tick_diff)
@@ -3255,6 +3256,7 @@ struct DecodeInfo {
     struct {
       uint8_t *in;
       bool not_queued;
+      uint8_t frame_id;
     };
 
     struct {
@@ -3364,6 +3366,9 @@ static int handle_recv(uint8_t *buf, int size)
     decode_info[work].not_queued = true;
 
     memcpy(recv_hdr[work], hdr, rp_data_hdr_id_size);
+    decode_info[work].frame_id = recv_hdr[work][0];
+    decode_info[work].top_bot = !recv_hdr[work][1];
+
     recv_delay_between_packets[work] = 0;
     recv_last_packet_time[work] = iclock();
 
@@ -3438,6 +3443,7 @@ static int handle_recv(uint8_t *buf, int size)
       .top_bot = top_bot,
       .in_delay = recv_delay_between_packets[work],
       .in = recv_buf[work],
+      .frame_id = recv_hdr[work][0],
       .in_size = recv_end_size[work],
     };
     if (queue_decode(work) != 0)
@@ -3993,6 +3999,7 @@ static void receive_from_socket(SOCKET s)
   }
 }
 
+static uint8_t last_decoded_frame_id[SCREEN_COUNT];
 void *jpeg_decode_thread_func(void *)
 {
   while (running && !restart_kcp) {
@@ -4040,8 +4047,9 @@ void *jpeg_decode_thread_func(void *)
           __atomic_add_fetch(&frame_fully_received_tracker, 1, __ATOMIC_RELAXED);
         }
       } else {
-        __atomic_add_fetch(&frame_lost_tracker, 1, __ATOMIC_RELAXED);
+        __atomic_add_fetch(&frame_lost_tracker, (uint8_t)(ptr->frame_id - last_decoded_frame_id[top_bot]), __ATOMIC_RELAXED);
       }
+      last_decoded_frame_id[top_bot] = ptr->frame_id;
     }
 
     rp_sem_rel(jpeg_decode_sem);
