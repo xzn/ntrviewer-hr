@@ -1747,8 +1747,7 @@ static void guiMain(struct nk_context *ctx)
     check_nav_slider_prev(ctx, NK_FOCUS_QUALITY, ntr_rp_quality);
 
     nk_layout_row_dynamic(ctx, 30, 2);
-    int qos = ntr_rp_qos * 128 * 1024;
-    snprintf(msg_buf, sizeof(msg_buf), "QoS %d.%d MBps", qos / 1024 / 1024, qos / 1024 % 1024 / 128 * 125);
+    snprintf(msg_buf, sizeof(msg_buf), "Bandwidth Limit %d Mbps", ntr_rp_qos);
     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
     do_nav_slider_next(ctx, NK_FOCUS_BANDWIDTH_LIMIT, &ntr_rp_qos);
     nk_slider_int(ctx, 4, &ntr_rp_qos, 20, 1);
