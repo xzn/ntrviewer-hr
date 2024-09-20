@@ -3,6 +3,7 @@
 *.dll
 *.zip
 include/ncnn
+include/*.h
 lib
 
 ntrviewer*

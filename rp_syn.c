@@ -3,6 +3,10 @@
 #include <time.h>
 #include "rp_syn.h"
 
+#ifdef _WIN32
+bool rp_lock_srw;
+#endif
+
 unsigned rp_atomic_fetch_addb_wrap(unsigned *p, unsigned a, unsigned factor) {
 	unsigned v, v_new;
 	do {
@@ -14,7 +18,7 @@ unsigned rp_atomic_fetch_addb_wrap(unsigned *p, unsigned a, unsigned factor) {
 
 int rp_syn_init1(struct rp_syn_comp_func_t *syn1, int init, void *base, unsigned stride, int count, void **pos) {
 	int res;
-	if ((res = rp_sem_init(syn1->sem, init ? count : 0)))
+	if ((res = rp_sem_create(syn1->sem, init ? count : 0, count)))
 		return res;
 	if ((res = rp_lock_init(syn1->mutex)))
 		return res;
@@ -39,14 +43,9 @@ int rp_syn_close1(struct rp_syn_comp_func_t *syn1) {
 	return ret;
 }
 
-int rp_syn_acq(struct rp_syn_comp_func_t *syn1, unsigned timeout_ns, void **pos) {
+int rp_syn_acq(struct rp_syn_comp_func_t *syn1, unsigned timeout_ns, void **pos, rp_e_t e) {
 	int res;
-	struct timespec to;
-	clock_gettime(CLOCK_REALTIME, &to);
-	to.tv_nsec += timeout_ns;
-	to.tv_sec += to.tv_nsec / 1000000000;
-	to.tv_nsec %= 1000000000;
-	if ((res = timeout_ns ? rp_sem_wait(syn1->sem, &to) : rp_sem_wait_try(syn1->sem)) != 0) {
+	if ((res = rp_sem_timedwait(syn1->sem, NWM_THREAD_WAIT_NS, e)) != 0) {
 		if (res != ETIMEDOUT)
 			fprintf(stderr, "rp_syn_acq wait sem error\n");
 		return res;
@@ -79,14 +78,9 @@ int rp_syn_rel(struct rp_syn_comp_func_t *syn1, void *pos) {
 	return res;
 }
 
-int rp_syn_acq1(struct rp_syn_comp_func_t *syn1, unsigned timeout_ns, void **pos) {
+int rp_syn_acq1(struct rp_syn_comp_func_t *syn1, unsigned timeout_ns, void **pos, rp_e_t e) {
 	int res;
-	struct timespec to;
-	clock_gettime(CLOCK_REALTIME, &to);
-	to.tv_nsec += timeout_ns;
-	to.tv_sec += to.tv_nsec / 1000000000;
-	to.tv_nsec %= 1000000000;
-	if ((res = timeout_ns ? rp_sem_wait(syn1->sem, &to) : rp_sem_wait_try(syn1->sem)) != 0) {
+	if ((res = rp_sem_timedwait(syn1->sem, NWM_THREAD_WAIT_NS, e)) != 0) {
 		if (res != ETIMEDOUT)
 			fprintf(stderr, "rp_syn_acq1 wait sem error\n");
 		return res;
@@ -107,14 +101,8 @@ int rp_syn_rel1(struct rp_syn_comp_func_t *syn1, void *pos) {
 		return -1;
 	}
 	int res;
-	struct timespec to;
-	clock_gettime(CLOCK_REALTIME, &to);
-	to.tv_nsec += NWM_THREAD_WAIT_NS;
-	to.tv_sec += to.tv_nsec / 1000000000;
-	to.tv_nsec %= 1000000000;
-	if ((res = rp_lock_wait(syn1->mutex, &to))) {
-		if (res != ETIMEDOUT)
-			fprintf(stderr, "rp_syn_rel1 wait mutex error\n");
+	if ((res = rp_lock_wait(syn1->mutex))) {
+		fprintf(stderr, "rp_syn_rel1 wait mutex error\n");
 		return res;
 	}
 

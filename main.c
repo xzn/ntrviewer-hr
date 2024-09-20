@@ -41,6 +41,7 @@ void Sleep(int milliseconds) {
 #include "realcugan-ncnn-vulkan/lib.h"
 #include "main.h"
 #include "rp_syn.h"
+#include "Presentation.h"
 #include <SDL2/SDL_syswm.h>
 
 rp_sem_t jpeg_decode_sem;
@@ -161,7 +162,7 @@ static inline void itimeofday(int64_t *sec, int64_t *usec)
     *usec = (int64_t)((qpc % freq) * 1000000 / freq);
 #else
   struct timespec ts;
-  if (clock_gettime(CLOCK_MONOTONIC_RAW, &ts) < 0) {
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0) {
     running = 0;
     *sec = *usec = 0;
     return;
@@ -193,69 +194,56 @@ static inline uint32_t iclock()
 // #endif
 // #endif
 
-static struct timespec clock_realtime_abs_ns_from_now(long ns) {
-  struct timespec to;
-  if (clock_gettime(CLOCK_REALTIME, &to) != 0) {
-    err_log("clock_gettime failed\n");
-    running = 0;
-    return (struct timespec){ 0, 0 };
-  }
-  to.tv_nsec += ns;
-  to.tv_sec += to.tv_nsec / 1000000000;
-  to.tv_nsec %= 1000000000;
-
-  return to;
-}
-
-static bool pthread_mutex_lock_loop(pthread_mutex_t *mutex) {
-  while (running) {
-    struct timespec to = clock_realtime_abs_ns_from_now(NWM_THREAD_WAIT_NS);
-    int ret = pthread_mutex_timedlock(mutex, &to);
-    if (ret) {
-      if (ret != ETIMEDOUT) {
-        err_log("pthread_mutex_timedlock error: %d", ret);
-        running = 0;
-        return false;
-      }
-    } else {
-      return true;
-    }
-  }
-  return false;
-}
-
-static void pthread_cond_mutex_flag_signal(int *flag, pthread_cond_t *cond, pthread_mutex_t *mutex) {
-  if (!pthread_mutex_lock_loop(mutex)) {
-    return;
-  }
+static void cond_mutex_flag_signal(int *flag, rp_cond_t *cond, rp_lock_t *mutex) {
+  rp_lock_wait(*mutex);
   __atomic_store_n(flag, 1, __ATOMIC_RELAXED);
-  pthread_cond_signal(cond);
-  pthread_mutex_unlock(mutex);
+  rp_cond_rel(*cond);
+  rp_lock_rel(*mutex);
 }
 
 #ifdef SDL_GL_SYNC
-static bool pthread_cond_mutex_flag_lock(int *flag, pthread_cond_t *cond, pthread_mutex_t *mutex) {
-  if (!pthread_mutex_lock_loop(mutex)) {
-    return false;
-  }
-  while (!__atomic_load_n(flag,  __ATOMIC_RELAXED)) {
+static bool cond_mutex_flag_lock(int *flag, rp_cond_t *cond, rp_lock_t *mutex) {
+  rp_lock_wait(*mutex);
+  while (!__atomic_load_n(flag, __ATOMIC_RELAXED)) {
     if (!running) {
-      pthread_mutex_unlock(mutex);
+      rp_lock_rel(*mutex);
       return false;
     }
-    struct timespec to = clock_realtime_abs_ns_from_now(NWM_THREAD_WAIT_NS);
-    int ret = pthread_cond_timedwait(cond, mutex, &to);
+    int ret = rp_cond_timedwait(*cond, *mutex, NWM_THREAD_WAIT_NS);
     if (ret) {
       if (ret != ETIMEDOUT) {
-        err_log("pthread_cond_timedwait error: %d", ret);
+        err_log("rp_cond_timedwait error: %d", ret);
         running = 0;
-        pthread_mutex_unlock(mutex);
+        rp_lock_rel(*mutex);
         return false;
       }
     }
   }
   return true;
 }
+#endif
+
+#ifdef _WIN32
+#define thread_t HANDLE
+#define thread_ret_t DWORD
+#define thread_create(t, f, a) ({ \
+  HANDLE _res = CreateThread(NULL, 0, f, a, 0, NULL); \
+  (t) = _res; \
+  _res ? 0 : -1; \
+})
+#define thread_exit(n) ExitThread((thread_ret_t)n)
+#define thread_join(t) WaitForSingleObject(t, INFINITE)
+#define thread_set_cancel(e) SetEvent(e)
+#define thread_cancel(t) ((void)0)
+#define thread_set_cancel_state(b) ((void)0)
+#else
+#define thread_t pthread_t
+#define thread_ret_t (void *)
+#define thread_create(t, f, a) pthread_create(&(t), NULL, f, a)
+#define thread_exit(n) pthread_exit((thread_ret_t)n)
+#define thread_join(t) pthread_join(t, NULL)
+#define thread_cancel(t) pthread_cancel(t)
+#define thread_set_cancel_state(b) pthread_setcancelstate(b ? PTHREAD_CANCEL_ENABLE : PTHREAD_CANCEL_DISABLE, NULL)
 #endif
 
 //! 8 bit unsigned integer.
@@ -619,7 +607,7 @@ struct tcp_thread_arg {
   short port;
 };
 
-void *tcp_thread_func(void *arg)
+static thread_ret_t tcp_thread_func(void *arg)
 {
   struct tcp_thread_arg *t = (struct tcp_thread_arg *)arg;
 
@@ -2059,7 +2047,7 @@ typedef struct _FrameBufferContext
   uint8_t screen_decoded[FrameBufferCount][400 * 240 * GL_CHANNELS_N];
   uint8_t screen_upscaled[400 * 240 * GL_CHANNELS_N * screen_upscale_factor * screen_upscale_factor];
 
-  pthread_mutex_t status_lock;
+  rp_lock_t status_lock;
   enum FrameBufferStatus status;
   int index_display_2;
   int index_display;
@@ -2073,15 +2061,15 @@ typedef struct _FrameBufferContext
 
 #ifndef SDL_GL_SINGLE_THREAD
   int decode_updated;
-  pthread_cond_t decode_updated_cond;
-  pthread_mutex_t decode_updated_mutex;
+  rp_cond_t decode_updated_cond;
+  rp_lock_t decode_updated_mutex;
 #endif
 } FrameBufferContext;
 
 #ifdef SDL_GL_SINGLE_THREAD
 int decode_updated;
-pthread_cond_t decode_updated_cond = PTHREAD_COND_INITIALIZER;
-pthread_mutex_t decode_updated_mutex = PTHREAD_MUTEX_INITIALIZER;
+rp_cond_t decode_updated_cond;
+rp_lock_t decode_updated_mutex;
 #endif
 
 FrameBufferContext buffer_ctx[SCREEN_COUNT];
@@ -2509,8 +2497,7 @@ static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int to
 {
   sr_next(tb, top_bot * FrameBufferCount + ctx->index_display_2);
 
-  if (!pthread_mutex_lock_loop(&ctx->status_lock))
-    return 0;
+  rp_lock_wait(ctx->status_lock);
   enum FrameBufferStatus status = ctx->status;
   if (ctx->status == FBS_UPDATED_2) {
     int index = ctx->index_ready_display_2;
@@ -2526,7 +2513,7 @@ static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int to
     ctx->status = FBS_NOT_UPDATED;
   }
   int index_display = ctx->index_display;
-  pthread_mutex_unlock(&ctx->status_lock);
+  rp_lock_rel(ctx->status_lock);
 
   if (status == FBS_NOT_AVAIL)
     return 0;
@@ -2685,47 +2672,45 @@ static int prev_fullscreen;
 static uint64_t lastUpdated[SCREEN_COUNT];
 static int nk_input_current;
 #ifndef SDL_GL_SINGLE_THREAD
-static pthread_mutex_t nk_input_lock = PTHREAD_MUTEX_INITIALIZER;
+static rp_lock_t nk_input_lock;
 #endif
 
 #ifdef SDL_GL_SYNC
 static int gl_swapbuffer_flag;
-static pthread_cond_t gl_swapbuffer_cond = PTHREAD_COND_INITIALIZER;
-static pthread_mutex_t gl_swapbuffer_mutex = PTHREAD_MUTEX_INITIALIZER;
+static rp_cond_t gl_swapbuffer_cond;
+static rp_lock_t gl_swapbuffer_mutex;
 
 static int gl_render_flag;
-static pthread_cond_t gl_render_cond = PTHREAD_COND_INITIALIZER;
-static pthread_mutex_t gl_render_mutex = PTHREAD_MUTEX_INITIALIZER;
+static rp_cond_t gl_render_cond;
+static rp_lock_t gl_render_mutex;
 #endif
 
 static struct nk_color nk_window_bgcolor = { 28, 48, 62, 255 };
 
 #define MIN_UPDATE_INTERVAL_US (33333)
 
-static bool decode_cond_wait(int *updated, pthread_cond_t *cond, pthread_mutex_t *mutex, int *force)
+static bool decode_cond_wait(int *updated, rp_cond_t *cond, rp_lock_t *mutex, int *force)
 {
-  struct timespec to = clock_realtime_abs_ns_from_now(MIN_UPDATE_INTERVAL_US * 1000);
-  if (!pthread_mutex_lock_loop(mutex))
-    return false;
+  rp_lock_wait(*mutex);
   while (!*updated) {
     if (!running) {
-      pthread_mutex_unlock(mutex);
+      rp_lock_rel(*mutex);
       return false;
     }
     int ret;
-    if ((ret = pthread_cond_timedwait(cond, mutex, &to))) {
+    if ((ret = rp_cond_timedwait(*cond, *mutex, MIN_UPDATE_INTERVAL_US * 1000))) {
       if (ret == ETIMEDOUT) {
         *force = 1;
         break;
       } else {
-        err_log("decode_updated_cond wait error: %d\n", ret);
-        pthread_mutex_unlock(mutex);
+        err_log("decode_cond_wait wait error: %d\n", ret);
+        rp_lock_rel(*mutex);
         return false;
       }
     }
   }
   *updated = 0;
-  pthread_mutex_unlock(mutex);
+  rp_lock_rel(*mutex);
   return true;
 }
 
@@ -2833,8 +2818,7 @@ ThreadLoop(int i)
       struct nk_context *ctx = nk_ctx;
 
 #ifndef SDL_GL_SINGLE_THREAD
-      if (!pthread_mutex_lock_loop(&nk_input_lock))
-        return;
+      rp_lock_wait(nk_input_lock);
 #endif
       if (nk_input_current) {
         // nk_sdl_handle_grab();
@@ -2848,15 +2832,15 @@ ThreadLoop(int i)
 
       guiMain(ctx);
 #ifndef SDL_GL_SINGLE_THREAD
-      pthread_mutex_unlock(&nk_input_lock);
+      rp_lock_rel(nk_input_lock);
 #endif
     }
 
 #ifdef SDL_GL_SYNC
-    if (!pthread_cond_mutex_flag_lock(&gl_swapbuffer_flag, &gl_swapbuffer_cond, &gl_swapbuffer_mutex))
+    if (!cond_mutex_flag_lock(&gl_swapbuffer_flag, &gl_swapbuffer_cond, &gl_swapbuffer_mutex))
       return;
     gl_swapbuffer_flag = 0;
-    pthread_mutex_unlock(&gl_swapbuffer_mutex);
+    rp_lock_rel(gl_swapbuffer_mutex);
 #endif
 
 #ifdef USE_SDL_RENDERER
@@ -2868,13 +2852,13 @@ ThreadLoop(int i)
     if (i == 0) {
       nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
     }
-    // pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+    // thread_set_cancel_state(false);
     SDL_GL_SwapWindow(win[i]);
-    // pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+    // thread_set_cancel_state(true);
 #endif
 
 #ifdef SDL_GL_SYNC
-    pthread_cond_mutex_flag_signal(&gl_render_flag, &gl_render_cond, &gl_render_mutex);
+    cond_mutex_flag_signal(&gl_render_flag, &gl_render_cond, &gl_render_mutex);
 #endif
     lastUpdated[i] = nextUpdated;
   }
@@ -2940,8 +2924,7 @@ MainLoop(void *loopArg)
       }
 
 #ifndef SDL_GL_SINGLE_THREAD
-      if (!pthread_mutex_lock_loop(&nk_input_lock))
-        return;
+      rp_lock_wait(nk_input_lock);
 #endif
       if (!nk_input_current) {
         nk_input_begin(ctx);
@@ -2949,7 +2932,7 @@ MainLoop(void *loopArg)
       }
       nk_sdl_handle_event(&evt);
 #ifndef SDL_GL_SINGLE_THREAD
-      pthread_mutex_unlock(&nk_input_lock);
+      rp_lock_rel(nk_input_lock);
 #endif
 
 skip_evt:
@@ -2982,31 +2965,24 @@ skip_evt:
 #endif
 
 #ifdef SDL_GL_SYNC
-  pthread_cond_mutex_flag_signal(&gl_swapbuffer_flag, &gl_swapbuffer_cond, &gl_swapbuffer_mutex);
+  cond_mutex_flag_signal(&gl_swapbuffer_flag, &gl_swapbuffer_cond, &gl_swapbuffer_mutex);
 
-  if (!pthread_cond_mutex_flag_lock(&gl_render_flag, &gl_render_cond, &gl_render_mutex))
+  if (!cond_mutex_flag_lock(&gl_render_flag, &gl_render_cond, &gl_render_mutex))
     return;
   gl_render_flag = 0;
-  pthread_mutex_unlock(&gl_render_mutex);
+  rp_lock_rel(gl_render_mutex);
 #endif
 }
 
 #ifndef SDL_GL_SINGLE_THREAD
-// static void sdl_gl_makecurrent_null(void *)
-// {
-//   SDL_GL_MakeCurrent(NULL, NULL);
-// }
-
-static void *window_thread_func(void *arg)
+static thread_ret_t window_thread_func(void *arg)
 {
   int i = (int)(uintptr_t)arg;
   SDL_GL_MakeCurrent(win[i], glContext[i]);
-  // pthread_cleanup_push(sdl_gl_makecurrent_null, NULL);
   while (running)
     ThreadLoop(i);
-  // pthread_cleanup_pop(1);
   SDL_GL_MakeCurrent(NULL, NULL);
-  return NULL;
+  return (thread_ret_t)(uintptr_t)NULL;
 }
 #endif
 
@@ -3014,8 +2990,7 @@ static int acquire_sem(rp_sem_t *sem) {
   while (1) {
     if (!running)
       return -1;
-    struct timespec to = clock_realtime_abs_ns_from_now(NWM_THREAD_WAIT_NS);
-    int res = rp_sem_wait(*sem, &to);
+    int res = rp_sem_timedwait(*sem, NWM_THREAD_WAIT_NS, NULL);
     if (res == 0)
       return 0;
     if (res != ETIMEDOUT) {
@@ -3034,8 +3009,7 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, int top_bot, int frame_
     __atomic_store_n(&delay_between_packet_tracker[top_bot], delay_between_packet, __ATOMIC_RELAXED);
   }
 
-  if (!pthread_mutex_lock_loop(&ctx->status_lock))
-    return;
+  rp_lock_wait(ctx->status_lock);
   // ctx_sync is set when view mode is top and bot in one window.
   // we can use this check to enable "triple buffering" only when the update rate is likely to exceed monitor refresh rate.
   if (/* ctx_sync && */ctx->status >= FBS_UPDATED) {
@@ -3050,15 +3024,15 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, int top_bot, int frame_
     ctx->index_decode = index;
     ctx->status = FBS_UPDATED;
   }
-  pthread_mutex_unlock(&ctx->status_lock);
+  rp_lock_rel(ctx->status_lock);
 
 #ifndef SDL_GL_SINGLE_THREAD
   if (ctx_sync)
-    pthread_cond_mutex_flag_signal(&ctx_sync->decode_updated, &ctx_sync->decode_updated_cond, &ctx_sync->decode_updated_mutex);
+    cond_mutex_flag_signal(&ctx_sync->decode_updated, &ctx_sync->decode_updated_cond, &ctx_sync->decode_updated_mutex);
   else
-    pthread_cond_mutex_flag_signal(&ctx->decode_updated, &ctx->decode_updated_cond, &ctx->decode_updated_mutex);
+    cond_mutex_flag_signal(&ctx->decode_updated, &ctx->decode_updated_cond, &ctx->decode_updated_mutex);
 #else
-  pthread_cond_mutex_flag_signal(&decode_updated, &decode_updated_cond, &decode_updated_mutex);
+  cond_mutex_flag_signal(&decode_updated, &decode_updated_cond, &decode_updated_mutex);
 #endif
 }
 
@@ -3999,16 +3973,16 @@ static void receive_from_socket(SOCKET s)
 }
 
 static uint8_t last_decoded_frame_id[SCREEN_COUNT];
-void *jpeg_decode_thread_func(void *)
+static thread_ret_t jpeg_decode_thread_func(void *e)
 {
   while (running && !restart_kcp) {
     struct DecodeInfo *ptr;
     while (1) {
       if (!(running && !restart_kcp))
         return 0;
-      pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
-      int res = rp_syn_acq(&jpeg_decode_queue, NWM_THREAD_WAIT_NS, (void **)&ptr);
-      pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+      thread_set_cancel_state(true);
+      int res = rp_syn_acq(&jpeg_decode_queue, NWM_THREAD_WAIT_NS, (void **)&ptr, e);
+      thread_set_cancel_state(false);
       if (res == 0)
         break;
       if (res != ETIMEDOUT) {
@@ -4032,6 +4006,10 @@ void *jpeg_decode_thread_func(void *)
       if ((ret = handle_decode_kcp(out, ptr->kcp_w, ptr->kcp_queue_w)) != 0) {
         err_log("kcp recv decode error: %d\n", ret);
         restart_kcp = 1;
+
+        // ikcp_reset(kcp, kcp->cid);
+        kcp_reset_cid = kcp->cid;
+        kcp_cid = kcp->cid + 1;
       } else {
         // err_log("%d\n", kcp_recv_info[ptr->kcp_w][ptr->kcp_queue_w].term_count);
         handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay, ctx_sync);
@@ -4079,10 +4057,9 @@ void receive_from_socket_loop(SOCKET s)
 
     // err_log("new connection\n");
     for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot) {
-      if (!pthread_mutex_lock_loop(&buffer_ctx[top_bot].status_lock))
-        return;
+      rp_lock_wait(buffer_ctx[top_bot].status_lock);
       buffer_ctx[top_bot].status = FBS_NOT_AVAIL;
-      pthread_mutex_unlock(&buffer_ctx[top_bot].status_lock);
+      rp_lock_rel(buffer_ctx[top_bot].status_lock);
     }
     for (int i = 0; i < rp_work_count; ++i) {
       recv_end[i] = 2;
@@ -4102,7 +4079,7 @@ void receive_from_socket_loop(SOCKET s)
       }
       jpeg_decode_sem_inited = 0;
     }
-    if (rp_sem_init(jpeg_decode_sem, rp_work_count) != 0) {
+    if (rp_sem_create(jpeg_decode_sem, rp_work_count, rp_work_count) != 0) {
       err_log("jpeg_decode_sem init failed\n");
       break;
     }
@@ -4124,9 +4101,14 @@ void receive_from_socket_loop(SOCKET s)
     memset(decode_ptr, 0, sizeof(decode_ptr));
     memset(decode_info, 0, sizeof(decode_info));
 
-    pthread_t jpeg_decode_thread;
+    thread_t jpeg_decode_thread;
     int ret;
-    if ((ret = pthread_create(&jpeg_decode_thread, NULL, jpeg_decode_thread_func, NULL)))
+#ifdef _WIN32
+    HANDLE jpeg_decode_thread_e = CreateEventA(NULL, FALSE, FALSE, NULL);
+#else
+    void *jpeg_decode_thread_e = NULL;
+#endif
+    if ((ret = thread_create(jpeg_decode_thread, jpeg_decode_thread_func, jpeg_decode_thread_e)))
     {
       err_log("jpeg_decode_thread create failed\n");
       break;
@@ -4135,8 +4117,14 @@ void receive_from_socket_loop(SOCKET s)
     receive_from_socket(s);
     // Sleep(RP_SOCKET_INTERVAL);
 
-    pthread_cancel(jpeg_decode_thread);
-    pthread_join(jpeg_decode_thread, NULL);
+#ifdef _WIN32
+    thread_set_cancel(jpeg_decode_thread_e);
+    thread_join(jpeg_decode_thread);
+    CloseHandle(jpeg_decode_thread_e);
+#else
+    thread_cancel(jpeg_decode_thread);
+    thread_join(jpeg_decode_thread);
+#endif
 
     if (kcp) {
       ikcp_release(kcp);
@@ -4145,11 +4133,11 @@ void receive_from_socket_loop(SOCKET s)
   }
 }
 
-void socket_error_pause(void) {
+static void socket_error_pause(void) {
   Sleep(RP_SOCKET_INTERVAL);
 }
 
-void *udp_recv_thread_func(void *)
+static thread_ret_t udp_recv_thread_func(void *)
 {
   while (running)
   {
@@ -4546,7 +4534,7 @@ int main(int argc, char *argv[])
 #endif
 
   for (int i = 0; i < SCREEN_COUNT; ++i) {
-    buffer_ctx[i].status_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    rp_lock_init(buffer_ctx[i].status_lock);
     buffer_ctx[i].index_display_2 = FBI_DISPLAY_2;
     buffer_ctx[i].index_display = FBI_DISPLAY;
     buffer_ctx[i].index_ready_display_2 = FBI_READY_DISPLAY_2;
@@ -4554,40 +4542,54 @@ int main(int argc, char *argv[])
     buffer_ctx[i].index_decode = FBI_DECODE;
 
 #ifndef SDL_GL_SINGLE_THREAD
-    buffer_ctx[i].decode_updated_cond = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
-    buffer_ctx[i].decode_updated_mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    rp_cond_init(buffer_ctx[i].decode_updated_cond);
+    rp_lock_init(buffer_ctx[i].decode_updated_mutex);
 #endif
   }
+
+#ifdef SDL_GL_SINGLE_THREAD
+  rp_cond_init(decode_updated_cond);
+  rp_lock_init(decode_updated_mutex);
+#else
+  rp_lock_init(nk_input_lock);
+#endif
+
+#ifdef SDL_GL_SYNC
+  rp_cond_init(gl_swapbuffer_cond);
+  rp_lock_init(gl_swapbuffer_mutex);
+  rp_cond_init(gl_render_cond);
+  rp_lock_init(gl_render_mutex);
+#endif
 
   rpConfigSetDefault();
   detect3DSIP();
   getAdapterIPs();
   tryAutoSelectAdapterIP();
 
-  pthread_t udp_recv_thread;
-  if ((ret = pthread_create(&udp_recv_thread, NULL, udp_recv_thread_func, NULL)))
+  thread_t udp_recv_thread;
+  if ((ret = thread_create(udp_recv_thread, udp_recv_thread_func, NULL)))
   {
     err_log("udp_recv_thread create failed\n");
     return -1;
   }
-  pthread_t menu_tcp_thread;
+  thread_t menu_tcp_thread;
   struct tcp_thread_arg menu_tcp_thread_arg = {
     &menu_work_state,
     &menu_remote_play,
     8000,
   };
-  if ((ret = pthread_create(&menu_tcp_thread, NULL, tcp_thread_func, &menu_tcp_thread_arg)))
+  if ((ret = thread_create(menu_tcp_thread, tcp_thread_func, &menu_tcp_thread_arg)))
   {
     err_log("menu_tcp_thread create failed\n");
     return -1;
   }
-  pthread_t nwm_tcp_thread;
+  thread_t nwm_tcp_thread;
   struct tcp_thread_arg nwm_tcp_thread_arg = {
     &nwm_work_state,
     NULL,
     5000 + 0x1a,
   };
-  if ((ret = pthread_create(&nwm_tcp_thread, NULL, tcp_thread_func, &nwm_tcp_thread_arg)))
+  if ((ret = thread_create(nwm_tcp_thread, tcp_thread_func, &nwm_tcp_thread_arg)))
   {
     err_log("nwm_tcp_thread create failed\n");
     return -1;
@@ -4599,14 +4601,14 @@ int main(int argc, char *argv[])
 
 #ifndef SDL_GL_SINGLE_THREAD
   SDL_GL_MakeCurrent(NULL, NULL);
-  pthread_t window_top_thread;
-  if ((ret = pthread_create(&window_top_thread, NULL, window_thread_func, (void *)SCREEN_TOP)))
+  thread_t window_top_thread;
+  if ((ret = thread_create(window_top_thread, window_thread_func, (void *)SCREEN_TOP)))
   {
     err_log("window_top_thread create failed\n");
     return -1;
   }
-  pthread_t window_bot_thread;
-  if ((ret = pthread_create(&window_bot_thread, NULL, window_thread_func, (void *)SCREEN_BOT)))
+  thread_t window_bot_thread;
+  if ((ret = thread_create(window_bot_thread, window_thread_func, (void *)SCREEN_BOT)))
   {
     err_log("window_bot_thread create failed\n");
     return -1;
@@ -4628,24 +4630,24 @@ int main(int argc, char *argv[])
   // Apparently cancelling a thread that has OpenGL stuff causes hangs, so let them exit on their own.
 
 #ifndef SDL_GL_SINGLE_THREAD
-  // pthread_cancel(window_bot_thread);
-  pthread_join(window_bot_thread, NULL);
-  // pthread_cancel(window_top_thread);
-  pthread_join(window_top_thread, NULL);
+  // thread_cancel(window_bot_thread);
+  thread_join(window_bot_thread);
+  // thread_cancel(window_top_thread);
+  thread_join(window_top_thread);
 #endif
 
-  pthread_cancel(udp_recv_thread);
-  pthread_join(udp_recv_thread, NULL);
-  pthread_cancel(menu_tcp_thread);
-  pthread_join(menu_tcp_thread, NULL);
-  pthread_cancel(nwm_tcp_thread);
-  pthread_join(nwm_tcp_thread, NULL);
+  thread_cancel(udp_recv_thread);
+  thread_join(udp_recv_thread);
+  thread_cancel(menu_tcp_thread);
+  thread_join(menu_tcp_thread);
+  thread_cancel(nwm_tcp_thread);
+  thread_join(nwm_tcp_thread);
 
   rp_syn_close1(&jpeg_decode_queue);
   rp_sem_close(jpeg_decode_sem);
 
   for (int i = 0; i < SCREEN_COUNT; ++i) {
-    pthread_mutex_destroy(&buffer_ctx[i].status_lock);
+    rp_lock_close(buffer_ctx[i].status_lock);
   }
 
 #ifdef USE_SDL_RENDERER
