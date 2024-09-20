@@ -41,7 +41,6 @@ void Sleep(int milliseconds) {
 #include "realcugan-ncnn-vulkan/lib.h"
 #include "main.h"
 #include "rp_syn.h"
-#include "Presentation.h"
 #include <SDL2/SDL_syswm.h>
 
 rp_sem_t jpeg_decode_sem;
@@ -55,6 +54,10 @@ struct rp_syn_comp_func_t jpeg_decode_queue;
 #define USE_VAO
 #endif
 // #define PRINT_PACKET_LOSS_INFO
+
+#ifdef _WIN32
+#include "Presentation.h"
+#endif
 
 #ifndef USE_SDL_RENDERER
 #define screen_upscale_factor REALCUGAN_SCALE
@@ -238,7 +241,7 @@ static bool cond_mutex_flag_lock(int *flag, rp_cond_t *cond, rp_lock_t *mutex) {
 #define thread_set_cancel_state(b) ((void)0)
 #else
 #define thread_t pthread_t
-#define thread_ret_t (void *)
+typedef void *thread_ret_t;
 #define thread_create(t, f, a) pthread_create(&(t), NULL, f, a)
 #define thread_exit(n) pthread_exit((thread_ret_t)n)
 #define thread_join(t) pthread_join(t, NULL)
@@ -4232,6 +4235,9 @@ int main(int argc, char *argv[])
 #ifdef _WIN32
   CoInitializeEx(NULL, COINIT_MULTITHREADED);
 #endif
+
+  rp_syn_startup();
+
   /* GUI */
   int ret;
 

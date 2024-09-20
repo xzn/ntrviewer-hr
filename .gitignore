@@ -8,5 +8,5 @@ lib
 
 ntrviewer*
 _win32*
-_pkg
-_test
+_pkg*
+_test*

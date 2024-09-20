@@ -29,6 +29,7 @@ typedef void *rp_e_t;
 #endif
 
 #ifdef _WIN32
+
 extern bool rp_lock_srw;
 
 #define rp_lock_init(n) ({ \
@@ -113,6 +114,8 @@ extern bool rp_lock_srw;
 
 #else
 
+extern pthread_condattr_t rp_cond_attr;
+
 #define rp_lock_init(n) pthread_mutex_init(&(n), 0)
 #define rp_lock_wait(n) pthread_mutex_lock(&(n))
 #define rp_lock_rel(n) pthread_mutex_unlock(&(n))
@@ -121,8 +124,7 @@ extern bool rp_lock_srw;
 #define rp_sem_create(n, i, m) rp_sem_init(n, i)
 #define rp_sem_init(n, i) sem_init(&(n), 0, i)
 #define rp_sem_timedwait(n, to_ns, e) ({ \
-	struct timespec _to = clock_monotonic_abs_ns_from_now(to_ns); \
-	int _ret = sem_clockwait(&(n), CLOCK_MONOTONIC, &_to); \
+	int _ret = sem_wait(&(n)); \
 	if (_ret) { _ret = errno; } \
 	_ret; \
 })
@@ -132,7 +134,7 @@ extern bool rp_lock_srw;
 #define rp_cond_init(c) pthread_cond_init(&(c), &rp_cond_attr)
 #define rp_cond_timedwait(c, m, to_ns) ({ \
 	struct timespec _to = clock_monotonic_abs_ns_from_now(to_ns); \
-	pthread_cond_clockwait(&(c), &(m), CLOCK_MONOTONIC, &_to); \
+	pthread_cond_timedwait(&(c), &(m), &_to); \
 })
 #define rp_cond_rel(c) pthread_cond_signal(&(c));
 #define rp_cond_close(c) pthread_cond_destroy(&(c))
@@ -150,6 +152,8 @@ static struct timespec clock_monotonic_abs_ns_from_now(long ns) {
 }
 
 #endif
+
+void rp_syn_startup(void);
 
 struct rp_syn_comp_func_t {
 	rp_sem_t sem;

@@ -5,6 +5,14 @@
 
 #ifdef _WIN32
 bool rp_lock_srw;
+#else
+pthread_condattr_t rp_cond_attr;
+
+void rp_syn_startup(void) {
+	pthread_condattr_init(&rp_cond_attr);
+	pthread_condattr_setclock(&rp_cond_attr, CLOCK_MONOTONIC);
+}
+
 #endif
 
 unsigned rp_atomic_fetch_addb_wrap(unsigned *p, unsigned a, unsigned factor) {
