@@ -50,13 +50,30 @@ struct rp_syn_comp_func_t jpeg_decode_queue;
 // #define GL_DEBUG
 // #define USE_ANGLE
 // #define USE_OGL_ES
-#ifndef USE_OGL_ES
+#if !defined(USE_OGL_ES) && !defined(USE_SDL_RENDERER)
 #define USE_VAO
 #endif
 // #define PRINT_PACKET_LOSS_INFO
 
-#ifdef _WIN32
+#if !defined(_WIN32) || defined(USE_SDL_RENDERER)
+#undef USE_COMPOSITION_SWAPCHAIN
+#endif
+
+#ifdef USE_COMPOSITION_SWAPCHAIN
 #include "Presentation.h"
+#include "dcomptypes.h"
+STDAPI DCompositionGetStatistics(
+  _In_ COMPOSITION_FRAME_ID frameId,
+  _Out_ COMPOSITION_FRAME_STATS *frameStats,
+  _In_ UINT targetIdCount,
+  _Out_writes_to_opt_(targetIdCount, *actualTargetIdCount) COMPOSITION_TARGET_ID *targetIds,
+  _Out_opt_ UINT *actualTargetIdCount);
+STDAPI DCompositionGetTargetStatistics(
+  _In_ COMPOSITION_FRAME_ID frameId,
+  _In_ const COMPOSITION_TARGET_ID *targetId,
+  _Out_ COMPOSITION_TARGET_STATS *targetStats);
+#include "glad/glad_wgl.h"
+static bool use_composition_swapchain;
 #endif
 
 #ifndef USE_SDL_RENDERER
@@ -284,14 +301,14 @@ typedef int64_t		s64;
 #define LEN(a) (sizeof(a) / sizeof(a)[0])
 
 #define FRAME_STAT_EVERY_X_US 1000000
-char window_title_with_fps[500];
-uint64_t window_title_last_tick;
-int frame_rate_decoded_tracker[SCREEN_COUNT] = {};
-int frame_rate_displayed_tracker[SCREEN_COUNT] = {};
-int frame_size_tracker[SCREEN_COUNT] = {};
-int delay_between_packet_tracker[SCREEN_COUNT] = {};
-int frame_fully_received_tracker;
-int frame_lost_tracker;
+static char window_title_with_fps[500];
+static uint64_t window_title_last_tick;
+static int frame_rate_decoded_tracker[SCREEN_COUNT] = {};
+static int frame_rate_displayed_tracker[SCREEN_COUNT] = {};
+static int frame_size_tracker[SCREEN_COUNT] = {};
+static int delay_between_packet_tracker[SCREEN_COUNT] = {};
+static int frame_fully_received_tracker;
+static int frame_lost_tracker;
 
 enum FrameBufferStatus
 {
@@ -302,28 +319,30 @@ enum FrameBufferStatus
 };
 
 /* Platform */
-SDL_Window *win[SCREEN_COUNT];
-Uint32 win_id[SCREEN_COUNT];
+static SDL_Window *win[SCREEN_COUNT];
+static SDL_Window *win_ogl[SCREEN_COUNT];
+static Uint32 win_id[SCREEN_COUNT];
 #ifdef USE_SDL_RENDERER
-SDL_Renderer *sdlRenderer[SCREEN_COUNT];
-SDL_Texture *sdlTexture[SCREEN_COUNT][SCREEN_COUNT];
+static SDL_Renderer *sdlRenderer[SCREEN_COUNT];
+static SDL_Texture *sdlTexture[SCREEN_COUNT][SCREEN_COUNT];
 #else
-SDL_GLContext glContext[SCREEN_COUNT];
-#endif
-int win_width[SCREEN_COUNT], win_height[SCREEN_COUNT];
-int ogl_version_major, ogl_version_minor;
+static SDL_GLContext glContext[SCREEN_COUNT];
+static int ogl_version_major, ogl_version_minor;
 
 #ifdef USE_VAO
-GLuint glVao[SCREEN_COUNT][SCREEN_COUNT];
-GLuint glVbo[SCREEN_COUNT][SCREEN_COUNT];
-GLuint glEbo[SCREEN_COUNT];
+static GLuint glVao[SCREEN_COUNT][SCREEN_COUNT];
+static GLuint glVbo[SCREEN_COUNT][SCREEN_COUNT];
+static GLuint glEbo[SCREEN_COUNT];
 
-GLuint glFboVao[SCREEN_COUNT];
-GLuint glFboVbo[SCREEN_COUNT];
-GLuint glFboEbo[SCREEN_COUNT];
+static GLuint glFboVao[SCREEN_COUNT];
+static GLuint glFboVbo[SCREEN_COUNT];
+static GLuint glFboEbo[SCREEN_COUNT];
 #endif
 
-enum ConnectionState
+#endif
+static int win_width[SCREEN_COUNT], win_height[SCREEN_COUNT];
+
+static enum ConnectionState
 {
   CS_DISCONNECTED,
   CS_CONNECTING,
@@ -332,13 +351,13 @@ enum ConnectionState
   CS_MAX,
 } menu_connection, nwm_connection;
 
-atomic_int menu_work_state;
-atomic_int nwm_work_state;
-atomic_bool menu_remote_play;
+static atomic_int menu_work_state;
+static atomic_int nwm_work_state;
+static atomic_bool menu_remote_play;
 
 static char ip_addr_buf[16];
 
-const char *connection_msg[CS_MAX] = {
+static const char *connection_msg[CS_MAX] = {
   "+",
   "...",
   "-",
@@ -1202,6 +1221,64 @@ static void getAdapterIPs(void) {
 }
 #endif
 
+#ifndef SDL_GL_SINGLE_THREAD
+#ifdef _WIN32
+static HANDLE updateBottomScreenEvent;
+
+static void event_init(HANDLE *event) {
+  *event = CreateEventA(NULL, FALSE, FALSE, NULL);
+}
+
+static void event_close(HANDLE *event) {
+  CloseHandle(*event);
+  *event = NULL;
+}
+
+static void event_wait(HANDLE *event, int to_ns) {
+  WaitForSingleObject(*event, to_ns / 1000000);
+}
+
+static void event_set(HANDLE *event) {
+  SetEvent(*event);
+}
+#else
+static struct event_t {
+  pthread_cond_t cond;
+  pthread_mutex_t mutex;
+  int flag;
+} updateBottomScreenEvent;
+
+static void event_init(struct event_t *event) {
+  pthread_cond_init(&event->cond, &rp_cond_attr);
+  pthread_mutex_init(&event->mutex, NULL);
+  event->flag = 0;
+}
+
+static void event_close(struct event_t *event) {
+  pthread_cond_destroy(&event->cond);
+  pthread_mutex_destroy(&event->mutex);
+  event->flag = 0;
+}
+
+static void event_wait(struct event_t *event, int to_ns) {
+  pthread_mutex_lock(&event->mutex);
+  while (!event->flag) {
+    struct timespec to = clock_monotonic_abs_ns_from_now(to_ns);
+    pthread_cond_timedwait(&event->cond, &event->mutex, &to);
+  }
+  event->flag = 0;
+  pthread_mutex_unlock(&event->mutex);
+}
+
+static void event_set(struct event_t *event) {
+  pthread_mutex_lock(&event->mutex);
+  event->flag = 1;
+  pthread_cond_signal(&event->cond);
+  pthread_mutex_unlock(&event->mutex);
+}
+#endif
+#endif
+
 static void updateViewMode(view_mode_t vm) {
   switch (vm) {
     case VIEW_MODE_TOP_BOT:
@@ -1237,6 +1314,12 @@ static void updateViewMode(view_mode_t vm) {
       SDL_SetWindowSize(win[SCREEN_BOT], WINDOW_WIDTH2, WINDOW_HEIGHT12);
       break;
   }
+
+#ifndef SDL_GL_SINGLE_THREAD
+  if (vm == VIEW_MODE_SEPARATE) {
+    event_set(&updateBottomScreenEvent);
+  }
+#endif
 }
 
 // HACK
@@ -2732,7 +2815,7 @@ ThreadLoop(int i)
 
   if (i >= screen_count) {
 #ifndef SDL_GL_SINGLE_THREAD
-    Sleep(REST_EVERY_MS);
+    event_wait(&updateBottomScreenEvent, NWM_THREAD_WAIT_NS);
 #endif
     return;
   }
@@ -2780,7 +2863,7 @@ ThreadLoop(int i)
   SDL_GL_GetDrawableSize(win[i], &win_width[i], &win_height[i]);
 
 #ifdef SDL_GL_SINGLE_THREAD
-  SDL_GL_MakeCurrent(win[i], glContext[i]);
+  SDL_GL_MakeCurrent(win_ogl[i], glContext[i]);
 #endif
   glViewport(0, 0, win_width[i], win_height[i]);
   glClearColor(bg[0], bg[1], bg[2], bg[3]);
@@ -2804,8 +2887,8 @@ ThreadLoop(int i)
 
   if (vm == VIEW_MODE_TOP_BOT) {
     force = 1;
-    updated |= hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400, 240, SCREEN_TOP, i, force);
-    updated |= hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT, i, force);
+    updated = hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400, 240, SCREEN_TOP, i, force) || updated;
+    updated = hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT, i, force) || updated;
   } else if (vm == VIEW_MODE_BOT)
     updated = hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, 1, i, force);
   else
@@ -2953,6 +3036,8 @@ skip_evt:
       SDL_SetWindowFullscreen(win[SCREEN_TOP], SDL_WINDOW_FULLSCREEN_DESKTOP);
       if (SDL_GetWindowDisplayIndex(win[SCREEN_TOP]) != SDL_GetWindowDisplayIndex(win[SCREEN_BOT])) {
         SDL_SetWindowFullscreen(win[SCREEN_BOT], SDL_WINDOW_FULLSCREEN_DESKTOP);
+      } else {
+        SDL_RaiseWindow(win[SCREEN_TOP]);
       }
     } else {
       updateViewMode(vm);
@@ -2981,7 +3066,7 @@ skip_evt:
 static thread_ret_t window_thread_func(void *arg)
 {
   int i = (int)(uintptr_t)arg;
-  SDL_GL_MakeCurrent(win[i], glContext[i]);
+  SDL_GL_MakeCurrent(win_ogl[i], glContext[i]);
   while (running)
     ThreadLoop(i);
   SDL_GL_MakeCurrent(NULL, NULL);
@@ -4230,10 +4315,19 @@ static void on_gl_error(
 }
 #endif
 
+#ifdef USE_COMPOSITION_SWAPCHAIN
+// TODO
+#endif
+
 int main(int argc, char *argv[])
 {
 #ifdef _WIN32
   CoInitializeEx(NULL, COINIT_MULTITHREADED);
+
+  OSVERSIONINFO osvi = {};
+  osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
+  GetVersionEx(&osvi);
+  err_log("Windows version %d.%d.%d\n", (int)osvi.dwMajorVersion, (int)osvi.dwMinorVersion, (int)osvi.dwBuildNumber);
 #endif
 
   rp_syn_startup();
@@ -4279,42 +4373,50 @@ int main(int argc, char *argv[])
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 #endif
 
-  Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE;
+  Uint32 win_flags = SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN;
+
 #ifndef USE_SDL_RENDERER
   win_flags |= SDL_WINDOW_OPENGL;
 #endif
 
   win[SCREEN_TOP] = SDL_CreateWindow(TITLE,
-                         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                         WINDOW_WIDTH, WINDOW_HEIGHT, win_flags);
+    SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+    WINDOW_WIDTH, WINDOW_HEIGHT, win_flags);
   if (!win[SCREEN_TOP])
   {
     err_log("SDL_CreateWindow: %s\n", SDL_GetError());
     return -1;
   }
-  win_id[SCREEN_TOP] = SDL_GetWindowID(win[SCREEN_TOP]);
 
   win[SCREEN_BOT] = SDL_CreateWindow(TITLE,
-                         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                         WINDOW_WIDTH, WINDOW_HEIGHT, win_flags | SDL_WINDOW_HIDDEN);
+    SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+    WINDOW_WIDTH, WINDOW_HEIGHT, win_flags);
   if (!win[SCREEN_BOT])
   {
     err_log("SDL_CreateWindow: %s\n", SDL_GetError());
     return -1;
   }
-  win_id[SCREEN_BOT] = SDL_GetWindowID(win[SCREEN_BOT]);
+
+  win_ogl[SCREEN_TOP] = win[SCREEN_TOP];
+  win_ogl[SCREEN_BOT] = win[SCREEN_BOT];
 
 #ifdef _WIN32
   SDL_SysWMinfo wmInfo[SCREEN_COUNT];
-  HWND hwnd[SCREEN_COUNT];
 
   SDL_VERSION(&wmInfo[SCREEN_TOP].version);
   SDL_GetWindowWMInfo(win[SCREEN_TOP], &wmInfo[SCREEN_TOP]);
-  hwnd[SCREEN_TOP] = wmInfo[SCREEN_TOP].info.win.window;
 
   SDL_VERSION(&wmInfo[SCREEN_BOT].version);
   SDL_GetWindowWMInfo(win[SCREEN_BOT], &wmInfo[SCREEN_BOT]);
+
+  HWND hwnd[SCREEN_COUNT];
+  hwnd[SCREEN_TOP] = wmInfo[SCREEN_TOP].info.win.window;
   hwnd[SCREEN_BOT] = wmInfo[SCREEN_BOT].info.win.window;
+#ifdef USE_COMPOSITION_SWAPCHAIN
+  HDC hdc[SCREEN_COUNT];
+  hdc[SCREEN_TOP] = wmInfo[SCREEN_TOP].info.win.hdc;
+  hdc[SCREEN_BOT] = wmInfo[SCREEN_BOT].info.win.hdc;
+#endif
 #endif
 
 #ifdef USE_SDL_RENDERER
@@ -4368,6 +4470,18 @@ int main(int argc, char *argv[])
   }
 #endif
 
+#ifdef USE_COMPOSITION_SWAPCHAIN
+  if (!gladLoadWGLLoader((GLADloadproc)SDL_GL_GetProcAddress, hdc[SCREEN_TOP]))
+  {
+    err_log("gladLoadWGLLoader failed\n");
+    return -1;
+  }
+  if (osvi.dwMajorVersion >= 10 && osvi.dwBuildNumber >= 22000 && GLAD_WGL_NV_DX_interop && GLAD_WGL_NV_DX_interop2) {
+    use_composition_swapchain = true;
+    err_log("Using composition swapchain\n");
+  }
+#endif
+
 #ifdef GL_DEBUG
   glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
   glDebugMessageCallback(on_gl_error, NULL);
@@ -4392,7 +4506,7 @@ int main(int argc, char *argv[])
   err_log("ogl version: %d.%d\n", ogl_version_major, ogl_version_minor);
 
 #ifdef SDL_GL_SINGLE_THREAD
-  SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);]
+  SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
 #endif
   glContext[SCREEN_BOT] = SDL_GL_CreateContext(win[SCREEN_BOT]);
   if (!glContext[SCREEN_BOT])
@@ -4410,12 +4524,55 @@ int main(int argc, char *argv[])
   }
 
   /* OpenGL setup */
-  SDL_GL_MakeCurrent(win[SCREEN_TOP], glContext[SCREEN_TOP]);
+  SDL_GL_MakeCurrent(win_ogl[SCREEN_TOP], glContext[SCREEN_TOP]);
   glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
 
   struct nk_context *ctx = nk_ctx = nk_sdl_init(win[SCREEN_TOP]);
 #endif
 
+#ifdef USE_COMPOSITION_SWAPCHAIN
+  if (use_composition_swapchain) {
+    win_flags &= ~SDL_WINDOW_OPENGL;
+
+    win[SCREEN_TOP] = SDL_CreateWindow(TITLE,
+    SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+    WINDOW_WIDTH, WINDOW_HEIGHT, win_flags);
+    if (!win[SCREEN_TOP])
+    {
+      err_log("SDL_CreateWindow: %s\n", SDL_GetError());
+      return -1;
+    }
+
+    win[SCREEN_BOT] = SDL_CreateWindow(TITLE,
+      SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+      WINDOW_WIDTH, WINDOW_HEIGHT, win_flags);
+    if (!win[SCREEN_BOT])
+    {
+      err_log("SDL_CreateWindow: %s\n", SDL_GetError());
+      return -1;
+    }
+
+    SDL_SysWMinfo wmInfo[SCREEN_COUNT];
+    HWND hwnd[SCREEN_COUNT];
+    HDC hdc[SCREEN_COUNT];
+
+    SDL_VERSION(&wmInfo[SCREEN_TOP].version);
+    SDL_GetWindowWMInfo(win[SCREEN_TOP], &wmInfo[SCREEN_TOP]);
+    hwnd[SCREEN_TOP] = wmInfo[SCREEN_TOP].info.win.window;
+    hdc[SCREEN_TOP] = wmInfo[SCREEN_TOP].info.win.hdc;
+
+    SDL_VERSION(&wmInfo[SCREEN_BOT].version);
+    SDL_GetWindowWMInfo(win[SCREEN_BOT], &wmInfo[SCREEN_BOT]);
+    hwnd[SCREEN_BOT] = wmInfo[SCREEN_BOT].info.win.window;
+    hdc[SCREEN_BOT] = wmInfo[SCREEN_BOT].info.win.hdc;
+
+    // TODO
+  }
+#endif
+
+  SDL_ShowWindow(win[SCREEN_TOP]);
+  win_id[SCREEN_TOP] = SDL_GetWindowID(win[SCREEN_TOP]);
+  win_id[SCREEN_BOT] = SDL_GetWindowID(win[SCREEN_BOT]);
 
   /* Load Fonts: if none of these are loaded a default font will be used  */
   /* Load Cursor: if you uncomment cursor loading please hide the cursor */
@@ -4445,7 +4602,7 @@ int main(int argc, char *argv[])
 
 #ifndef USE_SDL_RENDERER
   for (int j = 0; j < SCREEN_COUNT; ++j) {
-    SDL_GL_MakeCurrent(win[j], glContext[j]);
+    SDL_GL_MakeCurrent(win_ogl[j], glContext[j]);
     for (int i = 0; i < SCREEN_COUNT; ++i) {
       glGenTextures(1, &buffer_ctx[i].gl_tex_id[j]);
 
@@ -4467,7 +4624,7 @@ int main(int argc, char *argv[])
   }
 
   for (int j = 0; j < SCREEN_COUNT; ++j) {
-    SDL_GL_MakeCurrent(win[j], glContext[j]);
+    SDL_GL_MakeCurrent(win_ogl[j], glContext[j]);
     for (int i = 0; i < SCREEN_COUNT; ++i) {
       glGenFramebuffers(1, &buffer_ctx[i].gl_fbo_upscaled[j]);
       glBindFramebuffer(GL_DRAW_FRAMEBUFFER, buffer_ctx[i].gl_fbo_upscaled[j]);
@@ -4483,7 +4640,7 @@ int main(int argc, char *argv[])
   }
 
   for (int j = 0; j < SCREEN_COUNT; ++j) {
-    SDL_GL_MakeCurrent(win[j], glContext[j]);
+    SDL_GL_MakeCurrent(win_ogl[j], glContext[j]);
 
     gl_program[j] = LoadProgram((const char *)vShaderStr, (const char *)fShaderStr);
     gl_position_loc[j] = glGetAttribLocation(gl_program[j], "a_position");
@@ -4606,6 +4763,8 @@ int main(int argc, char *argv[])
 #endif
 
 #ifndef SDL_GL_SINGLE_THREAD
+  event_init(&updateBottomScreenEvent);
+
   SDL_GL_MakeCurrent(NULL, NULL);
   thread_t window_top_thread;
   if ((ret = thread_create(window_top_thread, window_thread_func, (void *)SCREEN_TOP)))
@@ -4640,6 +4799,8 @@ int main(int argc, char *argv[])
   thread_join(window_bot_thread);
   // thread_cancel(window_top_thread);
   thread_join(window_top_thread);
+
+  event_close(&updateBottomScreenEvent);
 #endif
 
   thread_cancel(udp_recv_thread);
@@ -4664,7 +4825,7 @@ int main(int argc, char *argv[])
   }
 #else
   for (int j = 0; j < SCREEN_COUNT; ++j) {
-    SDL_GL_MakeCurrent(win[j], glContext[j]);
+    SDL_GL_MakeCurrent(win_ogl[j], glContext[j]);
 #ifdef USE_VAO
     for (int i = 0; i < SCREEN_COUNT; ++i) {
       glDeleteBuffers(1, &glVbo[j][i]);
@@ -4682,7 +4843,7 @@ int main(int argc, char *argv[])
   }
 
   for (int j = 0; j < SCREEN_COUNT; ++j) {
-    SDL_GL_MakeCurrent(win[j], glContext[j]);
+    SDL_GL_MakeCurrent(win_ogl[j], glContext[j]);
     for (int i = 0; i < SCREEN_COUNT; ++i) {
       glDeleteTextures(1, &buffer_ctx[i].gl_tex_id[j]);
       glDeleteFramebuffers(1, &buffer_ctx[i].gl_fbo_upscaled[j]);
@@ -4703,8 +4864,14 @@ int main(int argc, char *argv[])
   SDL_GL_DeleteContext(glContext[SCREEN_BOT]);
   SDL_GL_DeleteContext(glContext[SCREEN_TOP]);
 #endif
-  SDL_DestroyWindow(win[SCREEN_BOT]);
-  SDL_DestroyWindow(win[SCREEN_TOP]);
+#ifdef USE_COMPOSITION_SWAPCHAIN
+  if (use_composition_swapchain) {
+    SDL_DestroyWindow(win[SCREEN_BOT]);
+    SDL_DestroyWindow(win[SCREEN_TOP]);
+  }
+#endif
+  SDL_DestroyWindow(win_ogl[SCREEN_BOT]);
+  SDL_DestroyWindow(win_ogl[SCREEN_TOP]);
   SDL_Quit();
 
   return 0;

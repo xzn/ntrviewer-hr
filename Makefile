@@ -6,15 +6,18 @@ CFLAGS := -Ofast -g -fno-strict-aliasing
 CFLAGS += -mssse3 -mavx2
 EMBED_JPEG_TURBO := 1
 USE_SDL_RENDERER := 0
+USE_COMPOSITION_SWAPCHAIN := 0
 USE_OGL_ES := 0
 USE_ANGLE := 0
 GL_DEBUG := 0
 
 ifeq ($(OS),Windows_NT)
 	LDLIBS := -Llib -static -lmingw32 -lSDL2main -lSDL2
-	LDLIBS += -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8 -l:dcomp.lib
+	LDLIBS += -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8
 	LDLIBS += -lws2_32 -liphlpapi
-
+ifeq ($(USE_COMPOSITION_SWAPCHAIN),1)
+	LDLIBS += -l:dcomp.lib
+endif
 	TARGET := ntrviewer.exe
 
 	NASM := -DWIN64 -fwin64
@@ -30,6 +33,11 @@ ifeq ($(USE_SDL_RENDERER),1)
 GL_OBJ :=
 else
 GL_OBJ := realcugan.o realcugan_lib.o libGLAD.o fsr/fsr_main.o fsr/image_utils.o libNKSDL.o
+ifeq ($(OS),Windows_NT)
+ifeq ($(USE_COMPOSITION_SWAPCHAIN),1)
+GL_OBJ += libGLAD_WGL.o
+endif
+endif
 LDLIBS += -lncnn -fopenmp
 LDLIBS += -lglslang -lMachineIndependent -lOSDependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools
 endif
@@ -64,6 +72,10 @@ LDLIBS += -lturbojpeg
 endif
 
 # LDLIBS += -Wl,-Bdynamic
+
+ifeq ($(USE_COMPOSITION_SWAPCHAIN),1)
+CPPFLAGS += -DUSE_COMPOSITION_SWAPCHAIN
+endif
 
 ifeq ($(USE_SDL_RENDERER),1)
 CPPFLAGS += -DUSE_SDL_RENDERER

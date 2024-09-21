@@ -72,7 +72,7 @@ extern bool rp_lock_srw;
 })
 #define rp_sem_timedwait(n, to_ns, e) ({ \
 	int _ret; \
-	DWORD to_ms = to_ns / 1000000; \
+	DWORD to_ms = (to_ns) / 1000000; \
 	HANDLE _h[2] = {n, e}; \
 	DWORD _res = e ? WaitForMultipleObjects(2, _h, FALSE, to_ms) : WaitForSingleObject(n, to_ms); \
 	if (_res == WAIT_TIMEOUT) { \
@@ -91,7 +91,7 @@ extern bool rp_lock_srw;
 
 #define rp_cond_init(c) InitializeConditionVariable(&c)
 #define rp_cond_timedwait(c, m, to_ns) ({ \
-	unsigned _to_ms = to_ns / 1000000; \
+	unsigned _to_ms = (to_ns) / 1000000; \
 	BOOL _res; \
 	if (rp_lock_srw) { \
 		_res = SleepConditionVariableSRW(&(c), &(m).srw, _to_ms, 0); \
