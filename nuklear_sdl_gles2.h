@@ -23,7 +23,7 @@ NK_API struct nk_context*   nk_sdl_init(SDL_Window *win);
 NK_API void                 nk_sdl_font_stash_begin(struct nk_font_atlas **atlas);
 NK_API void                 nk_sdl_font_stash_end(void);
 NK_API int                  nk_sdl_handle_event(SDL_Event *evt);
-NK_API void                 nk_sdl_render(enum nk_anti_aliasing , int max_vertex_buffer, int max_element_buffer);
+NK_API void                 nk_sdl_render(enum nk_anti_aliasing , int max_vertex_buffer, int max_element_buffer, bool vflip);
 NK_API void                 nk_sdl_shutdown(void);
 NK_API void                 nk_sdl_device_destroy(void);
 NK_API void                 nk_sdl_device_create(void);
@@ -174,17 +174,18 @@ nk_sdl_device_destroy(void)
 }
 
 NK_API void
-nk_sdl_render(enum nk_anti_aliasing AA, int max_vertex_buffer, int max_element_buffer)
+nk_sdl_render(enum nk_anti_aliasing AA, int max_vertex_buffer, int max_element_buffer, bool vflip)
 {
     struct nk_sdl_device *dev = &sdl.ogl;
     int width, height;
     int display_width, display_height;
     struct nk_vec2 scale;
+    GLfloat vmul = vflip ? -1.0f : 1.0f;
     GLfloat ortho[4][4] = {
-        {  2.0f,  0.0f,  0.0f, 0.0f },
-        {  0.0f, -2.0f,  0.0f, 0.0f },
-        {  0.0f,  0.0f, -1.0f, 0.0f },
-        { -1.0f,  1.0f,  0.0f, 1.0f },
+        {  2.0f,  0.0f       ,  0.0f, 0.0f },
+        {  0.0f, -2.0f * vmul,  0.0f, 0.0f },
+        {  0.0f,  0.0f       , -1.0f, 0.0f },
+        { -1.0f,  1.0f * vmul,  0.0f, 1.0f },
     };
 
     Uint64 now = SDL_GetTicks64();
@@ -276,8 +277,11 @@ nk_sdl_render(enum nk_anti_aliasing AA, int max_vertex_buffer, int max_element_b
         nk_draw_foreach(cmd, &sdl.ctx, &dev->cmds) {
             if (!cmd->elem_count) continue;
             glBindTexture(GL_TEXTURE_2D, (GLuint)cmd->texture.id);
+            GLint vclip = vflip ?
+                cmd->clip_rect.y :
+                height - (GLint)(cmd->clip_rect.y + cmd->clip_rect.h);
             glScissor((GLint)(cmd->clip_rect.x * scale.x),
-                (GLint)((height - (GLint)(cmd->clip_rect.y + cmd->clip_rect.h)) * scale.y),
+                (GLint)(vclip * scale.y),
                 (GLint)(cmd->clip_rect.w * scale.x),
                 (GLint)(cmd->clip_rect.h * scale.y));
             glDrawElements(GL_TRIANGLES, (GLsizei)cmd->elem_count, GL_UNSIGNED_SHORT, offset);
