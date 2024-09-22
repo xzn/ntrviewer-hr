@@ -45,8 +45,10 @@ void Sleep(int milliseconds) {
 
 #define err_log(f, ...) fprintf(stderr, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
 
-rp_sem_t jpeg_decode_sem;
-struct rp_syn_comp_func_t jpeg_decode_queue;
+static int running = 1;
+
+static rp_sem_t jpeg_decode_sem;
+static struct rp_syn_comp_func_t jpeg_decode_queue;
 
 // #define USE_SDL_RENDERER
 // #define GL_DEBUG
@@ -93,6 +95,8 @@ static ID3D11Device *d3d11device;
 static ID3D11DeviceContext *d3d11device_context;
 static IPresentationFactory *presentation_factory;
 static IPresentationManager *presentation_manager[SCREEN_COUNT];
+static HANDLE pres_man_lost_event[SCREEN_COUNT];
+static HANDLE pres_man_stat_avail_event[SCREEN_COUNT];
 static HANDLE composition_surface[SCREEN_COUNT];
 static IPresentationSurface *presentation_surface[SCREEN_COUNT];
 static IDXGIDevice *dxgi_device;
@@ -194,8 +198,83 @@ fail:
   return -1;
 }
 
+static void pres_man_proc_stat(int tb) {
+  HRESULT hr;
+
+  IPresentStatistics *pres_stat;
+  hr = IPresentationManager_GetNextPresentStatistics(presentation_manager[tb], &pres_stat);
+  if (hr) {
+    err_log("GetNextPresentStatistics failed: %d\n", (int)hr);
+    return;
+  }
+
+  UINT64 pres_id = IPresentStatistics_GetPresentId(pres_stat);
+  PresentStatisticsKind pres_kind = IPresentStatistics_GetKind(pres_stat);
+  err_log("Present stat %d %llu %d\n", tb, (unsigned long long)pres_id, (int)pres_kind);
+
+  switch (pres_kind) {
+    case PresentStatisticsKind_PresentStatus: {
+      IPresentStatusPresentStatistics *pres_stat_stat;
+      hr = IPresentStatistics_QueryInterface(pres_stat, &IID_IPresentStatusPresentStatistics, (void **)&pres_stat_stat);
+      if (hr) {
+        err_log("QueryInterface IPresentStatusPresentStatistics failed: %d\n", (int)hr);
+        goto done;
+      }
+
+      CompositionFrameId comp_frame_id = IPresentStatusPresentStatistics_GetCompositionFrameId(pres_stat_stat);
+      PresentStatus pres_status = IPresentStatusPresentStatistics_GetPresentStatus(pres_stat_stat);
+
+      err_log("Present status stat %llu %d\n", (unsigned long long)comp_frame_id, (int)pres_status);
+
+      IPresentStatusPresentStatistics_Release(pres_stat_stat);
+      break;
+    }
+
+    case PresentStatisticsKind_CompositionFrame: {
+      ICompositionFramePresentStatistics *comp_stat;
+      hr = IPresentStatistics_QueryInterface(pres_stat, &IID_ICompositionFramePresentStatistics, (void **)&comp_stat);
+      if (hr) {
+        err_log("QueryInterface ICompositionFramePresentStatistics failed: %d\n", (int)hr);
+        goto done;
+      }
+
+      CompositionFrameId comp_frame_id = ICompositionFramePresentStatistics_GetCompositionFrameId(comp_stat);
+
+      UINT disp_inst_count;
+      const CompositionFrameDisplayInstance *disp_insts;
+      ICompositionFramePresentStatistics_GetDisplayInstanceArray(comp_stat, &disp_inst_count, &disp_insts);
+
+      err_log("Comp stat %llu %d\n", (unsigned long long)comp_frame_id, (int)disp_inst_count);
+
+      ICompositionFramePresentStatistics_Release(comp_stat);
+      break;
+    }
+
+    case PresentStatisticsKind_IndependentFlipFrame: {
+      IIndependentFlipFramePresentStatistics *iflip_stat;
+      hr = IPresentStatistics_QueryInterface(pres_stat, &IID_IIndependentFlipFramePresentStatistics, (void **)&iflip_stat);
+      if (hr) {
+        err_log("QueryInterface IIndependentFlipFramePresentStatistics failed: %d\n", (int)hr);
+        goto done;
+      }
+
+      SystemInterruptTime disp_time = IIndependentFlipFramePresentStatistics_GetDisplayedTime(iflip_stat);
+      SystemInterruptTime pres_dura = IIndependentFlipFramePresentStatistics_GetPresentDuration(iflip_stat);
+
+      err_log("I flip frame stat %llu %llu\n", (unsigned long long)disp_time.value, (unsigned long long)pres_dura.value);
+
+      IIndependentFlipFramePresentStatistics_Release(iflip_stat);
+      break;
+    }
+  }
+
+done:
+  IPresentStatistics_Release(pres_stat);
+}
+
 static int presentation_buffer_get(int tb, int count_max, int width, int height, int *index) {
-  HANDLE events[count_max];
+  const int events_count = count_max + 2;
+  HANDLE events[events_count];
   for (int i = 0; i < count_max; ++i) {
     if (!presentation_buffers[tb][i].tex) {
       if (presentation_buffer_gen(tb, i, width, height) != 0) {
@@ -207,11 +286,32 @@ static int presentation_buffer_get(int tb, int count_max, int width, int height,
 
     events[i] = presentation_buffers[tb][i].buf_avail_event;
   }
+  events[count_max] = pres_man_stat_avail_event[tb];
+  events[count_max + 1] = pres_man_lost_event[tb];
 
-  DWORD res = WaitForMultipleObjects(count_max, events, FALSE, INFINITE);
-  if ((int)res >= count_max) {
-    return -1;
+  DWORD res;
+  while (1) {
+    res = WaitForMultipleObjects(events_count, events, FALSE, INFINITE);
+    if ((int)(res - WAIT_OBJECT_0) >= events_count) {
+      return -1;
+    }
+
+    res -= WAIT_OBJECT_0;
+    if ((int)res == count_max + 1) {
+      err_log("Presentation manager lost\n");
+      running = 0;
+      return -1;
+    }
+
+    if ((int)res == count_max) {
+      pres_man_proc_stat(tb);
+      continue;
+    }
+
+    break;
   }
+
+  err_log("%d %d %llu\n", tb, (int)res, (unsigned long long)IPresentationManager_GetNextPresentId(presentation_manager[tb]));
 
   int i = res;
   if (presentation_buffers[tb][i].width != width || presentation_buffers[tb][i].height != height) {
@@ -455,6 +555,36 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
       err_log("SetRoot failed: %d\n", (int)hr);
       return hr;
     }
+
+    hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager[i], PresentStatisticsKind_CompositionFrame, true);
+    if (hr) {
+      err_log("EnablePresentStatisticsKind CompositionFrame failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager[i], PresentStatisticsKind_PresentStatus, true);
+    if (hr) {
+      err_log("EnablePresentStatisticsKind PresentStatus failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager[i], PresentStatisticsKind_IndependentFlipFrame, true);
+    if (hr) {
+      err_log("EnablePresentStatisticsKind IndependentFlipFrame failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = IPresentationManager_GetLostEvent(presentation_manager[i], &pres_man_lost_event[i]);
+    if (hr) {
+      err_log("GetLostEvent failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = IPresentationManager_GetPresentStatisticsAvailableEvent(presentation_manager[i], &pres_man_stat_avail_event[i]);
+    if (hr) {
+      err_log("GetPresentStatisticsAvailableEvent failed: %d\n", (int)hr);
+      return hr;
+    }
   }
 
   for (int j = 0; j < SCREEN_COUNT; ++j) {
@@ -569,8 +699,6 @@ int sock_close(SOCKET sock)
 
 #include <stdint.h>
 #include <time.h>
-
-int running = 1;
 
 static inline void itimeofday(int64_t *sec, int64_t *usec)
 {
