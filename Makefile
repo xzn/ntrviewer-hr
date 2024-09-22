@@ -16,7 +16,7 @@ ifeq ($(OS),Windows_NT)
 	LDLIBS += -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8
 	LDLIBS += -lws2_32 -liphlpapi
 ifeq ($(USE_COMPOSITION_SWAPCHAIN),1)
-	LDLIBS += -ld3d11 -l:dcomp.lib
+	LDLIBS += -ld3d11
 endif
 	TARGET := ntrviewer.exe
 

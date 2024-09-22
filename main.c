@@ -96,9 +96,11 @@ static IPresentationManager *presentation_manager[SCREEN_COUNT];
 static HANDLE composition_surface[SCREEN_COUNT];
 static IPresentationSurface *presentation_surface[SCREEN_COUNT];
 static IDXGIDevice *dxgi_device;
-static IDCompositionDevice *dcomp_device;
+static IDCompositionDesktopDevice *dcomp_desktop_device;
+static IDCompositionDevice *dcomp_device1;
+static IDCompositionDevice3 *dcomp_device;
 static IDCompositionTarget *dcomp_target[SCREEN_COUNT];
-static IDCompositionVisual *dcomp_visual[SCREEN_COUNT];
+static IDCompositionVisual2 *dcomp_visual[SCREEN_COUNT];
 static IUnknown *dcomp_surface[SCREEN_COUNT];
 
 #define COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN (3)
@@ -329,6 +331,11 @@ static int render_buffer_get(int tb, int width, int height, GLuint *tex, HANDLE 
 }
 
 static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
+  if (dcomp_pfn_init() != 0) {
+    err_log("dcomp_pfn_init failed\n");
+    return -1;
+  }
+
   D3D_FEATURE_LEVEL featureLevelSupported;
 
   HRESULT hr;
@@ -348,7 +355,7 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
     return hr;
   }
 
-  hr = CreatePresentationFactory((IUnknown *)d3d11device, &IID_IPresentationFactory, (void **)&presentation_factory);
+  hr = pfn_CreatePresentationFactory((IUnknown *)d3d11device, &IID_IPresentationFactory, (void **)&presentation_factory);
   if (hr) {
     err_log("CreatePresentationFactory failed: %d\n", (int)hr);
     return hr;
@@ -370,9 +377,21 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
     return hr;
   }
 
-  hr = DCompositionCreateDevice(dxgi_device, &IID_IDCompositionDevice, (void **)&dcomp_device);
+  hr = DCompositionCreateDevice3((IUnknown *)dxgi_device, &IID_IDCompositionDesktopDevice, (void **)&dcomp_desktop_device);
   if (hr) {
     err_log("DCompositionCreateDevice IDXGIDevice failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  hr = dcomp_desktop_device->lpVtbl->QueryInterface(dcomp_desktop_device, &IID_IDCompositionDevice3, (void **)&dcomp_device);
+  if (hr) {
+    err_log("QueryInterface IDCompositionDevice3 failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  hr = dcomp_device->lpVtbl->QueryInterface(dcomp_device, &IID_IDCompositionDevice, (void **)&dcomp_device1);
+  if (hr) {
+    err_log("QueryInterface IDCompositionDevice failed: %d\n", (int)hr);
     return hr;
   }
 
@@ -395,7 +414,7 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
       return hr;
     }
 
-    hr = dcomp_device->lpVtbl->CreateTargetForHwnd(dcomp_device, hwnd[i], TRUE, &dcomp_target[i]);
+    hr = dcomp_desktop_device->lpVtbl->CreateTargetForHwnd(dcomp_desktop_device, hwnd[i], TRUE, &dcomp_target[i]);
     if (hr) {
       err_log("CreateTargetForHwnd failed: %d\n", (int)hr);
       return hr;
@@ -407,7 +426,7 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
       return hr;
     }
 
-    hr = dcomp_device->lpVtbl->CreateSurfaceFromHandle(dcomp_device, composition_surface[i], &dcomp_surface[i]);
+    hr = dcomp_device1->lpVtbl->CreateSurfaceFromHandle(dcomp_device1, composition_surface[i], &dcomp_surface[i]);
     if (hr) {
       err_log("CreateSurfaceFromHandle failed: %d\n", (int)hr);
       return hr;
@@ -431,7 +450,7 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
       return hr;
     }
 
-    hr = dcomp_target[i]->lpVtbl->SetRoot(dcomp_target[i], dcomp_visual[i]);
+    hr = dcomp_target[i]->lpVtbl->SetRoot(dcomp_target[i], (IDCompositionVisual *)dcomp_visual[i]);
     if (hr) {
       err_log("SetRoot failed: %d\n", (int)hr);
       return hr;
@@ -2806,7 +2825,10 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
   }
 
 #ifdef USE_COMPOSITION_SWAPCHAIN
-  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[tb]);
+  if (use_composition_swapchain)
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[tb]);
+  else
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 #else
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 #endif
@@ -3239,15 +3261,17 @@ ThreadLoop(int i)
 #ifdef USE_COMPOSITION_SWAPCHAIN
   GLuint tex_sc;
   HANDLE handle_sc;
-  if (render_buffer_get(i, win_width[i], win_height[i], &tex_sc, &handle_sc) != 0) {
-    return;
+  if (use_composition_swapchain) {
+    if (render_buffer_get(i, win_width[i], win_height[i], &tex_sc, &handle_sc) != 0) {
+      return;
+    }
+    if (!wglDXLockObjectsNV(gl_d3ddevice[i], 1, &handle_sc)) {
+      err_log("wglDXLockObjectsNV failed: %d\n", (int)GetLastError());
+      return;
+    }
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[i]);
+    glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, tex_sc);
   }
-  if (!wglDXLockObjectsNV(gl_d3ddevice[i], 1, &handle_sc)) {
-    err_log("wglDXLockObjectsNV failed: %d\n", (int)GetLastError());
-    return;
-  }
-  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[i]);
-  glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, tex_sc);
 #endif
 
   if (vm == VIEW_MODE_TOP_BOT) {
@@ -3301,11 +3325,15 @@ ThreadLoop(int i)
   }
   // thread_set_cancel_state(false);
 #ifdef USE_COMPOSITION_SWAPCHAIN
-  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-  if (!wglDXUnlockObjectsNV(gl_d3ddevice[i], 1, &handle_sc)) {
-    err_log("wglDXUnlockObjectsNV failed: %d\n", (int)GetLastError());
+  if (use_composition_swapchain) {
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    if (!wglDXUnlockObjectsNV(gl_d3ddevice[i], 1, &handle_sc)) {
+      err_log("wglDXUnlockObjectsNV failed: %d\n", (int)GetLastError());
+    }
+    presentation_buffer_present(i, COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN);
+  } else {
+    SDL_GL_SwapWindow(win[i]);
   }
-  presentation_buffer_present(i, COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN);
 #else
   SDL_GL_SwapWindow(win[i]);
 #endif
