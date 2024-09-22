@@ -43,6 +43,8 @@ void Sleep(int milliseconds) {
 #include "rp_syn.h"
 #include <SDL2/SDL_syswm.h>
 
+#define err_log(f, ...) fprintf(stderr, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
+
 rp_sem_t jpeg_decode_sem;
 struct rp_syn_comp_func_t jpeg_decode_queue;
 
@@ -55,25 +57,423 @@ struct rp_syn_comp_func_t jpeg_decode_queue;
 #endif
 // #define PRINT_PACKET_LOSS_INFO
 
+static SDL_Window *win[SCREEN_COUNT];
+static SDL_Window *win_ogl[SCREEN_COUNT];
+static Uint32 win_id[SCREEN_COUNT];
+#ifdef USE_SDL_RENDERER
+static SDL_Renderer *sdlRenderer[SCREEN_COUNT];
+static SDL_Texture *sdlTexture[SCREEN_COUNT][SCREEN_COUNT];
+#else
+static SDL_GLContext glContext[SCREEN_COUNT];
+static int ogl_version_major, ogl_version_minor;
+
+#ifdef USE_VAO
+static GLuint glVao[SCREEN_COUNT][SCREEN_COUNT];
+static GLuint glVbo[SCREEN_COUNT][SCREEN_COUNT];
+static GLuint glEbo[SCREEN_COUNT];
+
+static GLuint glFboVao[SCREEN_COUNT];
+static GLuint glFboVbo[SCREEN_COUNT];
+static GLuint glFboEbo[SCREEN_COUNT];
+#endif
+
+#endif
 #if !defined(_WIN32) || defined(USE_SDL_RENDERER)
 #undef USE_COMPOSITION_SWAPCHAIN
 #endif
 
 #ifdef USE_COMPOSITION_SWAPCHAIN
-#include "Presentation.h"
-#include "dcomptypes.h"
-STDAPI DCompositionGetStatistics(
-  _In_ COMPOSITION_FRAME_ID frameId,
-  _Out_ COMPOSITION_FRAME_STATS *frameStats,
-  _In_ UINT targetIdCount,
-  _Out_writes_to_opt_(targetIdCount, *actualTargetIdCount) COMPOSITION_TARGET_ID *targetIds,
-  _Out_opt_ UINT *actualTargetIdCount);
-STDAPI DCompositionGetTargetStatistics(
-  _In_ COMPOSITION_FRAME_ID frameId,
-  _In_ const COMPOSITION_TARGET_ID *targetId,
-  _Out_ COMPOSITION_TARGET_STATS *targetStats);
+#include "dcomp.h"
 #include "glad/glad_wgl.h"
 static bool use_composition_swapchain;
+static SDL_Window *win_sc[SCREEN_COUNT];
+GLuint gl_fbo_sc[SCREEN_COUNT];
+
+static ID3D11Device *d3d11device;
+static ID3D11DeviceContext *d3d11device_context;
+static IPresentationFactory *presentation_factory;
+static IPresentationManager *presentation_manager[SCREEN_COUNT];
+static HANDLE composition_surface[SCREEN_COUNT];
+static IPresentationSurface *presentation_surface[SCREEN_COUNT];
+static IDXGIDevice *dxgi_device;
+static IDCompositionDevice *dcomp_device;
+static IDCompositionTarget *dcomp_target[SCREEN_COUNT];
+static IDCompositionVisual *dcomp_visual[SCREEN_COUNT];
+static IUnknown *dcomp_surface[SCREEN_COUNT];
+
+#define COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN (3)
+#define PRESENATTION_BUFFER_COUNT_PER_SCREEN (8)
+
+static HANDLE gl_d3ddevice[SCREEN_COUNT];
+
+static struct presentation_buffer_t {
+  ID3D11Texture2D *tex;
+  IPresentationBuffer *buf;
+  HANDLE buf_avail_event;
+  int width;
+  int height;
+} presentation_buffers[SCREEN_COUNT][PRESENATTION_BUFFER_COUNT_PER_SCREEN * SCREEN_COUNT];
+
+static struct render_buffer_t {
+  ID3D11Texture2D *tex;
+  GLuint gl_tex;
+  HANDLE gl_handle;
+  int width;
+  int height;
+} render_buffers[SCREEN_COUNT];
+
+static int presentation_buffer_delete(int tb, int i) {
+  struct presentation_buffer_t *b = &presentation_buffers[tb][i];
+
+  if (b->buf_avail_event) {
+    CloseHandle(b->buf_avail_event);
+    b->buf_avail_event = NULL;
+  }
+
+  if (b->buf) {
+    IPresentationBuffer_Release(b->buf);
+    b->buf = NULL;
+  }
+
+  if (b->tex) {
+    ID3D11Texture2D_Release(b->tex);
+    b->tex = NULL;
+  }
+
+  b->width = 0;
+  b->height = 0;
+
+  return 0;
+}
+
+static int presentation_buffer_gen(int tb, int i, int width, int height) {
+  struct presentation_buffer_t *b = &presentation_buffers[tb][i];
+
+  D3D11_TEXTURE2D_DESC textureDesc = {};
+  textureDesc.Width = width;
+  textureDesc.Height = height;
+  textureDesc.MipLevels = 1;
+  textureDesc.ArraySize = 1;
+  textureDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+  textureDesc.SampleDesc.Count = 1;
+  textureDesc.SampleDesc.Quality = 0;
+  textureDesc.Usage = D3D11_USAGE_DEFAULT;
+  textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+  textureDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE;
+  textureDesc.CPUAccessFlags = 0;
+
+  HRESULT hr;
+
+  hr = ID3D11Device_CreateTexture2D(d3d11device, &textureDesc, NULL, &b->tex);
+  if (hr) {
+    err_log("CreateTexture2D failed: %d\n", (int)hr);
+    goto fail;
+  }
+
+  hr = IPresentationManager_AddBufferFromResource(presentation_manager[tb], (IUnknown *)b->tex, &b->buf);
+  if (hr) {
+    err_log("AddBufferFromResource failed: %d\n", (int)hr);
+    goto fail;
+  }
+
+  hr = IPresentationBuffer_GetAvailableEvent(b->buf, &b->buf_avail_event);
+  if (hr) {
+    err_log("GetAvailableEvent failed: %d\n", (int)hr);
+    goto fail;
+  }
+
+  b->width = width;
+  b->height = height;
+
+  return 0;
+
+fail:
+  presentation_buffer_delete(tb, i);
+  return -1;
+}
+
+static int presentation_buffer_get(int tb, int count_max, int width, int height, int *index) {
+  HANDLE events[count_max];
+  for (int i = 0; i < count_max; ++i) {
+    if (!presentation_buffers[tb][i].tex) {
+      if (presentation_buffer_gen(tb, i, width, height) != 0) {
+        return -1;
+      }
+      *index = i;
+      return 0;
+    }
+
+    events[i] = presentation_buffers[tb][i].buf_avail_event;
+  }
+
+  DWORD res = WaitForMultipleObjects(count_max, events, FALSE, INFINITE);
+  if ((int)res >= count_max) {
+    return -1;
+  }
+
+  int i = res;
+  if (presentation_buffers[tb][i].width != width || presentation_buffers[tb][i].height != height) {
+    presentation_buffer_delete(tb, i);
+    if (presentation_buffer_gen(tb, i, width, height) != 0) {
+      return -1;
+    }
+  }
+  *index = i;
+  return 0;
+}
+
+static int presentation_buffer_present(int tb, int count_max) {
+  struct render_buffer_t *b = &render_buffers[tb];
+
+  int index_sc;
+  if (presentation_buffer_get(tb, count_max, b->width, b->height, &index_sc) != 0) {
+    return -1;
+  }
+
+  HRESULT hr;
+
+  ID3D11DeviceContext_CopyResource(d3d11device_context, (ID3D11Resource *)presentation_buffers[tb][index_sc].tex, (ID3D11Resource *)b->tex);
+
+  hr = IPresentationSurface_SetBuffer(presentation_surface[tb], presentation_buffers[tb][index_sc].buf);
+  if (hr) {
+    err_log("SetBuffer failed: %d\n", (int)hr);
+    return -1;
+  }
+
+  hr = IPresentationManager_Present(presentation_manager[tb]);
+  if (hr) {
+    err_log("Present failed: %d\n", (int)hr);
+    return -1;
+  }
+
+  return 0;
+}
+
+static int render_buffer_delete(int tb) {
+  struct render_buffer_t *b = &render_buffers[tb];
+
+  if (b->gl_handle) {
+    wglDXUnregisterObjectNV(gl_d3ddevice[tb], b->gl_handle);
+    b->gl_handle = NULL;
+  }
+
+  if (b->gl_tex) {
+    glDeleteRenderbuffers(1, &b->gl_tex);
+    b->gl_tex = 0;
+  }
+
+  b->width = 0;
+  b->height = 0;
+
+  return 0;
+}
+
+static int render_buffer_gen(int tb, int width, int height) {
+  struct render_buffer_t *b = &render_buffers[tb];
+
+  D3D11_TEXTURE2D_DESC textureDesc = {};
+  textureDesc.Width = width;
+  textureDesc.Height = height;
+  textureDesc.MipLevels = 1;
+  textureDesc.ArraySize = 1;
+  textureDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+  textureDesc.SampleDesc.Count = 1;
+  textureDesc.SampleDesc.Quality = 0;
+  textureDesc.Usage = D3D11_USAGE_DEFAULT;
+  textureDesc.BindFlags = D3D11_BIND_RENDER_TARGET;
+  textureDesc.MiscFlags = 0;
+  textureDesc.CPUAccessFlags = 0;
+
+  HRESULT hr;
+
+  hr = ID3D11Device_CreateTexture2D(d3d11device, &textureDesc, NULL, &b->tex);
+  if (hr) {
+    err_log("CreateTexture2D failed: %d\n", (int)hr);
+    goto fail;
+  }
+
+  glGenRenderbuffers(1, &b->gl_tex);
+  b->gl_handle = wglDXRegisterObjectNV(gl_d3ddevice[tb], b->tex, b->gl_tex, GL_RENDERBUFFER, WGL_ACCESS_WRITE_DISCARD_NV);
+  if (!b->gl_handle) {
+    err_log("wglDXRegisterObjectNV failed: %d\n", (int)GetLastError());
+    goto fail;
+  }
+
+  b->width = width;
+  b->height = height;
+
+  return 0;
+
+fail:
+  render_buffer_delete(tb);
+  return -1;
+}
+
+static int render_buffer_get(int tb, int width, int height, GLuint *tex, HANDLE *handle) {
+  struct render_buffer_t *b = &render_buffers[tb];
+
+  if (b->width != width || b->height != height) {
+    if (render_buffer_delete(tb) != 0) {
+      return -1;
+    }
+
+    if (render_buffer_gen(tb, width, height) != 0) {
+      return -1;
+    }
+  }
+
+  *tex = b->gl_tex;
+  *handle = b->gl_handle;
+
+  return 0;
+}
+
+static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
+  D3D_FEATURE_LEVEL featureLevelSupported;
+
+  HRESULT hr;
+  hr = D3D11CreateDevice(
+    NULL,
+    D3D_DRIVER_TYPE_HARDWARE,
+    NULL,
+    D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS,
+    NULL,
+    0,
+    D3D11_SDK_VERSION,
+    &d3d11device,
+    &featureLevelSupported,
+    &d3d11device_context);
+  if (hr) {
+    err_log("D3D11CreateDevice failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  hr = CreatePresentationFactory((IUnknown *)d3d11device, &IID_IPresentationFactory, (void **)&presentation_factory);
+  if (hr) {
+    err_log("CreatePresentationFactory failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  if (
+    !(
+      IPresentationFactory_IsPresentationSupportedWithIndependentFlip(presentation_factory) ||
+      IPresentationFactory_IsPresentationSupported(presentation_factory)
+    )
+  ) {
+    err_log("presentation not supported\n");
+    return -1;
+  }
+
+  hr = ID3D11Device_QueryInterface(d3d11device, &IID_IDXGIDevice, (void **)&dxgi_device);
+  if (hr) {
+    err_log("QueryInterface IDXGIDevice failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  hr = DCompositionCreateDevice(dxgi_device, &IID_IDCompositionDevice, (void **)&dcomp_device);
+  if (hr) {
+    err_log("DCompositionCreateDevice IDXGIDevice failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  for (int i = 0; i < SCREEN_COUNT; ++i) {
+    hr = DCompositionCreateSurfaceHandle(COMPOSITIONOBJECT_ALL_ACCESS, NULL, &composition_surface[i]);
+    if (hr) {
+      err_log("DCompositionCreateSurfaceHandle failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = IPresentationFactory_CreatePresentationManager(presentation_factory, &presentation_manager[i]);
+    if (hr) {
+      err_log("CreatePresentationManager failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = IPresentationManager_CreatePresentationSurface(presentation_manager[i], composition_surface[i], &presentation_surface[i]);
+    if (hr) {
+      err_log("CreatePresentationSurface failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = dcomp_device->lpVtbl->CreateTargetForHwnd(dcomp_device, hwnd[i], TRUE, &dcomp_target[i]);
+    if (hr) {
+      err_log("CreateTargetForHwnd failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = dcomp_device->lpVtbl->CreateVisual(dcomp_device, &dcomp_visual[i]);
+    if (hr) {
+      err_log("CreateVisual failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = dcomp_device->lpVtbl->CreateSurfaceFromHandle(dcomp_device, composition_surface[i], &dcomp_surface[i]);
+    if (hr) {
+      err_log("CreateSurfaceFromHandle failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = dcomp_visual[i]->lpVtbl->SetContent(dcomp_visual[i], dcomp_surface[i]);
+    if (hr) {
+      err_log("SetContent failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = IPresentationSurface_SetAlphaMode(presentation_surface[i], DXGI_ALPHA_MODE_IGNORE);
+    if (hr) {
+      err_log("SetAlphaMode failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = IPresentationSurface_SetColorSpace(presentation_surface[i], DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+    if (hr) {
+      err_log("SetColorSpace failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = dcomp_target[i]->lpVtbl->SetRoot(dcomp_target[i], dcomp_visual[i]);
+    if (hr) {
+      err_log("SetRoot failed: %d\n", (int)hr);
+      return hr;
+    }
+  }
+
+  for (int j = 0; j < SCREEN_COUNT; ++j) {
+    SDL_GL_MakeCurrent(win_ogl[j], glContext[j]);
+    gl_d3ddevice[j] = wglDXOpenDeviceNV(d3d11device);
+    if (!gl_d3ddevice[j]) {
+      err_log("wglDXOpenDeviceNV failed: %d\n", (int)GetLastError());
+        return hr;
+    }
+  }
+
+  hr = dcomp_device->lpVtbl->Commit(dcomp_device);
+  if (hr) {
+    err_log("Commit failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  return 0;
+}
+
+static void composition_swapchain_close(void) {
+  // TODO
+
+  if (presentation_factory) {
+    IPresentationFactory_Release(presentation_factory);
+    presentation_factory = NULL;
+  }
+
+  if (d3d11device_context) {
+    ID3D11DeviceContext_Release(d3d11device_context);
+    d3d11device_context = NULL;
+  }
+
+  if (d3d11device) {
+    ID3D11Device_Release(d3d11device);
+    d3d11device = NULL;
+  }
+}
 #endif
 
 #ifndef USE_SDL_RENDERER
@@ -102,8 +502,6 @@ static bool use_composition_swapchain;
 #define GL_INT_FORMAT GL_RGBA8
 #define TJ_FORMAT TJPF_RGBA
 #define JCS_FORMAT JCS_EXT_RGBA
-
-#define err_log(f, ...) fprintf(stderr, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
 
 #ifdef EMBED_JPEG_TURBO
 #include "jpeg_turbo/jpeglib.h"
@@ -208,39 +606,10 @@ static inline uint32_t iclock()
   return (uint32_t)(iclock64() & 0xfffffffful);
 }
 
-// #ifndef SDL_GL_SINGLE_THREAD
+#ifndef SDL_GL_SINGLE_THREAD
 // #ifndef _WIN32
-// #define SDL_GL_SYNC
+#define SDL_GL_SYNC
 // #endif
-// #endif
-
-static void cond_mutex_flag_signal(int *flag, rp_cond_t *cond, rp_lock_t *mutex) {
-  rp_lock_wait(*mutex);
-  __atomic_store_n(flag, 1, __ATOMIC_RELAXED);
-  rp_cond_rel(*cond);
-  rp_lock_rel(*mutex);
-}
-
-#ifdef SDL_GL_SYNC
-static bool cond_mutex_flag_lock(int *flag, rp_cond_t *cond, rp_lock_t *mutex) {
-  rp_lock_wait(*mutex);
-  while (!__atomic_load_n(flag, __ATOMIC_RELAXED)) {
-    if (!running) {
-      rp_lock_rel(*mutex);
-      return false;
-    }
-    int ret = rp_cond_timedwait(*cond, *mutex, NWM_THREAD_WAIT_NS);
-    if (ret) {
-      if (ret != ETIMEDOUT) {
-        err_log("rp_cond_timedwait error: %d", ret);
-        running = 0;
-        rp_lock_rel(*mutex);
-        return false;
-      }
-    }
-  }
-  return true;
-}
 #endif
 
 #ifdef _WIN32
@@ -318,28 +687,6 @@ enum FrameBufferStatus
   FBS_UPDATED_2,
 };
 
-/* Platform */
-static SDL_Window *win[SCREEN_COUNT];
-static SDL_Window *win_ogl[SCREEN_COUNT];
-static Uint32 win_id[SCREEN_COUNT];
-#ifdef USE_SDL_RENDERER
-static SDL_Renderer *sdlRenderer[SCREEN_COUNT];
-static SDL_Texture *sdlTexture[SCREEN_COUNT][SCREEN_COUNT];
-#else
-static SDL_GLContext glContext[SCREEN_COUNT];
-static int ogl_version_major, ogl_version_minor;
-
-#ifdef USE_VAO
-static GLuint glVao[SCREEN_COUNT][SCREEN_COUNT];
-static GLuint glVbo[SCREEN_COUNT][SCREEN_COUNT];
-static GLuint glEbo[SCREEN_COUNT];
-
-static GLuint glFboVao[SCREEN_COUNT];
-static GLuint glFboVbo[SCREEN_COUNT];
-static GLuint glFboEbo[SCREEN_COUNT];
-#endif
-
-#endif
 static int win_width[SCREEN_COUNT], win_height[SCREEN_COUNT];
 
 static enum ConnectionState
@@ -1221,9 +1568,8 @@ static void getAdapterIPs(void) {
 }
 #endif
 
-#ifndef SDL_GL_SINGLE_THREAD
 #ifdef _WIN32
-static HANDLE updateBottomScreenEvent;
+typedef HANDLE event_t;
 
 static void event_init(HANDLE *event) {
   *event = CreateEventA(NULL, FALSE, FALSE, NULL);
@@ -1234,19 +1580,23 @@ static void event_close(HANDLE *event) {
   *event = NULL;
 }
 
-static void event_wait(HANDLE *event, int to_ns) {
-  WaitForSingleObject(*event, to_ns / 1000000);
+static int event_wait(HANDLE *event, int to_ns) {
+  DWORD res = WaitForSingleObject(*event, to_ns / 1000000);
+  if (res == WAIT_TIMEOUT) {
+    return ETIMEDOUT;
+  }
+  return (int)res;
 }
 
-static void event_set(HANDLE *event) {
+static void event_rel(HANDLE *event) {
   SetEvent(*event);
 }
 #else
-static struct event_t {
+typedef struct event_t {
   pthread_cond_t cond;
   pthread_mutex_t mutex;
   int flag;
-} updateBottomScreenEvent;
+} event_t;
 
 static void event_init(struct event_t *event) {
   pthread_cond_init(&event->cond, &rp_cond_attr);
@@ -1260,23 +1610,31 @@ static void event_close(struct event_t *event) {
   event->flag = 0;
 }
 
-static void event_wait(struct event_t *event, int to_ns) {
+static int event_wait(struct event_t *event, int to_ns) {
   pthread_mutex_lock(&event->mutex);
   while (!event->flag) {
     struct timespec to = clock_monotonic_abs_ns_from_now(to_ns);
-    pthread_cond_timedwait(&event->cond, &event->mutex, &to);
+    int res = pthread_cond_timedwait(&event->cond, &event->mutex, &to);
+    if (res) {
+      pthread_mutex_unlock(&event->mutex);
+      return res;
+    }
   }
   event->flag = 0;
   pthread_mutex_unlock(&event->mutex);
+  return 0;
 }
 
-static void event_set(struct event_t *event) {
+static void event_rel(struct event_t *event) {
   pthread_mutex_lock(&event->mutex);
   event->flag = 1;
   pthread_cond_signal(&event->cond);
   pthread_mutex_unlock(&event->mutex);
 }
 #endif
+
+#ifndef SDL_GL_SINGLE_THREAD
+static event_t updateBottomScreenEvent;
 #endif
 
 static void updateViewMode(view_mode_t vm) {
@@ -1317,7 +1675,7 @@ static void updateViewMode(view_mode_t vm) {
 
 #ifndef SDL_GL_SINGLE_THREAD
   if (vm == VIEW_MODE_SEPARATE) {
-    event_set(&updateBottomScreenEvent);
+    event_rel(&updateBottomScreenEvent);
   }
 #endif
 }
@@ -2146,16 +2504,12 @@ typedef struct _FrameBufferContext
   view_mode_t prev_vm;
 
 #ifndef SDL_GL_SINGLE_THREAD
-  int decode_updated;
-  rp_cond_t decode_updated_cond;
-  rp_lock_t decode_updated_mutex;
+  event_t decode_updated_event;
 #endif
 } FrameBufferContext;
 
 #ifdef SDL_GL_SINGLE_THREAD
-int decode_updated;
-rp_cond_t decode_updated_cond;
-rp_lock_t decode_updated_mutex;
+event_t decode_updated_event;
 #endif
 
 FrameBufferContext buffer_ctx[SCREEN_COUNT];
@@ -2181,9 +2535,7 @@ static void do_hr_draw_screen(__attribute__ ((unused)) FrameBufferContext *ctx, 
     uint8_t *dst = pixels;
     const int bpp = 4;
     for (int x = 0; x < width; ++x) {
-      for (int y = 0; y < height; ++y) {
-        memcpy(dst + y * pitch + x * bpp, data + x * height * bpp + (height - y - 1) * bpp, bpp);
-      }
+      memcpy(dst + x * pitch, data + x * height * bpp, height * bpp);
     }
 
     SDL_UnlockTexture(sdlTexture[tb][top_bot]);
@@ -2238,8 +2590,9 @@ static void do_hr_draw_screen(__attribute__ ((unused)) FrameBufferContext *ctx, 
     }
   }
 
-  SDL_Rect rect = { ctx_left, ctx_top, ctx_width, ctx_height };
-  SDL_RenderCopy(sdlRenderer[tb], sdlTexture[tb][top_bot], NULL, &rect);
+  SDL_Rect rect = { ctx_left, ctx_top + ctx_height, ctx_height, ctx_width };
+  SDL_Point center = { 0, 0 };
+  SDL_RenderCopyEx(sdlRenderer[tb], sdlTexture[tb][top_bot], NULL, &rect, -90, &center, SDL_FLIP_NONE);
 }
 #else
 static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot, int tb, int index)
@@ -2452,7 +2805,11 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     ctx->prev_tex_upscaled[tb] = 0;
   }
 
+#ifdef USE_COMPOSITION_SWAPCHAIN
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[tb]);
+#else
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+#endif
   glViewport(0, 0, win_w, win_h);
 
   nk_bool use_fsr = ctx_height > height * scale && ctx_width > width * scale && fsr_filter;
@@ -2579,7 +2936,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
 }
 #endif
 
-static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot, int tb, int force)
+static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot, int tb)
 {
   sr_next(tb, top_bot * FrameBufferCount + ctx->index_display_2);
 
@@ -2614,8 +2971,7 @@ static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int to
   }
   else
   {
-    if (force)
-      do_hr_draw_screen(ctx, NULL, width, height, top_bot, tb, index_display);
+    do_hr_draw_screen(ctx, NULL, width, height, top_bot, tb, index_display);
     return 0;
   }
 }
@@ -2755,48 +3111,49 @@ static void updateWindowsTitles(void)
 
 static view_mode_t prev_view_mode;
 static int prev_fullscreen;
-static uint64_t lastUpdated[SCREEN_COUNT];
 static int nk_input_current;
 #ifndef SDL_GL_SINGLE_THREAD
 static rp_lock_t nk_input_lock;
 #endif
 
-#ifdef SDL_GL_SYNC
-static int gl_swapbuffer_flag;
-static rp_cond_t gl_swapbuffer_cond;
-static rp_lock_t gl_swapbuffer_mutex;
+static void cond_mutex_flag_signal(event_t *event) {
+  event_rel(event);
+}
 
-static int gl_render_flag;
-static rp_cond_t gl_render_cond;
-static rp_lock_t gl_render_mutex;
+#ifdef SDL_GL_SYNC
+static bool cond_mutex_flag_lock(event_t *event) {
+  while (1) {
+    if (!running)
+      return false;
+    int res = event_wait(event, NWM_THREAD_WAIT_NS);
+    if (res == ETIMEDOUT) {
+      continue;
+    } else if (res) {
+      return false;
+    } else {
+      break;
+    }
+  }
+  return true;
+}
+
+static event_t gl_swapbuffer_event;
+
+static event_t gl_render_event;
 #endif
 
 static struct nk_color nk_window_bgcolor = { 28, 48, 62, 255 };
 
 #define MIN_UPDATE_INTERVAL_US (33333)
 
-static bool decode_cond_wait(int *updated, rp_cond_t *cond, rp_lock_t *mutex, int *force)
+static bool decode_cond_wait(event_t *event)
 {
-  rp_lock_wait(*mutex);
-  while (!*updated) {
-    if (!running) {
-      rp_lock_rel(*mutex);
-      return false;
-    }
-    int ret;
-    if ((ret = rp_cond_timedwait(*cond, *mutex, MIN_UPDATE_INTERVAL_US * 1000))) {
-      if (ret == ETIMEDOUT) {
-        *force = 1;
-        break;
-      } else {
-        err_log("decode_cond_wait wait error: %d\n", ret);
-        rp_lock_rel(*mutex);
-        return false;
-      }
-    }
+  int res = event_wait(event, MIN_UPDATE_INTERVAL_US * 1000);
+  if (res == ETIMEDOUT) {
+  } else if (res) {
+    err_log("decode_cond_wait failed: %d\n", res);
+    return false;
   }
-  *updated = 0;
-  rp_lock_rel(*mutex);
   return true;
 }
 
@@ -2870,84 +3227,94 @@ ThreadLoop(int i)
   glClear(GL_COLOR_BUFFER_BIT);
 #endif
 
-  int force = 0;
 #ifndef SDL_GL_SINGLE_THREAD
   int tb = vm == VIEW_MODE_BOT ? SCREEN_BOT : i;
-  if (!decode_cond_wait(&buffer_ctx[tb].decode_updated, &buffer_ctx[tb].decode_updated_cond, &buffer_ctx[tb].decode_updated_mutex, &force))
+  if (!decode_cond_wait(&buffer_ctx[tb].decode_updated_event))
     return;
 #else
-  if (i == SCREEN_TOP && !decode_cond_wait(&decode_updated, &decode_updated_cond, &decode_updated_mutex, &force))
+  if (i == SCREEN_TOP && !decode_cond_wait(&decode_updated_event))
     return;
 #endif
 
-  int updated = 0;
-  uint64_t nextUpdated = iclock64();
-  if (nextUpdated - lastUpdated[i] > MIN_UPDATE_INTERVAL_US)
-    force = 1;
+#ifdef USE_COMPOSITION_SWAPCHAIN
+  GLuint tex_sc;
+  HANDLE handle_sc;
+  if (render_buffer_get(i, win_width[i], win_height[i], &tex_sc, &handle_sc) != 0) {
+    return;
+  }
+  if (!wglDXLockObjectsNV(gl_d3ddevice[i], 1, &handle_sc)) {
+    err_log("wglDXLockObjectsNV failed: %d\n", (int)GetLastError());
+    return;
+  }
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[i]);
+  glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, tex_sc);
+#endif
 
   if (vm == VIEW_MODE_TOP_BOT) {
-    force = 1;
-    updated = hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400, 240, SCREEN_TOP, i, force) || updated;
-    updated = hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT, i, force) || updated;
+    hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400, 240, SCREEN_TOP, i);
+    hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT, i);
   } else if (vm == VIEW_MODE_BOT)
-    updated = hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, 1, i, force);
+    hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT, i);
   else
-    updated = hr_draw_screen(&buffer_ctx[i], i == 0 ? 400 : 320, 240, i, i, force);
+    hr_draw_screen(&buffer_ctx[i], i == 0 ? 400 : 320, 240, i, i);
 
   /* IMPORTANT: `nk_sdl_render` modifies some global OpenGL state
     * with blending, scissor, face culling, depth test and viewport and
     * defaults everything back into a default state.
     * Make sure to either a.) save and restore or b.) reset your own state after
     * rendering the UI. */
-  if (updated || force) {
-    if (i == 0) {
-      struct nk_context *ctx = nk_ctx;
+  if (i == 0) {
+    struct nk_context *ctx = nk_ctx;
 
 #ifndef SDL_GL_SINGLE_THREAD
-      rp_lock_wait(nk_input_lock);
+    rp_lock_wait(nk_input_lock);
 #endif
-      if (nk_input_current) {
-        // nk_sdl_handle_grab();
-        nk_input_end(ctx);
-      } else {
-        nk_input_begin(ctx);
-        // nk_sdl_handle_grab();
-        nk_input_end(ctx);
-      }
-      nk_input_current = 0;
-
-      guiMain(ctx);
-#ifndef SDL_GL_SINGLE_THREAD
-      rp_lock_rel(nk_input_lock);
-#endif
+    if (nk_input_current) {
+      // nk_sdl_handle_grab();
+      nk_input_end(ctx);
+    } else {
+      nk_input_begin(ctx);
+      // nk_sdl_handle_grab();
+      nk_input_end(ctx);
     }
+    nk_input_current = 0;
+
+    guiMain(ctx);
+#ifndef SDL_GL_SINGLE_THREAD
+    rp_lock_rel(nk_input_lock);
+#endif
+  }
 
 #ifdef SDL_GL_SYNC
-    if (!cond_mutex_flag_lock(&gl_swapbuffer_flag, &gl_swapbuffer_cond, &gl_swapbuffer_mutex))
-      return;
-    gl_swapbuffer_flag = 0;
-    rp_lock_rel(gl_swapbuffer_mutex);
+  if (!cond_mutex_flag_lock(&gl_swapbuffer_event))
+    return;
 #endif
 
 #ifdef USE_SDL_RENDERER
-    if (i == 0) {
-      nk_sdl_render(NK_ANTI_ALIASING_ON);
-    }
-    SDL_RenderPresent(sdlRenderer[i]);
+  if (i == 0) {
+    nk_sdl_render(NK_ANTI_ALIASING_ON);
+  }
+  SDL_RenderPresent(sdlRenderer[i]);
 #else
-    if (i == 0) {
-      nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
-    }
-    // thread_set_cancel_state(false);
-    SDL_GL_SwapWindow(win[i]);
-    // thread_set_cancel_state(true);
+  if (i == 0) {
+    nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
+  }
+  // thread_set_cancel_state(false);
+#ifdef USE_COMPOSITION_SWAPCHAIN
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+  if (!wglDXUnlockObjectsNV(gl_d3ddevice[i], 1, &handle_sc)) {
+    err_log("wglDXUnlockObjectsNV failed: %d\n", (int)GetLastError());
+  }
+  presentation_buffer_present(i, COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN);
+#else
+  SDL_GL_SwapWindow(win[i]);
+#endif
+  // thread_set_cancel_state(true);
 #endif
 
 #ifdef SDL_GL_SYNC
-    cond_mutex_flag_signal(&gl_render_flag, &gl_render_cond, &gl_render_mutex);
+  cond_mutex_flag_signal(&gl_render_event);
 #endif
-    lastUpdated[i] = nextUpdated;
-  }
 }
 
 static void
@@ -3053,12 +3420,10 @@ skip_evt:
 #endif
 
 #ifdef SDL_GL_SYNC
-  cond_mutex_flag_signal(&gl_swapbuffer_flag, &gl_swapbuffer_cond, &gl_swapbuffer_mutex);
+  cond_mutex_flag_signal(&gl_swapbuffer_event);
 
-  if (!cond_mutex_flag_lock(&gl_render_flag, &gl_render_cond, &gl_render_mutex))
+  if (!cond_mutex_flag_lock(&gl_render_event))
     return;
-  gl_render_flag = 0;
-  rp_lock_rel(gl_render_mutex);
 #endif
 }
 
@@ -3116,11 +3481,11 @@ void handle_decode_frame_screen(FrameBufferContext *ctx, int top_bot, int frame_
 
 #ifndef SDL_GL_SINGLE_THREAD
   if (ctx_sync)
-    cond_mutex_flag_signal(&ctx_sync->decode_updated, &ctx_sync->decode_updated_cond, &ctx_sync->decode_updated_mutex);
+    cond_mutex_flag_signal(&ctx_sync->decode_updated_event);
   else
-    cond_mutex_flag_signal(&ctx->decode_updated, &ctx->decode_updated_cond, &ctx->decode_updated_mutex);
+    cond_mutex_flag_signal(&ctx->decode_updated_event);
 #else
-  cond_mutex_flag_signal(&decode_updated, &decode_updated_cond, &decode_updated_mutex);
+  cond_mutex_flag_signal(&decode_updated_event);
 #endif
 }
 
@@ -4315,10 +4680,6 @@ static void on_gl_error(
 }
 #endif
 
-#ifdef USE_COMPOSITION_SWAPCHAIN
-// TODO
-#endif
-
 int main(int argc, char *argv[])
 {
 #ifdef _WIN32
@@ -4438,7 +4799,7 @@ int main(int argc, char *argv[])
   SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
   for (int j = 0; j < SCREEN_COUNT; ++j) {
     for (int i = 0; i < SCREEN_COUNT; ++i) {
-      sdlTexture[j][i] = SDL_CreateTexture(sdlRenderer[j], SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, i == SCREEN_TOP ? 400 : 320, 240);
+      sdlTexture[j][i] = SDL_CreateTexture(sdlRenderer[j], SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, 240, i == SCREEN_TOP ? 400 : 320);
       if (!sdlTexture[j][i]) {
         err_log("SDL_CreateTexture: %s\n", SDL_GetError());
         return -1;
@@ -4478,7 +4839,6 @@ int main(int argc, char *argv[])
   }
   if (osvi.dwMajorVersion >= 10 && osvi.dwBuildNumber >= 22000 && GLAD_WGL_NV_DX_interop && GLAD_WGL_NV_DX_interop2) {
     use_composition_swapchain = true;
-    err_log("Using composition swapchain\n");
   }
 #endif
 
@@ -4534,40 +4894,57 @@ int main(int argc, char *argv[])
   if (use_composition_swapchain) {
     win_flags &= ~SDL_WINDOW_OPENGL;
 
-    win[SCREEN_TOP] = SDL_CreateWindow(TITLE,
+    win_sc[SCREEN_TOP] = SDL_CreateWindow(TITLE,
     SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
     WINDOW_WIDTH, WINDOW_HEIGHT, win_flags);
-    if (!win[SCREEN_TOP])
+    if (!win_sc[SCREEN_TOP])
     {
       err_log("SDL_CreateWindow: %s\n", SDL_GetError());
       return -1;
     }
 
-    win[SCREEN_BOT] = SDL_CreateWindow(TITLE,
+    win_sc[SCREEN_BOT] = SDL_CreateWindow(TITLE,
       SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
       WINDOW_WIDTH, WINDOW_HEIGHT, win_flags);
-    if (!win[SCREEN_BOT])
+    if (!win_sc[SCREEN_BOT])
     {
       err_log("SDL_CreateWindow: %s\n", SDL_GetError());
       return -1;
     }
 
     SDL_SysWMinfo wmInfo[SCREEN_COUNT];
-    HWND hwnd[SCREEN_COUNT];
-    HDC hdc[SCREEN_COUNT];
 
     SDL_VERSION(&wmInfo[SCREEN_TOP].version);
-    SDL_GetWindowWMInfo(win[SCREEN_TOP], &wmInfo[SCREEN_TOP]);
-    hwnd[SCREEN_TOP] = wmInfo[SCREEN_TOP].info.win.window;
-    hdc[SCREEN_TOP] = wmInfo[SCREEN_TOP].info.win.hdc;
+    SDL_GetWindowWMInfo(win_sc[SCREEN_TOP], &wmInfo[SCREEN_TOP]);
 
     SDL_VERSION(&wmInfo[SCREEN_BOT].version);
-    SDL_GetWindowWMInfo(win[SCREEN_BOT], &wmInfo[SCREEN_BOT]);
-    hwnd[SCREEN_BOT] = wmInfo[SCREEN_BOT].info.win.window;
-    hdc[SCREEN_BOT] = wmInfo[SCREEN_BOT].info.win.hdc;
+    SDL_GetWindowWMInfo(win_sc[SCREEN_BOT], &wmInfo[SCREEN_BOT]);
 
-    // TODO
+    HWND hwnd[SCREEN_COUNT];
+    hwnd[SCREEN_TOP] = wmInfo[SCREEN_TOP].info.win.window;
+    hwnd[SCREEN_BOT] = wmInfo[SCREEN_BOT].info.win.window;
+
+    // HDC hdc[SCREEN_COUNT];
+    // hdc[SCREEN_TOP] = wmInfo[SCREEN_TOP].info.win.hdc;
+    // hdc[SCREEN_BOT] = wmInfo[SCREEN_BOT].info.win.hdc;
+
+    if (composition_swapchain_init(hwnd) != 0) {
+      goto end_use_c_sc;
+    }
+
+    win[SCREEN_TOP] = win_sc[SCREEN_TOP];
+    win[SCREEN_BOT] = win_sc[SCREEN_BOT];
+    err_log("Using composition swapchain\n");
+    goto start_use_c_sc;
+
+end_use_c_sc:
+    SDL_DestroyWindow(win_sc[SCREEN_BOT]);
+    SDL_DestroyWindow(win_sc[SCREEN_TOP]);
+    composition_swapchain_close();
+
+    use_composition_swapchain = 0;
   }
+start_use_c_sc:
 #endif
 
   SDL_ShowWindow(win[SCREEN_TOP]);
@@ -4637,6 +5014,12 @@ int main(int argc, char *argv[])
       }
       glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
     }
+
+#ifdef USE_COMPOSITION_SWAPCHAIN
+    if (use_composition_swapchain) {
+      glGenFramebuffers(1, &gl_fbo_sc[j]);
+    }
+#endif
   }
 
   for (int j = 0; j < SCREEN_COUNT; ++j) {
@@ -4705,23 +5088,19 @@ int main(int argc, char *argv[])
     buffer_ctx[i].index_decode = FBI_DECODE;
 
 #ifndef SDL_GL_SINGLE_THREAD
-    rp_cond_init(buffer_ctx[i].decode_updated_cond);
-    rp_lock_init(buffer_ctx[i].decode_updated_mutex);
+    event_init(&buffer_ctx[i].decode_updated_event);
 #endif
   }
 
 #ifdef SDL_GL_SINGLE_THREAD
-  rp_cond_init(decode_updated_cond);
-  rp_lock_init(decode_updated_mutex);
+  event_init(&decode_updated_event);
 #else
   rp_lock_init(nk_input_lock);
 #endif
 
 #ifdef SDL_GL_SYNC
-  rp_cond_init(gl_swapbuffer_cond);
-  rp_lock_init(gl_swapbuffer_mutex);
-  rp_cond_init(gl_render_cond);
-  rp_lock_init(gl_render_mutex);
+  event_init(&gl_swapbuffer_event);
+  event_init(&gl_render_event);
 #endif
 
   rpConfigSetDefault();
@@ -4813,7 +5192,21 @@ int main(int argc, char *argv[])
   rp_syn_close1(&jpeg_decode_queue);
   rp_sem_close(jpeg_decode_sem);
 
+#ifdef SDL_GL_SYNC
+  event_close(&gl_swapbuffer_event);
+  event_close(&gl_render_event);
+#endif
+
+#ifdef SDL_GL_SINGLE_THREAD
+  event_close(&decode_updated_event);
+#else
+  rp_lock_close(nk_input_lock);
+#endif
+
   for (int i = 0; i < SCREEN_COUNT; ++i) {
+#ifndef SDL_GL_SINGLE_THREAD
+    event_close(&buffer_ctx[i].decode_updated_event);
+#endif
     rp_lock_close(buffer_ctx[i].status_lock);
   }
 
@@ -4849,6 +5242,12 @@ int main(int argc, char *argv[])
       glDeleteFramebuffers(1, &buffer_ctx[i].gl_fbo_upscaled[j]);
       glDeleteTextures(1, &buffer_ctx[i].gl_tex_upscaled[j]);
     }
+
+#ifdef USE_COMPOSITION_SWAPCHAIN
+    if (use_composition_swapchain) {
+      glDeleteFramebuffers(1, &gl_fbo_sc[j]);
+    }
+#endif
   }
 #endif
 
@@ -4866,8 +5265,9 @@ int main(int argc, char *argv[])
 #endif
 #ifdef USE_COMPOSITION_SWAPCHAIN
   if (use_composition_swapchain) {
-    SDL_DestroyWindow(win[SCREEN_BOT]);
-    SDL_DestroyWindow(win[SCREEN_TOP]);
+    SDL_DestroyWindow(win_sc[SCREEN_BOT]);
+    SDL_DestroyWindow(win_sc[SCREEN_TOP]);
+    composition_swapchain_close();
   }
 #endif
   SDL_DestroyWindow(win_ogl[SCREEN_BOT]);

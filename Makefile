@@ -6,7 +6,7 @@ CFLAGS := -Ofast -g -fno-strict-aliasing
 CFLAGS += -mssse3 -mavx2
 EMBED_JPEG_TURBO := 1
 USE_SDL_RENDERER := 0
-USE_COMPOSITION_SWAPCHAIN := 0
+USE_COMPOSITION_SWAPCHAIN := 1
 USE_OGL_ES := 0
 USE_ANGLE := 0
 GL_DEBUG := 0
@@ -16,7 +16,7 @@ ifeq ($(OS),Windows_NT)
 	LDLIBS += -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8
 	LDLIBS += -lws2_32 -liphlpapi
 ifeq ($(USE_COMPOSITION_SWAPCHAIN),1)
-	LDLIBS += -l:dcomp.lib
+	LDLIBS += -ld3d11 -l:dcomp.lib
 endif
 	TARGET := ntrviewer.exe
 
