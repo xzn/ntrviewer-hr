@@ -50,6 +50,8 @@ static int running = 1;
 static rp_sem_t jpeg_decode_sem;
 static struct rp_syn_comp_func_t jpeg_decode_queue;
 
+static struct nk_color nk_window_bgcolor = { 28, 48, 62, 255 };
+
 // #define USE_SDL_RENDERER
 // #define GL_DEBUG
 // #define USE_ANGLE
@@ -334,7 +336,21 @@ static int presentation_buffer_present(int tb, int count_max) {
 
   HRESULT hr;
 
+#if 0
+  ID3D11RenderTargetView *rtv;
+  hr = ID3D11Device_CreateRenderTargetView(d3d11device, (ID3D11Resource *)presentation_buffers[tb][index_sc].tex, NULL, &rtv);
+  if (hr) {
+    err_log("CreateRenderTargetView failed: %d\n", (int)hr);
+    return -1;
+  }
+
+  float clearColor[4];
+  nk_color_fv(clearColor, nk_window_bgcolor);
+  ID3D11DeviceContext_ClearRenderTargetView(d3d11device_context, rtv, clearColor);
+  ID3D11RenderTargetView_Release(rtv);
+#else
   ID3D11DeviceContext_CopyResource(d3d11device_context, (ID3D11Resource *)presentation_buffers[tb][index_sc].tex, (ID3D11Resource *)b->tex);
+#endif
 
   hr = IPresentationSurface_SetBuffer(presentation_surface[tb], presentation_buffers[tb][index_sc].buf);
   if (hr) {
@@ -362,6 +378,11 @@ static int render_buffer_delete(int tb) {
   if (b->gl_tex) {
     glDeleteRenderbuffers(1, &b->gl_tex);
     b->gl_tex = 0;
+  }
+
+  if (b->tex) {
+    ID3D11Texture2D_Release(b->tex);
+    b->tex = NULL;
   }
 
   b->width = 0;
@@ -3291,8 +3312,6 @@ static event_t gl_swapbuffer_event;
 
 static event_t gl_render_event;
 #endif
-
-static struct nk_color nk_window_bgcolor = { 28, 48, 62, 255 };
 
 #define MIN_UPDATE_INTERVAL_US (33333)
 
