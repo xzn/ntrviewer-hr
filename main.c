@@ -1,4 +1,6 @@
 #ifdef _WIN32
+#define COBJMACROS
+#define INITGUID
 #define WINVER _WIN32_WINNT_WINBLUE
 #define _WIN32_WINNT _WIN32_WINNT_WINBLUE
 #include <winsock2.h>
@@ -101,8 +103,10 @@ static bool ro_init;
 
 #ifdef USE_COMPOSITION_SWAPCHAIN
 // #define USE_DXGI_SWAPCHAIN
+// #define USE_DIRECT_COMPOSITION
+#define USE_UI_COMPOSITION
 #include "dcomp.h"
-#include "windows.ui.composition.h"
+#include <winstring.h>
 #include "glad/glad_wgl.h"
 static bool use_composition_swapchain;
 static SDL_Window *win_sc[SCREEN_COUNT];
@@ -125,12 +129,26 @@ static IDXGISwapChain1 *dxgi_sc[SCREEN_COUNT];
 static int width_sc[SCREEN_COUNT];
 static int height_sc[SCREEN_COUNT];
 #endif
+#ifdef USE_DIRECT_COMPOSITION
 static IDCompositionDesktopDevice *dcomp_desktop_device;
 static IDCompositionDevice *dcomp_device1;
 static IDCompositionDevice3 *dcomp_device;
 static IDCompositionTarget *dcomp_target[SCREEN_COUNT];
 static IDCompositionVisual2 *dcomp_visual[SCREEN_COUNT];
 static IUnknown *dcomp_surface[SCREEN_COUNT];
+#endif
+#ifdef USE_UI_COMPOSITION
+static IDispatcherQueueController *queue_controller;
+static ICompositor *compositor;
+static ICompositorInterop *comp_interop;
+static ICompositorDesktopInterop *comp_desktop_interop;
+static IDesktopWindowTarget *desktop_target[SCREEN_COUNT];
+static ICompositionTarget *comp_target[SCREEN_COUNT];
+static IContainerVisual *container_visual[SCREEN_COUNT];
+static IVisual *root_visual[SCREEN_COUNT];
+static ICompositionSurface *comp_surface[SCREEN_COUNT];
+static ICompositionGraphicsDevice *comp_graphics_dev[SCREEN_COUNT];
+#endif
 
 #define COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN (3)
 #define PRESENATTION_BUFFER_COUNT_PER_SCREEN (8)
@@ -552,9 +570,58 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
     return -1;
   }
 
+  HRESULT hr;
+
+#ifdef USE_UI_COMPOSITION
+  struct DispatcherQueueOptions queue_options = {
+    sizeof(struct DispatcherQueueOptions),
+    DQTYPE_THREAD_CURRENT,
+    DQTAT_COM_NONE
+  };
+  hr = CreateDispatcherQueueController(queue_options, &queue_controller);
+  if (hr) {
+    err_log("CreateDispatcherQueueController failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  HSTRING Compositor_class_id;
+  hr = WindowsCreateString(RuntimeClass_Windows_UI_Composition_Compositor, wcslen(RuntimeClass_Windows_UI_Composition_Compositor), &Compositor_class_id);
+  if (hr) {
+    err_log("WindowsCreateString failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  IInspectable *compositor_insp;
+  hr = RoActivateInstance(Compositor_class_id, &compositor_insp);
+  if (hr) {
+    err_log("RoActivateInstance Compositor failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  hr = IInspectable_QueryInterface(compositor_insp, &IID_ICompositor, (void **)&compositor);
+  if (hr) {
+    err_log("QueryInterface ICompositor failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  IInspectable_Release(compositor_insp);
+  WindowsDeleteString(Compositor_class_id);
+
+  hr = ICompositor_QueryInterface(compositor, &IID_ICompositorInterop, (void **)&comp_interop);
+  if (hr) {
+    err_log("QueryInterface ICompositorInterop failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  hr = ICompositor_QueryInterface(compositor, &IID_ICompositorDesktopInterop, (void **)&comp_desktop_interop);
+  if (hr) {
+    err_log("QueryInterface ICompositorDesktopInterop failed: %d\n", (int)hr);
+    return hr;
+  }
+#endif
+
   D3D_FEATURE_LEVEL featureLevelSupported;
 
-  HRESULT hr;
   hr = D3D11CreateDevice(
     NULL,
     D3D_DRIVER_TYPE_HARDWARE,
@@ -611,6 +678,7 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
     return hr;
   }
 
+#ifdef USE_DIRECT_COMPOSITION
   hr = DCompositionCreateDevice3((IUnknown *)dxgi_device, &IID_IDCompositionDesktopDevice, (void **)&dcomp_desktop_device);
   if (hr) {
     err_log("DCompositionCreateDevice IDXGIDevice failed: %d\n", (int)hr);
@@ -628,6 +696,7 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
     err_log("QueryInterface IDCompositionDevice failed: %d\n", (int)hr);
     return hr;
   }
+#endif
 
   hr = IPresentationFactory_CreatePresentationManager(presentation_factory, &presentation_manager);
   if (hr) {
@@ -636,12 +705,45 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
   }
 
   for (int i = 0; i < SCREEN_COUNT; ++i) {
+#ifdef USE_UI_COMPOSITION
+    hr = comp_desktop_interop->lpVtbl->CreateDesktopWindowTarget(comp_desktop_interop, hwnd[i], true, &desktop_target[i]);
+    if (hr) {
+      err_log("CreateDesktopWindowTarget failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = ICompositor_CreateContainerVisual(compositor, &container_visual[i]);
+    if (hr) {
+      err_log("CreateContainerVisual failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = IContainerVisual_QueryInterface(container_visual[i], &IID_IVisual, (void **)&root_visual[i]);
+    if (hr) {
+      err_log("QueryInterface IVisual failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = IDesktopWindowTarget_QueryInterface(desktop_target[i], &IID_ICompositionTarget, (void **)&comp_target[i]);
+    if (hr) {
+      err_log("QueryInterface ICompositionTarget failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = ICompositionTarget_put_Root(comp_target[i], root_visual[i]);
+    if (hr) {
+      err_log("put_Root failed: %d\n", (int)hr);
+      return hr;
+    }
+#endif
+
     hr = DCompositionCreateSurfaceHandle(COMPOSITIONOBJECT_ALL_ACCESS, NULL, &composition_surface[i]);
     if (hr) {
       err_log("DCompositionCreateSurfaceHandle failed: %d\n", (int)hr);
       return hr;
     }
 
+#ifdef USE_DIRECT_COMPOSITION
     hr = dcomp_device1->lpVtbl->CreateSurfaceFromHandle(dcomp_device1, composition_surface[i], &dcomp_surface[i]);
     if (hr) {
       err_log("CreateSurfaceFromHandle failed: %d\n", (int)hr);
@@ -699,6 +801,7 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
       err_log("SetRoot failed: %d\n", (int)hr);
       return hr;
     }
+#endif
 
     hr = IPresentationManager_CreatePresentationSurface(presentation_manager, composition_surface[i], &presentation_surface[i]);
     if (hr) {
@@ -758,11 +861,13 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
     }
   }
 
+#ifdef USE_DIRECT_COMPOSITION
   hr = dcomp_device->lpVtbl->Commit(dcomp_device);
   if (hr) {
     err_log("Commit failed: %d\n", (int)hr);
     return hr;
   }
+#endif
 
   return 0;
 }

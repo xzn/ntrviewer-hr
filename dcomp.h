@@ -2,6 +2,9 @@
 #define RP_DCOMP_H
 
 #define COBJMACROS
+#define WIDL_using_Windows_System
+#define WIDL_using_Windows_UI_Composition
+
 #include <d3d11.h>
 #include <d2d1_1.h>
 #include "Presentation.h"
@@ -14,7 +17,7 @@ typedef STDMETHODIMP (*DCompositionCreateDevice3_t)(IUnknown *renderingDevice, R
 typedef STDMETHODIMP (*DCompositionCreateSurfaceHandle_t)(DWORD desiredAccess, SECURITY_ATTRIBUTES *securityAttributes, HANDLE *surfaceHandle);
 typedef STDMETHODIMP (*DCompositionGetStatistics_t)(COMPOSITION_FRAME_ID frameId, COMPOSITION_FRAME_STATS *frameStats, UINT targetIdCount, COMPOSITION_TARGET_ID *targetIds, UINT *actualTargetIdCount);
 typedef STDMETHODIMP (*DCompositionGetTargetStatistics_t)(COMPOSITION_FRAME_ID frameId, const COMPOSITION_TARGET_ID *targetId, COMPOSITION_TARGET_STATS *targetStats);
-typedef STDMETHODIMP (*CreatePresentationFactory_t)(IUnknown * d3dDevice, REFIID riid, void ** presentationFactory);
+typedef STDMETHODIMP (*CreatePresentationFactory_t)(IUnknown  *d3dDevice, REFIID riid, void  **presentationFactory);
 
 static DCompositionCreateDevice3_t DCompositionCreateDevice3;
 static DCompositionCreateSurfaceHandle_t DCompositionCreateSurfaceHandle;
@@ -235,5 +238,85 @@ DECLARE_INTERFACE(IDCompositionDevice3)
     STDMETHOD(CreateArithmeticCompositeEffect)(THIS_ IDCompositionArithmeticCompositeEffect **arithmeticCompositeEffect);
     STDMETHOD(CreateAffineTransform2DEffect)(THIS_ IDCompositionAffineTransform2DEffect **affineTransform2dEffect);
 };
+
+#include <windows.system.h>
+
+typedef IDispatcherQueue *PDISPATCHERQUEUE;
+typedef IDispatcherQueueController *PDISPATCHERQUEUECONTROLLER;
+
+enum DISPATCHERQUEUE_THREAD_APARTMENTTYPE {
+    DQTAT_COM_NONE = 0,
+    DQTAT_COM_ASTA = 1,
+    DQTAT_COM_STA  = 2
+};
+
+enum DISPATCHERQUEUE_THREAD_TYPE {
+    DQTYPE_THREAD_DEDICATED = 1,
+    DQTYPE_THREAD_CURRENT   = 2
+};
+
+struct DispatcherQueueOptions {
+    DWORD                                     dwSize;
+    enum DISPATCHERQUEUE_THREAD_TYPE          threadType;
+    enum DISPATCHERQUEUE_THREAD_APARTMENTTYPE apartmentType;
+};
+
+EXTERN_C HRESULT WINAPI CreateDispatcherQueueController(struct DispatcherQueueOptions options, PDISPATCHERQUEUECONTROLLER *dispatcherQueueController);
+
+#include <windows.ui.composition.h>
+
+typedef interface IDesktopWindowTarget IDesktopWindowTarget;
+const WCHAR InterfaceName_Windows_UI_Composition_Desktop_IDesktopWindowTarget[] = L"Windows.UI.Composition.Desktop.IDesktopWindowTarget";
+typedef struct IDesktopWindowTargetVtbl
+{
+    HRESULT (STDMETHODCALLTYPE *QueryInterface)(IDesktopWindowTarget *This,
+        REFIID riid,
+        void **ppvObject);
+    ULONG (STDMETHODCALLTYPE *AddRef)(IDesktopWindowTarget *This);
+    ULONG (STDMETHODCALLTYPE *Release)(IDesktopWindowTarget *This);
+    HRESULT (STDMETHODCALLTYPE *GetIids)(IDesktopWindowTarget *This,
+        ULONG *iidCount,
+        IID **iids);
+    HRESULT (STDMETHODCALLTYPE *GetRuntimeClassName)(IDesktopWindowTarget *This,
+        HSTRING *className);
+    HRESULT (STDMETHODCALLTYPE *GetTrustLevel)(IDesktopWindowTarget *This,
+        TrustLevel *trustLevel);
+    HRESULT (STDMETHODCALLTYPE *get_IsTopmost)(IDesktopWindowTarget *This,
+        boolean *value);
+} IDesktopWindowTargetVtbl;
+
+interface IDesktopWindowTarget
+{
+    CONST_VTBL struct IDesktopWindowTargetVtbl *lpVtbl;
+};
+
+#define IDesktopWindowTarget_QueryInterface(This, riid, ppvObject) \
+    ((This)->lpVtbl->QueryInterface(This, riid, ppvObject))
+#define IDesktopWindowTarget_AddRef(This) \
+    ((This)->lpVtbl->AddRef(This))
+#define IDesktopWindowTarget_Release(This) \
+    ((This)->lpVtbl->Release(This))
+#define IDesktopWindowTarget_GetIids(This, iidCount, iids) \
+    ((This)->lpVtbl->GetIids(This, iidCount, iids))
+#define IDesktopWindowTarget_GetRuntimeClassName(This, className) \
+    ((This)->lpVtbl->GetRuntimeClassName(This, className))
+#define IDesktopWindowTarget_GetTrustLevel(This, trustLevel) \
+    ((This)->lpVtbl->GetTrustLevel(This, trustLevel))
+#define IDesktopWindowTarget_get_IsTopmost(This, value) \
+    ((This)->lpVtbl->get_IsTopmost(This, value))
+const IID IID_IDesktopWindowTarget = { 0x6329d6ca, 0x3366, 0x490e, { 0x9d, 0xb3, 0x25, 0x31, 0x29, 0x29, 0xac, 0x51 } };
+
+#undef INTERFACE
+#define INTERFACE ICompositorDesktopInterop
+typedef interface INTERFACE INTERFACE;
+DECLARE_INTERFACE(ICompositorDesktopInterop)
+{
+    IUNKNOWN_METHODS
+    STDMETHOD(CreateDesktopWindowTarget)(THIS_ HWND hwndTarget, BOOL isTopmost, IDesktopWindowTarget **result);
+    STDMETHOD(EnsureOnThread)(THIS_ DWORD threadId);
+};
+const IID IID_ICompositorDesktopInterop = { 0x29e691fa, 0x4567, 0x4dca, { 0xb3, 0x19, 0xd0, 0xf2, 0x07, 0xeb, 0x68, 0x07 } };
+
+#include <windows.ui.composition.interop.h>
 
 #endif

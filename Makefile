@@ -34,6 +34,7 @@ GL_OBJ :=
 else
 GL_OBJ := realcugan.o realcugan_lib.o libGLAD.o fsr/fsr_main.o fsr/image_utils.o libNKSDL.o
 ifeq ($(OS),Windows_NT)
+GL_OBJ += ntrviewer.res
 ifeq ($(USE_COMPOSITION_SWAPCHAIN),1)
 GL_OBJ += libGLAD_WGL.o
 endif
@@ -130,6 +131,9 @@ jpeg_turbo/jpeg16/%.o: jpeg_turbo/jpeg16/%.c
 
 %.o: %.cpp
 	$(CXX) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS)
+
+ntrviewer.res: win_manifest.rc win_manifest.xml
+	windres --input $< --output $@ --output-format=coff
 
 realcugan_lib.o: realcugan-ncnn-vulkan/lib.cpp $(wildcard srmd-realcugan-vulkan/*.h)
 	$(CXX) realcugan-ncnn-vulkan/lib.cpp -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-attributes
