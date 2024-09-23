@@ -317,6 +317,17 @@ DECLARE_INTERFACE(ICompositorDesktopInterop)
 };
 const IID IID_ICompositorDesktopInterop = { 0x29e691fa, 0x4567, 0x4dca, { 0xb3, 0x19, 0xd0, 0xf2, 0x07, 0xeb, 0x68, 0x07 } };
 
-#include <windows.ui.composition.interop.h>
+#undef INTERFACE
+#define INTERFACE ICompositorInterop
+typedef interface INTERFACE INTERFACE;
+DECLARE_INTERFACE(ICompositorInterop)
+{
+    IUNKNOWN_METHODS
+    STDMETHOD(CreateCompositionSurfaceForHandle)(THIS_ HANDLE swapChain, ICompositionSurface **result);
+    STDMETHOD(CreateCompositionSurfaceForSwapChain)(THIS_ IUnknown *swapChain, ICompositionSurface **result);
+    STDMETHOD(CreateGraphicsDevice)(THIS_ IUnknown *renderingDevice, ICompositionGraphicsDevice **result);
+};
+
+const IID IID_ICompositorInterop = { 0x25297d5c, 0x3ad4, 0x4c9c, { 0xb5, 0xcf, 0xe3, 0x6a, 0x38, 0x51, 0x23, 0x30 } };
 
 #endif
