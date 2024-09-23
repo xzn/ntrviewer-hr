@@ -1,9 +1,11 @@
 #ifndef RP_DCOMP_H
 #define RP_DCOMP_H
 
+#define INITGUID
 #define COBJMACROS
 #define WIDL_using_Windows_System
 #define WIDL_using_Windows_UI_Composition
+#define WIDL_using_Windows_Foundation_Metadata
 
 #include <d3d11.h>
 #include <d2d1_1.h>
@@ -329,5 +331,68 @@ DECLARE_INTERFACE(ICompositorInterop)
 };
 
 const IID IID_ICompositorInterop = { 0x25297d5c, 0x3ad4, 0x4c9c, { 0xb5, 0xcf, 0xe3, 0x6a, 0x38, 0x51, 0x23, 0x30 } };
+
+typedef interface IVisual2 IVisual2;
+const WCHAR InterfaceName_Windows_UI_Composition_IVisual2[] = L"Windows.UI.Composition.IVisual2";
+typedef struct IVisual2Vtbl
+{
+    HRESULT (STDMETHODCALLTYPE* QueryInterface)(IVisual2* This,
+        REFIID riid,
+        void** ppvObject);
+    ULONG (STDMETHODCALLTYPE* AddRef)(IVisual2* This);
+    ULONG (STDMETHODCALLTYPE* Release)(IVisual2* This);
+    HRESULT (STDMETHODCALLTYPE* GetIids)(IVisual2* This,
+        ULONG* iidCount,
+        IID** iids);
+    HRESULT (STDMETHODCALLTYPE* GetRuntimeClassName)(IVisual2* This,
+        HSTRING* className);
+    HRESULT (STDMETHODCALLTYPE* GetTrustLevel)(IVisual2* This,
+        TrustLevel* trustLevel);
+    HRESULT (STDMETHODCALLTYPE* get_ParentForTransform)(IVisual2* This,
+        IVisual** value);
+    HRESULT (STDMETHODCALLTYPE* put_ParentForTransform)(IVisual2* This,
+        IVisual* value);
+    HRESULT (STDMETHODCALLTYPE* get_RelativeOffsetAdjustment)(IVisual2* This,
+        struct __x_ABI_CWindows_CFoundation_CNumerics_CVector3* value);
+    HRESULT (STDMETHODCALLTYPE* put_RelativeOffsetAdjustment)(IVisual2* This,
+        struct __x_ABI_CWindows_CFoundation_CNumerics_CVector3 value);
+    HRESULT (STDMETHODCALLTYPE* get_RelativeSizeAdjustment)(IVisual2* This,
+        struct __x_ABI_CWindows_CFoundation_CNumerics_CVector2* value);
+    HRESULT (STDMETHODCALLTYPE* put_RelativeSizeAdjustment)(IVisual2* This,
+        struct __x_ABI_CWindows_CFoundation_CNumerics_CVector2 value);
+} IVisual2Vtbl;
+
+interface IVisual2
+{
+    CONST_VTBL struct IVisual2Vtbl* lpVtbl;
+};
+
+#define IVisual2_QueryInterface(This, riid, ppvObject) \
+    ((This)->lpVtbl->QueryInterface(This, riid, ppvObject))
+#define IVisual2_AddRef(This) \
+    ((This)->lpVtbl->AddRef(This))
+#define IVisual2_Release(This) \
+    ((This)->lpVtbl->Release(This))
+#define IVisual2_GetIids(This, iidCount, iids) \
+    ((This)->lpVtbl->GetIids(This, iidCount, iids))
+#define IVisual2_GetRuntimeClassName(This, className) \
+    ((This)->lpVtbl->GetRuntimeClassName(This, className))
+#define IVisual2_GetTrustLevel(This, trustLevel) \
+    ((This)->lpVtbl->GetTrustLevel(This, trustLevel))
+#define IVisual2_get_ParentForTransform(This, value) \
+    ((This)->lpVtbl->get_ParentForTransform(This, value))
+#define IVisual2_put_ParentForTransform(This, value) \
+    ((This)->lpVtbl->put_ParentForTransform(This, value))
+#define IVisual2_get_RelativeOffsetAdjustment(This, value) \
+    ((This)->lpVtbl->get_RelativeOffsetAdjustment(This, value))
+#define IVisual2_put_RelativeOffsetAdjustment(This, value) \
+    ((This)->lpVtbl->put_RelativeOffsetAdjustment(This, value))
+#define IVisual2_get_RelativeSizeAdjustment(This, value) \
+    ((This)->lpVtbl->get_RelativeSizeAdjustment(This, value))
+#define IVisual2_put_RelativeSizeAdjustment(This, value) \
+    ((This)->lpVtbl->put_RelativeSizeAdjustment(This, value))
+const IID IID_IVisual2 = { 0x3052b611, 0x56c3, 0x4c3e, { 0x8b, 0xf3, 0xf6, 0xe1, 0xad, 0x47, 0x3f, 0x06 } };
+
+#include <windows.foundation.metadata.h>
 
 #endif

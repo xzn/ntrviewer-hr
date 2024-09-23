@@ -103,7 +103,7 @@ static bool ro_init;
 
 #ifdef USE_COMPOSITION_SWAPCHAIN
 // #define USE_DIRECT_COMPOSITION
-#define USE_DXGI_SWAPCHAIN
+// #define USE_DXGI_SWAPCHAIN
 
 #include "dcomp.h"
 #include <winstring.h>
@@ -152,6 +152,7 @@ static ICompositionSurfaceBrush *surface_brush[SCREEN_COUNT];
 static ICompositionBrush *comp_brush[SCREEN_COUNT];
 static ISpriteVisual *sprite_visual[SCREEN_COUNT];
 static IVisual *comp_visual[SCREEN_COUNT];
+static IVisual2 *comp_visual2[SCREEN_COUNT];
 #endif
 
 #define COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN (3)
@@ -887,6 +888,22 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
       err_log("put_Brush failed: %d\n", (int)hr);
       return hr;
     }
+
+    hr = ISpriteVisual_QueryInterface(sprite_visual[i], &IID_IVisual2, (void **)&comp_visual2[i]);
+    if (hr) {
+      err_log("QueryInterface IVisual2 failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    struct __x_ABI_CWindows_CFoundation_CNumerics_CVector2 rel_size = { 1.0f, 1.0f };
+    hr = IVisual2_put_RelativeSizeAdjustment(comp_visual2[i], rel_size);
+    if (hr) {
+      err_log("put_RelativeSizeAdjustment failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    IVisual2_Release(comp_visual2[i]);
+    comp_visual2[i] = NULL;
 
     hr = ISpriteVisual_QueryInterface(sprite_visual[i], &IID_IVisual, (void **)&comp_visual[i]);
     if (hr) {
