@@ -412,6 +412,25 @@ static int presentation_buffer_get(int tb, int count_max, int width, int height,
 }
 #endif
 
+#ifdef USE_DIRECT_COMPOSITION
+static int dcomp_set_offset_y(int tb, int height) {
+  HRESULT hr;
+  hr = dcomp_visual[tb]->lpVtbl->SetOffsetY2(dcomp_visual[tb], (FLOAT)height);
+  if (hr) {
+    err_log("SetOffsetY failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  hr = dcomp_device->lpVtbl->Commit(dcomp_device);
+  if (hr) {
+    err_log("Commit failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  return hr;
+}
+#endif
+
 static int presentation_buffer_present(int tb, __attribute__ ((unused)) int count_max) {
 #ifdef USE_DXGI_SWAPCHAIN
   struct render_buffer_t *b = &render_buffers[tb];
@@ -427,6 +446,12 @@ static int presentation_buffer_present(int tb, __attribute__ ((unused)) int coun
 
     width_sc[tb] = b->width;
     height_sc[tb] = b->height;
+
+#ifdef USE_DIRECT_COMPOSITION
+    hr = dcomp_set_offset_y(tb, b->height);
+    if (hr)
+      return hr;
+#endif
   }
 
   ID3D11Texture2D *tex;
@@ -482,17 +507,9 @@ static int presentation_buffer_present(int tb, __attribute__ ((unused)) int coun
     }
 
 #ifdef USE_DIRECT_COMPOSITION
-    hr = dcomp_visual[tb]->lpVtbl->SetOffsetY2(dcomp_visual[tb], (FLOAT)b->height);
-    if (hr) {
-      err_log("SetOffsetY failed: %d\n", (int)hr);
+    hr = dcomp_set_offset_y(tb, b->height);
+    if (hr)
       return hr;
-    }
-
-    hr = dcomp_device->lpVtbl->Commit(dcomp_device);
-    if (hr) {
-      err_log("Commit failed: %d\n", (int)hr);
-      return hr;
-    }
 #endif
   }
 
@@ -746,8 +763,8 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
   for (int i = 0; i < SCREEN_COUNT; ++i) {
 #ifdef USE_DXGI_SWAPCHAIN
     DXGI_SWAP_CHAIN_DESC1 sc_desc = {};
-    sc_desc.Width = WINDOW_WIDTH;
-    sc_desc.Height = WINDOW_HEIGHT;
+    sc_desc.Width = 1;
+    sc_desc.Height = 1;
     sc_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     sc_desc.SampleDesc.Count = 1;
     sc_desc.BufferCount = COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN;
