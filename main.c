@@ -122,7 +122,6 @@ GLuint gl_fbo_sc[SCREEN_COUNT];
 static ID3D11Device *d3d11device;
 static ID3D11DeviceContext *d3d11device_context;
 static rp_lock_t d3d11device_context_lock;
-static IPresentationFactory *presentation_factory;
 static IDXGIDevice *dxgi_device;
 static IDXGIDevice2 *dxgi_device2;
 static IDXGIAdapter *dxgi_adapter;
@@ -132,6 +131,8 @@ static IDXGISwapChain1 *dxgi_sc[SCREEN_COUNT];
 static int width_sc[SCREEN_COUNT];
 static int height_sc[SCREEN_COUNT];
 #else
+static IPresentationFactory *presentation_factory;
+static bool displayable_surface_support;
 static HANDLE pres_man_lost_event;
 static HANDLE pres_man_stat_avail_event;
 static IPresentationManager *presentation_manager;
@@ -213,22 +214,24 @@ static int presentation_buffer_delete(int tb, int i) {
 static int presentation_buffer_gen(int tb, int i, int width, int height) {
   struct presentation_buffer_t *b = &presentation_buffers[tb][i];
 
-  D3D11_TEXTURE2D_DESC textureDesc = {};
-  textureDesc.Width = width;
-  textureDesc.Height = height;
-  textureDesc.MipLevels = 1;
-  textureDesc.ArraySize = 1;
-  textureDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-  textureDesc.SampleDesc.Count = 1;
-  textureDesc.SampleDesc.Quality = 0;
-  textureDesc.Usage = D3D11_USAGE_DEFAULT;
-  textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-  textureDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE;
-  textureDesc.CPUAccessFlags = 0;
+  D3D11_TEXTURE2D_DESC tex_desc = {};
+  tex_desc.Width = width;
+  tex_desc.Height = height;
+  tex_desc.MipLevels = 1;
+  tex_desc.ArraySize = 1;
+  tex_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+  tex_desc.SampleDesc.Count = 1;
+  tex_desc.SampleDesc.Quality = 0;
+  tex_desc.Usage = D3D11_USAGE_DEFAULT;
+  tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+  tex_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
+  if (displayable_surface_support)
+    tex_desc.MiscFlags |= D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE;
+  tex_desc.CPUAccessFlags = 0;
 
   HRESULT hr;
 
-  hr = ID3D11Device_CreateTexture2D(d3d11device, &textureDesc, NULL, &b->tex);
+  hr = ID3D11Device_CreateTexture2D(d3d11device, &tex_desc, NULL, &b->tex);
   if (hr) {
     err_log("CreateTexture2D failed: %d\n", (int)hr);
     goto fail;
@@ -561,22 +564,22 @@ static int render_buffer_delete(int tb) {
 static int render_buffer_gen(int tb, int width, int height) {
   struct render_buffer_t *b = &render_buffers[tb];
 
-  D3D11_TEXTURE2D_DESC textureDesc = {};
-  textureDesc.Width = width;
-  textureDesc.Height = height;
-  textureDesc.MipLevels = 1;
-  textureDesc.ArraySize = 1;
-  textureDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-  textureDesc.SampleDesc.Count = 1;
-  textureDesc.SampleDesc.Quality = 0;
-  textureDesc.Usage = D3D11_USAGE_DEFAULT;
-  textureDesc.BindFlags = D3D11_BIND_RENDER_TARGET;
-  textureDesc.MiscFlags = 0;
-  textureDesc.CPUAccessFlags = 0;
+  D3D11_TEXTURE2D_DESC tex_desc = {};
+  tex_desc.Width = width;
+  tex_desc.Height = height;
+  tex_desc.MipLevels = 1;
+  tex_desc.ArraySize = 1;
+  tex_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+  tex_desc.SampleDesc.Count = 1;
+  tex_desc.SampleDesc.Quality = 0;
+  tex_desc.Usage = D3D11_USAGE_DEFAULT;
+  tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+  tex_desc.MiscFlags = 0;
+  tex_desc.CPUAccessFlags = 0;
 
   HRESULT hr;
 
-  hr = ID3D11Device_CreateTexture2D(d3d11device, &textureDesc, NULL, &b->tex);
+  hr = ID3D11Device_CreateTexture2D(d3d11device, &tex_desc, NULL, &b->tex);
   if (hr) {
     err_log("CreateTexture2D failed: %d\n", (int)hr);
     goto fail;
@@ -645,22 +648,6 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
   }
 
   rp_lock_init(d3d11device_context_lock);
-
-  hr = pfn_CreatePresentationFactory((IUnknown *)d3d11device, &IID_IPresentationFactory, (void **)&presentation_factory);
-  if (hr) {
-    err_log("CreatePresentationFactory failed: %d\n", (int)hr);
-    return hr;
-  }
-
-  if (
-    !(
-      IPresentationFactory_IsPresentationSupportedWithIndependentFlip(presentation_factory) ||
-      IPresentationFactory_IsPresentationSupported(presentation_factory)
-    )
-  ) {
-    err_log("presentation not supported\n");
-    return -1;
-  }
 
   hr = ID3D11Device_QueryInterface(d3d11device, &IID_IDXGIDevice, (void **)&dxgi_device);
   if (hr) {
@@ -753,6 +740,33 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
 #endif
 
 #ifndef USE_DXGI_SWAPCHAIN
+  hr = pfn_CreatePresentationFactory((IUnknown *)d3d11device, &IID_IPresentationFactory, (void **)&presentation_factory);
+  if (hr) {
+    err_log("CreatePresentationFactory failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  if (
+    !(
+      IPresentationFactory_IsPresentationSupportedWithIndependentFlip(presentation_factory) ||
+      IPresentationFactory_IsPresentationSupported(presentation_factory)
+    )
+  ) {
+    err_log("presentation not supported\n");
+    return -1;
+  }
+
+  D3D11_FEATURE_DATA_DISPLAYABLE displayable_feature;
+  hr = ID3D11Device_CheckFeatureSupport(d3d11device, D3D11_FEATURE_DISPLAYABLE, &displayable_feature, sizeof(displayable_feature));
+  if (hr) {
+    err_log("CheckFeatureSupport failed: %d\n", (int)hr);
+    return hr;
+  }
+  displayable_surface_support = displayable_feature.DisplayableTexture;
+  if (!displayable_surface_support) {
+    err_log("no displayable texture support\n");
+  }
+
   hr = IPresentationFactory_CreatePresentationManager(presentation_factory, &presentation_manager);
   if (hr) {
     err_log("CreatePresentationManager failed: %d\n", (int)hr);
@@ -1027,11 +1041,6 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
 
 static void composition_swapchain_close(void) {
   // TODO
-
-  if (presentation_factory) {
-    IPresentationFactory_Release(presentation_factory);
-    presentation_factory = NULL;
-  }
 
   if (d3d11device_context) {
     ID3D11DeviceContext_Release(d3d11device_context);
