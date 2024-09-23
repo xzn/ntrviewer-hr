@@ -5477,13 +5477,14 @@ end_use_c_sc:
     use_composition_swapchain = 0;
   }
 start_use_c_sc:
+
+  SDL_GL_MakeCurrent(win_ogl[SCREEN_TOP], glContext[SCREEN_TOP]);
 #endif
 
   SDL_ShowWindow(win[SCREEN_TOP]);
   win_id[SCREEN_TOP] = SDL_GetWindowID(win[SCREEN_TOP]);
   win_id[SCREEN_BOT] = SDL_GetWindowID(win[SCREEN_BOT]);
 
-  SDL_GL_MakeCurrent(win_ogl[SCREEN_TOP], glContext[SCREEN_TOP]);
   /* Load Fonts: if none of these are loaded a default font will be used  */
   /* Load Cursor: if you uncomment cursor loading please hide the cursor */
   {
