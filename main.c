@@ -102,7 +102,7 @@ static bool ro_init;
 #endif
 
 #ifdef USE_COMPOSITION_SWAPCHAIN
-// #define USE_DIRECT_COMPOSITION
+#define USE_DIRECT_COMPOSITION
 // #define USE_DXGI_SWAPCHAIN
 
 #include "dcomp.h"
@@ -909,6 +909,7 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
   }
 
 #ifndef USE_DXGI_SWAPCHAIN
+#if 0
   hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager, PresentStatisticsKind_CompositionFrame, true);
   if (hr) {
     err_log("EnablePresentStatisticsKind CompositionFrame failed: %d\n", (int)hr);
@@ -926,6 +927,7 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
     err_log("EnablePresentStatisticsKind IndependentFlipFrame failed: %d\n", (int)hr);
     return hr;
   }
+#endif
 
   hr = IPresentationManager_GetLostEvent(presentation_manager, &pres_man_lost_event);
   if (hr) {
@@ -1114,11 +1116,11 @@ static inline uint32_t iclock()
   return (uint32_t)(iclock64() & 0xfffffffful);
 }
 
-#ifndef SDL_GL_SINGLE_THREAD
+// #ifndef SDL_GL_SINGLE_THREAD
 // #ifndef _WIN32
-#define SDL_GL_SYNC
+// #define SDL_GL_SYNC
 // #endif
-#endif
+// #endif
 
 #ifdef _WIN32
 #define thread_t HANDLE
