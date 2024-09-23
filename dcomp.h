@@ -3,9 +3,11 @@
 
 #define INITGUID
 #define COBJMACROS
+
 #define WIDL_using_Windows_System
 #define WIDL_using_Windows_UI_Composition
 #define WIDL_using_Windows_Foundation_Metadata
+#define WIDL_using_Windows_Foundation_Numerics
 
 #include <d3d11.h>
 #include <d2d1_1.h>

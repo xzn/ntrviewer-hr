@@ -105,7 +105,11 @@ static bool ro_init;
 #endif
 
 #ifdef USE_COMPOSITION_SWAPCHAIN
-#define USE_DIRECT_COMPOSITION
+
+// Use direct composition instead of UI.Composition
+// #define USE_DIRECT_COMPOSITION
+
+// Use dxgi instead of composition swapchain to check
 // #define USE_DXGI_SWAPCHAIN
 
 #include "dcomp.h"
@@ -496,6 +500,20 @@ static int presentation_buffer_present(int tb, __attribute__ ((unused)) int coun
       err_log("SetSourceRect failed: %d\n", (int)hr);
       return hr;
     }
+
+#ifdef USE_DIRECT_COMPOSITION
+    hr = dcomp_visual[tb]->lpVtbl->SetOffsetY2(dcomp_visual[tb], (FLOAT)b->height);
+    if (hr) {
+      err_log("SetOffsetY failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = dcomp_device->lpVtbl->Commit(dcomp_device);
+    if (hr) {
+      err_log("Commit failed: %d\n", (int)hr);
+      return hr;
+    }
+#endif
   }
 
   hr = IPresentationManager_Present(presentation_manager);
@@ -786,6 +804,13 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
       return hr;
     }
 
+    D2D_MATRIX_3X2_F trans_mat = { .m = { { 1.0f, 0.0f }, { 0.0f, -1.0f }, { 0.0f, 0.0f } } };
+    hr = dcomp_visual[i]->lpVtbl->SetTransform2(dcomp_visual[i], &trans_mat);
+    if (hr) {
+      err_log("SetTransform failed: %d\n", (int)hr);
+      return hr;
+    }
+
 #ifdef USE_DXGI_SWAPCHAIN
     hr = dcomp_visual[i]->lpVtbl->SetContent(dcomp_visual[i], (IUnknown *)dxgi_sc[i]);
     if (hr) {
@@ -886,10 +911,17 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
       return hr;
     }
 
-    struct __x_ABI_CWindows_CFoundation_CNumerics_CVector2 rel_size = { 1.0f, 1.0f };
+    struct Vector2 rel_size = { 1.0f, 1.0f };
     hr = IVisual2_put_RelativeSizeAdjustment(comp_visual2[i], rel_size);
     if (hr) {
       err_log("put_RelativeSizeAdjustment failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    struct Vector3 rel_offset = { 0.0f, 1.0f, 0.0f };
+    hr = IVisual2_put_RelativeOffsetAdjustment(comp_visual2[i], rel_offset);
+    if (hr) {
+      err_log("put_RelativeOffsetAdjustment failed: %d\n", (int)hr);
       return hr;
     }
 
@@ -899,6 +931,18 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
     hr = ISpriteVisual_QueryInterface(sprite_visual[i], &IID_IVisual, (void **)&comp_visual[i]);
     if (hr) {
       err_log("QueryInterface IVisual failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    struct Matrix4x4 trans_mat = {
+      1.0f, 0.0f, 0.0f, 0.0f,
+      0.0f, -1.0f, 0.0f, 0.0f,
+      0.0f, 0.0f, 1.0f, 0.0f,
+      0.0f, 0.0f, 0.0f, 1.0f,
+    };
+    hr = IVisual_put_TransformMatrix(comp_visual[i], trans_mat);
+    if (hr) {
+      err_log("put_TransformMatrix failed: %d\n", (int)hr);
       return hr;
     }
 
@@ -3190,15 +3234,6 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
   vVertices_pos[2][1] = ctx_bot_f;
   vVertices_pos[3][0] = ctx_right_f;
   vVertices_pos[3][1] = ctx_top_f;
-#ifdef USE_COMPOSITION_SWAPCHAIN
-  if (use_composition_swapchain) {
-    vVertices_pos[0][1] = -ctx_top_f;
-    vVertices_pos[1][1] = -ctx_bot_f;
-    vVertices_pos[2][1] = -ctx_bot_f;
-    vVertices_pos[3][1] = -ctx_top_f;
-  }
-#endif
-
 #ifdef USE_VAO
   struct vao_vertice_t vertices[4];
   for (int i = 0; i < 4; ++i) {
@@ -3811,16 +3846,15 @@ ThreadLoop(int i)
 #endif
 
 #ifdef USE_SDL_RENDERER
-  if (i == 0) {
+  if (i == SCREEN_TOP) {
     nk_sdl_render(NK_ANTI_ALIASING_ON);
   }
   SDL_RenderPresent(sdlRenderer[i]);
 #else
-
-#ifdef USE_COMPOSITION_SWAPCHAIN
-  if (i == 0) {
-    nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY, use_composition_swapchain);
+  if (i == SCREEN_TOP) {
+    nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
   }
+#ifdef USE_COMPOSITION_SWAPCHAIN
   if (use_composition_swapchain) {
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
     if (!wglDXUnlockObjectsNV(gl_d3ddevice[i], 1, &handle_sc)) {
@@ -3831,9 +3865,6 @@ ThreadLoop(int i)
     SDL_GL_SwapWindow(win[i]);
   }
 #else
-  if (i == 0) {
-    nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY, false);
-  }
   SDL_GL_SwapWindow(win[i]);
 #endif
 #endif
