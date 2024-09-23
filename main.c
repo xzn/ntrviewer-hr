@@ -122,6 +122,7 @@ GLuint gl_fbo_sc[SCREEN_COUNT];
 static ID3D11Device *d3d11device;
 static ID3D11DeviceContext *d3d11device_context;
 static rp_lock_t d3d11device_context_lock;
+static bool d3d_gl_mt_supported;
 static IDXGIDevice *dxgi_device;
 static IDXGIDevice2 *dxgi_device2;
 static IDXGIAdapter *dxgi_adapter;
@@ -168,7 +169,7 @@ static IVisual2 *comp_visual2[SCREEN_COUNT];
 #define COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN (3)
 #define PRESENATTION_BUFFER_COUNT_PER_SCREEN (8)
 
-static HANDLE gl_d3ddevice[SCREEN_COUNT];
+static HANDLE gl_d3ddevice;
 
 static struct render_buffer_t {
   ID3D11Texture2D *tex;
@@ -464,11 +465,13 @@ static int presentation_buffer_present(int tb, __attribute__ ((unused)) int coun
     return -1;
   }
 
-  rp_lock_wait(d3d11device_context_lock);
+  if (d3d_gl_mt_supported)
+    rp_lock_wait(d3d11device_context_lock);
 
   ID3D11DeviceContext_CopyResource(d3d11device_context, (ID3D11Resource *)tex, (ID3D11Resource *)b->tex);
 
-  rp_lock_rel(d3d11device_context_lock);
+  if (d3d_gl_mt_supported)
+    rp_lock_rel(d3d11device_context_lock);
 
   hr = IDXGISwapChain1_Present(dxgi_sc[tb], 1, 0);
   if (hr) {
@@ -516,11 +519,13 @@ static int presentation_buffer_present(int tb, __attribute__ ((unused)) int coun
 #endif
   }
 
-  rp_lock_wait(d3d11device_context_lock);
+  if (d3d_gl_mt_supported)
+    rp_lock_wait(d3d11device_context_lock);
 
   ID3D11DeviceContext_CopyResource(d3d11device_context, (ID3D11Resource *)presentation_buffers[tb][index_sc].tex, (ID3D11Resource *)b->tex);
 
-  rp_lock_rel(d3d11device_context_lock);
+  if (d3d_gl_mt_supported)
+    rp_lock_rel(d3d11device_context_lock);
 
   hr = IPresentationManager_Present(presentation_manager);
   if (hr) {
@@ -541,7 +546,7 @@ static int render_buffer_delete(int tb) {
   struct render_buffer_t *b = &render_buffers[tb];
 
   if (b->gl_handle) {
-    wglDXUnregisterObjectNV(gl_d3ddevice[tb], b->gl_handle);
+    wglDXUnregisterObjectNV(gl_d3ddevice, b->gl_handle);
     b->gl_handle = NULL;
   }
 
@@ -586,7 +591,7 @@ static int render_buffer_gen(int tb, int width, int height) {
   }
 
   glGenRenderbuffers(1, &b->gl_tex);
-  b->gl_handle = wglDXRegisterObjectNV(gl_d3ddevice[tb], b->tex, b->gl_tex, GL_RENDERBUFFER, WGL_ACCESS_WRITE_DISCARD_NV);
+  b->gl_handle = wglDXRegisterObjectNV(gl_d3ddevice, b->tex, b->gl_tex, GL_RENDERBUFFER, WGL_ACCESS_WRITE_DISCARD_NV);
   if (!b->gl_handle) {
     err_log("wglDXRegisterObjectNV failed: %d\n", (int)GetLastError());
     goto fail;
@@ -666,6 +671,17 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
     err_log("QueryInterface IDXGIAdapter failed: %d\n", (int)hr);
     return hr;
   }
+
+  DXGI_ADAPTER_DESC adapter_desc = {};
+  hr = IDXGIAdapter_GetDesc(dxgi_adapter, &adapter_desc);
+  if (hr) {
+    err_log("GetDesc failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  // On AMD D3D GL interop doesn't work well in multithreaded scenarios
+  // Only tested to be working in NVIDIA for now
+  d3d_gl_mt_supported = adapter_desc.VendorId == 0x10de ? true : adapter_desc.VendorId == 0x1002 ? false : false;
 
   hr = IDXGIAdapter_GetParent(dxgi_adapter, &IID_IDXGIFactory2, (void **)&dxgi_factory);
   if (hr) {
@@ -784,7 +800,7 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
     sc_desc.BufferCount = COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN;
     sc_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     sc_desc.Scaling = DXGI_SCALING_STRETCH;
-    sc_desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+    sc_desc.SwapEffect = IsWindows10OrGreater() ? DXGI_SWAP_EFFECT_FLIP_DISCARD : DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
     sc_desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
 
     hr = IDXGIFactory2_CreateSwapChainForComposition(dxgi_factory, (IUnknown *)d3d11device, &sc_desc, NULL, &dxgi_sc[i]);
@@ -1019,13 +1035,10 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
   }
 #endif
 
-  for (int j = 0; j < SCREEN_COUNT; ++j) {
-    SDL_GL_MakeCurrent(win_ogl[j], glContext[j]);
-    gl_d3ddevice[j] = wglDXOpenDeviceNV(d3d11device);
-    if (!gl_d3ddevice[j]) {
-      err_log("wglDXOpenDeviceNV failed: %d\n", (int)GetLastError());
-        return hr;
-    }
+  gl_d3ddevice = wglDXOpenDeviceNV(d3d11device);
+  if (!gl_d3ddevice) {
+    err_log("wglDXOpenDeviceNV failed: %d\n", (int)GetLastError());
+      return hr;
   }
 
 #ifdef USE_DIRECT_COMPOSITION
@@ -3810,8 +3823,12 @@ ThreadLoop(int i)
     if (render_buffer_get(i, win_width[i], win_height[i], &tex_sc, &handle_sc) != 0) {
       return;
     }
-    if (!wglDXLockObjectsNV(gl_d3ddevice[i], 1, &handle_sc)) {
+    if (!d3d_gl_mt_supported)
+      rp_lock_wait(d3d11device_context_lock);
+    if (!wglDXLockObjectsNV(gl_d3ddevice, 1, &handle_sc)) {
       err_log("wglDXLockObjectsNV failed: %d\n", (int)GetLastError());
+      if (!d3d_gl_mt_supported)
+        rp_lock_rel(d3d11device_context_lock);
       return;
     }
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[i]);
@@ -3876,10 +3893,12 @@ ThreadLoop(int i)
 #ifdef USE_COMPOSITION_SWAPCHAIN
   if (use_composition_swapchain) {
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    if (!wglDXUnlockObjectsNV(gl_d3ddevice[i], 1, &handle_sc)) {
+    if (!wglDXUnlockObjectsNV(gl_d3ddevice, 1, &handle_sc)) {
       err_log("wglDXUnlockObjectsNV failed: %d\n", (int)GetLastError());
     }
     presentation_buffer_present(i, COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN);
+    if (!d3d_gl_mt_supported)
+      rp_lock_rel(d3d11device_context_lock);
   } else {
     SDL_GL_SwapWindow(win[i]);
   }
