@@ -121,6 +121,7 @@ GLuint gl_fbo_sc[SCREEN_COUNT];
 
 static ID3D11Device *d3d11device;
 static ID3D11DeviceContext *d3d11device_context;
+static rp_lock_t d3d11device_context_lock;
 static IPresentationFactory *presentation_factory;
 static IDXGIDevice *dxgi_device;
 static IDXGIDevice2 *dxgi_device2;
@@ -435,25 +436,20 @@ static int presentation_buffer_present(int tb, __attribute__ ((unused)) int coun
     return -1;
   }
 
-#if 0
-  ID3D11RenderTargetView *rtv;
-  hr = ID3D11Device_CreateRenderTargetView(d3d11device, (ID3D11Resource *)tex, NULL, &rtv);
-  if (hr) {
-    err_log("CreateRenderTargetView failed: %d\n", (int)hr);
-    return -1;
-  }
+  rp_lock_wait(d3d11device_context_lock);
 
-  float clearColor[4];
-  nk_color_fv(clearColor, nk_window_bgcolor);
-  ID3D11DeviceContext_ClearRenderTargetView(d3d11device_context, rtv, clearColor);
-  ID3D11RenderTargetView_Release(rtv);
-#else
   ID3D11DeviceContext_CopyResource(d3d11device_context, (ID3D11Resource *)tex, (ID3D11Resource *)b->tex);
-#endif
+
+  rp_lock_rel(d3d11device_context_lock);
 
   hr = IDXGISwapChain1_Present(dxgi_sc[tb], 1, 0);
   if (hr) {
     err_log("Present failed: %d\n", (int)hr);
+    if (hr == DXGI_ERROR_DEVICE_REMOVED) {
+      hr = ID3D11Device_GetDeviceRemovedReason(d3d11device);
+      err_log("GetDeviceRemovedReason: %d\n", (int)hr);
+    }
+    running = 0;
     return -1;
   }
 
@@ -469,22 +465,6 @@ static int presentation_buffer_present(int tb, __attribute__ ((unused)) int coun
   }
 
   HRESULT hr;
-
-#if 0
-  ID3D11RenderTargetView *rtv;
-  hr = ID3D11Device_CreateRenderTargetView(d3d11device, (ID3D11Resource *)presentation_buffers[tb][index_sc].tex, NULL, &rtv);
-  if (hr) {
-    err_log("CreateRenderTargetView failed: %d\n", (int)hr);
-    return -1;
-  }
-
-  float clearColor[4];
-  nk_color_fv(clearColor, nk_window_bgcolor);
-  ID3D11DeviceContext_ClearRenderTargetView(d3d11device_context, rtv, clearColor);
-  ID3D11RenderTargetView_Release(rtv);
-#else
-  ID3D11DeviceContext_CopyResource(d3d11device_context, (ID3D11Resource *)presentation_buffers[tb][index_sc].tex, (ID3D11Resource *)b->tex);
-#endif
 
   hr = IPresentationSurface_SetBuffer(presentation_surface[tb], presentation_buffers[tb][index_sc].buf);
   if (hr) {
@@ -515,6 +495,12 @@ static int presentation_buffer_present(int tb, __attribute__ ((unused)) int coun
     }
 #endif
   }
+
+  rp_lock_wait(d3d11device_context_lock);
+
+  ID3D11DeviceContext_CopyResource(d3d11device_context, (ID3D11Resource *)presentation_buffers[tb][index_sc].tex, (ID3D11Resource *)b->tex);
+
+  rp_lock_rel(d3d11device_context_lock);
 
   hr = IPresentationManager_Present(presentation_manager);
   if (hr) {
@@ -640,6 +626,8 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
     err_log("D3D11CreateDevice failed: %d\n", (int)hr);
     return hr;
   }
+
+  rp_lock_init(d3d11device_context_lock);
 
   hr = pfn_CreatePresentationFactory((IUnknown *)d3d11device, &IID_IPresentationFactory, (void **)&presentation_factory);
   if (hr) {
