@@ -124,11 +124,12 @@ static IDXGISwapChain1 *dxgi_sc[SCREEN_COUNT];
 static int width_sc[SCREEN_COUNT];
 static int height_sc[SCREEN_COUNT];
 #else
-static HANDLE pres_man_lost_event[SCREEN_COUNT];
-static HANDLE pres_man_stat_avail_event[SCREEN_COUNT];
+static HANDLE pres_man_lost_event;
+static HANDLE pres_man_stat_avail_event;
 static IPresentationManager *presentation_manager;
 static HANDLE composition_surface[SCREEN_COUNT];
 static IPresentationSurface *presentation_surface[SCREEN_COUNT];
+static RECT src_rect[SCREEN_COUNT];
 #ifdef USE_DIRECT_COMPOSITION
 static IUnknown *dcomp_surface[SCREEN_COUNT];
 #endif
@@ -264,7 +265,7 @@ fail:
   return -1;
 }
 
-static void pres_man_proc_stat(int tb) {
+static void pres_man_proc_stat(void) {
   HRESULT hr;
 
   IPresentStatistics *pres_stat;
@@ -276,7 +277,7 @@ static void pres_man_proc_stat(int tb) {
 
   UINT64 pres_id = IPresentStatistics_GetPresentId(pres_stat);
   PresentStatisticsKind pres_kind = IPresentStatistics_GetKind(pres_stat);
-  err_log("Present stat %d %llu %d\n", tb, (unsigned long long)pres_id, (int)pres_kind);
+  err_log("Present stat %llu %d\n", (unsigned long long)pres_id, (int)pres_kind);
 
   switch (pres_kind) {
     case PresentStatisticsKind_PresentStatus: {
@@ -339,7 +340,9 @@ done:
 }
 
 static int presentation_buffer_get(int tb, int count_max, int width, int height, int *index) {
-  const int events_count = count_max + 2;
+  int events_count = count_max + 1;
+  if (tb == SCREEN_TOP)
+    ++events_count;
   HANDLE events[events_count];
   for (int i = 0; i < count_max; ++i) {
     if (!presentation_buffers[tb][i].tex) {
@@ -352,8 +355,9 @@ static int presentation_buffer_get(int tb, int count_max, int width, int height,
 
     events[i] = presentation_buffers[tb][i].buf_avail_event;
   }
-  events[count_max] = pres_man_stat_avail_event[tb];
-  events[count_max + 1] = pres_man_lost_event[tb];
+  events[count_max] = pres_man_lost_event;
+  if (tb == SCREEN_TOP)
+    events[count_max + 1] = pres_man_stat_avail_event;
 
   DWORD res;
   while (1) {
@@ -366,14 +370,14 @@ static int presentation_buffer_get(int tb, int count_max, int width, int height,
     }
 
     res -= WAIT_OBJECT_0;
-    if ((int)res == count_max + 1) {
+    if ((int)res == count_max) {
       err_log("Presentation manager lost\n");
       running = 0;
       return -1;
     }
 
-    if ((int)res == count_max) {
-      pres_man_proc_stat(tb);
+    if ((int)res == count_max + 1) {
+      pres_man_proc_stat();
       continue;
     }
 
@@ -381,8 +385,12 @@ static int presentation_buffer_get(int tb, int count_max, int width, int height,
   }
 
   res = WaitForMultipleObjects(count_max, events, FALSE, INFINITE);
+  if ((int)(res - WAIT_OBJECT_0) >= count_max) {
+    return -1;
+  }
+  res -= WAIT_OBJECT_0;
 
-  err_log("%d %d %llu\n", tb, (int)res, (unsigned long long)IPresentationManager_GetNextPresentId(presentation_manager));
+  // err_log("%d %d %llu\n", tb, (int)res, (unsigned long long)IPresentationManager_GetNextPresentId(presentation_manager));
 
   int i = res;
   if (presentation_buffers[tb][i].width != width || presentation_buffers[tb][i].height != height) {
@@ -475,6 +483,16 @@ static int presentation_buffer_present(int tb, __attribute__ ((unused)) int coun
   if (hr) {
     err_log("SetBuffer failed: %d\n", (int)hr);
     return -1;
+  }
+
+  if (src_rect[tb].right != b->width || src_rect[tb].bottom != b->height) {
+    src_rect[tb].right = b->width;
+    src_rect[tb].bottom = b->height;
+    hr = IPresentationSurface_SetSourceRect(presentation_surface[tb], &src_rect[tb]);
+    if (hr) {
+      err_log("SetSourceRect failed: %d\n", (int)hr);
+      return hr;
+    }
   }
 
   hr = IPresentationManager_Present(presentation_manager);
@@ -756,36 +774,6 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
       err_log("SetColorSpace failed: %d\n", (int)hr);
       return hr;
     }
-
-    hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager, PresentStatisticsKind_CompositionFrame, true);
-    if (hr) {
-      err_log("EnablePresentStatisticsKind CompositionFrame failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager, PresentStatisticsKind_PresentStatus, true);
-    if (hr) {
-      err_log("EnablePresentStatisticsKind PresentStatus failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager, PresentStatisticsKind_IndependentFlipFrame, true);
-    if (hr) {
-      err_log("EnablePresentStatisticsKind IndependentFlipFrame failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    hr = IPresentationManager_GetLostEvent(presentation_manager, &pres_man_lost_event[i]);
-    if (hr) {
-      err_log("GetLostEvent failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    hr = IPresentationManager_GetPresentStatisticsAvailableEvent(presentation_manager, &pres_man_stat_avail_event[i]);
-    if (hr) {
-      err_log("GetPresentStatisticsAvailableEvent failed: %d\n", (int)hr);
-      return hr;
-    }
 #endif
 
 #ifdef USE_DIRECT_COMPOSITION
@@ -919,6 +907,44 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
 
 #endif
   }
+
+#ifndef USE_DXGI_SWAPCHAIN
+  hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager, PresentStatisticsKind_CompositionFrame, true);
+  if (hr) {
+    err_log("EnablePresentStatisticsKind CompositionFrame failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager, PresentStatisticsKind_PresentStatus, true);
+  if (hr) {
+    err_log("EnablePresentStatisticsKind PresentStatus failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager, PresentStatisticsKind_IndependentFlipFrame, true);
+  if (hr) {
+    err_log("EnablePresentStatisticsKind IndependentFlipFrame failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  hr = IPresentationManager_GetLostEvent(presentation_manager, &pres_man_lost_event);
+  if (hr) {
+    err_log("GetLostEvent failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  hr = IPresentationManager_ForceVSyncInterrupt(presentation_manager, false);
+  if (hr) {
+    err_log("ForceVSyncInterrupt failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  hr = IPresentationManager_GetPresentStatisticsAvailableEvent(presentation_manager, &pres_man_stat_avail_event);
+  if (hr) {
+    err_log("GetPresentStatisticsAvailableEvent failed: %d\n", (int)hr);
+    return hr;
+  }
+#endif
 
   for (int j = 0; j < SCREEN_COUNT; ++j) {
     SDL_GL_MakeCurrent(win_ogl[j], glContext[j]);
