@@ -5419,9 +5419,6 @@ int main(int argc, char *argv[])
   SDL_GL_MakeCurrent(win_ogl[SCREEN_TOP], glContext[SCREEN_TOP]);
   glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
 
-  struct nk_context *ctx = nk_ctx = nk_sdl_init(win[SCREEN_TOP]);
-#endif
-
 #ifdef USE_COMPOSITION_SWAPCHAIN
   if (use_composition_swapchain) {
     win_flags &= ~SDL_WINDOW_OPENGL;
@@ -5479,6 +5476,9 @@ end_use_c_sc:
 start_use_c_sc:
 
   SDL_GL_MakeCurrent(win_ogl[SCREEN_TOP], glContext[SCREEN_TOP]);
+#endif
+
+  struct nk_context *ctx = nk_ctx = nk_sdl_init(win[SCREEN_TOP]);
 #endif
 
   SDL_ShowWindow(win[SCREEN_TOP]);
