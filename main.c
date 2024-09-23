@@ -519,6 +519,11 @@ static int presentation_buffer_present(int tb, __attribute__ ((unused)) int coun
   hr = IPresentationManager_Present(presentation_manager);
   if (hr) {
     err_log("Present failed: %d\n", (int)hr);
+    if (hr == DXGI_ERROR_DEVICE_REMOVED) {
+      hr = ID3D11Device_GetDeviceRemovedReason(d3d11device);
+      err_log("GetDeviceRemovedReason: %d\n", (int)hr);
+    }
+    running = 0;
     return -1;
   }
 
