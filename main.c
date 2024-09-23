@@ -99,6 +99,9 @@ static GLuint glFboEbo[SCREEN_COUNT];
 static bool ro_init;
 #define RO_INIT() (ro_init ? RoInitialize(RO_INIT_MULTITHREADED) : CoInitializeEx(NULL, COINIT_MULTITHREADED))
 #define RO_UNINIT() (ro_init ? RoUninitialize() : CoUninitialize())
+#else
+#define RO_INIT()
+#define RO_UNINIT()
 #endif
 
 #ifdef USE_COMPOSITION_SWAPCHAIN
@@ -1116,11 +1119,11 @@ static inline uint32_t iclock()
   return (uint32_t)(iclock64() & 0xfffffffful);
 }
 
-// #ifndef SDL_GL_SINGLE_THREAD
-// #ifndef _WIN32
-// #define SDL_GL_SYNC
-// #endif
-// #endif
+#ifndef SDL_GL_SINGLE_THREAD
+#ifndef _WIN32
+#define SDL_GL_SYNC
+#endif
+#endif
 
 #ifdef _WIN32
 #define thread_t HANDLE
