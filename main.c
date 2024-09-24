@@ -148,24 +148,22 @@ static bool compositing;
 static rp_sem_t compositing_begin_sem;
 static rp_sem_t compositing_end_sem;
 
-static ID3D11Device *d3d11device;
-static ID3D11DeviceContext *d3d11device_context;
-static rp_lock_t d3d11device_context_lock;
-static bool d3d_gl_mt_supported;
-static IDXGIDevice *dxgi_device;
-static IDXGIDevice2 *dxgi_device2;
-static IDXGIAdapter *dxgi_adapter;
-static IDXGIFactory2 *dxgi_factory;
+static ID3D11Device *d3d11device[SCREEN_COUNT];
+static ID3D11DeviceContext *d3d11device_context[SCREEN_COUNT];
+static IDXGIDevice *dxgi_device[SCREEN_COUNT];
+static IDXGIDevice2 *dxgi_device2[SCREEN_COUNT];
+static IDXGIAdapter *dxgi_adapter[SCREEN_COUNT];
+static IDXGIFactory2 *dxgi_factory[SCREEN_COUNT];
 #ifdef USE_DXGI_SWAPCHAIN
 static IDXGISwapChain1 *dxgi_sc[SCREEN_COUNT];
 static int width_sc[SCREEN_COUNT];
 static int height_sc[SCREEN_COUNT];
 #else
-static IPresentationFactory *presentation_factory;
-static bool displayable_surface_support;
-static HANDLE pres_man_lost_event;
-static HANDLE pres_man_stat_avail_event;
-static IPresentationManager *presentation_manager;
+static IPresentationFactory *presentation_factory[SCREEN_COUNT];
+static bool displayable_surface_support[SCREEN_COUNT];
+static HANDLE pres_man_lost_event[SCREEN_COUNT];
+static HANDLE pres_man_stat_avail_event[SCREEN_COUNT];
+static IPresentationManager *presentation_manager[SCREEN_COUNT];
 static HANDLE composition_surface[SCREEN_COUNT];
 static IPresentationSurface *presentation_surface[SCREEN_COUNT];
 static RECT src_rect[SCREEN_COUNT];
@@ -174,9 +172,9 @@ static IUnknown *dcomp_surface[SCREEN_COUNT];
 #endif
 #endif
 #ifdef USE_DIRECT_COMPOSITION
-static IDCompositionDesktopDevice *dcomp_desktop_device;
-static IDCompositionDevice *dcomp_device1;
-static IDCompositionDevice3 *dcomp_device;
+static IDCompositionDesktopDevice *dcomp_desktop_device[SCREEN_COUNT];
+static IDCompositionDevice *dcomp_device1[SCREEN_COUNT];
+static IDCompositionDevice3 *dcomp_device[SCREEN_COUNT];
 static IDCompositionTarget *dcomp_target[SCREEN_COUNT];
 static IDCompositionVisual2 *dcomp_visual[SCREEN_COUNT];
 #else
@@ -212,7 +210,7 @@ static void d3d11_trigger_tdr(void) {
 #define COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN (3)
 #define PRESENATTION_BUFFER_COUNT_PER_SCREEN (8)
 
-static HANDLE gl_d3ddevice;
+static HANDLE gl_d3ddevice[SCREEN_COUNT];
 
 static struct render_buffer_t {
   ID3D11Texture2D *tex;
@@ -269,19 +267,19 @@ static int presentation_buffer_gen(int tb, int i, int width, int height) {
   tex_desc.Usage = D3D11_USAGE_DEFAULT;
   tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
   tex_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
-  if (displayable_surface_support)
+  if (displayable_surface_support[tb])
     tex_desc.MiscFlags |= D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE;
   tex_desc.CPUAccessFlags = 0;
 
   HRESULT hr;
 
-  hr = ID3D11Device_CreateTexture2D(d3d11device, &tex_desc, NULL, &b->tex);
+  hr = ID3D11Device_CreateTexture2D(d3d11device[tb], &tex_desc, NULL, &b->tex);
   if (hr) {
     err_log("CreateTexture2D failed: %d\n", (int)hr);
     goto fail;
   }
 
-  hr = IPresentationManager_AddBufferFromResource(presentation_manager, (IUnknown *)b->tex, &b->buf);
+  hr = IPresentationManager_AddBufferFromResource(presentation_manager[tb], (IUnknown *)b->tex, &b->buf);
   if (hr) {
     err_log("AddBufferFromResource failed: %d\n", (int)hr);
     goto fail;
@@ -320,11 +318,11 @@ fail:
   return -1;
 }
 
-static void pres_man_proc_stat(void) {
+static void pres_man_proc_stat(int tb) {
   HRESULT hr;
 
   IPresentStatistics *pres_stat;
-  hr = IPresentationManager_GetNextPresentStatistics(presentation_manager, &pres_stat);
+  hr = IPresentationManager_GetNextPresentStatistics(presentation_manager[tb], &pres_stat);
   if (hr) {
     err_log("GetNextPresentStatistics failed: %d\n", (int)hr);
     return;
@@ -332,7 +330,7 @@ static void pres_man_proc_stat(void) {
 
   UINT64 pres_id = IPresentStatistics_GetPresentId(pres_stat);
   PresentStatisticsKind pres_kind = IPresentStatistics_GetKind(pres_stat);
-  err_log("Present stat %llu %d\n", (unsigned long long)pres_id, (int)pres_kind);
+  err_log("Present stat %d %llu %d\n", tb, (unsigned long long)pres_id, (int)pres_kind);
 
   switch (pres_kind) {
     case PresentStatisticsKind_PresentStatus: {
@@ -432,7 +430,7 @@ static int presentation_buffer_get(int tb, int count_max, int width, int height,
     }
 
     if ((int)res == count_max + 1) {
-      pres_man_proc_stat();
+      pres_man_proc_stat(tb);
       continue;
     }
 
@@ -468,7 +466,7 @@ static int dcomp_set_offset_y(int tb, int height) {
     return hr;
   }
 
-  hr = dcomp_device->lpVtbl->Commit(dcomp_device);
+  hr = dcomp_device[tb]->lpVtbl->Commit(dcomp_device[tb]);
   if (hr) {
     err_log("Commit failed: %d\n", (int)hr);
     return hr;
@@ -508,19 +506,13 @@ static int presentation_buffer_present(int tb, __attribute__ ((unused)) int coun
     return -1;
   }
 
-  if (d3d_gl_mt_supported)
-    rp_lock_wait(d3d11device_context_lock);
-
-  ID3D11DeviceContext_CopyResource(d3d11device_context, (ID3D11Resource *)tex, (ID3D11Resource *)b->tex);
-
-  if (d3d_gl_mt_supported)
-    rp_lock_rel(d3d11device_context_lock);
+  ID3D11DeviceContext_CopyResource(d3d11device_context[tb], (ID3D11Resource *)tex, (ID3D11Resource *)b->tex);
 
   hr = IDXGISwapChain1_Present(dxgi_sc[tb], 1, 0);
   if (hr) {
     err_log("Present failed: %d\n", (int)hr);
     if (hr == DXGI_ERROR_DEVICE_REMOVED) {
-      hr = ID3D11Device_GetDeviceRemovedReason(d3d11device);
+      hr = ID3D11Device_GetDeviceRemovedReason(d3d11device[tb]);
       err_log("GetDeviceRemovedReason: %d\n", (int)hr);
     }
     compositing = 0;
@@ -562,19 +554,13 @@ static int presentation_buffer_present(int tb, __attribute__ ((unused)) int coun
 #endif
   }
 
-  if (d3d_gl_mt_supported)
-    rp_lock_wait(d3d11device_context_lock);
+  ID3D11DeviceContext_CopyResource(d3d11device_context[tb], (ID3D11Resource *)presentation_buffers[tb][index_sc].tex, (ID3D11Resource *)b->tex);
 
-  ID3D11DeviceContext_CopyResource(d3d11device_context, (ID3D11Resource *)presentation_buffers[tb][index_sc].tex, (ID3D11Resource *)b->tex);
-
-  if (d3d_gl_mt_supported)
-    rp_lock_rel(d3d11device_context_lock);
-
-  hr = IPresentationManager_Present(presentation_manager);
+  hr = IPresentationManager_Present(presentation_manager[tb]);
   if (hr) {
     err_log("Present failed: %d\n", (int)hr);
     if (hr == DXGI_ERROR_DEVICE_REMOVED) {
-      hr = ID3D11Device_GetDeviceRemovedReason(d3d11device);
+      hr = ID3D11Device_GetDeviceRemovedReason(d3d11device[tb]);
       err_log("GetDeviceRemovedReason: %d\n", (int)hr);
     }
     compositing = 0;
@@ -590,7 +576,7 @@ static int render_buffer_delete(int tb) {
 
   if (b->gl_handle) {
     // In case of gl device lost (e.g. graphics driver reset) this will crash on NVIDIA.
-    wglDXUnregisterObjectNV(gl_d3ddevice, b->gl_handle);
+    wglDXUnregisterObjectNV(gl_d3ddevice[tb], b->gl_handle);
     b->gl_handle = NULL;
   }
 
@@ -628,14 +614,14 @@ static int render_buffer_gen(int tb, int width, int height) {
 
   HRESULT hr;
 
-  hr = ID3D11Device_CreateTexture2D(d3d11device, &tex_desc, NULL, &b->tex);
+  hr = ID3D11Device_CreateTexture2D(d3d11device[tb], &tex_desc, NULL, &b->tex);
   if (hr) {
     err_log("CreateTexture2D failed: %d\n", (int)hr);
     goto fail;
   }
 
   glGenRenderbuffers(1, &b->gl_tex);
-  b->gl_handle = wglDXRegisterObjectNV(gl_d3ddevice, b->tex, b->gl_tex, GL_RENDERBUFFER, WGL_ACCESS_WRITE_DISCARD_NV);
+  b->gl_handle = wglDXRegisterObjectNV(gl_d3ddevice[tb], b->tex, b->gl_tex, GL_RENDERBUFFER, WGL_ACCESS_WRITE_DISCARD_NV);
   if (!b->gl_handle) {
     err_log("wglDXRegisterObjectNV failed: %d\n", (int)GetLastError());
     goto fail;
@@ -685,96 +671,88 @@ static void composition_buffer_cleanup(int tb) {
 static int composition_swapchain_device_init(void) {
   HRESULT hr;
 
-  D3D_FEATURE_LEVEL featureLevelSupported;
+  for (int i = 0; i < SCREEN_COUNT; ++i) {
+    D3D_FEATURE_LEVEL featureLevelSupported;
 
-  hr = D3D11CreateDevice(
-    NULL,
-    D3D_DRIVER_TYPE_HARDWARE,
-    NULL,
-    D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS,
-    NULL,
-    0,
-    D3D11_SDK_VERSION,
-    &d3d11device,
-    &featureLevelSupported,
-    &d3d11device_context);
-  if (hr) {
-    err_log("D3D11CreateDevice failed: %d\n", (int)hr);
-    return hr;
-  }
+    hr = D3D11CreateDevice(
+      NULL,
+      D3D_DRIVER_TYPE_HARDWARE,
+      NULL,
+      D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS,
+      NULL,
+      0,
+      D3D11_SDK_VERSION,
+      &d3d11device[i],
+      &featureLevelSupported,
+      &d3d11device_context[i]);
+    if (hr) {
+      err_log("D3D11CreateDevice failed: %d\n", (int)hr);
+      return hr;
+    }
 
-  hr = ID3D11Device_QueryInterface(d3d11device, &IID_IDXGIDevice, (void **)&dxgi_device);
-  if (hr) {
-    err_log("QueryInterface IDXGIDevice failed: %d\n", (int)hr);
-    return hr;
-  }
+    hr = ID3D11Device_QueryInterface(d3d11device[i], &IID_IDXGIDevice, (void **)&dxgi_device[i]);
+    if (hr) {
+      err_log("QueryInterface IDXGIDevice failed: %d\n", (int)hr);
+      return hr;
+    }
 
-  hr = ID3D11Device_QueryInterface(d3d11device, &IID_IDXGIDevice2, (void **)&dxgi_device2);
-  if (hr) {
-    err_log("QueryInterface IDXGIDevice2 failed: %d\n", (int)hr);
-    return hr;
-  }
+    hr = ID3D11Device_QueryInterface(d3d11device[i], &IID_IDXGIDevice2, (void **)&dxgi_device2[i]);
+    if (hr) {
+      err_log("QueryInterface IDXGIDevice2 failed: %d\n", (int)hr);
+      return hr;
+    }
 
-  hr = IDXGIDevice2_GetParent(dxgi_device2, &IID_IDXGIAdapter, (void **)&dxgi_adapter);
-  if (hr) {
-    err_log("QueryInterface IDXGIAdapter failed: %d\n", (int)hr);
-    return hr;
-  }
+    hr = IDXGIDevice2_GetParent(dxgi_device2[i], &IID_IDXGIAdapter, (void **)&dxgi_adapter[i]);
+    if (hr) {
+      err_log("QueryInterface IDXGIAdapter failed: %d\n", (int)hr);
+      return hr;
+    }
 
-  DXGI_ADAPTER_DESC adapter_desc = {};
-  hr = IDXGIAdapter_GetDesc(dxgi_adapter, &adapter_desc);
-  if (hr) {
-    err_log("GetDesc failed: %d\n", (int)hr);
-    return hr;
-  }
+    DXGI_ADAPTER_DESC adapter_desc = {};
+    hr = IDXGIAdapter_GetDesc(dxgi_adapter[i], &adapter_desc);
+    if (hr) {
+      err_log("GetDesc failed: %d\n", (int)hr);
+      return hr;
+    }
 
-  // On AMD D3D GL interop would crash if imported objects were used from multiple threads at the same time,
-  // even if the objects were different.
-  // On NVIDIA there were the occasional device lost as well.
-  d3d_gl_mt_supported = adapter_desc.VendorId == 0x10de ? false : adapter_desc.VendorId == 0x1002 ? false : false;
-
-  hr = IDXGIAdapter_GetParent(dxgi_adapter, &IID_IDXGIFactory2, (void **)&dxgi_factory);
-  if (hr) {
-    err_log("QueryInterface IDXGIFactory2 failed: %d\n", (int)hr);
-    return hr;
-  }
+    hr = IDXGIAdapter_GetParent(dxgi_adapter[i], &IID_IDXGIFactory2, (void **)&dxgi_factory[i]);
+    if (hr) {
+      err_log("QueryInterface IDXGIFactory2 failed: %d\n", (int)hr);
+      return hr;
+    }
 
 #ifndef USE_DXGI_SWAPCHAIN
-  hr = pfn_CreatePresentationFactory((IUnknown *)d3d11device, &IID_IPresentationFactory, (void **)&presentation_factory);
-  if (hr) {
-    err_log("CreatePresentationFactory failed: %d\n", (int)hr);
-    return hr;
-  }
+    hr = pfn_CreatePresentationFactory((IUnknown *)d3d11device[i], &IID_IPresentationFactory, (void **)&presentation_factory[i]);
+    if (hr) {
+      err_log("CreatePresentationFactory failed: %d\n", (int)hr);
+      return hr;
+    }
 
-  if (
-    !(
-      IPresentationFactory_IsPresentationSupportedWithIndependentFlip(presentation_factory) ||
-      IPresentationFactory_IsPresentationSupported(presentation_factory)
-    )
-  ) {
-    err_log("presentation not supported\n");
-    return -1;
-  }
+    if (
+      !(
+        IPresentationFactory_IsPresentationSupportedWithIndependentFlip(presentation_factory[i]) ||
+        IPresentationFactory_IsPresentationSupported(presentation_factory[i])
+      )
+    ) {
+      err_log("presentation not supported\n");
+      return -1;
+    }
 
-  D3D11_FEATURE_DATA_DISPLAYABLE displayable_feature;
-  hr = ID3D11Device_CheckFeatureSupport(d3d11device, D3D11_FEATURE_DISPLAYABLE, &displayable_feature, sizeof(displayable_feature));
-  if (hr) {
-    err_log("CheckFeatureSupport failed: %d\n", (int)hr);
-    return hr;
-  }
-  displayable_surface_support = displayable_feature.DisplayableTexture;
-  if (!displayable_surface_support) {
-    err_log("no displayable texture support\n");
-  }
+    D3D11_FEATURE_DATA_DISPLAYABLE displayable_feature;
+    hr = ID3D11Device_CheckFeatureSupport(d3d11device[i], D3D11_FEATURE_DISPLAYABLE, &displayable_feature, sizeof(displayable_feature));
+    if (hr) {
+      err_log("CheckFeatureSupport failed: %d\n", (int)hr);
+      return hr;
+    }
+    displayable_surface_support[i] = displayable_feature.DisplayableTexture;
 
-  hr = IPresentationFactory_CreatePresentationManager(presentation_factory, &presentation_manager);
-  if (hr) {
-    err_log("CreatePresentationManager failed: %d\n", (int)hr);
-    return hr;
-  }
+    hr = IPresentationFactory_CreatePresentationManager(presentation_factory[i], &presentation_manager[i]);
+    if (hr) {
+      err_log("CreatePresentationManager failed: %d\n", (int)hr);
+      return hr;
+    }
 #endif
 
-  for (int i = 0; i < SCREEN_COUNT; ++i) {
 #ifdef USE_DXGI_SWAPCHAIN
     DXGI_SWAP_CHAIN_DESC1 sc_desc = {};
     sc_desc.Width = 1;
@@ -787,7 +765,7 @@ static int composition_swapchain_device_init(void) {
     sc_desc.SwapEffect = IsWindows10OrGreater() ? DXGI_SWAP_EFFECT_FLIP_DISCARD : DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
     sc_desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
 
-    hr = IDXGIFactory2_CreateSwapChainForComposition(dxgi_factory, (IUnknown *)d3d11device, &sc_desc, NULL, &dxgi_sc[i]);
+    hr = IDXGIFactory2_CreateSwapChainForComposition(dxgi_factory[i], (IUnknown *)d3d11device[i], &sc_desc, NULL, &dxgi_sc[i]);
     if (hr) {
       err_log("CreateSwapChainForComposition failed: %d\n", (int)hr);
       return hr;
@@ -802,7 +780,7 @@ static int composition_swapchain_device_init(void) {
       return hr;
     }
 
-    hr = IPresentationManager_CreatePresentationSurface(presentation_manager, composition_surface[i], &presentation_surface[i]);
+    hr = IPresentationManager_CreatePresentationSurface(presentation_manager[i], composition_surface[i], &presentation_surface[i]);
     if (hr) {
       err_log("CreatePresentationSurface failed: %d\n", (int)hr);
       return hr;
@@ -830,7 +808,7 @@ static int composition_swapchain_device_init(void) {
       return hr;
     }
 #else
-    hr = dcomp_device1->lpVtbl->CreateSurfaceFromHandle(dcomp_device1, composition_surface[i], &dcomp_surface[i]);
+    hr = dcomp_device1[i]->lpVtbl->CreateSurfaceFromHandle(dcomp_device1[i], composition_surface[i], &dcomp_surface[i]);
     if (hr) {
       err_log("CreateSurfaceFromHandle failed: %d\n", (int)hr);
       return hr;
@@ -872,53 +850,53 @@ static int composition_swapchain_device_init(void) {
     }
 
 #endif
-  }
+
 #ifndef USE_DXGI_SWAPCHAIN
 #if 0
-  hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager, PresentStatisticsKind_CompositionFrame, true);
-  if (hr) {
-    err_log("EnablePresentStatisticsKind CompositionFrame failed: %d\n", (int)hr);
-    return hr;
-  }
-
-  hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager, PresentStatisticsKind_PresentStatus, true);
-  if (hr) {
-    err_log("EnablePresentStatisticsKind PresentStatus failed: %d\n", (int)hr);
-    return hr;
-  }
-
-  hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager, PresentStatisticsKind_IndependentFlipFrame, true);
-  if (hr) {
-    err_log("EnablePresentStatisticsKind IndependentFlipFrame failed: %d\n", (int)hr);
-    return hr;
-  }
-#endif
-
-  hr = IPresentationManager_GetLostEvent(presentation_manager, &pres_man_lost_event);
-  if (hr) {
-    err_log("GetLostEvent failed: %d\n", (int)hr);
-    return hr;
-  }
-
-  hr = IPresentationManager_ForceVSyncInterrupt(presentation_manager, false);
-  if (hr) {
-    err_log("ForceVSyncInterrupt failed: %d\n", (int)hr);
-    return hr;
-  }
-
-  hr = IPresentationManager_GetPresentStatisticsAvailableEvent(presentation_manager, &pres_man_stat_avail_event);
-  if (hr) {
-    err_log("GetPresentStatisticsAvailableEvent failed: %d\n", (int)hr);
-    return hr;
-  }
-#endif
-
-  gl_d3ddevice = wglDXOpenDeviceNV(d3d11device);
-  if (!gl_d3ddevice) {
-    err_log("wglDXOpenDeviceNV failed: %d\n", (int)GetLastError());
+    hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager[i], PresentStatisticsKind_CompositionFrame, true);
+    if (hr) {
+      err_log("EnablePresentStatisticsKind CompositionFrame failed: %d\n", (int)hr);
       return hr;
-  }
+    }
 
+    hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager[i], PresentStatisticsKind_PresentStatus, true);
+    if (hr) {
+      err_log("EnablePresentStatisticsKind PresentStatus failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager[i], PresentStatisticsKind_IndependentFlipFrame, true);
+    if (hr) {
+      err_log("EnablePresentStatisticsKind IndependentFlipFrame failed: %d\n", (int)hr);
+      return hr;
+    }
+#endif
+
+    hr = IPresentationManager_GetLostEvent(presentation_manager[i], &pres_man_lost_event[i]);
+    if (hr) {
+      err_log("GetLostEvent failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = IPresentationManager_ForceVSyncInterrupt(presentation_manager[i], false);
+    if (hr) {
+      err_log("ForceVSyncInterrupt failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = IPresentationManager_GetPresentStatisticsAvailableEvent(presentation_manager[i], &pres_man_stat_avail_event[i]);
+    if (hr) {
+      err_log("GetPresentStatisticsAvailableEvent failed: %d\n", (int)hr);
+      return hr;
+    }
+#endif
+
+    gl_d3ddevice[i] = wglDXOpenDeviceNV(d3d11device[i]);
+    if (!gl_d3ddevice[i]) {
+      err_log("wglDXOpenDeviceNV failed: %d\n", (int)GetLastError());
+        return hr;
+    }
+  }
   return 0;
 }
 
@@ -930,25 +908,7 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
 
   HRESULT hr;
 
-#ifdef USE_DIRECT_COMPOSITION
-  hr = DCompositionCreateDevice3((IUnknown *)dxgi_device, &IID_IDCompositionDesktopDevice, (void **)&dcomp_desktop_device);
-  if (hr) {
-    err_log("DCompositionCreateDevice IDXGIDevice failed: %d\n", (int)hr);
-    return hr;
-  }
-
-  hr = dcomp_desktop_device->lpVtbl->QueryInterface(dcomp_desktop_device, &IID_IDCompositionDevice3, (void **)&dcomp_device);
-  if (hr) {
-    err_log("QueryInterface IDCompositionDevice3 failed: %d\n", (int)hr);
-    return hr;
-  }
-
-  hr = dcomp_device->lpVtbl->QueryInterface(dcomp_device, &IID_IDCompositionDevice, (void **)&dcomp_device1);
-  if (hr) {
-    err_log("QueryInterface IDCompositionDevice failed: %d\n", (int)hr);
-    return hr;
-  }
-#else
+#ifndef USE_DIRECT_COMPOSITION
   struct DispatcherQueueOptions queue_options = {
     sizeof(struct DispatcherQueueOptions),
     DQTYPE_THREAD_CURRENT,
@@ -998,7 +958,25 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
 
   for (int i = 0; i < SCREEN_COUNT; ++i) {
 #ifdef USE_DIRECT_COMPOSITION
-    hr = dcomp_device->lpVtbl->CreateVisual(dcomp_device, &dcomp_visual[i]);
+    hr = DCompositionCreateDevice3((IUnknown *)dxgi_device[i], &IID_IDCompositionDesktopDevice, (void **)&dcomp_desktop_device[i]);
+    if (hr) {
+      err_log("DCompositionCreateDevice IDXGIDevice failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = dcomp_desktop_device[i]->lpVtbl->QueryInterface(dcomp_desktop_device[i], &IID_IDCompositionDevice3, (void **)&dcomp_device[i]);
+    if (hr) {
+      err_log("QueryInterface IDCompositionDevice3 failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = dcomp_device[i]->lpVtbl->QueryInterface(dcomp_device[i], &IID_IDCompositionDevice, (void **)&dcomp_device1[i]);
+    if (hr) {
+      err_log("QueryInterface IDCompositionDevice failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = dcomp_device[i]->lpVtbl->CreateVisual(dcomp_device[i], &dcomp_visual[i]);
     if (hr) {
       err_log("CreateVisual failed: %d\n", (int)hr);
       return hr;
@@ -1011,7 +989,7 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
       return hr;
     }
 
-    hr = dcomp_desktop_device->lpVtbl->CreateTargetForHwnd(dcomp_desktop_device, hwnd[i], TRUE, &dcomp_target[i]);
+    hr = dcomp_desktop_device[i]->lpVtbl->CreateTargetForHwnd(dcomp_desktop_device[i], hwnd[i], TRUE, &dcomp_target[i]);
     if (hr) {
       err_log("CreateTargetForHwnd failed: %d\n", (int)hr);
       return hr;
@@ -1020,6 +998,12 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
     hr = dcomp_target[i]->lpVtbl->SetRoot(dcomp_target[i], (IDCompositionVisual *)dcomp_visual[i]);
     if (hr) {
       err_log("SetRoot failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    hr = dcomp_device[i]->lpVtbl->Commit(dcomp_device[i]);
+    if (hr) {
+      err_log("Commit failed: %d\n", (int)hr);
       return hr;
     }
 #else
@@ -1109,43 +1093,35 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
 #endif
   }
 
-#ifdef USE_DIRECT_COMPOSITION
-  hr = dcomp_device->lpVtbl->Commit(dcomp_device);
-  if (hr) {
-    err_log("Commit failed: %d\n", (int)hr);
-    return hr;
-  }
-#endif
-
   return composition_swapchain_device_init();
 }
 
 #define CHECK_AND_RELEASE(p) do { \
   if (p) { \
     IUnknown_Release(p); \
-    p = NULL; \
+    (p) = NULL; \
   } \
 } while (0)
 
 static void composition_swapchain_device_close(void) {
-  if (gl_d3ddevice) {
-    wglDXCloseDeviceNV(gl_d3ddevice);
-    gl_d3ddevice = NULL;
-  }
+  for (int i = 0; i < SCREEN_COUNT; ++i) {
+    if (gl_d3ddevice[i]) {
+      wglDXCloseDeviceNV(gl_d3ddevice[i]);
+      gl_d3ddevice[i] = NULL;
+    }
 
 #ifndef USE_DXGI_SWAPCHAIN
-  if (pres_man_stat_avail_event) {
-    CloseHandle(pres_man_stat_avail_event);
-    pres_man_stat_avail_event = NULL;
-  }
+    if (pres_man_stat_avail_event[i]) {
+      CloseHandle(pres_man_stat_avail_event[i]);
+      pres_man_stat_avail_event[i] = NULL;
+    }
 
-  if (pres_man_lost_event) {
-    CloseHandle(pres_man_lost_event);
-    pres_man_lost_event = NULL;
-  }
+    if (pres_man_lost_event[i]) {
+      CloseHandle(pres_man_lost_event[i]);
+      pres_man_lost_event[i] = NULL;
+    }
 #endif
 
-  for (int i = 0; i < SCREEN_COUNT; ++i) {
 #ifdef USE_DIRECT_COMPOSITION
 
 #ifndef USE_DXGI_SWAPCHAIN
@@ -1170,29 +1146,26 @@ static void composition_swapchain_device_close(void) {
       composition_surface[i] = NULL;
     }
 #endif
-  }
-
 #ifndef USE_DXGI_SWAPCHAIN
-  CHECK_AND_RELEASE(presentation_manager);
+    CHECK_AND_RELEASE(presentation_manager[i]);
 
-  displayable_surface_support = false;
+    displayable_surface_support[i] = false;
 
-  CHECK_AND_RELEASE(presentation_factory);
+    CHECK_AND_RELEASE(presentation_factory[i]);
 #endif
 
-  CHECK_AND_RELEASE(dxgi_factory);
+    CHECK_AND_RELEASE(dxgi_factory[i]);
 
-  d3d_gl_mt_supported = false;
+    CHECK_AND_RELEASE(dxgi_adapter[i]);
 
-  CHECK_AND_RELEASE(dxgi_adapter);
+    CHECK_AND_RELEASE(dxgi_device2[i]);
 
-  CHECK_AND_RELEASE(dxgi_device2);
+    CHECK_AND_RELEASE(dxgi_device[i]);
 
-  CHECK_AND_RELEASE(dxgi_device);
+    CHECK_AND_RELEASE(d3d11device_context[i]);
 
-  CHECK_AND_RELEASE(d3d11device_context);
-
-  CHECK_AND_RELEASE(d3d11device);
+    CHECK_AND_RELEASE(d3d11device[i]);
+  }
 }
 
 static void composition_swapchain_close(void) {
@@ -1203,6 +1176,12 @@ static void composition_swapchain_close(void) {
     CHECK_AND_RELEASE(dcomp_target[i]);
 
     CHECK_AND_RELEASE(dcomp_visual[i]);
+
+    CHECK_AND_RELEASE(dcomp_device1[i]);
+
+    CHECK_AND_RELEASE(dcomp_device[i]);
+
+    CHECK_AND_RELEASE(dcomp_desktop_device[i]);
 #else
     CHECK_AND_RELEASE(comp_visual[i]);
 
@@ -1220,13 +1199,7 @@ static void composition_swapchain_close(void) {
 #endif
   }
 
-#ifdef USE_DIRECT_COMPOSITION
-  CHECK_AND_RELEASE(dcomp_device1);
-
-  CHECK_AND_RELEASE(dcomp_device);
-
-  CHECK_AND_RELEASE(dcomp_desktop_device);
-#else
+#ifndef USE_DIRECT_COMPOSITION
   CHECK_AND_RELEASE(comp_desktop_interop);
 
   CHECK_AND_RELEASE(comp_interop);
@@ -4017,13 +3990,9 @@ ThreadLoop(int i)
       compositing = 0;
       return;
     }
-    if (!d3d_gl_mt_supported)
-      rp_lock_wait(d3d11device_context_lock);
     // Hang on AMD (there may be other hang locations) when gl device is lost.
-    if (!wglDXLockObjectsNV(gl_d3ddevice, 1, &handle_sc)) {
+    if (!wglDXLockObjectsNV(gl_d3ddevice[i], 1, &handle_sc)) {
       err_log("wglDXLockObjectsNV failed: %d\n", (int)GetLastError());
-      if (!d3d_gl_mt_supported)
-        rp_lock_rel(d3d11device_context_lock);
       compositing = 0;
       return;
     }
@@ -4089,12 +4058,10 @@ ThreadLoop(int i)
 #ifdef USE_COMPOSITION_SWAPCHAIN
   if (use_composition_swapchain) {
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    if (!wglDXUnlockObjectsNV(gl_d3ddevice, 1, &handle_sc)) {
+    if (!wglDXUnlockObjectsNV(gl_d3ddevice[i], 1, &handle_sc)) {
       err_log("wglDXUnlockObjectsNV failed: %d\n", (int)GetLastError());
     }
     presentation_buffer_present(i, COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN);
-    if (!d3d_gl_mt_supported)
-      rp_lock_rel(d3d11device_context_lock);
   } else {
     SDL_GL_SwapWindow(win[i]);
   }
@@ -5753,8 +5720,6 @@ int main(int argc, char *argv[])
       goto end_use_c_sc;
     }
 
-    rp_lock_init(d3d11device_context_lock);
-
     compositing = 1;
     rp_sem_create(compositing_begin_sem, 0, SCREEN_COUNT);
     rp_sem_create(compositing_end_sem, 0, SCREEN_COUNT);
@@ -6101,7 +6066,6 @@ start_use_c_sc:
   if (use_composition_swapchain) {
     rp_sem_close(compositing_end_sem);
     rp_sem_close(compositing_begin_sem);
-    rp_lock_close(d3d11device_context_lock);
 
     SDL_DestroyWindow(win_sc[SCREEN_BOT]);
     SDL_DestroyWindow(win_sc[SCREEN_TOP]);
