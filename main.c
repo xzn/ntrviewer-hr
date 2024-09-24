@@ -728,9 +728,10 @@ static int composition_swapchain_device_init(void) {
     return hr;
   }
 
-  // On AMD D3D GL interop doesn't work well in multithreaded scenarios
-  // Only tested to be working in NVIDIA for now
-  d3d_gl_mt_supported = adapter_desc.VendorId == 0x10de ? true : adapter_desc.VendorId == 0x1002 ? false : false;
+  // On AMD D3D GL interop would crash if imported objects were used from multiple threads at the same time,
+  // even if the objects were different.
+  // On NVIDIA there were the occasional device lost as well.
+  d3d_gl_mt_supported = adapter_desc.VendorId == 0x10de ? false : adapter_desc.VendorId == 0x1002 ? false : false;
 
   hr = IDXGIAdapter_GetParent(dxgi_adapter, &IID_IDXGIFactory2, (void **)&dxgi_factory);
   if (hr) {
