@@ -411,7 +411,7 @@ static int presentation_buffer_get(int tb, int count_max, int width, int height,
     res -= WAIT_OBJECT_0;
     if ((int)res == count_max) {
       err_log("Presentation manager lost\n");
-      running = 0;
+      compositing = 0;
       return -1;
     }
 
