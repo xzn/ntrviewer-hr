@@ -72,9 +72,9 @@ extern bool rp_lock_srw;
 })
 #define rp_sem_timedwait(n, to_ns, e) ({ \
 	int _ret; \
-	DWORD to_ms = (to_ns) / 1000000; \
+	DWORD _to_ms = (to_ns) / 1000000; \
 	HANDLE _h[2] = {n, e}; \
-	DWORD _res = e ? WaitForMultipleObjects(2, _h, FALSE, to_ms) : WaitForSingleObject(n, to_ms); \
+	DWORD _res = e ? WaitForMultipleObjects(2, _h, FALSE, _to_ms) : WaitForSingleObject(n, _to_ms); \
 	if (_res == WAIT_TIMEOUT) { \
 		_ret = ETIMEDOUT; \
 	} else if (_res == WAIT_OBJECT_0) { \

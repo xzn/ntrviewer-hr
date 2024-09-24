@@ -69,6 +69,16 @@ static struct nk_color nk_window_bgcolor = { 28, 48, 62, 255 };
 #endif
 // #define PRINT_PACKET_LOSS_INFO
 
+#if defined(USE_SDL_RENDERER) || (defined(USE_ANGLE) && defined(_WIN32))
+#define SDL_GL_SINGLE_THREAD
+#endif
+
+#ifndef SDL_GL_SINGLE_THREAD
+#ifndef _WIN32
+#define SDL_GL_SYNC
+#endif
+#endif
+
 static SDL_Window *win[SCREEN_COUNT];
 static SDL_Window *win_ogl[SCREEN_COUNT];
 static Uint32 win_id[SCREEN_COUNT];
@@ -104,6 +114,19 @@ static bool ro_init;
 #define RO_UNINIT()
 #endif
 
+static int acquire_sem(rp_sem_t *sem) {
+  while (1) {
+    if (!running)
+      return -1;
+    int res = rp_sem_timedwait(*sem, NWM_THREAD_WAIT_NS, NULL);
+    if (res == 0)
+      return 0;
+    if (res != ETIMEDOUT) {
+      return -1;
+    }
+  }
+}
+
 #ifdef USE_COMPOSITION_SWAPCHAIN
 
 // Use direct composition instead of UI.Composition
@@ -118,6 +141,10 @@ static bool ro_init;
 static bool use_composition_swapchain;
 static SDL_Window *win_sc[SCREEN_COUNT];
 GLuint gl_fbo_sc[SCREEN_COUNT];
+
+static bool compositing;
+static rp_sem_t compositing_begin_sem;
+static rp_sem_t compositing_end_sem;
 
 static ID3D11Device *d3d11device;
 static ID3D11DeviceContext *d3d11device_context;
@@ -480,7 +507,7 @@ static int presentation_buffer_present(int tb, __attribute__ ((unused)) int coun
       hr = ID3D11Device_GetDeviceRemovedReason(d3d11device);
       err_log("GetDeviceRemovedReason: %d\n", (int)hr);
     }
-    running = 0;
+    compositing = 0;
     return -1;
   }
 
@@ -534,7 +561,7 @@ static int presentation_buffer_present(int tb, __attribute__ ((unused)) int coun
       hr = ID3D11Device_GetDeviceRemovedReason(d3d11device);
       err_log("GetDeviceRemovedReason: %d\n", (int)hr);
     }
-    running = 0;
+    compositing = 0;
     return -1;
   }
 
@@ -546,6 +573,7 @@ static int render_buffer_delete(int tb) {
   struct render_buffer_t *b = &render_buffers[tb];
 
   if (b->gl_handle) {
+    // In case of gl device lost (e.g. graphics driver reset) this will crash on NVIDIA.
     wglDXUnregisterObjectNV(gl_d3ddevice, b->gl_handle);
     b->gl_handle = NULL;
   }
@@ -624,6 +652,18 @@ static int render_buffer_get(int tb, int width, int height, GLuint *tex, HANDLE 
   *handle = b->gl_handle;
 
   return 0;
+}
+
+static void composition_buffer_cleanup(int tb) {
+  render_buffer_delete(tb);
+#ifdef USE_DXGI_SWAPCHAIN
+  width_sc[tb] = height_sc[tb] = 0;
+#else
+  src_rect[tb].bottom = src_rect[tb].right = 0;
+  for (int i = 0; i < PRESENATTION_BUFFER_COUNT_PER_SCREEN * SCREEN_COUNT; ++i) {
+    presentation_buffer_delete(tb, i);
+  }
+#endif
 }
 
 static int composition_swapchain_device_init(void) {
@@ -1179,6 +1219,18 @@ static void composition_swapchain_close(void) {
   CHECK_AND_RELEASE(queue_controller);
 #endif
 }
+
+static void composition_swapchain_device_restart(void) {
+  composition_swapchain_device_close();
+  HRESULT hr;
+  hr = composition_swapchain_device_init();
+  if (hr) {
+    err_log("composition_swapchain_device_init failed\n");
+    running = 0;
+  } else {
+    err_log("successful\n");
+  }
+}
 #endif
 
 #ifndef USE_SDL_RENDERER
@@ -1197,10 +1249,6 @@ static void composition_swapchain_close(void) {
 
 #define HR_MAX(a, b) ((a) > (b) ? (a) : (b))
 #define HR_MIN(a, b) ((a) < (b) ? (a) : (b))
-
-#if defined(USE_SDL_RENDERER) || (defined(USE_ANGLE) && defined(_WIN32))
-#define SDL_GL_SINGLE_THREAD
-#endif
 
 #define GL_CHANNELS_N 4
 #define GL_FORMAT GL_RGBA
@@ -1308,12 +1356,6 @@ static inline uint32_t iclock()
 {
   return (uint32_t)(iclock64() & 0xfffffffful);
 }
-
-#ifndef SDL_GL_SINGLE_THREAD
-#ifndef _WIN32
-#define SDL_GL_SYNC
-#endif
-#endif
 
 #ifdef _WIN32
 #define thread_t HANDLE
@@ -3862,6 +3904,26 @@ float font_scale;
 static void
 ThreadLoop(int i)
 {
+#if defined(USE_COMPOSITION_SWAPCHAIN) && !defined(SDL_GL_SINGLE_THREAD)
+  if (use_composition_swapchain) {
+    if (!compositing) {
+      composition_buffer_cleanup(i);
+      rp_sem_rel(compositing_end_sem);
+      acquire_sem(&compositing_begin_sem);
+    }
+  }
+#endif
+
+  GLenum gl_err;
+  while ((gl_err = glGetError()) != GL_NO_ERROR) {
+    err_log("gl error: %d\n", (int)gl_err);
+    if (gl_err == GL_OUT_OF_MEMORY) {
+      err_log("gl error unrecoverable, shutting down\n");
+      running = 0;
+      return;
+    }
+  }
+
   /* Draw */
   int screen_count = SCREEN_COUNT;
   view_mode_t vm = __atomic_load_n(&view_mode, __ATOMIC_RELAXED);
@@ -3939,6 +4001,7 @@ ThreadLoop(int i)
     }
     if (!d3d_gl_mt_supported)
       rp_lock_wait(d3d11device_context_lock);
+    // Hang on AMD (there may be other hang locations) when gl device is lost.
     if (!wglDXLockObjectsNV(gl_d3ddevice, 1, &handle_sc)) {
       err_log("wglDXLockObjectsNV failed: %d\n", (int)GetLastError());
       if (!d3d_gl_mt_supported)
@@ -4029,6 +4092,29 @@ ThreadLoop(int i)
 static void
 MainLoop(void *loopArg)
 {
+#ifdef USE_COMPOSITION_SWAPCHAIN
+  if (use_composition_swapchain) {
+    if (!compositing) {
+#ifdef SDL_GL_SINGLE_THREAD
+      for (int i = 0; i < SCREEN_COUNT; ++i) {
+        composition_buffer_cleanup(i);
+      }
+#else
+      for (int i = 0; i < SCREEN_COUNT; ++i) {
+        acquire_sem(&compositing_end_sem);
+      }
+#endif
+      composition_swapchain_device_restart();
+      compositing = 1;
+#ifndef SDL_GL_SINGLE_THREAD
+      for (int i = 0; i < SCREEN_COUNT; ++i) {
+        rp_sem_rel(compositing_begin_sem);
+      }
+#endif
+    }
+  }
+#endif
+
   struct nk_context *ctx = (struct nk_context *)loopArg;
 
   /* Input */
@@ -4046,6 +4132,11 @@ MainLoop(void *loopArg)
       evt.key.keysym.sym == SDLK_f
     ) {
       fullscreen = !fullscreen;
+    } else if (
+      evt.type == SDL_KEYDOWN &&
+      evt.key.keysym.sym == SDLK_r
+    ) {
+      compositing = 0;
     } else {
       switch (evt.type) {
         case SDL_MOUSEMOTION:
@@ -4152,19 +4243,6 @@ static thread_ret_t window_thread_func(void *arg)
   return (thread_ret_t)(uintptr_t)NULL;
 }
 #endif
-
-static int acquire_sem(rp_sem_t *sem) {
-  while (1) {
-    if (!running)
-      return -1;
-    int res = rp_sem_timedwait(*sem, NWM_THREAD_WAIT_NS, NULL);
-    if (res == 0)
-      return 0;
-    if (res != ETIMEDOUT) {
-      return -1;
-    }
-  }
-}
 
 void handle_decode_frame_screen(FrameBufferContext *ctx, int top_bot, int frame_size, int delay_between_packet, __attribute__ ((unused)) FrameBufferContext *ctx_sync)
 {
@@ -5390,7 +5468,8 @@ static void on_gl_error(
     GLenum source, GLenum type, GLuint id, GLenum severity,
     GLsizei length, const GLchar *message, const void *)
 {
-  err_log("gl_error: %u:%u:%u:%u:%u: %s\n", source, type, id, severity, length, message);
+  if (severity != GL_DEBUG_SEVERITY_NOTIFICATION)
+    err_log("gl_error: %u:%u:%u:%u:%u: %s\n", source, type, id, severity, length, message);
 }
 #endif
 
@@ -5646,9 +5725,15 @@ int main(int argc, char *argv[])
 
     rp_lock_init(d3d11device_context_lock);
 
+    compositing = 1;
+    rp_sem_create(compositing_begin_sem, 0, SCREEN_COUNT);
+    rp_sem_create(compositing_end_sem, 0, SCREEN_COUNT);
+
     win[SCREEN_TOP] = win_sc[SCREEN_TOP];
     win[SCREEN_BOT] = win_sc[SCREEN_BOT];
+
     err_log("Using composition swapchain\n");
+
     goto start_use_c_sc;
 
 end_use_c_sc:
@@ -5984,6 +6069,10 @@ start_use_c_sc:
 #endif
 #ifdef USE_COMPOSITION_SWAPCHAIN
   if (use_composition_swapchain) {
+    rp_sem_close(compositing_end_sem);
+    rp_sem_close(compositing_begin_sem);
+    rp_lock_close(d3d11device_context_lock);
+
     SDL_DestroyWindow(win_sc[SCREEN_BOT]);
     SDL_DestroyWindow(win_sc[SCREEN_TOP]);
     composition_swapchain_close();
