@@ -135,6 +135,8 @@ static int acquire_sem(rp_sem_t *sem) {
 // Use dxgi instead of composition swapchain to check
 // #define USE_DXGI_SWAPCHAIN
 
+// #define TDR_TEST_HOTKEY
+
 #include "dcomp.h"
 #include <winstring.h>
 #include "glad/glad_wgl.h"
@@ -191,6 +193,20 @@ static ICompositionBrush *comp_brush[SCREEN_COUNT];
 static ISpriteVisual *sprite_visual[SCREEN_COUNT];
 static IVisual *comp_visual[SCREEN_COUNT];
 static IVisual2 *comp_visual2[SCREEN_COUNT];
+#endif
+
+#ifdef TDR_TEST_HOTKEY
+#include "cs_tdr.h"
+static void d3d11_trigger_tdr(void) {
+  ID3D11ComputeShader *cs;
+  d3d11device->lpVtbl->CreateComputeShader(d3d11device, cs_tdr_compiled, sizeof(cs_tdr_compiled), NULL, &cs);
+  rp_lock_wait(d3d11device_context_lock);
+	d3d11device_context->lpVtbl->CSSetShader(d3d11device_context, cs, NULL, 0);
+	d3d11device_context->lpVtbl->Dispatch(d3d11device_context, 256, 1, 1);
+	d3d11device_context->lpVtbl->Flush(d3d11device_context);
+  rp_lock_rel(d3d11device_context_lock);
+  IUnknown_Release(cs);
+}
 #endif
 
 #define COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN (3)
@@ -4136,7 +4152,18 @@ MainLoop(void *loopArg)
       evt.type == SDL_KEYDOWN &&
       evt.key.keysym.sym == SDLK_r
     ) {
-      compositing = 0;
+#ifdef TDR_TEST_HOTKEY
+      if (use_composition_swapchain)
+        compositing = 0;
+#endif
+    } else if (
+      evt.type == SDL_KEYDOWN &&
+      evt.key.keysym.sym == SDLK_t
+    ) {
+#ifdef TDR_TEST_HOTKEY
+      if (use_composition_swapchain)
+        d3d11_trigger_tdr();
+#endif
     } else {
       switch (evt.type) {
         case SDL_MOUSEMOTION:
