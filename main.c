@@ -4013,6 +4013,7 @@ ThreadLoop(int i)
   HANDLE handle_sc;
   if (use_composition_swapchain) {
     if (render_buffer_get(i, win_width[i], win_height[i], &tex_sc, &handle_sc) != 0) {
+      compositing = 0;
       return;
     }
     if (!d3d_gl_mt_supported)
@@ -4022,6 +4023,7 @@ ThreadLoop(int i)
       err_log("wglDXLockObjectsNV failed: %d\n", (int)GetLastError());
       if (!d3d_gl_mt_supported)
         rp_lock_rel(d3d11device_context_lock);
+      compositing = 0;
       return;
     }
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[i]);
