@@ -4233,6 +4233,11 @@ static thread_ret_t window_thread_func(void *arg)
   SDL_GL_MakeCurrent(win_ogl[i], glContext[i]);
   while (running)
     ThreadLoop(i);
+#if defined(USE_COMPOSITION_SWAPCHAIN) && !defined(SDL_GL_SINGLE_THREAD)
+  if (use_composition_swapchain) {
+    composition_buffer_cleanup(i);
+  }
+#endif
   SDL_GL_MakeCurrent(NULL, NULL);
 
   RO_UNINIT();
@@ -5964,6 +5969,14 @@ start_use_c_sc:
 #else
   while (running)
     MainLoop((void *)ctx);
+#endif
+
+#if defined(USE_COMPOSITION_SWAPCHAIN) && defined(SDL_GL_SINGLE_THREAD)
+  if (use_composition_swapchain) {
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      composition_buffer_cleanup(i);
+    }
+  }
 #endif
 
 #ifdef _WIN32
