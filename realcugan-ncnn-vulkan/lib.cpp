@@ -26,8 +26,8 @@
 
 #define REALCUGAN_WORK_COUNT (2)
 
-static RealCUGAN* realcugan[SCREEN_COUNT * SCREEN_COUNT * REALCUGAN_WORK_COUNT];
-static int realcugan_indices[SCREEN_COUNT * SCREEN_COUNT * FrameBufferCount];
+static RealCUGAN* realcugan[SCREEN_COUNT * REALCUGAN_WORK_COUNT];
+static int realcugan_indices[SCREEN_COUNT * FrameBufferCount];
 static int realcugan_work_indices[SCREEN_COUNT];
 static std::vector<std::unique_ptr<std::mutex>> realcugan_locks;
 static bool realcugan_support_ext_mem;
@@ -37,13 +37,14 @@ static int realcugan_size()
     return realcugan_support_ext_mem ? sizeof(realcugan) / sizeof(realcugan[0]) : 1;
 }
 
-static int realcugan_index(int tb, int index, int next)
+static int realcugan_index(int top_bot, int index, int next)
 {
+    index = top_bot * FrameBufferCount + index;
     if (next) {
-        ++realcugan_work_indices[tb];
-        realcugan_work_indices[tb] %= REALCUGAN_WORK_COUNT;
+        ++realcugan_work_indices[top_bot];
+        realcugan_work_indices[top_bot] %= REALCUGAN_WORK_COUNT;
 
-        realcugan_indices[index] = (tb * SCREEN_COUNT + index / FrameBufferCount) * REALCUGAN_WORK_COUNT + realcugan_work_indices[tb];
+        realcugan_indices[index] = top_bot * REALCUGAN_WORK_COUNT + realcugan_work_indices[top_bot];
     }
     return realcugan_support_ext_mem ? realcugan_indices[index] : 0;
 }
@@ -288,10 +289,6 @@ extern "C" int realcugan_create()
         if (realcugan[j]) {
             delete realcugan[j];
         }
-        int tb = j / (SCREEN_COUNT * REALCUGAN_WORK_COUNT);
-        int top_bot = j % (SCREEN_COUNT * REALCUGAN_WORK_COUNT) / REALCUGAN_WORK_COUNT;
-        if (tb == SCREEN_BOT && top_bot == SCREEN_TOP)
-            continue;
 
         realcugan[j] = new RealCUGAN(gpuid[i], tta_mode);
         realcugan[j]->load(paramfullpath, modelfullpath);
@@ -308,12 +305,12 @@ extern "C" int realcugan_create()
     return 0;
 }
 
-extern "C" GLuint realcugan_run(int tb, int index, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, GLuint *gl_sem, GLuint *gl_sem_next, bool *dim3, bool *success)
+extern "C" GLuint realcugan_run(int tb, int top_bot, int index, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, GLuint *gl_sem, GLuint *gl_sem_next, bool *dim3, bool *success)
 {
     ncnn::Mat inimage = ncnn::Mat(w, h, (void*)indata, (size_t)c, c);
     ncnn::Mat outimage = ncnn::Mat(w * REALCUGAN_SCALE, h * REALCUGAN_SCALE, (void*)outdata, (size_t)c, c);
 
-    int locks_index = realcugan_index(tb, index, 1);
+    int locks_index = realcugan_index(top_bot, index, 1);
     if (locks_index + 1 > realcugan_locks.size()) {
         realcugan_locks.resize(locks_index + 1);
     }
@@ -323,7 +320,7 @@ extern "C" GLuint realcugan_run(int tb, int index, int w, int h, int c, const un
     }
 
     realcugan_locks[locks_index]->lock();
-    if (realcugan[locks_index]->process(0, inimage, outimage) != 0) {
+    if (realcugan[locks_index]->process(tb, inimage, outimage) != 0) {
         realcugan_locks[locks_index]->unlock();
 
         *success = false;
@@ -331,7 +328,7 @@ extern "C" GLuint realcugan_run(int tb, int index, int w, int h, int c, const un
     }
     realcugan_locks[locks_index]->unlock();
 
-    OutVkImageMat *out = realcugan[locks_index]->out_gpu_tex[0];
+    OutVkImageMat *out = realcugan[locks_index]->out_gpu_tex[tb];
     GLuint tex = out->gl_texture;
     *gl_sem = out->gl_sem;
     *gl_sem_next = out->gl_sem_next;
@@ -340,13 +337,13 @@ extern "C" GLuint realcugan_run(int tb, int index, int w, int h, int c, const un
     return tex;
 }
 
-extern "C" void realcugan_next(int tb, int index)
+extern "C" void realcugan_next(int tb, int top_bot, int index)
 {
-    int locks_index = realcugan_index(tb, index, 0);
-    if (!realcugan[locks_index] || 0 >= realcugan[locks_index]->out_gpu_tex.size()) {
+    int locks_index = realcugan_index(top_bot, index, 0);
+    if (!realcugan[locks_index] || tb >= realcugan[locks_index]->out_gpu_tex.size()) {
         return;
     }
-    OutVkImageMat *out = realcugan[locks_index]->out_gpu_tex[0];
+    OutVkImageMat *out = realcugan[locks_index]->out_gpu_tex[tb];
     if (!out || !out->first_subseq) {
         return;
     }
@@ -366,8 +363,12 @@ extern "C" void realcugan_next(int tb, int index)
 
 extern "C" void realcugan_destroy()
 {
-    for (int j = 0; j < SCREEN_COUNT * SCREEN_COUNT * FrameBufferCount; ++j) {
-        realcugan_next(j / (SCREEN_COUNT * FrameBufferCount), j % (SCREEN_COUNT * FrameBufferCount));
+    for (int k = 0; k < SCREEN_COUNT; ++k) {
+        for (int j = 0; j < SCREEN_COUNT; ++j) {
+            for (int i = 0; i < FrameBufferCount; ++i) {
+                realcugan_next(k, j, i);
+            }
+        }
     }
 
     for (int j = 0; j < realcugan_size(); ++j) {

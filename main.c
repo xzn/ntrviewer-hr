@@ -3442,7 +3442,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
 
     if (data) {
       scale = screen_upscale_factor;
-      tex_upscaled = sr_run(tb, top_bot * FrameBufferCount + index, height, width, GL_CHANNELS_N, data, ctx->screen_upscaled, &gl_sem, &gl_sem_next, &dim3, &success);
+      tex_upscaled = sr_run(tb, top_bot, index, height, width, GL_CHANNELS_N, data, ctx->screen_upscaled, &gl_sem, &gl_sem_next, &dim3, &success);
       if (!tex_upscaled) {
         if (!success) {
           upscaled = 0;
@@ -3670,7 +3670,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
 
 static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot, int tb)
 {
-  sr_next(tb, top_bot * FrameBufferCount + ctx->index_display_2);
+  sr_next(tb, top_bot, ctx->index_display_2);
 
   rp_lock_wait(ctx->status_lock);
   enum FrameBufferStatus status = ctx->status;
