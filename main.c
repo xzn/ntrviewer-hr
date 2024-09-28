@@ -196,13 +196,13 @@ static IVisual2 *comp_visual2[SCREEN_COUNT];
 #ifdef TDR_TEST_HOTKEY
 #include "cs_tdr.h"
 static void d3d11_trigger_tdr(void) {
+  int i = SCREEN_TOP;
   ID3D11ComputeShader *cs;
-  d3d11device->lpVtbl->CreateComputeShader(d3d11device, cs_tdr_compiled, sizeof(cs_tdr_compiled), NULL, &cs);
-  rp_lock_wait(d3d11device_context_lock);
-	d3d11device_context->lpVtbl->CSSetShader(d3d11device_context, cs, NULL, 0);
-	d3d11device_context->lpVtbl->Dispatch(d3d11device_context, 256, 1, 1);
-	d3d11device_context->lpVtbl->Flush(d3d11device_context);
-  rp_lock_rel(d3d11device_context_lock);
+  d3d11device[i]->lpVtbl->CreateComputeShader(d3d11device[i], cs_tdr_compiled, sizeof(cs_tdr_compiled), NULL, &cs);
+  // Violating thread safety here but whatever
+  d3d11device_context[i]->lpVtbl->CSSetShader(d3d11device_context[i], cs, NULL, 0);
+  d3d11device_context[i]->lpVtbl->Dispatch(d3d11device_context[i], 256, 1, 1);
+  d3d11device_context[i]->lpVtbl->Flush(d3d11device_context[i]);
   IUnknown_Release(cs);
 }
 #endif
@@ -893,7 +893,8 @@ static int composition_swapchain_device_init(void) {
 
     gl_d3ddevice[i] = wglDXOpenDeviceNV(d3d11device[i]);
     if (!gl_d3ddevice[i]) {
-      err_log("wglDXOpenDeviceNV failed: %d\n", (int)GetLastError());
+      hr = GetLastError();
+      err_log("wglDXOpenDeviceNV failed: %d\n", (int)hr);
         return hr;
     }
   }
@@ -3900,6 +3901,9 @@ ThreadLoop(int i)
       composition_buffer_cleanup(i);
       rp_sem_rel(compositing_end_sem);
       acquire_sem(&compositing_begin_sem);
+      if (!running) {
+        return;
+      }
     }
   }
 #endif
@@ -4099,6 +4103,9 @@ MainLoop(void *loopArg)
         rp_sem_rel(compositing_begin_sem);
       }
 #endif
+      if (!running) {
+        return;
+      }
     }
   }
 #endif
