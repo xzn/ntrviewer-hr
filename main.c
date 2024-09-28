@@ -249,7 +249,7 @@ static struct render_buffer_t {
   HANDLE gl_handle;
   int width;
   int height;
-} render_buffers[SCREEN_COUNT][SCREEN_COUNT];
+} render_buffers[SCREEN_COUNT][SCREEN_COUNT], ui_render_buf;
 
 #ifndef USE_DXGI_SWAPCHAIN
 static struct presentation_buffer_t {
@@ -258,11 +258,9 @@ static struct presentation_buffer_t {
   HANDLE buf_avail_event;
   int width;
   int height;
-} presentation_buffers[SCREEN_COUNT][SCREEN_COUNT][PRESENATTION_BUFFER_COUNT_PER_SCREEN];
+} presentation_buffers[SCREEN_COUNT][SCREEN_COUNT][PRESENATTION_BUFFER_COUNT_PER_SCREEN], ui_pres_bufs[COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN];
 
-static int presentation_buffer_delete(int tb, int top_bot, int i) {
-  struct presentation_buffer_t *b = &presentation_buffers[tb][top_bot][i];
-
+static int presentation_buffer_delete(struct presentation_buffer_t *b) {
   if (b->buf_avail_event) {
     CloseHandle(b->buf_avail_event);
     b->buf_avail_event = NULL;
@@ -284,9 +282,7 @@ static int presentation_buffer_delete(int tb, int top_bot, int i) {
   return 0;
 }
 
-static int presentation_buffer_gen(int tb, int top_bot, int sc_vm, int i, int width, int height) {
-  struct presentation_buffer_t *b = &presentation_buffers[tb][top_bot][i];
-
+static int presentation_buffer_gen(struct presentation_buffer_t *b, int tb, int top_bot, int sc_vm, int width, int height) {
   D3D11_TEXTURE2D_DESC tex_desc = {};
   tex_desc.Width = width;
   tex_desc.Height = height;
@@ -348,7 +344,7 @@ static int presentation_buffer_gen(int tb, int top_bot, int sc_vm, int i, int wi
   return 0;
 
 fail:
-  presentation_buffer_delete(tb, top_bot, i);
+  presentation_buffer_delete(b);
   return -1;
 }
 
@@ -436,7 +432,8 @@ static int presentation_buffer_get(int tb, int top_bot, int sc_vm, int count_max
   HANDLE events[events_count];
   for (int i = 0; i < count_max; ++i) {
     if (!presentation_buffers[tb][top_bot][i].tex) {
-      if (presentation_buffer_gen(tb, top_bot, sc_vm, i, width, height) != 0) {
+      struct presentation_buffer_t *b = &presentation_buffers[tb][top_bot][i];
+      if (presentation_buffer_gen(b, tb, top_bot, sc_vm, width, height) != 0) {
         return -1;
       }
       *index = i;
@@ -489,8 +486,9 @@ static int presentation_buffer_get(int tb, int top_bot, int sc_vm, int count_max
 
   int i = res;
   if (presentation_buffers[tb][top_bot][i].width != width || presentation_buffers[tb][top_bot][i].height != height) {
-    presentation_buffer_delete(tb, top_bot, i);
-    if (presentation_buffer_gen(tb, top_bot, sc_vm, i, width, height) != 0) {
+    struct presentation_buffer_t *b = &presentation_buffers[tb][top_bot][i];
+    presentation_buffer_delete(b);
+    if (presentation_buffer_gen(b, tb, top_bot, sc_vm, width, height) != 0) {
       return -1;
     }
   }
@@ -623,9 +621,10 @@ static int presentation_buffer_present(int tb, int top_bot, int sc_vm, __attribu
 #endif
 }
 
-static int render_buffer_delete(int tb, int top_bot) {
-  struct render_buffer_t *b = &render_buffers[tb][top_bot];
+static int ui_buffer_present(__attribute__ ((unused)) int count_max) {
+}
 
+static int render_buffer_delete(struct render_buffer_t *b, int tb) {
   if (b->gl_handle) {
     // In case of gl device lost (e.g. graphics driver reset) this will crash on NVIDIA.
     wglDXUnregisterObjectNV(gl_d3ddevice[tb], b->gl_handle);
@@ -648,9 +647,7 @@ static int render_buffer_delete(int tb, int top_bot) {
   return 0;
 }
 
-static int render_buffer_gen(int tb, int top_bot, int width, int height) {
-  struct render_buffer_t *b = &render_buffers[tb][top_bot];
-
+static int render_buffer_gen(struct render_buffer_t *b, int tb, int width, int height) {
   D3D11_TEXTURE2D_DESC tex_desc = {};
   tex_desc.Width = width;
   tex_desc.Height = height;
@@ -685,19 +682,17 @@ static int render_buffer_gen(int tb, int top_bot, int width, int height) {
   return 0;
 
 fail:
-  render_buffer_delete(tb, top_bot);
+  render_buffer_delete(b, tb);
   return -1;
 }
 
-static int render_buffer_get(int tb, int top_bot, int width, int height, GLuint *tex, HANDLE *handle) {
-  struct render_buffer_t *b = &render_buffers[tb][top_bot];
-
+static int render_buffer_get(struct render_buffer_t *b, int tb, int width, int height, GLuint *tex, HANDLE *handle) {
   if (b->width != width || b->height != height) {
-    if (render_buffer_delete(tb, top_bot) != 0) {
+    if (render_buffer_delete(b, tb) != 0) {
       return -1;
     }
 
-    if (render_buffer_gen(tb, top_bot, width, height) != 0) {
+    if (render_buffer_gen(b, tb, width, height) != 0) {
       return -1;
     }
   }
@@ -713,7 +708,8 @@ static void composition_buffer_cleanup(int tb) {
   for (int j = 0; j < SCREEN_COUNT; ++j) {
     // tb here is tied to the respective gl context, where as in render_buffer_delete it's top_bot
     // hence the reversed order of parameters
-    render_buffer_delete(j, tb);
+    struct render_buffer_t *b = &render_buffers[j][tb];
+    render_buffer_delete(b, j);
 #ifdef USE_DXGI_SWAPCHAIN
     width_sc[tb] = height_sc[tb] = 0;
 #else
@@ -721,7 +717,16 @@ static void composition_buffer_cleanup(int tb) {
       src_rect_child[j].bottom = src_rect_child[j].right = 0;
     }
     for (int i = 0; i < PRESENATTION_BUFFER_COUNT_PER_SCREEN; ++i) {
-      presentation_buffer_delete(tb, j, i);
+      struct presentation_buffer_t *b = &presentation_buffers[tb][j][i];
+      presentation_buffer_delete(b);
+    }
+  }
+  if (tb == SCREEN_TOP) {
+    struct render_buffer_t *b = &ui_render_buf;
+    render_buffer_delete(b, tb);
+    for (int i = 0; i < COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN; ++i) {
+      struct presentation_buffer_t *b = &ui_pres_bufs[i];
+      presentation_buffer_delete(b);
     }
   }
 #endif
@@ -784,6 +789,12 @@ static int presentation_render_reset(int sc_vm) {
       RECT rect = { 0, 0, 1, 1 };
       hr = IPresentationSurface_SetSourceRect(pres_surf_util[SURFACE_UTIL_BG], &rect);
 
+      hr = dcomp_vis_util[SURFACE_UTIL_BG]->lpVtbl->SetContent(dcomp_vis_util[SURFACE_UTIL_BG], dcomp_surf_util[SURFACE_UTIL_BG]);
+      if (hr) {
+        err_log("SetContent failed: %d\n", (int)hr);
+        return hr;
+      }
+
       hr = IPresentationManager_Present(presentation_manager[i]);
       if (hr) {
         err_log("Present failed: %d\n", (int)hr);
@@ -823,6 +834,12 @@ static int presentation_render_reset(int sc_vm) {
         err_log("SetContent failed: %d\n", (int)hr);
         return hr;
       }
+    }
+
+    hr = dcomp_vis_util[SURFACE_UTIL_BG]->lpVtbl->SetContent(dcomp_vis_util[SURFACE_UTIL_BG], NULL);
+    if (hr) {
+      err_log("SetContent failed: %d\n", (int)hr);
+      return hr;
     }
 
     D2D_MATRIX_3X2_F trans_mat = { .m = { { 1.0f, 0.0f }, { 0.0f, -1.0f }, { 0.0f, 0.0f } } };
@@ -4405,7 +4422,8 @@ ThreadLoop(int i)
         prev_ctx_height[sc_top_bot] = ctx_height;
       }
     }
-    if (render_buffer_get(sc_tb, sc_top_bot, ctx_width, ctx_height, &tex_sc, &handle_sc) != 0) {
+    struct render_buffer_t *sc_render_buf = &render_buffers[sc_tb][sc_top_bot];
+    if (render_buffer_get(sc_render_buf, sc_tb, ctx_width, ctx_height, &tex_sc, &handle_sc) != 0) {
       compositing = 0;
       if (sc_tb == SCREEN_TOP) {
         rp_lock_rel(comp_lock);
@@ -4479,20 +4497,59 @@ ThreadLoop(int i)
   }
   SDL_RenderPresent(sdlRenderer[i]);
 #else
-  if (i == SCREEN_TOP) {
-    nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
-  }
 #ifdef USE_COMPOSITION_SWAPCHAIN
   if (use_composition_swapchain) {
+    if (sc_vm && i == SCREEN_TOP) {
+      GLuint ui_tex;
+      HANDLE ui_handle;
+      if (render_buffer_get(&ui_render_buf, sc_tb, prev_win_width[sc_top_bot], prev_win_height[sc_top_bot], &ui_tex, &ui_handle)) {
+        compositing = 0;
+        if (sc_tb == SCREEN_TOP) {
+          rp_lock_rel(comp_lock);
+        }
+        return;
+      }
+
+      if (!wglDXLockObjectsNV(gl_d3ddevice[sc_tb], 1, &ui_handle)) {
+        err_log("wglDXLockObjectsNV failed: %d\n", (int)GetLastError());
+        compositing = 0;
+        if (sc_tb == SCREEN_TOP) {
+          rp_lock_rel(comp_lock);
+        }
+        return;
+      }
+
+      glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, ui_tex);
+
+      glViewport(0, 0, prev_win_width[sc_top_bot], prev_win_height[sc_top_bot]);
+      glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+      glClear(GL_COLOR_BUFFER_BIT);
+
+      nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
+
+      if (!wglDXUnlockObjectsNV(gl_d3ddevice[sc_tb], 1, &ui_handle)) {
+        err_log("wglDXUnlockObjectsNV failed: %d\n", (int)GetLastError());
+      }
+    } else {
+      if (i == SCREEN_TOP) {
+        nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
+      }
+    }
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
     if (!wglDXUnlockObjectsNV(gl_d3ddevice[sc_tb], 1, &handle_sc)) {
       err_log("wglDXUnlockObjectsNV failed: %d\n", (int)GetLastError());
     }
     presentation_buffer_present(sc_tb, sc_top_bot, sc_vm, COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN);
   } else {
+    if (i == SCREEN_TOP) {
+      nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
+    }
     SDL_GL_SwapWindow(win[i]);
   }
 #else
+  if (i == SCREEN_TOP) {
+    nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
+  }
   SDL_GL_SwapWindow(win[i]);
 #endif
   if (sc_tb == SCREEN_TOP) {
