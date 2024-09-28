@@ -174,6 +174,7 @@ static bool displayable_surface_support[SCREEN_COUNT];
 static HANDLE pres_man_lost_event[SCREEN_COUNT];
 static HANDLE pres_man_stat_avail_event[SCREEN_COUNT];
 static IPresentationManager *presentation_manager[SCREEN_COUNT];
+static IPresentationManager *pres_man_child[SCREEN_COUNT];
 static HANDLE composition_surface[SCREEN_COUNT];
 static IPresentationSurface *presentation_surface[SCREEN_COUNT];
 static RECT src_rect[SCREEN_COUNT];
@@ -297,7 +298,7 @@ static int presentation_buffer_gen(int tb, int top_bot, int sc_vm, int i, int wi
   }
 
   hr = IPresentationManager_AddBufferFromResource(
-    sc_vm ? presentation_manager[SCREEN_TOP] : presentation_manager[tb],
+    sc_vm ? pres_man_child[top_bot] : presentation_manager[tb],
     (IUnknown *)b->tex, &b->buf
   );
   if (hr) {
@@ -338,12 +339,12 @@ fail:
   return -1;
 }
 
-static void pres_man_proc_stat(int tb, __attribute__ ((unused)) int top_bot, int sc_vm) {
+static void pres_man_proc_stat(int tb, int top_bot, int sc_vm) {
   HRESULT hr;
 
   IPresentStatistics *pres_stat;
   hr = IPresentationManager_GetNextPresentStatistics(
-    sc_vm ? presentation_manager[SCREEN_TOP] : presentation_manager[tb],
+    sc_vm ? pres_man_child[top_bot] : presentation_manager[tb],
     &pres_stat
   );
   if (hr) {
@@ -594,7 +595,7 @@ static int presentation_buffer_present(int tb, int top_bot, int sc_vm, __attribu
 
   ID3D11DeviceContext_CopyResource(d3d11device_context[tb], (ID3D11Resource *)presentation_buffers[tb][top_bot][index_sc].tex, (ID3D11Resource *)b->tex);
 
-  hr = IPresentationManager_Present(sc_vm ? presentation_manager[SCREEN_TOP] : presentation_manager[tb]);
+  hr = IPresentationManager_Present(sc_vm ? pres_man_child[top_bot] : presentation_manager[tb]);
   if (hr) {
     err_log("Present failed: %d\n", (int)hr);
     if (hr == DXGI_ERROR_DEVICE_REMOVED) {
@@ -856,6 +857,16 @@ static int composition_swapchain_device_init(void) {
       err_log("CreatePresentationManager failed: %d\n", (int)hr);
       return hr;
     }
+
+    if (i == SCREEN_TOP) {
+      for (int j = 0; j < SCREEN_COUNT; ++j) {
+        hr = IPresentationFactory_CreatePresentationManager(presentation_factory[i], &pres_man_child[j]);
+        if (hr) {
+          err_log("CreatePresentationManager failed: %d\n", (int)hr);
+          return hr;
+        }
+      }
+    }
 #endif
 
 #ifdef USE_DXGI_SWAPCHAIN
@@ -911,7 +922,7 @@ static int composition_swapchain_device_init(void) {
           return hr;
         }
 
-        hr = IPresentationManager_CreatePresentationSurface(presentation_manager[i], comp_surf_child[j], &pres_surf_child[j]);
+        hr = IPresentationManager_CreatePresentationSurface(pres_man_child[j], comp_surf_child[j], &pres_surf_child[j]);
         if (hr) {
           err_log("CreatePresentationSurface failed: %d\n", (int)hr);
           return hr;
