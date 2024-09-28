@@ -3904,6 +3904,7 @@ ThreadLoop(int i)
   }
 #endif
 
+#ifndef USE_SDL_RENDERER
   GLenum gl_err;
   while ((gl_err = glGetError()) != GL_NO_ERROR) {
     err_log("gl error: %d\n", (int)gl_err);
@@ -3913,6 +3914,7 @@ ThreadLoop(int i)
       return;
     }
   }
+#endif
 
   /* Draw */
   int screen_count = SCREEN_COUNT;
@@ -5631,9 +5633,7 @@ int main(int argc, char *argv[])
   if (!gladLoadWGLLoader((GLADloadproc)SDL_GL_GetProcAddress, hdc[SCREEN_TOP]))
   {
     err_log("gladLoadWGLLoader failed\n");
-    return -1;
-  }
-  if (osvi.dwMajorVersion >= 10 && osvi.dwBuildNumber >= 22000 && GLAD_WGL_NV_DX_interop && GLAD_WGL_NV_DX_interop2) {
+  } else if (osvi.dwMajorVersion >= 10 && osvi.dwBuildNumber >= 22000 && GLAD_WGL_NV_DX_interop && GLAD_WGL_NV_DX_interop2) {
     use_composition_swapchain = true;
   }
 #endif
