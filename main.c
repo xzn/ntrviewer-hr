@@ -161,6 +161,12 @@ static rp_sem_t compositing_end_sem;
 static int prev_sc_vm;
 static rp_lock_t comp_lock;
 
+enum {
+  SURFACE_UTIL_BG,
+  SURFACE_UTIL_UI,
+  SURFACE_UTIL_COUNT,
+};
+
 static ID3D11Device *d3d11device[SCREEN_COUNT];
 static ID3D11DeviceContext *d3d11device_context[SCREEN_COUNT];
 static IDXGIDevice *dxgi_device[SCREEN_COUNT];
@@ -183,11 +189,14 @@ static IPresentationSurface *presentation_surface[SCREEN_COUNT];
 static RECT src_rect[SCREEN_COUNT];
 // For tb == SCREEN_TOP and view_mode == VIEW_MODE_TOP_BOT
 static HANDLE comp_surf_child[SCREEN_COUNT];
+static HANDLE comp_surf_util[SURFACE_UTIL_COUNT];
 static IPresentationSurface *pres_surf_child[SCREEN_COUNT];
+static IPresentationSurface *pres_surf_util[SURFACE_UTIL_COUNT];
 static RECT src_rect_child[SCREEN_COUNT];
 #ifdef USE_DIRECT_COMPOSITION
 static IUnknown *dcomp_surface[SCREEN_COUNT];
 static IUnknown *dcomp_surf_child[SCREEN_COUNT];
+static IUnknown *dcomp_surf_util[SURFACE_UTIL_COUNT];
 #endif
 #endif
 #ifdef USE_DIRECT_COMPOSITION
@@ -197,6 +206,7 @@ static IDCompositionDevice3 *dcomp_device[SCREEN_COUNT];
 static IDCompositionTarget *dcomp_target[SCREEN_COUNT];
 static IDCompositionVisual2 *dcomp_visual[SCREEN_COUNT];
 static IDCompositionVisual2 *dcomp_vis_child[SCREEN_COUNT];
+static IDCompositionVisual2 *dcomp_vis_util[SURFACE_UTIL_COUNT];
 #else
 static IDispatcherQueueController *queue_controller;
 static ICompositor *compositor;
@@ -723,10 +733,66 @@ static int presentation_render_reset(int sc_vm) {
 
   HRESULT hr;
   if (sc_vm) {
-    hr = dcomp_visual[i]->lpVtbl->SetContent(dcomp_visual[i], NULL);
-    if (hr) {
-      err_log("SetContent failed: %d\n", (int)hr);
-      return hr;
+    // set background color
+    {
+      D3D11_TEXTURE2D_DESC textureDesc = {};
+      textureDesc.Width = 1;
+      textureDesc.Height = 1;
+      textureDesc.MipLevels = 1;
+      textureDesc.ArraySize = 1;
+      textureDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+      textureDesc.SampleDesc.Count = 1;
+      textureDesc.SampleDesc.Quality = 0;
+      textureDesc.Usage = D3D11_USAGE_DEFAULT;
+      textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+      textureDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
+      textureDesc.CPUAccessFlags = 0;
+
+      ID3D11Texture2D *tex;
+      IPresentationBuffer *buf;
+
+      hr = ID3D11Device_CreateTexture2D(d3d11device[i], &textureDesc, NULL, &tex);
+      if (hr) {
+        err_log("CreateTexture2D failed: %d\n", (int)hr);
+        return hr;
+      }
+
+      hr = IPresentationManager_AddBufferFromResource(presentation_manager[i], (IUnknown *)tex, &buf);
+      if (hr) {
+        err_log("AddBufferFromResource failed: %d\n", (int)hr);
+        return hr;
+      }
+
+      // comp_lock should have been held when calling this function
+      ID3D11RenderTargetView *rtv;
+      hr = ID3D11Device_CreateRenderTargetView(d3d11device[i], (ID3D11Resource *)tex, NULL, &rtv);
+      if (hr) {
+        err_log("CreateRenderTargetView failed: %d\n", (int)hr);
+        return -1;
+      }
+
+      float clearColor[4];
+      nk_color_fv(clearColor, nk_window_bgcolor);
+      ID3D11DeviceContext_ClearRenderTargetView(d3d11device_context[i], rtv, clearColor);
+
+      hr = IPresentationSurface_SetBuffer(pres_surf_util[SURFACE_UTIL_BG], buf);
+      if (hr) {
+        err_log("SetBuffer failed: %d\n", (int)hr);
+        return -1;
+      }
+
+      RECT rect = { 0, 0, 1, 1 };
+      hr = IPresentationSurface_SetSourceRect(pres_surf_util[SURFACE_UTIL_BG], &rect);
+
+      hr = IPresentationManager_Present(presentation_manager[i]);
+      if (hr) {
+        err_log("Present failed: %d\n", (int)hr);
+        return -1;
+      }
+
+      IUnknown_Release(rtv);
+      IUnknown_Release(tex);
+      IUnknown_Release(buf);
     }
 
     hr = dcomp_visual[i]->lpVtbl->SetTransform1(dcomp_visual[i], NULL);
@@ -949,6 +1015,32 @@ static int composition_swapchain_device_init(void) {
           return hr;
         }
       }
+
+      for (int j = 0; j < SURFACE_UTIL_COUNT; ++j) {
+        hr = DCompositionCreateSurfaceHandle(COMPOSITIONOBJECT_ALL_ACCESS, NULL, &comp_surf_util[j]);
+        if (hr) {
+          err_log("DCompositionCreateSurfaceHandle failed: %d\n", (int)hr);
+          return hr;
+        }
+
+        hr = IPresentationManager_CreatePresentationSurface(presentation_manager[i], comp_surf_util[j], &pres_surf_util[j]);
+        if (hr) {
+          err_log("CreatePresentationSurface failed: %d\n", (int)hr);
+          return hr;
+        }
+
+        hr = IPresentationSurface_SetAlphaMode(pres_surf_util[j], j == SURFACE_UTIL_UI ? DXGI_ALPHA_MODE_STRAIGHT : DXGI_ALPHA_MODE_IGNORE);
+        if (hr) {
+          err_log("SetAlphaMode failed: %d\n", (int)hr);
+          return hr;
+        }
+
+        hr = IPresentationSurface_SetColorSpace(pres_surf_util[j], DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+        if (hr) {
+          err_log("SetColorSpace failed: %d\n", (int)hr);
+          return hr;
+        }
+      }
     }
 #endif
 
@@ -982,6 +1074,20 @@ static int composition_swapchain_device_init(void) {
         }
 
         hr = dcomp_vis_child[j]->lpVtbl->SetContent(dcomp_vis_child[j], dcomp_surf_child[j]);
+        if (hr) {
+          err_log("SetContent failed: %d\n", (int)hr);
+          return hr;
+        }
+      }
+
+      for (int j = 0; j < SURFACE_UTIL_COUNT; ++j) {
+        hr = dcomp_device1[i]->lpVtbl->CreateSurfaceFromHandle(dcomp_device1[i], comp_surf_util[j], &dcomp_surf_util[j]);
+        if (hr) {
+          err_log("CreateSurfaceFromHandle failed: %d\n", (int)hr);
+          return hr;
+        }
+
+        hr = dcomp_vis_util[j]->lpVtbl->SetContent(dcomp_vis_util[j], dcomp_surf_util[j]);
         if (hr) {
           err_log("SetContent failed: %d\n", (int)hr);
           return hr;
@@ -1182,6 +1288,20 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
         }
 
         hr = dcomp_visual[i]->lpVtbl->AddVisual(dcomp_visual[i], (IDCompositionVisual *)dcomp_vis_child[j], FALSE, NULL);
+        if (hr) {
+          err_log("AddVisual failed: %d\n", (int)hr);
+          return hr;
+        }
+      }
+
+      for (int j = 0; j < SURFACE_UTIL_COUNT; ++j) {
+        hr = dcomp_device[i]->lpVtbl->CreateVisual(dcomp_device[i], &dcomp_vis_util[j]);
+        if (hr) {
+          err_log("CreateVisual failed: %d\n", (int)hr);
+          return hr;
+        }
+
+        hr = dcomp_visual[i]->lpVtbl->AddVisual(dcomp_visual[i], (IDCompositionVisual *)dcomp_vis_util[j], j == SURFACE_UTIL_BG ? TRUE : FALSE, NULL);
         if (hr) {
           err_log("AddVisual failed: %d\n", (int)hr);
           return hr;
@@ -4259,6 +4379,13 @@ ThreadLoop(int i)
           if (sc_tb == SCREEN_TOP) {
             rp_lock_rel(comp_lock);
           }
+          return;
+        }
+
+        D2D_MATRIX_3X2_F trans_mat = { .m = { { (FLOAT)win_width[sc_tb], 0.0f }, { 0.0f, (FLOAT)win_height[sc_tb] }, { 0.0f, 0.0f } } };
+        hr = dcomp_vis_util[SURFACE_UTIL_BG]->lpVtbl->SetTransform2(dcomp_vis_util[SURFACE_UTIL_BG], &trans_mat);
+        if (hr) {
+          err_log("SetTransform failed: %d\n", (int)hr);
           return;
         }
 
