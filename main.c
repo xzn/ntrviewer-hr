@@ -107,6 +107,9 @@ static GLuint glFboVbo[SCREEN_COUNT];
 static GLuint glFboEbo[SCREEN_COUNT];
 #endif
 
+static int prev_win_width[SCREEN_COUNT], prev_win_height[SCREEN_COUNT];
+static int prev_ctx_width[SCREEN_COUNT], prev_ctx_height[SCREEN_COUNT];
+
 #endif
 #if !defined(_WIN32) || defined(USE_SDL_RENDERER)
 #undef USE_COMPOSITION_SWAPCHAIN
@@ -698,7 +701,9 @@ static int render_buffer_get(int tb, int top_bot, int width, int height, GLuint 
 static void composition_buffer_cleanup(int tb) {
   src_rect[tb].bottom = src_rect[tb].right = 0;
   for (int j = 0; j < SCREEN_COUNT; ++j) {
-    render_buffer_delete(tb, j);
+    // tb here is tied to the respective gl context, where as in render_buffer_delete it's top_bot
+    // hence the reversed order of parameters
+    render_buffer_delete(j, tb);
 #ifdef USE_DXGI_SWAPCHAIN
     width_sc[tb] = height_sc[tb] = 0;
 #else
@@ -741,6 +746,10 @@ static int presentation_render_reset(int sc_vm) {
     hr = dcomp_set_offset_y(i, 0);
     if (hr)
       return hr;
+
+    for (int j = 0; j < SCREEN_COUNT; ++j) {
+      prev_win_height[j] = prev_win_width[j] = prev_ctx_height[j] = prev_ctx_width[j] = 0;
+    }
   } else {
     for (int j = 0; j < SCREEN_COUNT; ++j) {
       hr = dcomp_vis_child[j]->lpVtbl->SetContent(dcomp_vis_child[j], NULL);
@@ -1058,6 +1067,8 @@ static int composition_swapchain_device_init(void) {
         return hr;
     }
   }
+
+  prev_sc_vm = -1;
   return 0;
 }
 
@@ -1595,7 +1606,6 @@ enum FrameBufferStatus
 };
 
 static int win_width[SCREEN_COUNT], win_height[SCREEN_COUNT];
-static int prev_ctx_width[SCREEN_COUNT], prev_ctx_height[SCREEN_COUNT];
 
 static enum ConnectionState
 {
@@ -3513,6 +3523,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     ctx_top_f = -1.0f;
     ctx_right_f = 1.0f;
     ctx_bot_f = 1.0f;
+    tb = top_bot;
   } else {
     // int tb;
     if (vm == VIEW_MODE_TOP_BOT) {
@@ -4078,9 +4089,7 @@ ThreadLoop(int i)
     if (!compositing) {
       if (i == SCREEN_TOP)
         rp_lock_wait(comp_lock);
-      SDL_GL_MakeCurrent(win_ogl[i], glContext[i]);
       composition_buffer_cleanup(i);
-      SDL_GL_MakeCurrent(NULL, NULL);
       if (i == SCREEN_TOP)
         rp_lock_rel(comp_lock);
       rp_sem_rel(compositing_end_sem);
@@ -4173,7 +4182,6 @@ ThreadLoop(int i)
   if (sc_tb == SCREEN_TOP) {
     rp_lock_wait(comp_lock);
   }
-  SDL_GL_MakeCurrent(win_ogl[sc_tb], glContext[sc_tb]);
 #endif
 
   GLenum gl_err;
@@ -4182,7 +4190,6 @@ ThreadLoop(int i)
     if (gl_err == GL_OUT_OF_MEMORY) {
       err_log("gl error unrecoverable, shutting down\n");
       running = 0;
-      SDL_GL_MakeCurrent(NULL, NULL);
       if (sc_tb == SCREEN_TOP) {
         rp_lock_rel(comp_lock);
       }
@@ -4200,7 +4207,6 @@ ThreadLoop(int i)
   if (use_composition_swapchain) {
     if (sc_tb == SCREEN_TOP && prev_sc_vm != sc_vm) {
       if (presentation_render_reset(sc_vm)) {
-        SDL_GL_MakeCurrent(NULL, NULL);
         if (sc_tb == SCREEN_TOP) {
           rp_lock_rel(comp_lock);
         }
@@ -4235,13 +4241,12 @@ ThreadLoop(int i)
       ctx_width = NK_MAX(ctx_width, 1);
       ctx_height = NK_MAX(ctx_height, 1);
 
-      if (prev_ctx_width[sc_top_bot] != ctx_width || prev_ctx_height[sc_top_bot] != ctx_height) {
+      if (prev_win_width[sc_top_bot] != win_width[sc_tb] || prev_win_height[sc_top_bot] != win_height[sc_tb]) {
         HRESULT hr;
 
         hr = dcomp_vis_child[sc_top_bot]->lpVtbl->SetOffsetX2(dcomp_vis_child[sc_top_bot], (FLOAT)ctx_left);
         if (hr) {
           err_log("SetOffsetX failed: %d\n", (int)hr);
-          SDL_GL_MakeCurrent(NULL, NULL);
           if (sc_tb == SCREEN_TOP) {
             rp_lock_rel(comp_lock);
           }
@@ -4251,7 +4256,6 @@ ThreadLoop(int i)
         hr = dcomp_vis_child[sc_top_bot]->lpVtbl->SetOffsetY2(dcomp_vis_child[sc_top_bot], (FLOAT)ctx_top);
         if (hr) {
           err_log("SetOffsetY failed: %d\n", (int)hr);
-          SDL_GL_MakeCurrent(NULL, NULL);
           if (sc_tb == SCREEN_TOP) {
             rp_lock_rel(comp_lock);
           }
@@ -4261,12 +4265,14 @@ ThreadLoop(int i)
         hr = dcomp_device[SCREEN_TOP]->lpVtbl->Commit(dcomp_device[SCREEN_TOP]);
         if (hr) {
           err_log("Commit failed: %d\n", (int)hr);
-          SDL_GL_MakeCurrent(NULL, NULL);
           if (sc_tb == SCREEN_TOP) {
             rp_lock_rel(comp_lock);
           }
           return;
         }
+
+        prev_win_width[sc_top_bot] = win_width[sc_tb];
+        prev_win_height[sc_top_bot] = win_height[sc_tb];
 
         prev_ctx_width[sc_top_bot] = ctx_width;
         prev_ctx_height[sc_top_bot] = ctx_height;
@@ -4274,7 +4280,6 @@ ThreadLoop(int i)
     }
     if (render_buffer_get(sc_tb, sc_top_bot, ctx_width, ctx_height, &tex_sc, &handle_sc) != 0) {
       compositing = 0;
-      SDL_GL_MakeCurrent(NULL, NULL);
       if (sc_tb == SCREEN_TOP) {
         rp_lock_rel(comp_lock);
       }
@@ -4284,13 +4289,12 @@ ThreadLoop(int i)
     if (!wglDXLockObjectsNV(gl_d3ddevice[sc_tb], 1, &handle_sc)) {
       err_log("wglDXLockObjectsNV failed: %d\n", (int)GetLastError());
       compositing = 0;
-      SDL_GL_MakeCurrent(NULL, NULL);
       if (sc_tb == SCREEN_TOP) {
         rp_lock_rel(comp_lock);
       }
       return;
     }
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[sc_tb]);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[sc_top_bot]);
     glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, tex_sc);
   }
 #endif
@@ -4364,7 +4368,6 @@ ThreadLoop(int i)
 #else
   SDL_GL_SwapWindow(win[i]);
 #endif
-  SDL_GL_MakeCurrent(NULL, NULL);
   if (sc_tb == SCREEN_TOP) {
     rp_lock_rel(comp_lock);
   }
@@ -4533,18 +4536,14 @@ static thread_ret_t window_thread_func(void *arg)
   RO_INIT();
 
   int i = (int)(uintptr_t)arg;
-#if 0
   SDL_GL_MakeCurrent(win_ogl[i], glContext[i]);
-#endif
   while (running)
     ThreadLoop(i);
 #if defined(USE_COMPOSITION_SWAPCHAIN) && !defined(SDL_GL_SINGLE_THREAD)
   if (use_composition_swapchain) {
     if (i == SCREEN_TOP)
       rp_lock_wait(comp_lock);
-    SDL_GL_MakeCurrent(win_ogl[i], glContext[i]);
     composition_buffer_cleanup(i);
-    SDL_GL_MakeCurrent(NULL, NULL);
     if (i == SCREEN_TOP)
       rp_lock_rel(comp_lock);
   }
