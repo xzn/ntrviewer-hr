@@ -107,7 +107,7 @@ static GLuint glFboVbo[SCREEN_COUNT];
 static GLuint glFboEbo[SCREEN_COUNT];
 #endif
 
-static int prev_win_width[SCREEN_COUNT], prev_win_height[SCREEN_COUNT];
+__attribute__ ((unused)) static int prev_win_width[SCREEN_COUNT], prev_win_height[SCREEN_COUNT];
 static int prev_ctx_width[SCREEN_COUNT], prev_ctx_height[SCREEN_COUNT];
 
 #endif
@@ -444,7 +444,6 @@ static int presentation_buffer_get(struct presentation_buffer_t *bufs, int tb, i
   *index = i;
   return 0;
 }
-#endif
 
 static int dcomp_set_offset_y(int tb, int height) {
   HRESULT hr;
@@ -1289,6 +1288,7 @@ static void composition_swapchain_device_restart(void) {
     err_log("successful\n");
   }
 }
+#endif
 
 #ifndef USE_SDL_RENDERER
 #define screen_upscale_factor REALCUGAN_SCALE
@@ -3312,7 +3312,13 @@ struct vao_vertice_t {
 #endif
 
 #ifdef USE_SDL_RENDERER
-static void do_hr_draw_screen(__attribute__ ((unused)) FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot, int tb, __attribute__ ((unused)) int index)
+static void do_hr_draw_screen(
+  __attribute__ ((unused)) FrameBufferContext *ctx,
+  uint8_t *data, int width, int height, int top_bot, int tb,
+  __attribute__ ((unused)) int index,
+  __attribute__ ((unused)) view_mode_t vm,
+  __attribute__ ((unused)) int sc_vm
+)
 {
   if (data) {
     void *pixels;
@@ -3336,7 +3342,6 @@ static void do_hr_draw_screen(__attribute__ ((unused)) FrameBufferContext *ctx, 
   int ctx_width;
   int ctx_height;
   // int tb;
-  view_mode_t vm = __atomic_load_n(&view_mode, __ATOMIC_RELAXED);
   if (vm == VIEW_MODE_TOP_BOT) {
     // tb = SCREEN_TOP;
 
@@ -4016,6 +4021,8 @@ ThreadLoop(int i)
 
   float bg[4];
   nk_color_fv(bg, nk_window_bgcolor);
+  int width = sc_top_bot == SCREEN_TOP ? 400 : 320;
+  int height = 240;
 #ifdef USE_SDL_RENDERER
   /* scale the renderer output for High-DPI displays */
   {
@@ -4055,12 +4062,13 @@ ThreadLoop(int i)
 #else
   SDL_GL_GetDrawableSize(win[sc_tb], &win_width[sc_tb], &win_height[sc_tb]);
 
-#ifdef SDL_GL_SINGLE_THREAD
-  SDL_GL_MakeCurrent(win_ogl[i], glContext[i]);
-#else
+#ifdef USE_COMPOSITION_SWAPCHAIN
   if (sc_tb == SCREEN_TOP) {
     rp_lock_wait(comp_lock);
   }
+#endif
+#ifdef SDL_GL_SINGLE_THREAD
+  SDL_GL_MakeCurrent(win_ogl[i], glContext[i]);
 #endif
 
   GLenum gl_err;
@@ -4069,17 +4077,17 @@ ThreadLoop(int i)
     if (gl_err == GL_OUT_OF_MEMORY) {
       err_log("gl error unrecoverable, shutting down\n");
       running = 0;
+#ifdef USE_COMPOSITION_SWAPCHAIN
       if (sc_tb == SCREEN_TOP) {
         rp_lock_rel(comp_lock);
       }
+#endif
       return;
     }
   }
 
   int ctx_width = NK_MAX(win_width[sc_tb], 1);
   int ctx_height = NK_MAX(win_height[sc_tb], 1);
-  int width = sc_top_bot == SCREEN_TOP ? 400 : 320;
-  int height = 240;
 #ifdef USE_COMPOSITION_SWAPCHAIN
   GLuint tex_sc;
   HANDLE handle_sc;
@@ -4237,8 +4245,10 @@ ThreadLoop(int i)
     hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT, i, vm, sc_vm);
   else {
     if (!hr_draw_screen(&buffer_ctx[sc_top_bot], width, height, sc_top_bot, sc_tb, vm, sc_vm)) {
+#ifndef USE_SDL_RENDERER
       glClearColor(bg[0], bg[1], bg[2], bg[3]);
       glClear(GL_COLOR_BUFFER_BIT);
+#endif
     }
   }
 
@@ -4333,15 +4343,15 @@ ThreadLoop(int i)
     }
     SDL_GL_SwapWindow(win[i]);
   }
+  if (sc_tb == SCREEN_TOP) {
+    rp_lock_rel(comp_lock);
+  }
 #else
   if (i == SCREEN_TOP) {
     nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
   }
   SDL_GL_SwapWindow(win[i]);
 #endif
-  if (sc_tb == SCREEN_TOP) {
-    rp_lock_rel(comp_lock);
-  }
 #endif
 
 #ifdef SDL_GL_SYNC
