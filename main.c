@@ -2598,6 +2598,9 @@ static enum NK_NAV_FOCUS {
 static int hide_windows = 0;
 static struct nk_style nk_style_current;
 
+static const char *remote_play_wnd = "Remote Play";
+static const char *debug_msg_wnd = "Debug";
+
 static void do_nav_next(enum NK_FOCUS nk_focus)
 {
   if (nk_focus == nk_focus_current) {
@@ -2640,6 +2643,9 @@ static void do_nav_next(enum NK_FOCUS nk_focus)
   }
 }
 
+// HACK always allow property text edit input in current window
+static nk_flags nav_layout_rom;
+
 static void do_nav_property_next(struct nk_context *ctx, const char *name, enum NK_FOCUS nk_focus, int val)
 {
   if (check_next_property(ctx, name)) {
@@ -2655,6 +2661,11 @@ static void do_nav_property_next(struct nk_context *ctx, const char *name, enum 
   }
 
   if (nk_focus_current == nk_focus && nk_nav_focus != NK_NAV_FOCUS_NONE) {
+    nav_layout_rom = ctx->current->layout->flags & NK_WINDOW_ROM;
+    if (nav_layout_rom) {
+      ctx->current->layout->flags &= ~NK_WINDOW_ROM;
+    }
+
     switch (__atomic_load_n(&nk_nav_command, __ATOMIC_RELAXED)) {
       case NK_NAV_PREVIOUS:
       case NK_NAV_NEXT:
@@ -2687,6 +2698,11 @@ static void check_nav_property_prev(struct nk_context *ctx, const char *name, en
     nk_nav_focus = NK_NAV_FOCUS_NONE;
   }
   ctx->input.keyboard.keys[NK_KEY_ENTER].clicked = 0;
+
+  if (nav_layout_rom) {
+    ctx->current->layout->flags |= NK_WINDOW_ROM;
+    nav_layout_rom = 0;
+  }
 }
 
 static void do_nav_combobox_next(struct nk_context *ctx, enum NK_FOCUS nk_focus, int *selected, int count)
@@ -2826,8 +2842,6 @@ static void check_nav_slider_prev(struct nk_context *ctx, enum NK_FOCUS nk_focus
 
 static void guiMain(struct nk_context *ctx)
 {
-  const char *remote_play_wnd = "Remote Play";
-
   ctx->style.window.fixed_background = nk_style_item_hide();
   const char *background_wnd = "Background";
   if (nk_begin(ctx, background_wnd, nk_rect(0, 0, win_width[SCREEN_TOP], win_height[SCREEN_TOP]),
@@ -3055,7 +3069,6 @@ static void guiMain(struct nk_context *ctx)
   nk_end(ctx);
   nk_window_show(ctx, remote_play_wnd, show_window);
 
-  const char *debug_msg_wnd = "Debug";
   if (nk_begin(ctx, debug_msg_wnd, nk_rect(475, 10, 150, 250),
                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE) && show_window)
   {
@@ -3091,10 +3104,6 @@ static void guiMain(struct nk_context *ctx)
   }
   nk_end(ctx);
   nk_window_show(ctx, debug_msg_wnd, show_window);
-
-  // HACK to ensure Remote Play config window has keyboard focus
-  if (nk_window_is_active(ctx, debug_msg_wnd))
-    nk_window_set_focus(ctx, remote_play_wnd);
 }
 
 #ifndef USE_SDL_RENDERER
