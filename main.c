@@ -87,6 +87,12 @@ static struct nk_color nk_window_bgcolor = { 28, 48, 62, 255 };
 #endif
 #endif
 
+#define GL_CHANNELS_N 4
+#define GL_FORMAT GL_RGBA
+#define GL_INT_FORMAT GL_RGBA8
+#define TJ_FORMAT TJPF_RGBA
+#define JCS_FORMAT JCS_EXT_RGBA
+
 static SDL_Window *win[SCREEN_COUNT];
 static SDL_Window *win_ogl[SCREEN_COUNT];
 static Uint32 win_id[SCREEN_COUNT];
@@ -599,7 +605,7 @@ static int render_buffer_gen(struct render_buffer_t *b, int tb, int width, int h
   tex_desc.SampleDesc.Count = 1;
   tex_desc.SampleDesc.Quality = 0;
   tex_desc.Usage = D3D11_USAGE_DEFAULT;
-  tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+  tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
   tex_desc.MiscFlags = 0;
   tex_desc.CPUAccessFlags = 0;
 
@@ -643,6 +649,41 @@ static int render_buffer_get(struct render_buffer_t *b, int tb, int width, int h
   *handle = b->gl_handle;
 
   return 0;
+}
+
+static GLuint ui_render_tex;
+static int ui_render_width, ui_render_height;
+static GLuint ui_render_tex_get(int width, int height) {
+  if (ui_render_width == width && ui_render_height == height) {
+    return ui_render_tex;
+  }
+
+  if (ui_render_tex) {
+    glDeleteTextures(1, &ui_render_tex);
+    ui_render_tex = 0;
+    ui_render_width = 0;
+    ui_render_height = 0;
+  }
+
+  glGenTextures(1, &ui_render_tex);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, ui_render_tex);
+  glTexImage2D(
+    GL_TEXTURE_2D, 0,
+    GL_INT_FORMAT,
+    width,
+    height, 0,
+    GL_FORMAT, GL_UNSIGNED_BYTE,
+    0);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glBindTexture(GL_TEXTURE_2D, 0);
+
+  ui_render_width = width;
+  ui_render_height = height;
+  return ui_render_tex;
 }
 
 static void composition_buffer_cleanup(int tb) {
@@ -1306,12 +1347,6 @@ static void composition_swapchain_device_restart(void) {
 
 #define HR_MAX(a, b) ((a) > (b) ? (a) : (b))
 #define HR_MIN(a, b) ((a) < (b) ? (a) : (b))
-
-#define GL_CHANNELS_N 4
-#define GL_FORMAT GL_RGBA
-#define GL_INT_FORMAT GL_RGBA8
-#define TJ_FORMAT TJPF_RGBA
-#define JCS_FORMAT JCS_EXT_RGBA
 
 #ifdef EMBED_JPEG_TURBO
 #include "jpeg_turbo/jpeglib.h"
@@ -3085,7 +3120,11 @@ static GLbyte fShaderStr[] =
   "uniform sampler2D s_texture;\n"
   "void main()\n"
   "{\n"
-  " gl_FragColor = texture2D(s_texture, v_texCoord);\n"
+  " vec4 color = texture2D(s_texture, v_texCoord);\n"
+  " if (color == vec4(0.0))\n"
+  "  gl_FragColor = color;\n"
+  " else\n"
+  "  gl_FragColor = vec4(color.rgb, 15.0 / 16.0); \n"
   "}\n";
 
 #ifdef USE_OGL_ES
@@ -3961,9 +4000,7 @@ static bool decode_cond_wait(event_t *event)
   return true;
 }
 
-#ifdef USE_SDL_RENDERER
-float font_scale;
-#endif
+struct nk_vec2 font_scale;
 
 static void
 ThreadLoop(int i)
@@ -4023,44 +4060,25 @@ ThreadLoop(int i)
   nk_color_fv(bg, nk_window_bgcolor);
   int width = sc_top_bot == SCREEN_TOP ? 400 : 320;
   int height = 240;
+  float scale_x = 1.0f, scale_y = 1.0f;
 #ifdef USE_SDL_RENDERER
   /* scale the renderer output for High-DPI displays */
   {
     int render_w, render_h;
-    float scale_x, scale_y;
     SDL_GetRendererOutputSize(sdlRenderer[i], &render_w, &render_h);
     SDL_GetWindowSize(win[i], &win_width[i], &win_height[i]);
     scale_x = (float)(render_w) / (float)(win_width[i]);
     scale_y = (float)(render_h) / (float)(win_height[i]);
     SDL_RenderSetScale(sdlRenderer[i], scale_x, scale_y);
-    if (i == SCREEN_TOP && font_scale != scale_y) {
-      font_scale = scale_y;
-
-      struct nk_context *ctx = nk_ctx;
-
-      /* Load Fonts: if none of these are loaded a default font will be used  */
-      /* Load Cursor: if you uncomment cursor loading please hide the cursor */
-      struct nk_font_atlas *atlas;
-      struct nk_font_config config = nk_font_config(0);
-      struct nk_font *font;
-
-      /* set up the font atlas and add desired font; note that font sizes are
-        * multiplied by font_scale to produce better results at higher DPIs */
-      nk_sdl_font_stash_begin(&atlas);
-      font = nk_font_atlas_add_default(atlas, 13 * font_scale, &config);
-      nk_sdl_font_stash_end();
-
-      /* this hack makes the font appear to be scaled down to the desired
-        * size and is only necessary when font_scale > 1 */
-      font->handle.height /= font_scale;
-      /*nk_style_load_all_cursors(ctx, atlas->cursors);*/
-      nk_style_set_font(ctx, &font->handle);
-    }
   }
   SDL_SetRenderDrawColor(sdlRenderer[i], bg[0]* 255, bg[1] * 255, bg[2] * 255, bg[3] * 255);
   SDL_RenderClear(sdlRenderer[i]);
 #else
+  int win_w, win_h;
+  SDL_GetWindowSize(win[sc_tb], &win_w, &win_h);
   SDL_GL_GetDrawableSize(win[sc_tb], &win_width[sc_tb], &win_height[sc_tb]);
+  scale_x = (float)win_width[sc_tb] / win_w;
+  scale_y = (float)win_height[sc_tb] / win_h;
 
 #ifdef USE_COMPOSITION_SWAPCHAIN
   if (sc_tb == SCREEN_TOP) {
@@ -4257,7 +4275,7 @@ ThreadLoop(int i)
     * defaults everything back into a default state.
     * Make sure to either a.) save and restore or b.) reset your own state after
     * rendering the UI. */
-  if (i == 0) {
+  if (i == SCREEN_TOP) {
     struct nk_context *ctx = nk_ctx;
 
 #ifndef SDL_GL_SINGLE_THREAD
@@ -4277,6 +4295,30 @@ ThreadLoop(int i)
 #ifndef SDL_GL_SINGLE_THREAD
     rp_lock_rel(nk_input_lock);
 #endif
+
+    if (font_scale.x != scale_x || font_scale.y != scale_y) {
+      font_scale = (struct nk_vec2){ scale_x, scale_y };
+
+      struct nk_context *ctx = nk_ctx;
+
+      /* Load Fonts: if none of these are loaded a default font will be used  */
+      /* Load Cursor: if you uncomment cursor loading please hide the cursor */
+      struct nk_font_atlas *atlas;
+      struct nk_font_config config = nk_font_config(0);
+      struct nk_font *font;
+
+      /* set up the font atlas and add desired font; note that font sizes are
+        * multiplied by font_scale to produce better results at higher DPIs */
+      nk_sdl_font_stash_begin(&atlas);
+      font = nk_font_atlas_add_default(atlas, 13 * font_scale.x, &config);
+      nk_sdl_font_stash_end();
+
+      /* this hack makes the font appear to be scaled down to the desired
+        * size and is only necessary when font_scale > 1 */
+      font->handle.height = font->handle.height / font_scale.x / font_scale.x * font_scale.y;
+      /*nk_style_load_all_cursors(ctx, atlas->cursors);*/
+      nk_style_set_font(ctx, &font->handle);
+    }
   }
 
 #ifdef SDL_GL_SYNC
@@ -4312,13 +4354,35 @@ ThreadLoop(int i)
         return;
       }
 
-      glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, ui_tex);
+      GLuint ui_nk_tex = ui_render_tex_get(prev_win_width[sc_top_bot], prev_win_height[sc_top_bot]);
+      glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ui_nk_tex, 0);
 
       glViewport(0, 0, prev_win_width[sc_top_bot], prev_win_height[sc_top_bot]);
       glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
       glClear(GL_COLOR_BUFFER_BIT);
 
       nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
+
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, ui_nk_tex);
+      glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, ui_tex);
+
+      glUseProgram(gl_program[sc_tb]);
+#ifdef USE_VAO
+      glBindVertexArray(glFboVao[sc_tb]);
+      glBindBuffer(GL_ARRAY_BUFFER, glFboVbo[sc_tb]);
+      glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, glFboEbo[sc_tb]);
+#else
+      glEnableVertexAttribArray(gl_fbo_position_loc[sc_tb]);
+      glEnableVertexAttribArray(gl_fbo_tex_coord_loc[sc_tb]);
+      glVertexAttribPointer(gl_fbo_position_loc[sc_tb], 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_pos), fbo_vVertices_pos);
+      glVertexAttribPointer(gl_fbo_tex_coord_loc[sc_tb], 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vVertices_tex_coord), fbo_vVertices_tex_coord);
+#endif
+#ifdef USE_VAO
+      glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+#else
+      glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, fbo_indices);
+#endif
 
       if (!wglDXUnlockObjectsNV(gl_d3ddevice[sc_tb], 1, &ui_handle)) {
         err_log("wglDXUnlockObjectsNV failed: %d\n", (int)GetLastError());
