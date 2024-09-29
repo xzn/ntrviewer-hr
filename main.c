@@ -773,6 +773,15 @@ static void composition_buffer_cleanup(int tb) {
       struct presentation_buffer_t *b = &ui_pres_bufs[i];
       presentation_buffer_delete(b);
     }
+
+    for (int j = 0; j < SCREEN_COUNT; ++j) {
+      prev_win_height[j] = prev_win_width[j] = prev_ctx_height[j] = prev_ctx_width[j] = 0;
+      src_rect[j].right = src_rect[j].bottom = 0;
+      src_rect_child[j].right = src_rect_child[j].bottom = 0;
+    }
+
+    for (int j = 0; j < SURFACE_UTIL_COUNT; ++j)
+      src_rect_util[j].right = src_rect_util[j].bottom = 0;
   }
 #endif
 }
@@ -780,16 +789,6 @@ static void composition_buffer_cleanup(int tb) {
 static int presentation_render_reset(int sc_vm) {
   int i = SCREEN_TOP;
   composition_buffer_cleanup(i);
-
-  for (int j = 0; j < SCREEN_COUNT; ++j) {
-    prev_win_height[j] = prev_win_width[j] = prev_ctx_height[j] = prev_ctx_width[j] = 0;
-
-    src_rect[i].right = src_rect[i].bottom = 0;
-
-    src_rect_child[i].right = src_rect_child[i].bottom = 0;
-
-    src_rect_util[i].right = src_rect_util[i].bottom = 0;
-  }
 
   HRESULT hr;
   if (sc_vm) {
