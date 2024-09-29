@@ -146,7 +146,7 @@ static int acquire_sem(rp_sem_t *sem) {
 // Use dxgi instead of composition swapchain to check
 // #define USE_DXGI_SWAPCHAIN
 
-#define TDR_TEST_HOTKEY
+// #define TDR_TEST_HOTKEY
 
 #include "dcomp.h"
 #include <winstring.h>
@@ -4437,13 +4437,21 @@ ThreadLoop(int i)
   HANDLE handle_sc;
   if (use_composition_swapchain) {
     if (sc_tb == SCREEN_TOP && prev_sc_vm != sc_vm) {
-      if (presentation_render_reset(sc_vm)) {
+      if (i == SCREEN_TOP) {
+        if (presentation_render_reset(sc_vm)) {
+          if (sc_tb == SCREEN_TOP) {
+            rp_lock_rel(comp_lock);
+          }
+          return;
+        }
+        prev_sc_vm = sc_vm;
+      } else {
         if (sc_tb == SCREEN_TOP) {
           rp_lock_rel(comp_lock);
         }
+        Sleep(REST_EVERY_MS);
         return;
       }
-      prev_sc_vm = sc_vm;
     }
     if (sc_vm) {
       int ctx_left;
