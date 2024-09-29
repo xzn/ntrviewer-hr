@@ -139,15 +139,7 @@ static int acquire_sem(rp_sem_t *sem) {
 }
 
 #ifdef USE_COMPOSITION_SWAPCHAIN
-
-// Use direct composition instead of UI.Composition
-#define USE_DIRECT_COMPOSITION
-
-// Use dxgi instead of composition swapchain to check
-// #define USE_DXGI_SWAPCHAIN
-
 // #define TDR_TEST_HOTKEY
-
 #include "dcomp.h"
 #include <winstring.h>
 #include "glad/glad_wgl.h"
@@ -173,11 +165,6 @@ static IDXGIDevice *dxgi_device[SCREEN_COUNT];
 static IDXGIDevice2 *dxgi_device2[SCREEN_COUNT];
 static IDXGIAdapter *dxgi_adapter[SCREEN_COUNT];
 static IDXGIFactory2 *dxgi_factory[SCREEN_COUNT];
-#ifdef USE_DXGI_SWAPCHAIN
-static IDXGISwapChain1 *dxgi_sc[SCREEN_COUNT];
-static int width_sc[SCREEN_COUNT];
-static int height_sc[SCREEN_COUNT];
-#else
 static IPresentationFactory *presentation_factory[SCREEN_COUNT];
 static bool displayable_surface_support[SCREEN_COUNT];
 static HANDLE pres_man_lost_event[SCREEN_COUNT];
@@ -194,13 +181,9 @@ static IPresentationSurface *pres_surf_child[SCREEN_COUNT];
 static IPresentationSurface *pres_surf_util[SURFACE_UTIL_COUNT];
 static RECT src_rect_child[SCREEN_COUNT];
 static RECT src_rect_util[SCREEN_COUNT];
-#ifdef USE_DIRECT_COMPOSITION
 static IUnknown *dcomp_surface[SCREEN_COUNT];
 static IUnknown *dcomp_surf_child[SCREEN_COUNT];
 static IUnknown *dcomp_surf_util[SURFACE_UTIL_COUNT];
-#endif
-#endif
-#ifdef USE_DIRECT_COMPOSITION
 static IDCompositionDesktopDevice *dcomp_desktop_device[SCREEN_COUNT];
 static IDCompositionDevice *dcomp_device1[SCREEN_COUNT];
 static IDCompositionDevice3 *dcomp_device[SCREEN_COUNT];
@@ -208,21 +191,6 @@ static IDCompositionTarget *dcomp_target[SCREEN_COUNT];
 static IDCompositionVisual2 *dcomp_visual[SCREEN_COUNT];
 static IDCompositionVisual2 *dcomp_vis_child[SCREEN_COUNT];
 static IDCompositionVisual2 *dcomp_vis_util[SURFACE_UTIL_COUNT];
-#else
-static IDispatcherQueueController *queue_controller;
-static ICompositor *compositor;
-static ICompositorInterop *comp_interop;
-static ICompositorDesktopInterop *comp_desktop_interop;
-static IDesktopWindowTarget *desktop_target[SCREEN_COUNT];
-static ICompositionTarget *comp_target[SCREEN_COUNT];
-static ICompositionSurface *comp_surface_interop[SCREEN_COUNT];
-static ICompositionSurface *comp_surface[SCREEN_COUNT];
-static ICompositionSurfaceBrush *surface_brush[SCREEN_COUNT];
-static ICompositionBrush *comp_brush[SCREEN_COUNT];
-static ISpriteVisual *sprite_visual[SCREEN_COUNT];
-static IVisual *comp_visual[SCREEN_COUNT];
-static IVisual2 *comp_visual2[SCREEN_COUNT];
-#endif
 
 #ifdef TDR_TEST_HOTKEY
 #include "cs_tdr.h"
@@ -252,7 +220,6 @@ static struct render_buffer_t {
   int height;
 } render_buffers[SCREEN_COUNT][SCREEN_COUNT], ui_render_buf;
 
-#ifndef USE_DXGI_SWAPCHAIN
 static struct presentation_buffer_t {
   ID3D11Texture2D *tex;
   IPresentationBuffer *buf;
@@ -315,23 +282,6 @@ static int presentation_buffer_gen(struct presentation_buffer_t *b, int tb, int 
     err_log("AddBufferFromResource failed: %d\n", (int)hr);
     goto fail;
   }
-
-  // IDXGIResource1 *dxgi_res;
-  // hr = ID3D11Texture2D_QueryInterface(b->tex, &IID_IDXGIResource1, (void **)&dxgi_res);
-  // if (hr) {
-  //   err_log("QueryInterface IDXGIResource1 failed: %d\n", (int)hr);
-  //   goto fail;
-  // }
-
-  // HANDLE tex_handle;
-  // hr = IDXGIResource1_CreateSharedHandle(dxgi_res, NULL, GENERIC_ALL, NULL, &tex_handle);
-  // if (hr) {
-  //   err_log("CreateSharedHandle failed: %d\n", (int)hr);
-  //   goto fail;
-  // }
-
-  // CloseHandle(tex_handle);
-  // IDXGIResource1_Release(dxgi_res);
 
   hr = IPresentationBuffer_GetAvailableEvent(b->buf, &b->buf_avail_event);
   if (hr) {
@@ -483,8 +433,6 @@ static int presentation_buffer_get(struct presentation_buffer_t *bufs, int tb, i
   }
   res -= WAIT_OBJECT_0;
 
-  // err_log("%d %d %llu\n", tb, (int)res, (unsigned long long)IPresentationManager_GetNextPresentId(presentation_manager));
-
   int i = res;
   if (bufs[i].width != width || bufs[i].height != height) {
     struct presentation_buffer_t *b = &bufs[i];
@@ -498,7 +446,6 @@ static int presentation_buffer_get(struct presentation_buffer_t *bufs, int tb, i
 }
 #endif
 
-#ifdef USE_DIRECT_COMPOSITION
 static int dcomp_set_offset_y(int tb, int height) {
   HRESULT hr;
   hr = dcomp_visual[tb]->lpVtbl->SetOffsetY2(dcomp_visual[tb], (FLOAT)height);
@@ -515,55 +462,9 @@ static int dcomp_set_offset_y(int tb, int height) {
 
   return hr;
 }
-#endif
 
 static int presentation_buffer_present(int tb, int top_bot, int sc_vm, __attribute__ ((unused)) int count_max) {
-#ifdef USE_DXGI_SWAPCHAIN
-  struct render_buffer_t *b = &render_buffers[tb];
 
-  HRESULT hr;
-
-  if (b->width != width_sc[tb] || b->height != height_sc[tb]) {
-    hr = IDXGISwapChain1_ResizeBuffers(dxgi_sc[tb], 0, b->width, b->height, DXGI_FORMAT_UNKNOWN, 0);
-    if (hr) {
-      err_log("ResizeBuffers failed: %d\n", (int)hr);
-      return -1;
-    }
-
-    width_sc[tb] = b->width;
-    height_sc[tb] = b->height;
-
-#ifdef USE_DIRECT_COMPOSITION
-    hr = dcomp_set_offset_y(tb, b->height);
-    if (hr)
-      return hr;
-#endif
-  }
-
-  ID3D11Texture2D *tex;
-  hr = IDXGISwapChain1_GetBuffer(dxgi_sc[tb], 0, &IID_ID3D11Texture2D, (void **)&tex);
-  if (hr) {
-    err_log("GetBuffer failed: %d\n", (int)hr);
-    return -1;
-  }
-
-  ID3D11DeviceContext_CopyResource(d3d11device_context[tb], (ID3D11Resource *)tex, (ID3D11Resource *)b->tex);
-
-  hr = IDXGISwapChain1_Present(dxgi_sc[tb], 1, 0);
-  if (hr) {
-    err_log("Present failed: %d\n", (int)hr);
-    if (hr == DXGI_ERROR_DEVICE_REMOVED) {
-      hr = ID3D11Device_GetDeviceRemovedReason(d3d11device[tb]);
-      err_log("GetDeviceRemovedReason: %d\n", (int)hr);
-    }
-    compositing = 0;
-    return -1;
-  }
-
-  ID3D11Texture2D_Release(tex);
-
-  return 0;
-#else
   struct render_buffer_t *b = &render_buffers[tb][top_bot];
 
   int index_sc;
@@ -597,13 +498,11 @@ static int presentation_buffer_present(int tb, int top_bot, int sc_vm, __attribu
       return hr;
     }
 
-#ifdef USE_DIRECT_COMPOSITION
     if (!sc_vm) {
       hr = dcomp_set_offset_y(tb, b->height);
       if (hr)
         return hr;
     }
-#endif
   }
 
   ID3D11DeviceContext_CopyResource(d3d11device_context[tb], (ID3D11Resource *)bufs[index_sc].tex, (ID3D11Resource *)b->tex);
@@ -620,7 +519,6 @@ static int presentation_buffer_present(int tb, int top_bot, int sc_vm, __attribu
   }
 
   return 0;
-#endif
 }
 
 static int ui_buffer_present(__attribute__ ((unused)) int count_max) {
@@ -755,9 +653,6 @@ static void composition_buffer_cleanup(int tb) {
     // hence the reversed order of parameters
     struct render_buffer_t *b = &render_buffers[j][tb];
     render_buffer_delete(b, j);
-#ifdef USE_DXGI_SWAPCHAIN
-    width_sc[tb] = height_sc[tb] = 0;
-#else
     if (tb == SCREEN_TOP) {
       src_rect_child[j].bottom = src_rect_child[j].right = 0;
     }
@@ -783,7 +678,6 @@ static void composition_buffer_cleanup(int tb) {
     for (int j = 0; j < SURFACE_UTIL_COUNT; ++j)
       src_rect_util[j].right = src_rect_util[j].bottom = 0;
   }
-#endif
 }
 
 static int presentation_render_reset(int sc_vm) {
@@ -971,7 +865,6 @@ static int composition_swapchain_device_init(void) {
       return hr;
     }
 
-#ifndef USE_DXGI_SWAPCHAIN
     hr = pfn_CreatePresentationFactory((IUnknown *)d3d11device[i], &IID_IPresentationFactory, (void **)&presentation_factory[i]);
     if (hr) {
       err_log("CreatePresentationFactory failed: %d\n", (int)hr);
@@ -1011,29 +904,7 @@ static int composition_swapchain_device_init(void) {
         }
       }
     }
-#endif
 
-#ifdef USE_DXGI_SWAPCHAIN
-    DXGI_SWAP_CHAIN_DESC1 sc_desc = {};
-    sc_desc.Width = 1;
-    sc_desc.Height = 1;
-    sc_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    sc_desc.SampleDesc.Count = 1;
-    sc_desc.BufferCount = COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN;
-    sc_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    sc_desc.Scaling = DXGI_SCALING_STRETCH;
-    sc_desc.SwapEffect = IsWindows10OrGreater() ? DXGI_SWAP_EFFECT_FLIP_DISCARD : DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
-    sc_desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-
-    hr = IDXGIFactory2_CreateSwapChainForComposition(dxgi_factory[i], (IUnknown *)d3d11device[i], &sc_desc, NULL, &dxgi_sc[i]);
-    if (hr) {
-      err_log("CreateSwapChainForComposition failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    width_sc[i] = sc_desc.Width;
-    height_sc[i] = sc_desc.Height;
-#else
     hr = DCompositionCreateSurfaceHandle(COMPOSITIONOBJECT_ALL_ACCESS, NULL, &composition_surface[i]);
     if (hr) {
       err_log("DCompositionCreateSurfaceHandle failed: %d\n", (int)hr);
@@ -1111,17 +982,7 @@ static int composition_swapchain_device_init(void) {
         }
       }
     }
-#endif
 
-#ifdef USE_DIRECT_COMPOSITION
-
-#ifdef USE_DXGI_SWAPCHAIN
-    hr = dcomp_visual[i]->lpVtbl->SetContent(dcomp_visual[i], (IUnknown *)dxgi_sc[i]);
-    if (hr) {
-      err_log("SetContent failed: %d\n", (int)hr);
-      return hr;
-    }
-#else
     hr = dcomp_device1[i]->lpVtbl->CreateSurfaceFromHandle(dcomp_device1[i], composition_surface[i], &dcomp_surface[i]);
     if (hr) {
       err_log("CreateSurfaceFromHandle failed: %d\n", (int)hr);
@@ -1163,39 +1024,7 @@ static int composition_swapchain_device_init(void) {
         }
       }
     }
-#endif
 
-#else
-
-#ifdef USE_DXGI_SWAPCHAIN
-    hr = comp_interop->lpVtbl->CreateCompositionSurfaceForSwapChain(comp_interop, (IUnknown *)dxgi_sc[i], &comp_surface_interop[i]);
-    if (hr) {
-      err_log("CreateCompositionSurfaceForSwapChain failed: %d\n", (int)hr);
-      return hr;
-    }
-#else
-    hr = comp_interop->lpVtbl->CreateCompositionSurfaceForHandle(comp_interop, composition_surface[i], &comp_surface_interop[i]);
-    if (hr) {
-      err_log("CreateCompositionSurfaceForHandle failed: %d\n", (int)hr);
-      return hr;
-    }
-#endif
-
-    hr = ICompositionSurface_QueryInterface(comp_surface_interop[i], &IID_ICompositionSurface, (void **)&comp_surface[i]);
-    if (hr) {
-      err_log("QueryInterface ICompositionSurface failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    hr = ICompositionSurfaceBrush_put_Surface(surface_brush[i], comp_surface[i]);
-    if (hr) {
-      err_log("put_Surface failed: %d\n", (int)hr);
-      return hr;
-    }
-
-#endif
-
-#ifndef USE_DXGI_SWAPCHAIN
 #if 0
     hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager[i], PresentStatisticsKind_CompositionFrame, true);
     if (hr) {
@@ -1233,7 +1062,6 @@ static int composition_swapchain_device_init(void) {
       err_log("GetPresentStatisticsAvailableEvent failed: %d\n", (int)hr);
       return hr;
     }
-#endif
 
     gl_d3ddevice[i] = wglDXOpenDeviceNV(d3d11device[i]);
     if (!gl_d3ddevice[i]) {
@@ -1255,56 +1083,7 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
 
   HRESULT hr;
 
-#ifndef USE_DIRECT_COMPOSITION
-  struct DispatcherQueueOptions queue_options = {
-    sizeof(struct DispatcherQueueOptions),
-    DQTYPE_THREAD_CURRENT,
-    DQTAT_COM_NONE
-  };
-  hr = CreateDispatcherQueueController(queue_options, &queue_controller);
-  if (hr) {
-    err_log("CreateDispatcherQueueController failed: %d\n", (int)hr);
-    return hr;
-  }
-
-  HSTRING Compositor_class_id;
-  hr = WindowsCreateString(RuntimeClass_Windows_UI_Composition_Compositor, wcslen(RuntimeClass_Windows_UI_Composition_Compositor), &Compositor_class_id);
-  if (hr) {
-    err_log("WindowsCreateString failed: %d\n", (int)hr);
-    return hr;
-  }
-
-  IInspectable *compositor_insp;
-  hr = RoActivateInstance(Compositor_class_id, &compositor_insp);
-  if (hr) {
-    err_log("RoActivateInstance Compositor failed: %d\n", (int)hr);
-    return hr;
-  }
-
-  hr = IInspectable_QueryInterface(compositor_insp, &IID_ICompositor, (void **)&compositor);
-  if (hr) {
-    err_log("QueryInterface ICompositor failed: %d\n", (int)hr);
-    return hr;
-  }
-
-  IInspectable_Release(compositor_insp);
-  WindowsDeleteString(Compositor_class_id);
-
-  hr = ICompositor_QueryInterface(compositor, &IID_ICompositorInterop, (void **)&comp_interop);
-  if (hr) {
-    err_log("QueryInterface ICompositorInterop failed: %d\n", (int)hr);
-    return hr;
-  }
-
-  hr = ICompositor_QueryInterface(compositor, &IID_ICompositorDesktopInterop, (void **)&comp_desktop_interop);
-  if (hr) {
-    err_log("QueryInterface ICompositorDesktopInterop failed: %d\n", (int)hr);
-    return hr;
-  }
-#endif
-
   for (int i = 0; i < SCREEN_COUNT; ++i) {
-#ifdef USE_DIRECT_COMPOSITION
     hr = DCompositionCreateDevice3((IUnknown *)dxgi_device[i], &IID_IDCompositionDesktopDevice, (void **)&dcomp_desktop_device[i]);
     if (hr) {
       err_log("DCompositionCreateDevice IDXGIDevice failed: %d\n", (int)hr);
@@ -1383,91 +1162,6 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
       err_log("Commit failed: %d\n", (int)hr);
       return hr;
     }
-#else
-    hr = comp_desktop_interop->lpVtbl->CreateDesktopWindowTarget(comp_desktop_interop, hwnd[i], true, &desktop_target[i]);
-    if (hr) {
-      err_log("CreateDesktopWindowTarget failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    hr = IDesktopWindowTarget_QueryInterface(desktop_target[i], &IID_ICompositionTarget, (void **)&comp_target[i]);
-    if (hr) {
-      err_log("QueryInterface ICompositionTarget failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    hr = ICompositor_CreateSurfaceBrush(compositor, &surface_brush[i]);
-    if (hr) {
-      err_log("CreateSurfaceBrush failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    hr = ICompositionSurfaceBrush_QueryInterface(surface_brush[i], &IID_ICompositionBrush, (void **)&comp_brush[i]);
-    if (hr) {
-      err_log("QueryInterface ICompositionBrush failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    hr = ICompositor_CreateSpriteVisual(compositor, &sprite_visual[i]);
-    if (hr) {
-      err_log("CreateSpriteVisual failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    hr = ISpriteVisual_put_Brush(sprite_visual[i], comp_brush[i]);
-    if (hr) {
-      err_log("put_Brush failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    hr = ISpriteVisual_QueryInterface(sprite_visual[i], &IID_IVisual2, (void **)&comp_visual2[i]);
-    if (hr) {
-      err_log("QueryInterface IVisual2 failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    struct Vector2 rel_size = { 1.0f, 1.0f };
-    hr = IVisual2_put_RelativeSizeAdjustment(comp_visual2[i], rel_size);
-    if (hr) {
-      err_log("put_RelativeSizeAdjustment failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    struct Vector3 rel_offset = { 0.0f, 1.0f, 0.0f };
-    hr = IVisual2_put_RelativeOffsetAdjustment(comp_visual2[i], rel_offset);
-    if (hr) {
-      err_log("put_RelativeOffsetAdjustment failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    IVisual2_Release(comp_visual2[i]);
-    comp_visual2[i] = NULL;
-
-    hr = ISpriteVisual_QueryInterface(sprite_visual[i], &IID_IVisual, (void **)&comp_visual[i]);
-    if (hr) {
-      err_log("QueryInterface IVisual failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    struct Matrix4x4 trans_mat = {
-      1.0f, 0.0f, 0.0f, 0.0f,
-      0.0f, -1.0f, 0.0f, 0.0f,
-      0.0f, 0.0f, 1.0f, 0.0f,
-      0.0f, 0.0f, 0.0f, 1.0f,
-    };
-    hr = IVisual_put_TransformMatrix(comp_visual[i], trans_mat);
-    if (hr) {
-      err_log("put_TransformMatrix failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    hr = ICompositionTarget_put_Root(comp_target[i], comp_visual[i]);
-    if (hr) {
-      err_log("put_Root failed: %d\n", (int)hr);
-      return hr;
-    }
-
-#endif
   }
 
   return composition_swapchain_device_init();
@@ -1487,7 +1181,6 @@ static void composition_swapchain_device_close(void) {
       gl_d3ddevice[i] = NULL;
     }
 
-#ifndef USE_DXGI_SWAPCHAIN
     if (pres_man_stat_avail_event[i]) {
       CloseHandle(pres_man_stat_avail_event[i]);
       pres_man_stat_avail_event[i] = NULL;
@@ -1497,11 +1190,7 @@ static void composition_swapchain_device_close(void) {
       CloseHandle(pres_man_lost_event[i]);
       pres_man_lost_event[i] = NULL;
     }
-#endif
 
-#ifdef USE_DIRECT_COMPOSITION
-
-#ifndef USE_DXGI_SWAPCHAIN
     if (i == SCREEN_TOP) {
       for (int j = 0; j < SURFACE_UTIL_COUNT; ++j)
         CHECK_AND_RELEASE(dcomp_surf_util[i]);
@@ -1511,19 +1200,7 @@ static void composition_swapchain_device_close(void) {
     }
 
     CHECK_AND_RELEASE(dcomp_surface[i]);
-#endif
 
-#else
-
-    CHECK_AND_RELEASE(comp_surface[i]);
-
-    CHECK_AND_RELEASE(comp_surface_interop[i]);
-
-#endif
-
-#ifdef USE_DXGI_SWAPCHAIN
-    CHECK_AND_RELEASE(dxgi_sc[i]);
-#else
     if (i == SCREEN_TOP) {
       for (int j = 0; j < SURFACE_UTIL_COUNT; ++j)
         CHECK_AND_RELEASE(pres_surf_util[i]);
@@ -1552,8 +1229,7 @@ static void composition_swapchain_device_close(void) {
       CloseHandle(composition_surface[i]);
       composition_surface[i] = NULL;
     }
-#endif
-#ifndef USE_DXGI_SWAPCHAIN
+
     if (i == SCREEN_TOP)
       for (int j = 0; j < SCREEN_COUNT; ++j)
         CHECK_AND_RELEASE(pres_man_child[i]);
@@ -1563,7 +1239,6 @@ static void composition_swapchain_device_close(void) {
     displayable_surface_support[i] = false;
 
     CHECK_AND_RELEASE(presentation_factory[i]);
-#endif
 
     CHECK_AND_RELEASE(dxgi_factory[i]);
 
@@ -1583,7 +1258,6 @@ static void composition_swapchain_close(void) {
   composition_swapchain_device_close();
 
   for (int i = 0; i < SCREEN_COUNT; ++i) {
-#ifdef USE_DIRECT_COMPOSITION
     CHECK_AND_RELEASE(dcomp_target[i]);
 
     if (i == SCREEN_TOP) {
@@ -1601,32 +1275,7 @@ static void composition_swapchain_close(void) {
     CHECK_AND_RELEASE(dcomp_device[i]);
 
     CHECK_AND_RELEASE(dcomp_desktop_device[i]);
-#else
-    CHECK_AND_RELEASE(comp_visual[i]);
-
-    CHECK_AND_RELEASE(comp_visual2[i]);
-
-    CHECK_AND_RELEASE(sprite_visual[i]);
-
-    CHECK_AND_RELEASE(comp_brush[i]);
-
-    CHECK_AND_RELEASE(surface_brush[i]);
-
-    CHECK_AND_RELEASE(comp_target[i]);
-
-    CHECK_AND_RELEASE(desktop_target[i]);
-#endif
   }
-
-#ifndef USE_DIRECT_COMPOSITION
-  CHECK_AND_RELEASE(comp_desktop_interop);
-
-  CHECK_AND_RELEASE(comp_interop);
-
-  CHECK_AND_RELEASE(compositor);
-
-  CHECK_AND_RELEASE(queue_controller);
-#endif
 }
 
 static void composition_swapchain_device_restart(void) {
@@ -1640,7 +1289,6 @@ static void composition_swapchain_device_restart(void) {
     err_log("successful\n");
   }
 }
-#endif
 
 #ifndef USE_SDL_RENDERER
 #define screen_upscale_factor REALCUGAN_SCALE
