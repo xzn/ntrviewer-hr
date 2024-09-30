@@ -35,6 +35,7 @@
 #if defined(_WIN32) && defined(USE_D3D11)
 #include <SDL2/SDL.h>
 #include "nuklear_d3d11.h"
+#include <d3d11.h>
 #elif defined(USE_OGL_ES)
 #include "nuklear_sdl_gles2.h"
 #else

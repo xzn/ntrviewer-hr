@@ -99,7 +99,7 @@ static Uint32 win_id[SCREEN_COUNT];
 #ifdef USE_SDL_RENDERER
 static SDL_Renderer *sdlRenderer[SCREEN_COUNT];
 static SDL_Texture *sdlTexture[SCREEN_COUNT][SCREEN_COUNT];
-#else
+#elif !defined(USE_D3D11)
 static SDL_GLContext glContext[SCREEN_COUNT];
 static int ogl_version_major, ogl_version_minor;
 
@@ -113,10 +113,13 @@ static GLuint glFboVbo[SCREEN_COUNT];
 static GLuint glFboEbo[SCREEN_COUNT];
 #endif
 
+#endif
+
+#ifndef USE_SDL_RENDERER
 __attribute__ ((unused)) static int prev_win_width[SCREEN_COUNT], prev_win_height[SCREEN_COUNT];
 static int prev_ctx_width[SCREEN_COUNT], prev_ctx_height[SCREEN_COUNT];
-
 #endif
+
 #if !defined(_WIN32) || defined(USE_SDL_RENDERER)
 #undef USE_COMPOSITION_SWAPCHAIN
 #endif
@@ -213,6 +216,16 @@ static void event_rel(struct event_t *event) {
 static event_t updateBottomScreenEvent;
 #endif
 
+static int win_w[SCREEN_COUNT], win_h[SCREEN_COUNT];
+static int win_width[SCREEN_COUNT], win_height[SCREEN_COUNT];
+static int win_dpi[SCREEN_COUNT];
+
+static void updateWindowSize(int tb) {
+  SDL_GetWindowSize(win[tb], &win_w[tb], &win_h[tb]);
+  SDL_GL_GetDrawableSize(win[tb], &win_width[tb], &win_height[tb]);
+  win_dpi[tb] = win_width[tb] * USER_DEFAULT_SCREEN_DPI / win_w[tb];
+}
+
 static void updateViewMode(view_mode_t vm) {
   switch (vm) {
     case VIEW_MODE_TOP_BOT:
@@ -233,19 +246,24 @@ static void updateViewMode(view_mode_t vm) {
   switch (vm) {
     case VIEW_MODE_TOP_BOT:
       SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT);
+      updateWindowSize(SCREEN_TOP);
       break;
 
     case VIEW_MODE_TOP:
       SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT12);
+      updateWindowSize(SCREEN_TOP);
       break;
 
     case VIEW_MODE_BOT:
       SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH2, WINDOW_HEIGHT12);
+      updateWindowSize(SCREEN_TOP);
       break;
 
     case VIEW_MODE_SEPARATE:
       SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT12);
+      updateWindowSize(SCREEN_TOP);
       SDL_SetWindowSize(win[SCREEN_BOT], WINDOW_WIDTH2, WINDOW_HEIGHT12);
+      updateWindowSize(SCREEN_BOT);
       break;
   }
 
@@ -256,6 +274,67 @@ static void updateViewMode(view_mode_t vm) {
 #endif
 }
 
+#ifdef USE_D3D11
+#define SDL_GL_MakeCurrent(w, c) ((void)0)
+#define nk_sdl_font_stash_begin nk_d3d11_font_stash_begin
+#define nk_sdl_font_stash_end nk_d3d11_font_stash_end
+static LONG_PTR sdl_wnd_proc[SCREEN_COUNT];
+
+struct d3d_vertex_t {
+  float pos[2];
+  float uv[2];
+};
+static ID3D11InputLayout *d3d_il[SCREEN_COUNT];
+static ID3D11Buffer *d3d_vb[SCREEN_COUNT];
+static ID3D11Buffer *d3d_ib[SCREEN_COUNT];
+static ID3D11VertexShader *d3d_vs[SCREEN_COUNT];
+static ID3D11PixelShader *d3d_ps[SCREEN_COUNT];
+static ID3D11SamplerState *d3d_ss_point[SCREEN_COUNT];
+static ID3D11SamplerState *d3d_ss_linear[SCREEN_COUNT];
+static ID3D11BlendState *d3d_ui_bs[SCREEN_COUNT];
+static const char *d3d_vs_src =
+  "struct VSInput\n"
+  "{\n"
+  " float2 position: POSITION;\n"
+  " float2 uv: TEXCOORD;\n"
+  "};\n"
+  "struct VSOutput\n"
+  "{\n"
+  " float4 position: SV_Position;\n"
+  " float2 uv: TEXCOORD;\n"
+  "};\n"
+  "VSOutput Main(VSInput input)\n"
+  "{\n"
+  " VSOutput output = (VSOutput)0;\n"
+  " output.position = float4(input.position, 0.0, 1.0);\n"
+  " output.uv = input.uv;\n"
+  " return output;\n"
+  "}\n";
+static const char *d3d_ps_src =
+  "SamplerState my_samp: register(s0);\n"
+  "Texture2D my_tex: register(t0);\n"
+  "struct PSInput\n"
+  "{\n"
+  " float4 position: SV_Position;\n"
+  " float2 uv: TEXCOORD;\n"
+  "};\n"
+  "struct PSOutput\n"
+  "{\n"
+  " float4 color: SV_Target0;\n"
+  "};\n"
+  "PSOutput Main(PSInput input)\n"
+  "{\n"
+  " PSOutput output = (PSOutput)0;\n"
+  " float4 color = my_tex.Sample(my_samp, input.uv);\n"
+  " if (color.a != 0.0)\n"
+  "  color.a = 15.0 / 16.0;\n"
+  " output.color = color;\n"
+  " return output;\n"
+  "}\n";
+
+#include <d3dcompiler.h>
+#endif
+
 #ifdef USE_COMPOSITION_SWAPCHAIN
 // #define TDR_TEST_HOTKEY
 #include "dcomp.h"
@@ -263,9 +342,9 @@ static void updateViewMode(view_mode_t vm) {
 #ifndef USE_D3D11
 #include "glad/glad_wgl.h"
 static GLuint gl_fbo_sc[SCREEN_COUNT];
+static SDL_Window *win_sc[SCREEN_COUNT];
 #endif
 static bool use_composition_swapchain;
-static SDL_Window *win_sc[SCREEN_COUNT];
 
 static bool compositing;
 static rp_sem_t compositing_begin_sem;
@@ -335,20 +414,27 @@ static void d3d11_trigger_tdr(void) {
 #define COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN (3)
 #define PRESENATTION_BUFFER_COUNT_PER_SCREEN (8)
 
+#ifdef USE_D3D11
+static ID3D11Texture2D *d3d_ui_tex;
+static ID3D11RenderTargetView *d3d_ui_rtv;
+static ID3D11ShaderResourceView *d3d_ui_srv;
+#else
 static HANDLE gl_d3ddevice[SCREEN_COUNT];
 
 static struct render_buffer_t {
   ID3D11Texture2D *tex;
-#ifndef USE_D3D11
   GLuint gl_tex;
-#endif
   HANDLE gl_handle;
   int width;
   int height;
 } render_buffers[SCREEN_COUNT][SCREEN_COUNT], ui_render_buf;
+#endif
 
 static struct presentation_buffer_t {
   ID3D11Texture2D *tex;
+#ifdef USE_D3D11
+  ID3D11RenderTargetView *rtv;
+#endif
   IPresentationBuffer *buf;
   HANDLE buf_avail_event;
   int width;
@@ -365,6 +451,13 @@ static int presentation_buffer_delete(struct presentation_buffer_t *b) {
     IPresentationBuffer_Release(b->buf);
     b->buf = NULL;
   }
+
+#ifdef USE_D3D11
+  if (b->rtv) {
+    ID3D11RenderTargetView_Release(b->rtv);
+    b->rtv = NULL;
+  }
+#endif
 
   if (b->tex) {
     ID3D11Texture2D_Release(b->tex);
@@ -393,8 +486,13 @@ static int presentation_buffer_gen(struct presentation_buffer_t *b, int tb, int 
   tex_desc.SampleDesc.Quality = 0;
   tex_desc.Usage = D3D11_USAGE_DEFAULT;
   tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+#ifdef USE_D3D11
+  tex_desc.BindFlags |= D3D11_BIND_RENDER_TARGET;
+#endif
   tex_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
-  if (displayable_surface_support[tb])
+  // sc_child < 0 is UI util surface, which has transparency
+  // transparency crashes on NVDIIA when using direct scanout. (AMD doesn't do direct scanout from D3D texture at all apparently)
+  if (sc_child >= 0 && displayable_surface_support[tb])
     tex_desc.MiscFlags |= D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE;
   tex_desc.CPUAccessFlags = 0;
 
@@ -405,6 +503,14 @@ static int presentation_buffer_gen(struct presentation_buffer_t *b, int tb, int 
     err_log("CreateTexture2D failed: %d\n", (int)hr);
     goto fail;
   }
+
+#ifdef USE_D3D11
+  hr = ID3D11Device_CreateRenderTargetView(d3d11device[tb], (ID3D11Resource *)b->tex, NULL, &b->rtv);
+  if (hr) {
+    err_log("CreateRenderTargetView failed: %d\n", (int)hr);
+    return -1;
+  }
+#endif
 
   hr = IPresentationManager_AddBufferFromResource(
     sc_child >= 0 ? sc_child ? pres_man_child[j] : presentation_manager[j] : pres_man_util[j],
@@ -615,6 +721,44 @@ static int presentation_buffer_get(struct presentation_buffer_t *bufs, int tb, i
   return 0;
 }
 
+#ifdef USE_D3D11
+static int ui_buffer_present(struct presentation_buffer_t *buf, int width, int height) {
+  int j = SURFACE_UTIL_UI;
+  int tb = SCREEN_TOP;
+  HRESULT hr;
+
+  hr = IPresentationSurface_SetBuffer(pres_surf_util[j], buf->buf);
+  if (hr) {
+    err_log("SetBuffer failed: %d\n", (int)hr);
+    return -1;
+  }
+
+  RECT *rect;
+  rect = &src_rect_util[j];
+  if (rect->right != width || rect->bottom != height) {
+    rect->right = width;
+    rect->bottom = height;
+    hr = IPresentationSurface_SetSourceRect(pres_surf_util[j], rect);
+    if (hr) {
+      err_log("SetSourceRect failed: %d\n", (int)hr);
+      return hr;
+    }
+  }
+
+  hr = IPresentationManager_Present(pres_man_util[j]);
+  if (hr) {
+    err_log("Present failed: %d\n", (int)hr);
+    if (hr == DXGI_ERROR_DEVICE_REMOVED) {
+      hr = ID3D11Device_GetDeviceRemovedReason(d3d11device[tb]);
+      err_log("GetDeviceRemovedReason: %d\n", (int)hr);
+    }
+    compositing = 0;
+    return -1;
+  }
+
+  return 0;
+}
+#else
 static int presentation_buffer_present(int tb, int top_bot, int sc_child, __attribute__ ((unused)) int count_max) {
   struct render_buffer_t *b = &render_buffers[tb][top_bot];
 
@@ -667,7 +811,7 @@ static int presentation_buffer_present(int tb, int top_bot, int sc_child, __attr
   return 0;
 }
 
-static int ui_buffer_present(__attribute__ ((unused)) int count_max) {
+static int ui_buffer_present(int count_max) {
   struct render_buffer_t *b = &ui_render_buf;
 
   int tb = SCREEN_TOP;
@@ -827,14 +971,17 @@ static GLuint ui_render_tex_get(int width, int height) {
   ui_render_height = height;
   return ui_render_tex;
 }
+#endif
 
 static void composition_buffer_cleanup(int tb) {
   src_rect[tb].bottom = src_rect[tb].right = 0;
   for (int j = 0; j < SCREEN_COUNT; ++j) {
     // tb here is tied to the respective gl context, where as in render_buffer_delete it's top_bot
     // hence the reversed order of parameters
+#ifndef USE_D3D11
     struct render_buffer_t *b = &render_buffers[j][tb];
     render_buffer_delete(b, j);
+#endif
     if (tb == SCREEN_TOP) {
       src_rect_child[j].bottom = src_rect_child[j].right = 0;
     }
@@ -844,8 +991,10 @@ static void composition_buffer_cleanup(int tb) {
     }
   }
   if (tb == SCREEN_TOP) {
+#ifndef USE_D3D11
     struct render_buffer_t *b = &ui_render_buf;
     render_buffer_delete(b, tb);
+#endif
     for (int i = 0; i < COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN; ++i) {
       struct presentation_buffer_t *b = &ui_pres_bufs[i];
       presentation_buffer_delete(b);
@@ -1286,12 +1435,14 @@ static int composition_swapchain_device_init(void) {
       }
     }
 
+#ifndef USE_D3D11
     gl_d3ddevice[i] = wglDXOpenDeviceNV(d3d11device[i]);
     if (!gl_d3ddevice[i]) {
       hr = GetLastError();
       err_log("wglDXOpenDeviceNV failed: %d\n", (int)hr);
         return hr;
     }
+#endif
   }
 
   presentation_render_reset(prev_sc_child, 0);
@@ -1400,10 +1551,12 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
 
 static void composition_swapchain_device_close(void) {
   for (int i = 0; i < SCREEN_COUNT; ++i) {
+#ifndef USE_D3D11
     if (gl_d3ddevice[i]) {
       wglDXCloseDeviceNV(gl_d3ddevice[i]);
       gl_d3ddevice[i] = NULL;
     }
+#endif
 
     if (i == SCREEN_TOP) {
       for (int j = 0; j < SCREEN_COUNT; ++j) {
@@ -1533,7 +1686,7 @@ static void composition_swapchain_device_restart(void) {
 }
 #endif
 
-#ifndef USE_SDL_RENDERER
+#if !defined(USE_SDL_RENDERER) && !defined(USE_D3D11)
 #define screen_upscale_factor REALCUGAN_SCALE
 #define sr_create realcugan_create
 #define sr_run realcugan_run
@@ -1720,8 +1873,6 @@ enum FrameBufferStatus
   FBS_UPDATED,
   FBS_UPDATED_2,
 };
-
-static int win_width[SCREEN_COUNT], win_height[SCREEN_COUNT];
 
 static enum ConnectionState
 {
@@ -3201,6 +3352,59 @@ static void guiMain(struct nk_context *ctx)
 }
 
 #ifndef USE_SDL_RENDERER
+#ifdef USE_D3D11
+static ID3DBlob *compileShader(const char *src, const char *target) {
+  HRESULT hr;
+  ID3DBlob *code;
+  ID3DBlob *err_msg;
+  hr = D3DCompile(src, strlen(src), NULL, NULL, NULL, "Main", target, D3DCOMPILE_OPTIMIZATION_LEVEL3 | D3DCOMPILE_WARNINGS_ARE_ERRORS , 0, &code, &err_msg);
+  if (hr) {
+    err_log("D3DCompile failed: %d\n", (int)hr);
+    if (err_msg) {
+      err_log("%s\n", (const char *)err_msg->lpVtbl->GetBufferPointer(err_msg));
+      IUnknown_Release(err_msg);
+    }
+    return NULL;
+  }
+  if (err_msg)
+    IUnknown_Release(err_msg);
+  return code;
+}
+static ID3D11VertexShader *loadVS(ID3D11Device *dev, const char *src, ID3DBlob **compiled) {
+  ID3DBlob *code = compileShader(src, "vs_4_0");
+  if (!code) {
+    return NULL;
+  }
+
+  ID3D11VertexShader *vs;
+  HRESULT hr;
+  hr = ID3D11Device_CreateVertexShader(dev, code->lpVtbl->GetBufferPointer(code), code->lpVtbl->GetBufferSize(code), NULL, &vs);
+  if (hr) {
+    err_log("CreateVertexShader failed: %d\n", (int)hr);
+    IUnknown_Release(code);
+    return NULL;
+  }
+  *compiled = code;
+  return vs;
+}
+static ID3D11PixelShader *loadPS(ID3D11Device *dev, const char *src) {
+  ID3DBlob *code = compileShader(src, "ps_4_0");
+  if (!code) {
+    return NULL;
+  }
+
+  ID3D11PixelShader *ps;
+  HRESULT hr;
+  hr = ID3D11Device_CreatePixelShader(dev, code->lpVtbl->GetBufferPointer(code), code->lpVtbl->GetBufferSize(code), NULL, &ps);
+  if (hr) {
+    err_log("CreatePixelShader failed: %d\n", (int)hr);
+    IUnknown_Release(code);
+    return NULL;
+  }
+  IUnknown_Release(code);
+  return ps;
+}
+#else
 #ifdef USE_OGL_ES
 #define GLSL_VERSION "#version 100\n" "precision highp float;\n"
 #else
@@ -3412,12 +3616,15 @@ GLint gl_fbo_position_loc[SCREEN_COUNT];
 GLint gl_fbo_tex_coord_loc[SCREEN_COUNT];
 GLint gl_fbo_sampler_loc[SCREEN_COUNT];
 #endif
+#endif
 
 typedef struct _FrameBufferContext
 {
+#ifndef USE_D3D11
   GLuint gl_tex_id[SCREEN_COUNT];
   GLuint gl_tex_upscaled[SCREEN_COUNT];
   GLuint gl_fbo_upscaled[SCREEN_COUNT];
+#endif
 
   uint8_t screen_decoded[FrameBufferCount][400 * 240 * GL_CHANNELS_N];
   uint8_t screen_upscaled[400 * 240 * GL_CHANNELS_N * screen_upscale_factor * screen_upscale_factor];
@@ -3430,7 +3637,9 @@ typedef struct _FrameBufferContext
   int index_ready_display;
   int index_decode;
   uint8_t *prev_data;
+#ifndef USE_D3D11
   GLuint prev_tex_upscaled[SCREEN_COUNT], prev_tex_fsr[SCREEN_COUNT];
+#endif
   int prev_win_w, prev_win_h;
   view_mode_t prev_vm;
 
@@ -3529,6 +3738,10 @@ static void do_hr_draw_screen(
   SDL_Rect rect = { ctx_left, ctx_top + ctx_height, ctx_height, ctx_width };
   SDL_Point center = { 0, 0 };
   SDL_RenderCopyEx(sdlRenderer[tb], sdlTexture[tb][top_bot], NULL, &rect, -90, &center, SDL_FLIP_NONE);
+}
+#elif defined(USE_D3D11)
+static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot, int tb, int index, view_mode_t vm, int sc_child)
+{
 }
 #else
 static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot, int tb, int index, view_mode_t vm, int sc_child)
@@ -4067,6 +4280,7 @@ static void updateWindowsTitles(void)
 static view_mode_t prev_view_mode;
 static int prev_fullscreen;
 static int nk_input_current;
+static int nk_gui_next;
 #ifndef SDL_GL_SINGLE_THREAD
 static rp_lock_t nk_input_lock;
 #endif
@@ -4185,21 +4399,25 @@ ThreadLoop(int i)
   SDL_SetRenderDrawColor(sdlRenderer[i], bg[0]* 255, bg[1] * 255, bg[2] * 255, bg[3] * 255);
   SDL_RenderClear(sdlRenderer[i]);
 #else
-  int win_w, win_h;
-  SDL_GetWindowSize(win[sc_tb], &win_w, &win_h);
-  SDL_GL_GetDrawableSize(win[sc_tb], &win_width[sc_tb], &win_height[sc_tb]);
-  scale_x = (float)win_width[sc_tb] / win_w;
-  scale_y = (float)win_height[sc_tb] / win_h;
+#ifndef USE_D3D11
+  updateWindowSize(sc_tb);
+#endif
+  scale_x = (float)win_width[sc_tb] / win_w[sc_tb];
+  scale_y = (float)win_height[sc_tb] / win_h[sc_tb];
 
 #ifdef USE_COMPOSITION_SWAPCHAIN
   if (sc_tb == SCREEN_TOP) {
     rp_lock_wait(comp_lock);
+    if (!compositing) {
+      goto sc_tb_fail;
+    }
   }
 #endif
 #ifdef SDL_GL_SINGLE_THREAD
   SDL_GL_MakeCurrent(win_ogl[i], glContext[i]);
 #endif
 
+#ifndef USE_D3D11
   GLenum gl_err;
   while ((gl_err = glGetError()) != GL_NO_ERROR) {
     err_log("gl error: %d\n", (int)gl_err);
@@ -4213,12 +4431,15 @@ ThreadLoop(int i)
 #endif
     }
   }
+#endif
 
   int ctx_width = NK_MAX(win_width[sc_tb], 1);
   int ctx_height = NK_MAX(win_height[sc_tb], 1);
 #ifdef USE_COMPOSITION_SWAPCHAIN
+#ifndef USE_D3D11
   GLuint tex_sc;
   HANDLE handle_sc;
+#endif
   if (use_composition_swapchain) {
     if (sc_tb == SCREEN_TOP && __atomic_load_n(&prev_sc_child, __ATOMIC_RELAXED) != sc_child) {
       if (i == SCREEN_TOP) {
@@ -4283,12 +4504,14 @@ ThreadLoop(int i)
           goto sc_tb_fail;
         }
 
+#ifndef USE_D3D11
         D2D_MATRIX_3X2_F ui_trans_mat = { .m = { { 1.0f, 0.0f }, { 0.0f, -1.0f }, { 0.0f, (FLOAT)win_height[sc_tb] } } };
         hr = dcomp_vis_util[SURFACE_UTIL_UI]->lpVtbl->SetTransform2(dcomp_vis_util[SURFACE_UTIL_UI], &ui_trans_mat);
         if (hr) {
           err_log("SetTransform failed: %d\n", (int)hr);
           goto sc_tb_fail;
         }
+#endif
 
         hr = dcomp_device[SCREEN_TOP]->lpVtbl->Commit(dcomp_device[SCREEN_TOP]);
         if (hr) {
@@ -4303,9 +4526,9 @@ ThreadLoop(int i)
         prev_ctx_height[sc_top_bot] = ctx_height;
       }
     } else {
+#ifndef USE_D3D11
       if (sc_tb == SCREEN_TOP && (prev_win_width[sc_top_bot] != win_width[sc_tb] || prev_win_height[sc_top_bot] != win_height[sc_tb])) {
         HRESULT hr;
-
         D2D_MATRIX_3X2_F ui_trans_mat = { .m = { { 1.0f, 0.0f }, { 0.0f, -1.0f }, { 0.0f, (FLOAT)win_height[sc_tb] } } };
         hr = dcomp_vis_util[SURFACE_UTIL_UI]->lpVtbl->SetTransform2(dcomp_vis_util[SURFACE_UTIL_UI], &ui_trans_mat);
         if (hr) {
@@ -4322,7 +4545,9 @@ ThreadLoop(int i)
         prev_win_width[sc_top_bot] = win_width[sc_tb];
         prev_win_height[sc_top_bot] = win_height[sc_tb];
       }
+#endif
     }
+#ifndef USE_D3D11
     struct render_buffer_t *sc_render_buf = &render_buffers[sc_tb][sc_top_bot];
     if (render_buffer_get(sc_render_buf, sc_tb, ctx_width, ctx_height, &tex_sc, &handle_sc) != 0) {
       compositing = 0;
@@ -4336,14 +4561,17 @@ ThreadLoop(int i)
     }
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[sc_top_bot]);
     glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, tex_sc);
+#endif
   }
 #endif
 
+#ifndef USE_D3D11
   glViewport(0, 0, ctx_width, ctx_height);
   if (!sc_child) {
     glClearColor(bg[0], bg[1], bg[2], bg[3]);
     glClear(GL_COLOR_BUFFER_BIT);
   }
+#endif
 #endif
 
   if (vm == VIEW_MODE_TOP_BOT && !sc_child) {
@@ -4353,7 +4581,7 @@ ThreadLoop(int i)
     hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT, i, vm, sc_child);
   else {
     if (!hr_draw_screen(&buffer_ctx[sc_top_bot], width, height, sc_top_bot, sc_tb, vm, sc_child)) {
-#ifndef USE_SDL_RENDERER
+#if !defined(USE_SDL_RENDERER) && !defined(USE_D3D11)
       glClearColor(bg[0], bg[1], bg[2], bg[3]);
       glClear(GL_COLOR_BUFFER_BIT);
 #endif
@@ -4371,17 +4599,20 @@ ThreadLoop(int i)
 #ifndef SDL_GL_SINGLE_THREAD
     rp_lock_wait(nk_input_lock);
 #endif
-    if (nk_input_current) {
-      // nk_sdl_handle_grab();
-      nk_input_end(ctx);
-    } else {
-      nk_input_begin(ctx);
-      // nk_sdl_handle_grab();
-      nk_input_end(ctx);
-    }
-    nk_input_current = 0;
+    if (nk_gui_next) {
+      if (nk_input_current) {
+        // nk_sdl_handle_grab();
+        nk_input_end(ctx);
+      } else {
+        nk_input_begin(ctx);
+        // nk_sdl_handle_grab();
+        nk_input_end(ctx);
+      }
+      nk_input_current = 0;
 
-    guiMain(ctx);
+      guiMain(ctx);
+      nk_gui_next = 0;
+    }
 #ifndef SDL_GL_SINGLE_THREAD
     rp_lock_rel(nk_input_lock);
 #endif
@@ -4419,10 +4650,60 @@ ThreadLoop(int i)
 #ifdef USE_SDL_RENDERER
   if (i == SCREEN_TOP) {
     nk_sdl_render(NK_ANTI_ALIASING_ON);
+    nk_gui_next = 1;
   }
   SDL_RenderPresent(sdlRenderer[i]);
 #else
 #ifdef USE_COMPOSITION_SWAPCHAIN
+#ifdef USE_D3D11
+  if (use_composition_swapchain) {
+    if (i == SCREEN_TOP) {
+      struct presentation_buffer_t *bufs = ui_pres_bufs;
+      int j = SURFACE_UTIL_UI;
+      int index_sc;
+      int width = prev_win_width[sc_top_bot];
+      int height = prev_win_height[sc_top_bot];
+      if (presentation_buffer_get(bufs, j, -1, COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN, width, height, &index_sc) != 0) {
+        goto sc_tb_fail;
+      }
+      struct presentation_buffer_t *buf = &bufs[index_sc];
+      ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &d3d_ui_rtv, NULL);
+      nk_d3d11_render(d3d11device_context[i], NK_ANTI_ALIASING_ON, (float)USER_DEFAULT_SCREEN_DPI / win_dpi[i]);
+      nk_gui_next = 1;
+
+      ID3D11DeviceContext_IASetPrimitiveTopology(d3d11device_context[i], D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+      unsigned vb_stride = sizeof(struct d3d_vertex_t);
+      unsigned vb_offset = 0;
+      ID3D11DeviceContext_IASetVertexBuffers(d3d11device_context[i], 0, 1, &d3d_vb[i], &vb_stride, &vb_offset);
+      ID3D11DeviceContext_IASetIndexBuffer(d3d11device_context[i], d3d_ib[i], DXGI_FORMAT_R32_UINT, 0);
+      ID3D11DeviceContext_IASetInputLayout(d3d11device_context[i], d3d_il[i]);
+      ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &buf->rtv, NULL);
+      ID3D11DeviceContext_OMSetBlendState(d3d11device_context[i], d3d_ui_bs[i], NULL, 0xffffffff);
+      ID3D11DeviceContext_VSSetShader(d3d11device_context[i], d3d_vs[i], NULL, 0);
+      ID3D11DeviceContext_PSSetShader(d3d11device_context[i], d3d_ps[i], NULL, 0);
+      ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[i], 0, 1, &d3d_ui_srv);
+      ID3D11DeviceContext_PSSetSamplers(d3d11device_context[i], 0, 1, &d3d_ss_point[i]);
+      ID3D11DeviceContext_RSSetState(d3d11device_context[i], NULL);
+      D3D11_VIEWPORT vp = { .Width = width, .Height = height };
+      ID3D11DeviceContext_RSSetViewports(d3d11device_context[i], 1, &vp);
+      ID3D11DeviceContext_DrawIndexed(d3d11device_context[i], 6, 0, 0);
+
+      ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 0, NULL, NULL);
+      ID3D11ShaderResourceView *ptr_null = NULL;
+      ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[i], 0, 1, &ptr_null);
+      if (ui_buffer_present(buf, width, height)) {
+        goto sc_tb_fail;
+      }
+    }
+    // TODO present
+  } else {
+    if (i == SCREEN_TOP) {
+      nk_d3d11_render(d3d11device_context[i], NK_ANTI_ALIASING_ON, (float)USER_DEFAULT_SCREEN_DPI / win_dpi[i]);
+      nk_gui_next = 1;
+    }
+    // TODO present
+  }
+#else
   if (use_composition_swapchain) {
     if (i == SCREEN_TOP) {
       GLuint ui_tex;
@@ -4446,6 +4727,7 @@ ThreadLoop(int i)
       glClear(GL_COLOR_BUFFER_BIT);
 
       nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
+      nk_gui_next = 1;
 
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_2D, ui_nk_tex);
@@ -4515,9 +4797,11 @@ ThreadLoop(int i)
   } else {
     if (i == SCREEN_TOP) {
       nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
+      nk_gui_next = 1;
     }
     SDL_GL_SwapWindow(win[i]);
   }
+#endif
 
   sc_tb_success = 1;
 sc_tb_fail:
@@ -4530,6 +4814,7 @@ sc_tb_fail:
 #else
   if (i == SCREEN_TOP) {
     nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
+    nk_gui_next = 1;
   }
   SDL_GL_SwapWindow(win[i]);
 #endif
@@ -4539,6 +4824,108 @@ sc_tb_fail:
   cond_mutex_flag_signal(&gl_render_event);
 #endif
 }
+
+#ifdef USE_D3D11
+static LRESULT CALLBACK
+WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
+{
+  int i = GetWindowLongPtrA(hwnd, GWLP_USERDATA);
+
+  switch (msg) {
+    case WM_DESTROY:
+      PostQuitMessage(0);
+      return 0;
+
+    case WM_SIZE:
+      int width = NK_MAX(LOWORD(lparam), 1);
+      int height = NK_MAX(HIWORD(lparam), 1);
+      win_width[i] = width;
+      win_height[i] = height;
+      win_w[i] = win_width[i] * USER_DEFAULT_SCREEN_DPI / win_dpi[i];
+      win_h[i] = win_height[i] * USER_DEFAULT_SCREEN_DPI / win_dpi[i];
+      if (i == SCREEN_TOP) {
+        rp_lock_wait(comp_lock);
+
+        CHECK_AND_RELEASE(d3d_ui_srv);
+        CHECK_AND_RELEASE(d3d_ui_rtv);
+        CHECK_AND_RELEASE(d3d_ui_tex);
+
+        D3D11_TEXTURE2D_DESC tex_desc = {};
+        tex_desc.Width = width;
+        tex_desc.Height = height;
+        tex_desc.MipLevels = 1;
+        tex_desc.ArraySize = 1;
+        tex_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        tex_desc.SampleDesc.Count = 1;
+        tex_desc.SampleDesc.Quality = 0;
+        tex_desc.Usage = D3D11_USAGE_DEFAULT;
+        tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        tex_desc.MiscFlags = 0;
+        tex_desc.CPUAccessFlags = 0;
+
+        HRESULT hr;
+        hr = ID3D11Device_CreateTexture2D(d3d11device[i], &tex_desc, NULL, &d3d_ui_tex);
+        if (hr) {
+          err_log("CreateTexture2D failed: %d\n", (int)hr);
+          compositing = 0;
+        } else {
+          hr = ID3D11Device_CreateRenderTargetView(d3d11device[i], (ID3D11Resource *)d3d_ui_tex, NULL, &d3d_ui_rtv);
+          if (hr) {
+            err_log("CreateRenderTargetView failed: %d\n", (int)hr);
+            CHECK_AND_RELEASE(d3d_ui_tex);
+            compositing = 0;
+          } else {
+            hr = ID3D11Device_CreateShaderResourceView(d3d11device[i], (ID3D11Resource *)d3d_ui_tex, NULL, &d3d_ui_srv);
+            if (hr) {
+              err_log("CreateShaderResourceView failed: %d\n", (int)hr);
+              CHECK_AND_RELEASE(d3d_ui_rtv);
+              CHECK_AND_RELEASE(d3d_ui_tex);
+              compositing = 0;
+            }
+          }
+        }
+      }
+      nk_d3d11_resize(d3d11device_context[i], width, height, (float)USER_DEFAULT_SCREEN_DPI / win_dpi[i]);
+      if (i == SCREEN_TOP)
+        rp_lock_rel(comp_lock);
+      break;
+
+    case WM_DPICHANGED: {
+      win_dpi[i] = HIWORD(wparam);
+      // RECT *const rect = (RECT *)lparam;
+      // handled by sdl wnd proc already
+#if 0
+      SetWindowPos(hwnd,
+        NULL,
+        rect ->left,
+        rect ->top,
+        rect->right - rect->left,
+        rect->bottom - rect->top,
+        SWP_NOZORDER | SWP_NOACTIVATE);
+#endif
+      break;
+    }
+
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONUP:
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONUP:
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONDBLCLK: {
+      int x = (short)LOWORD(lparam);
+      int y = (short)HIWORD(lparam);
+      x = x * USER_DEFAULT_SCREEN_DPI / win_dpi[i];
+      y = y * USER_DEFAULT_SCREEN_DPI / win_dpi[i];
+      lparam = MAKELPARAM(x, y);
+    }
+  }
+
+  nk_d3d11_handle_event(hwnd, msg, wparam, lparam);
+  return CallWindowProcA((WNDPROC)sdl_wnd_proc[i], hwnd, msg, wparam, lparam);
+}
+#endif
 
 static void
 MainLoop(void *loopArg)
@@ -4571,6 +4958,19 @@ MainLoop(void *loopArg)
 
   struct nk_context *ctx = (struct nk_context *)loopArg;
 
+#ifdef USE_D3D11
+  SDL_Event evt;
+  while (SDL_PollEvent(&evt))
+  {
+    if (
+      evt.type == SDL_QUIT ||
+      (evt.type == SDL_WINDOWEVENT && evt.window.event == SDL_WINDOWEVENT_CLOSE)
+    ) {
+      running = 0;
+      return;
+    }
+  }
+#else
   /* Input */
   SDL_Event evt;
   while (SDL_PollEvent(&evt))
@@ -4656,6 +5056,7 @@ MainLoop(void *loopArg)
 skip_evt:
     }
   }
+#endif
 
   view_mode_t vm = __atomic_load_n(&view_mode, __ATOMIC_RELAXED);
   if (prev_view_mode != vm) {
@@ -6009,7 +6410,7 @@ int main(int argc, char *argv[])
 
   Uint32 win_flags = SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN;
 
-#ifndef USE_SDL_RENDERER
+#if !defined(USE_SDL_RENDERER) && !defined(USE_D3D11)
   win_flags |= SDL_WINDOW_OPENGL;
 #endif
 
@@ -6081,6 +6482,11 @@ int main(int argc, char *argv[])
   }
 
   struct nk_context *ctx = nk_ctx = nk_sdl_init(win[SCREEN_TOP], sdlRenderer[SCREEN_TOP]);
+#else
+#ifdef USE_D3D11
+  if (osvi.dwMajorVersion >= 10 && osvi.dwBuildNumber >= 22000) {
+    use_composition_swapchain = true;
+  }
 #else
   glContext[SCREEN_TOP] = SDL_GL_CreateContext(win[SCREEN_TOP]);
   if (!glContext[SCREEN_TOP])
@@ -6157,9 +6563,11 @@ int main(int argc, char *argv[])
   /* OpenGL setup */
   SDL_GL_MakeCurrent(win_ogl[SCREEN_TOP], glContext[SCREEN_TOP]);
   glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+#endif
 
 #ifdef USE_COMPOSITION_SWAPCHAIN
   if (use_composition_swapchain) {
+#ifndef USE_D3D11
     win_flags &= ~SDL_WINDOW_OPENGL;
 
     win_sc[SCREEN_TOP] = SDL_CreateWindow(TITLE,
@@ -6195,6 +6603,7 @@ int main(int argc, char *argv[])
     // HDC hdc[SCREEN_COUNT];
     // hdc[SCREEN_TOP] = wmInfo[SCREEN_TOP].info.win.hdc;
     // hdc[SCREEN_BOT] = wmInfo[SCREEN_BOT].info.win.hdc;
+#endif
 
     if (composition_swapchain_init(hwnd) != 0) {
       goto end_use_c_sc;
@@ -6205,16 +6614,19 @@ int main(int argc, char *argv[])
     rp_sem_create(compositing_end_sem, 0, SCREEN_COUNT);
     rp_lock_init(comp_lock);
 
+#ifndef USE_D3D11
     win[SCREEN_TOP] = win_sc[SCREEN_TOP];
     win[SCREEN_BOT] = win_sc[SCREEN_BOT];
-
+#endif
     err_log("Using composition swapchain\n");
 
     goto start_use_c_sc;
 
 end_use_c_sc:
+#ifndef USE_D3D11
     SDL_DestroyWindow(win_sc[SCREEN_BOT]);
     SDL_DestroyWindow(win_sc[SCREEN_TOP]);
+#endif
     composition_swapchain_close();
 
     use_composition_swapchain = 0;
@@ -6224,10 +6636,50 @@ start_use_c_sc:
   SDL_GL_MakeCurrent(win_ogl[SCREEN_TOP], glContext[SCREEN_TOP]);
 #endif
 
+#ifdef USE_D3D11
+  if (!use_composition_swapchain) {
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      D3D_FEATURE_LEVEL featureLevelSupported;
+      HRESULT hr;
+      hr = D3D11CreateDevice(
+        NULL,
+        D3D_DRIVER_TYPE_HARDWARE,
+        NULL,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS,
+        NULL,
+        0,
+        D3D11_SDK_VERSION,
+        &d3d11device[i],
+        &featureLevelSupported,
+        &d3d11device_context[i]);
+      if (hr) {
+        err_log("D3D11CreateDevice failed: %d\n", (int)hr);
+        return -1;
+      }
+    }
+
+    rp_lock_init(comp_lock);
+  }
+
+  for (int i = 0; i < SCREEN_COUNT; ++i) {
+    SetWindowLongPtrA(hwnd[i], GWLP_USERDATA, i);
+    sdl_wnd_proc[i] = GetWindowLongPtrA(hwnd[i], GWLP_WNDPROC);
+    SetWindowLongPtrA(hwnd[i], GWLP_WNDPROC, (LONG_PTR)WindowProc);
+  }
+
+#define MAX_VERTEX_BUFFER 512 * 1024
+#define MAX_INDEX_BUFFER 128 * 1024
+  struct nk_context *ctx = nk_ctx = nk_d3d11_init(d3d11device[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT, MAX_VERTEX_BUFFER, MAX_INDEX_BUFFER);
+#else
   struct nk_context *ctx = nk_ctx = nk_sdl_init(win[SCREEN_TOP]);
 #endif
+#endif
 
+  for (int i = 0; i < SCREEN_COUNT; ++i) {
+    updateWindowSize(i);
+  }
   SDL_ShowWindow(win[SCREEN_TOP]);
+  updateViewMode(view_mode);
   win_id[SCREEN_TOP] = SDL_GetWindowID(win[SCREEN_TOP]);
   win_id[SCREEN_BOT] = SDL_GetWindowID(win[SCREEN_BOT]);
 
@@ -6258,6 +6710,110 @@ start_use_c_sc:
   sock_startup();
 
 #ifndef USE_SDL_RENDERER
+#ifdef USE_D3D11
+  for (int j = 0; j < SCREEN_COUNT; ++j) {
+    HRESULT hr;
+
+    ID3DBlob *vs_code;
+    d3d_vs[j] = loadVS(d3d11device[j], d3d_vs_src, &vs_code);
+    if (!d3d_vs[j]) {
+      return -1;
+    }
+    d3d_ps[j] = loadPS(d3d11device[j], d3d_ps_src);
+    if (!d3d_ps[j]) {
+      return -1;
+    }
+
+    D3D11_INPUT_ELEMENT_DESC input_desc[] =
+    {
+      { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+      { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    };
+
+    hr = ID3D11Device_CreateInputLayout(
+      d3d11device[j],
+      input_desc,
+      ARRAYSIZE(input_desc),
+      vs_code->lpVtbl->GetBufferPointer(vs_code),
+      vs_code->lpVtbl->GetBufferSize(vs_code),
+      &d3d_il[j]
+    );
+    if (hr) {
+      err_log("CreateInputLayout failed: %d\n", (int)hr);
+      return -1;
+    }
+    CHECK_AND_RELEASE(vs_code);
+
+    const struct d3d_vertex_t vb_data[] = {
+      { { -1.0f, 1.0f }, { 0.0f, 0.0f } },
+      { { -1.0f, -1.0f }, { 0.0f, 1.0f } },
+      { { 1.0f, 1.0f }, { 1.0f, 0.0f } },
+      { { 1.0f, -1.0f }, { 1.0f, 1.0f } },
+    };
+    D3D11_BUFFER_DESC vb_desc = {};
+    vb_desc.ByteWidth = sizeof(vb_data);
+    vb_desc.Usage     = D3D11_USAGE_IMMUTABLE;
+    vb_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA vb_srd = { .pSysMem = vb_data };
+    hr = ID3D11Device_CreateBuffer(d3d11device[j], &vb_desc, &vb_srd, &d3d_vb[j]);
+    if (hr) {
+      err_log("CreateBuffer failed: %d\n", (int)hr);
+      return -1;
+    }
+
+    const unsigned ib_data[] =
+      {0, 2, 1, 1, 2, 3};
+    D3D11_BUFFER_DESC ib_desc = {};
+    ib_desc.ByteWidth = sizeof(ib_data);
+    ib_desc.Usage     = D3D11_USAGE_IMMUTABLE;
+    ib_desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA ib_srd = { .pSysMem = ib_data };
+    hr = ID3D11Device_CreateBuffer(d3d11device[j], &ib_desc, &ib_srd, &d3d_ib[j]);
+    if (hr) {
+      err_log("CreateBuffer failed: %d\n", (int)hr);
+      return -1;
+    }
+
+    D3D11_BLEND_DESC blend_desc = {
+      .RenderTarget = {
+        {
+          .BlendEnable = TRUE,
+          .SrcBlend = D3D11_BLEND_ONE,
+          .DestBlend = D3D11_BLEND_ZERO,
+          .BlendOp = D3D11_BLEND_OP_ADD,
+          .SrcBlendAlpha = D3D11_BLEND_ONE,
+          .DestBlendAlpha = D3D11_BLEND_ZERO,
+          .BlendOpAlpha = D3D11_BLEND_OP_ADD,
+          .RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL,
+        }
+      }
+    };
+    hr = ID3D11Device_CreateBlendState(d3d11device[j], &blend_desc, &d3d_ui_bs[j]);
+    if (hr) {
+      err_log("CreateBlendState failed: %d\n", (int)hr);
+      return -1;
+    }
+
+    D3D11_SAMPLER_DESC sampler_desc = {};
+    sampler_desc.Filter         = D3D11_FILTER_MIN_MAG_MIP_POINT;
+    sampler_desc.AddressU       = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler_desc.AddressV       = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler_desc.AddressW       = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler_desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    hr = ID3D11Device_CreateSamplerState(d3d11device[j], &sampler_desc, &d3d_ss_point[j]);
+    if (hr) {
+      err_log("CreateSamplerState failed: %d\n", (int)hr);
+      return -1;
+    }
+
+    sampler_desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    hr = ID3D11Device_CreateSamplerState(d3d11device[j], &sampler_desc, &d3d_ss_linear[j]);
+    if (hr) {
+      err_log("CreateSamplerState failed: %d\n", (int)hr);
+      return -1;
+    }
+  }
+#else
   for (int j = 0; j < SCREEN_COUNT; ++j) {
     SDL_GL_MakeCurrent(win_ogl[j], glContext[j]);
     for (int i = 0; i < SCREEN_COUNT; ++i) {
@@ -6357,6 +6913,7 @@ start_use_c_sc:
     glVertexAttribPointer(gl_fbo_tex_coord_loc[j], 2, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, tex_coord));
 #endif
   }
+#endif
 #endif
 
   for (int i = 0; i < SCREEN_COUNT; ++i) {
@@ -6498,12 +7055,16 @@ start_use_c_sc:
     rp_lock_close(buffer_ctx[i].status_lock);
   }
 
+  for (int j = 0; j < SCREEN_COUNT; ++j)
+    SDL_HideWindow(win[j]);
+
 #ifdef USE_SDL_RENDERER
   for (int j = 0; j < SCREEN_COUNT; ++j) {
     for (int i = 0; i < SCREEN_COUNT; ++i) {
       SDL_DestroyTexture(sdlTexture[j][i]);
     }
   }
+#elif defined(USE_D3D11)
 #else
   for (int j = 0; j < SCREEN_COUNT; ++j) {
     SDL_GL_MakeCurrent(win_ogl[j], glContext[j]);
@@ -6540,7 +7101,11 @@ start_use_c_sc:
 #endif
 
   sock_cleanup();
+#ifdef USE_D3D11
+  nk_d3d11_shutdown();
+#else
   nk_sdl_shutdown();
+#endif
 
 #ifdef USE_SDL_RENDERER
   SDL_DestroyRenderer(sdlRenderer[SCREEN_TOP]);
@@ -6548,8 +7113,29 @@ start_use_c_sc:
 #else
   if (upscaling_filter_created)
     sr_destroy();
+#ifndef USE_D3D11
   SDL_GL_DeleteContext(glContext[SCREEN_BOT]);
   SDL_GL_DeleteContext(glContext[SCREEN_TOP]);
+#endif
+#endif
+#ifdef USE_D3D11
+  if (!use_composition_swapchain) {
+    rp_lock_close(comp_lock);
+  }
+  CHECK_AND_RELEASE(d3d_ui_srv);
+  CHECK_AND_RELEASE(d3d_ui_rtv);
+  CHECK_AND_RELEASE(d3d_ui_tex);
+  for (int j = 0; j < SCREEN_COUNT; ++j) {
+    CHECK_AND_RELEASE(d3d_ui_bs[j]);
+    CHECK_AND_RELEASE(d3d_ib[j]);
+    CHECK_AND_RELEASE(d3d_vb[j]);
+    CHECK_AND_RELEASE(d3d_ss_point[j]);
+    CHECK_AND_RELEASE(d3d_ss_linear[j]);
+    CHECK_AND_RELEASE(d3d_ps[j]);
+    CHECK_AND_RELEASE(d3d_il[j]);
+    CHECK_AND_RELEASE(d3d_vs[j]);
+    CHECK_AND_RELEASE(d3d_ps[j]);
+  }
 #endif
 #ifdef USE_COMPOSITION_SWAPCHAIN
   if (use_composition_swapchain) {
@@ -6557,9 +7143,16 @@ start_use_c_sc:
     rp_sem_close(compositing_end_sem);
     rp_sem_close(compositing_begin_sem);
 
+#ifndef USE_D3D11
     SDL_DestroyWindow(win_sc[SCREEN_BOT]);
     SDL_DestroyWindow(win_sc[SCREEN_TOP]);
+#endif
     composition_swapchain_close();
+  } else {
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      CHECK_AND_RELEASE(d3d11device_context[i]);
+      CHECK_AND_RELEASE(d3d11device[i]);
+    }
   }
 #endif
   SDL_DestroyWindow(win_ogl[SCREEN_BOT]);

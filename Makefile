@@ -4,6 +4,7 @@ CPPFLAGS := -Iinclude
 # CFLAGS := -Og -g
 CFLAGS := -Ofast -g -fno-strict-aliasing
 CFLAGS += -mssse3 -mavx2
+CFLAGS += -flarge-source-files
 EMBED_JPEG_TURBO := 1
 USE_SDL_RENDERER := 0
 USE_D3D11 := 1

@@ -23,8 +23,8 @@ NK_API struct nk_context *nk_d3d11_init(ID3D11Device *device, int width, int hei
 NK_API void nk_d3d11_font_stash_begin(struct nk_font_atlas **atlas);
 NK_API void nk_d3d11_font_stash_end(void);
 NK_API int nk_d3d11_handle_event(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
-NK_API void nk_d3d11_render(ID3D11DeviceContext *context, enum nk_anti_aliasing);
-NK_API void nk_d3d11_resize(ID3D11DeviceContext *context, int width, int height);
+NK_API void nk_d3d11_render(ID3D11DeviceContext *context, enum nk_anti_aliasing, float scale);
+NK_API void nk_d3d11_resize(ID3D11DeviceContext *context, int width, int height, float scale);
 NK_API void nk_d3d11_shutdown(void);
 
 #endif
@@ -81,7 +81,7 @@ static struct
 } d3d11;
 
 NK_API void
-nk_d3d11_render(ID3D11DeviceContext *context, enum nk_anti_aliasing AA)
+nk_d3d11_render(ID3D11DeviceContext *context, enum nk_anti_aliasing AA, float scale)
 {
     const float blend_factor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
     const UINT stride = sizeof(struct nk_d3d11_vertex);
@@ -150,6 +150,7 @@ nk_d3d11_render(ID3D11DeviceContext *context, enum nk_anti_aliasing AA)
     ID3D11DeviceContext_Unmap(context, (ID3D11Resource *)d3d11.vertex_buffer, 0);
     ID3D11DeviceContext_Unmap(context, (ID3D11Resource *)d3d11.index_buffer, 0);
 
+    float inv_scale = 1.0f / scale;
     /* iterate over and execute each draw command */
     nk_draw_foreach(cmd, &d3d11.ctx, &d3d11.cmds)
     {
@@ -157,10 +158,10 @@ nk_d3d11_render(ID3D11DeviceContext *context, enum nk_anti_aliasing AA)
         ID3D11ShaderResourceView *texture_view = (ID3D11ShaderResourceView *)cmd->texture.ptr;
         if (!cmd->elem_count) continue;
 
-        scissor.left = (LONG)cmd->clip_rect.x;
-        scissor.right = (LONG)(cmd->clip_rect.x + cmd->clip_rect.w);
-        scissor.top = (LONG)cmd->clip_rect.y;
-        scissor.bottom = (LONG)(cmd->clip_rect.y + cmd->clip_rect.h);
+        scissor.left = (LONG)cmd->clip_rect.x * inv_scale;
+        scissor.right = (LONG)(cmd->clip_rect.x + cmd->clip_rect.w) * inv_scale;
+        scissor.top = (LONG)cmd->clip_rect.y * inv_scale;
+        scissor.bottom = (LONG)(cmd->clip_rect.y + cmd->clip_rect.h) * inv_scale;
 
         ID3D11DeviceContext_PSSetShaderResources(context, 0, 1, &texture_view);
         ID3D11DeviceContext_RSSetScissorRects(context, 1, &scissor);
@@ -193,12 +194,12 @@ nk_d3d11_get_projection_matrix(int width, int height, float *result)
 }
 
 NK_API void
-nk_d3d11_resize(ID3D11DeviceContext *context, int width, int height)
+nk_d3d11_resize(ID3D11DeviceContext *context, int width, int height, float scale)
 {
     D3D11_MAPPED_SUBRESOURCE mapped;
     if (SUCCEEDED(ID3D11DeviceContext_Map(context, (ID3D11Resource *)d3d11.const_buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
     {
-        nk_d3d11_get_projection_matrix(width, height, (float *)mapped.pData);
+        nk_d3d11_get_projection_matrix(width * scale, height * scale, (float *)mapped.pData);
         ID3D11DeviceContext_Unmap(context, (ID3D11Resource *)d3d11.const_buffer, 0);
 
         d3d11.viewport.Width = (float)width;
