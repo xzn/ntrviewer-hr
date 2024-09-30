@@ -24,7 +24,7 @@ NK_API void nk_d3d11_font_stash_begin(struct nk_font_atlas **atlas);
 NK_API void nk_d3d11_font_stash_end(void);
 NK_API int nk_d3d11_handle_event(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 NK_API void nk_d3d11_render(ID3D11DeviceContext *context, enum nk_anti_aliasing, float scale);
-NK_API void nk_d3d11_resize(ID3D11DeviceContext *context, int width, int height, float scale);
+NK_API int nk_d3d11_resize(ID3D11DeviceContext *context, int width, int height, float scale);
 NK_API void nk_d3d11_shutdown(void);
 
 #endif
@@ -193,7 +193,7 @@ nk_d3d11_get_projection_matrix(int width, int height, float *result)
     memcpy(result, matrix, sizeof(matrix));
 }
 
-NK_API void
+NK_API int
 nk_d3d11_resize(ID3D11DeviceContext *context, int width, int height, float scale)
 {
     D3D11_MAPPED_SUBRESOURCE mapped;
@@ -204,6 +204,10 @@ nk_d3d11_resize(ID3D11DeviceContext *context, int width, int height, float scale
 
         d3d11.viewport.Width = (float)width;
         d3d11.viewport.Height = (float)height;
+
+        return 0;
+    } else {
+        return -1;
     }
 }
 

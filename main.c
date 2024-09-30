@@ -246,24 +246,19 @@ static void updateViewMode(view_mode_t vm) {
   switch (vm) {
     case VIEW_MODE_TOP_BOT:
       SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT);
-      updateWindowSize(SCREEN_TOP);
       break;
 
     case VIEW_MODE_TOP:
       SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT12);
-      updateWindowSize(SCREEN_TOP);
       break;
 
     case VIEW_MODE_BOT:
       SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH2, WINDOW_HEIGHT12);
-      updateWindowSize(SCREEN_TOP);
       break;
 
     case VIEW_MODE_SEPARATE:
       SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT12);
-      updateWindowSize(SCREEN_TOP);
       SDL_SetWindowSize(win[SCREEN_BOT], WINDOW_WIDTH2, WINDOW_HEIGHT12);
-      updateWindowSize(SCREEN_BOT);
       break;
   }
 
@@ -4526,8 +4521,8 @@ ThreadLoop(int i)
         prev_ctx_height[sc_top_bot] = ctx_height;
       }
     } else {
-#ifndef USE_D3D11
       if (sc_tb == SCREEN_TOP && (prev_win_width[sc_top_bot] != win_width[sc_tb] || prev_win_height[sc_top_bot] != win_height[sc_tb])) {
+#ifndef USE_D3D11
         HRESULT hr;
         D2D_MATRIX_3X2_F ui_trans_mat = { .m = { { 1.0f, 0.0f }, { 0.0f, -1.0f }, { 0.0f, (FLOAT)win_height[sc_tb] } } };
         hr = dcomp_vis_util[SURFACE_UTIL_UI]->lpVtbl->SetTransform2(dcomp_vis_util[SURFACE_UTIL_UI], &ui_trans_mat);
@@ -4541,11 +4536,10 @@ ThreadLoop(int i)
           err_log("Commit failed: %d\n", (int)hr);
           goto sc_tb_fail;
         }
-
+#endif
         prev_win_width[sc_top_bot] = win_width[sc_tb];
         prev_win_height[sc_top_bot] = win_height[sc_tb];
       }
-#endif
     }
 #ifndef USE_D3D11
     struct render_buffer_t *sc_render_buf = &render_buffers[sc_tb][sc_top_bot];
@@ -4661,8 +4655,8 @@ ThreadLoop(int i)
       struct presentation_buffer_t *bufs = ui_pres_bufs;
       int j = SURFACE_UTIL_UI;
       int index_sc;
-      int width = prev_win_width[sc_top_bot];
-      int height = prev_win_height[sc_top_bot];
+      int width = NK_MAX(prev_win_width[sc_top_bot], 1);
+      int height = NK_MAX(prev_win_height[sc_top_bot], 1);
       if (presentation_buffer_get(bufs, j, -1, COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN, width, height, &index_sc) != 0) {
         goto sc_tb_fail;
       }
@@ -4887,10 +4881,12 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
             }
           }
         }
-      }
-      nk_d3d11_resize(d3d11device_context[i], width, height, (float)USER_DEFAULT_SCREEN_DPI / win_dpi[i]);
-      if (i == SCREEN_TOP)
+        if (nk_d3d11_resize(d3d11device_context[i], width, height, (float)USER_DEFAULT_SCREEN_DPI / win_dpi[i])) {
+          err_log("nk_d3d11_resize failed\n");
+          compositing = 0;
+        }
         rp_lock_rel(comp_lock);
+      }
       break;
 
     case WM_DPICHANGED: {
