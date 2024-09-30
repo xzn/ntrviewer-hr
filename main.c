@@ -257,7 +257,7 @@ static void updateViewMode(view_mode_t vm) {
 }
 
 #ifdef USE_COMPOSITION_SWAPCHAIN
-#define TDR_TEST_HOTKEY
+// #define TDR_TEST_HOTKEY
 #include "dcomp.h"
 #include <winstring.h>
 #include "glad/glad_wgl.h"
