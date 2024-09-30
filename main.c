@@ -257,7 +257,7 @@ static void updateViewMode(view_mode_t vm) {
 }
 
 #ifdef USE_COMPOSITION_SWAPCHAIN
-// #define TDR_TEST_HOTKEY
+#define TDR_TEST_HOTKEY
 #include "dcomp.h"
 #include <winstring.h>
 #include "glad/glad_wgl.h"
@@ -374,6 +374,11 @@ static int presentation_buffer_delete(struct presentation_buffer_t *b) {
 }
 
 static int presentation_buffer_gen(struct presentation_buffer_t *b, int tb, int sc_child, int width, int height) {
+  int j = tb;
+  if (sc_child) {
+    tb = SCREEN_TOP;
+  }
+
   D3D11_TEXTURE2D_DESC tex_desc = {};
   tex_desc.Width = width;
   tex_desc.Height = height;
@@ -398,7 +403,7 @@ static int presentation_buffer_gen(struct presentation_buffer_t *b, int tb, int 
   }
 
   hr = IPresentationManager_AddBufferFromResource(
-    sc_child >= 0 ? sc_child ? pres_man_child[tb] : presentation_manager[tb] : pres_man_util[tb],
+    sc_child >= 0 ? sc_child ? pres_man_child[j] : presentation_manager[j] : pres_man_util[j],
     (IUnknown *)b->tex, &b->buf
   );
   if (hr) {
@@ -661,27 +666,28 @@ static int presentation_buffer_present(int tb, int top_bot, int sc_child, __attr
 static int ui_buffer_present(__attribute__ ((unused)) int count_max) {
   struct render_buffer_t *b = &ui_render_buf;
 
-  int tb = SURFACE_UTIL_UI;
+  int tb = SCREEN_TOP;
+  int j = SURFACE_UTIL_UI;
   int index_sc;
   struct presentation_buffer_t *bufs = ui_pres_bufs;
-  if (presentation_buffer_get(bufs, tb, -1, count_max, b->width, b->height, &index_sc) != 0) {
+  if (presentation_buffer_get(bufs, j, -1, count_max, b->width, b->height, &index_sc) != 0) {
     return -1;
   }
 
   HRESULT hr;
 
-  hr = IPresentationSurface_SetBuffer(pres_surf_util[tb], bufs[index_sc].buf);
+  hr = IPresentationSurface_SetBuffer(pres_surf_util[j], bufs[index_sc].buf);
   if (hr) {
     err_log("SetBuffer failed: %d\n", (int)hr);
     return -1;
   }
 
   RECT *rect;
-  rect = &src_rect_util[tb];
+  rect = &src_rect_util[j];
   if (rect->right != b->width || rect->bottom != b->height) {
     rect->right = b->width;
     rect->bottom = b->height;
-    hr = IPresentationSurface_SetSourceRect(pres_surf_util[tb], rect);
+    hr = IPresentationSurface_SetSourceRect(pres_surf_util[j], rect);
     if (hr) {
       err_log("SetSourceRect failed: %d\n", (int)hr);
       return hr;
@@ -690,7 +696,7 @@ static int ui_buffer_present(__attribute__ ((unused)) int count_max) {
 
   ID3D11DeviceContext_CopyResource(d3d11device_context[tb], (ID3D11Resource *)bufs[index_sc].tex, (ID3D11Resource *)b->tex);
 
-  hr = IPresentationManager_Present(pres_man_util[tb]);
+  hr = IPresentationManager_Present(pres_man_util[j]);
   if (hr) {
     err_log("Present failed: %d\n", (int)hr);
     if (hr == DXGI_ERROR_DEVICE_REMOVED) {
@@ -852,14 +858,14 @@ static void composition_buffer_cleanup(int tb) {
   }
 }
 
-static int presentation_render_reset(int sc_child) {
+static int presentation_render_reset(int sc_child, int bg) {
   int i = SCREEN_TOP;
   composition_buffer_cleanup(i);
 
   HRESULT hr;
   if (sc_child) {
     // set background color
-    {
+    if (bg) {
       int j = SURFACE_UTIL_BG;
       hr = dcomp_visual[i]->lpVtbl->AddVisual(dcomp_visual[i], (IDCompositionVisual *)dcomp_vis_util[j], j == SURFACE_UTIL_BG ? TRUE : FALSE, NULL);
       if (hr) {
@@ -944,7 +950,7 @@ static int presentation_render_reset(int sc_child) {
       }
     }
   } else {
-    {
+    if (bg) {
       int j = SURFACE_UTIL_BG;
       hr = dcomp_visual[i]->lpVtbl->RemoveVisual(dcomp_visual[i], (IDCompositionVisual *)dcomp_vis_util[j]);
       if (hr) {
@@ -1220,23 +1226,17 @@ static int composition_swapchain_device_init(void) {
       err_log("EnablePresentStatisticsKind PresentStatus failed: %d\n", (int)hr);
       return hr;
     }
-#endif
 
     hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager[i], PresentStatisticsKind_IndependentFlipFrame, true);
     if (hr) {
       err_log("EnablePresentStatisticsKind IndependentFlipFrame failed: %d\n", (int)hr);
       return hr;
     }
+#endif
 
     hr = IPresentationManager_GetLostEvent(presentation_manager[i], &pres_man_lost_event[i]);
     if (hr) {
       err_log("GetLostEvent failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    hr = IPresentationManager_ForceVSyncInterrupt(presentation_manager[i], false);
-    if (hr) {
-      err_log("ForceVSyncInterrupt failed: %d\n", (int)hr);
       return hr;
     }
 
@@ -1260,23 +1260,17 @@ static int composition_swapchain_device_init(void) {
           err_log("EnablePresentStatisticsKind PresentStatus failed: %d\n", (int)hr);
           return hr;
         }
-#endif
 
         hr = IPresentationManager_EnablePresentStatisticsKind(pres_man_child[j], PresentStatisticsKind_IndependentFlipFrame, true);
         if (hr) {
           err_log("EnablePresentStatisticsKind IndependentFlipFrame failed: %d\n", (int)hr);
           return hr;
         }
+#endif
 
         hr = IPresentationManager_GetLostEvent(pres_man_child[j], &pres_man_child_lost_event[j]);
         if (hr) {
           err_log("GetLostEvent failed: %d\n", (int)hr);
-          return hr;
-        }
-
-        hr = IPresentationManager_ForceVSyncInterrupt(pres_man_child[j], false);
-        if (hr) {
-          err_log("ForceVSyncInterrupt failed: %d\n", (int)hr);
           return hr;
         }
 
@@ -1295,6 +1289,8 @@ static int composition_swapchain_device_init(void) {
         return hr;
     }
   }
+
+  presentation_render_reset(prev_sc_child, 0);
 
   return 0;
 }
@@ -1468,9 +1464,13 @@ static void composition_swapchain_device_close(void) {
       composition_surface[i] = NULL;
     }
 
-    if (i == SCREEN_TOP)
+    if (i == SCREEN_TOP) {
+      for (int j = 0; j < SURFACE_UTIL_COUNT; ++j)
+        CHECK_AND_RELEASE(pres_man_util[j]);
+
       for (int j = 0; j < SCREEN_COUNT; ++j)
         CHECK_AND_RELEASE(pres_man_child[i]);
+    }
 
     CHECK_AND_RELEASE(presentation_manager[i]);
 
@@ -4214,7 +4214,7 @@ ThreadLoop(int i)
   if (use_composition_swapchain) {
     if (sc_tb == SCREEN_TOP && __atomic_load_n(&prev_sc_child, __ATOMIC_RELAXED) != sc_child) {
       if (i == SCREEN_TOP) {
-        if (presentation_render_reset(sc_child)) {
+        if (presentation_render_reset(sc_child, 1)) {
           goto sc_tb_fail;
         }
         __atomic_store_n(&prev_sc_child, sc_child, __ATOMIC_RELAXED);
@@ -4417,13 +4417,6 @@ ThreadLoop(int i)
 #ifdef USE_COMPOSITION_SWAPCHAIN
   if (use_composition_swapchain) {
     if (i == SCREEN_TOP) {
-      HRESULT hr;
-      hr = dcomp_vis_util[SURFACE_UTIL_UI]->lpVtbl->SetContent(dcomp_vis_util[SURFACE_UTIL_UI], hide_windows ? NULL : dcomp_surf_util[SURFACE_UTIL_UI]);
-      if (hr) {
-        err_log("SetContent failed: %d\n", (int)hr);
-        goto sc_tb_fail;
-      }
-
       GLuint ui_tex;
       HANDLE ui_handle;
       if (render_buffer_get(&ui_render_buf, sc_tb, prev_win_width[sc_top_bot], prev_win_height[sc_top_bot], &ui_tex, &ui_handle)) {
@@ -4472,6 +4465,7 @@ ThreadLoop(int i)
       }
 
       if (prev_hide_windows != hide_windows) {
+        HRESULT hr;
         int j = SURFACE_UTIL_UI;
         if (hide_windows) {
           hr = dcomp_visual[i]->lpVtbl->RemoveVisual(dcomp_visual[i], (IDCompositionVisual *)dcomp_vis_util[j]);
@@ -4485,6 +4479,11 @@ ThreadLoop(int i)
             err_log("AddVisual failed: %d\n", (int)hr);
             goto sc_tb_fail;
           }
+        }
+        hr = dcomp_vis_util[j]->lpVtbl->SetContent(dcomp_vis_util[j], hide_windows ? NULL : dcomp_surf_util[j]);
+        if (hr) {
+          err_log("SetContent failed: %d\n", (int)hr);
+          goto sc_tb_fail;
         }
         hr = dcomp_device[i]->lpVtbl->Commit(dcomp_device[i]);
         if (hr) {
