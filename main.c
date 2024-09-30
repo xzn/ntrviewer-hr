@@ -157,6 +157,7 @@ static bool compositing;
 static rp_sem_t compositing_begin_sem;
 static rp_sem_t compositing_end_sem;
 static int prev_sc_vm;
+static int prev_hide_windows;
 // Serialize d3d11device_context[SCREEN_TOP] calls (including indirectly through gl interop)
 static rp_lock_t comp_lock;
 
@@ -490,23 +491,6 @@ static int presentation_buffer_get(struct presentation_buffer_t *bufs, int tb, i
   return 0;
 }
 
-static int dcomp_set_offset_y(int tb, int height) {
-  HRESULT hr;
-  hr = dcomp_visual[tb]->lpVtbl->SetOffsetY2(dcomp_visual[tb], (FLOAT)height);
-  if (hr) {
-    err_log("SetOffsetY failed: %d\n", (int)hr);
-    return hr;
-  }
-
-  hr = dcomp_device[tb]->lpVtbl->Commit(dcomp_device[tb]);
-  if (hr) {
-    err_log("Commit failed: %d\n", (int)hr);
-    return hr;
-  }
-
-  return hr;
-}
-
 static int presentation_buffer_present(int tb, int top_bot, int sc_vm, __attribute__ ((unused)) int count_max) {
 
   struct render_buffer_t *b = &render_buffers[tb][top_bot];
@@ -541,16 +525,11 @@ static int presentation_buffer_present(int tb, int top_bot, int sc_vm, __attribu
       err_log("SetSourceRect failed: %d\n", (int)hr);
       return hr;
     }
-
-    if (!sc_vm) {
-      hr = dcomp_set_offset_y(tb, b->height);
-      if (hr)
-        return hr;
-    }
   }
 
   ID3D11DeviceContext_CopyResource(d3d11device_context[tb], (ID3D11Resource *)bufs[index_sc].tex, (ID3D11Resource *)b->tex);
 
+  // err_log("%d %llu\n", sc_vm ? top_bot : tb, (unsigned long long)IPresentationManager_GetNextPresentId(sc_vm ? pres_man_child[top_bot] : presentation_manager[tb]));
   hr = IPresentationManager_Present(sc_vm ? pres_man_child[top_bot] : presentation_manager[tb]);
   if (hr) {
     err_log("Present failed: %d\n", (int)hr);
@@ -835,12 +814,6 @@ static int presentation_render_reset(int sc_vm) {
       IUnknown_Release(buf);
     }
 
-    hr = dcomp_visual[i]->lpVtbl->SetTransform1(dcomp_visual[i], NULL);
-    if (hr) {
-      err_log("SetTransform failed: %d\n", (int)hr);
-      return hr;
-    }
-
     for (int j = 0; j < SCREEN_COUNT; ++j) {
       hr = dcomp_vis_child[j]->lpVtbl->SetContent(dcomp_vis_child[j], dcomp_surf_child[j]);
       if (hr) {
@@ -848,10 +821,6 @@ static int presentation_render_reset(int sc_vm) {
         return hr;
       }
     }
-
-    hr = dcomp_set_offset_y(i, 0);
-    if (hr)
-      return hr;
   } else {
     for (int j = 0; j < SCREEN_COUNT; ++j) {
       hr = dcomp_vis_child[j]->lpVtbl->SetContent(dcomp_vis_child[j], NULL);
@@ -869,23 +838,18 @@ static int presentation_render_reset(int sc_vm) {
       }
     }
 
-    D2D_MATRIX_3X2_F trans_mat = { .m = { { 1.0f, 0.0f }, { 0.0f, -1.0f }, { 0.0f, 0.0f } } };
-    hr = dcomp_visual[i]->lpVtbl->SetTransform2(dcomp_visual[i], &trans_mat);
-    if (hr) {
-      err_log("SetTransform failed: %d\n", (int)hr);
-      return hr;
-    }
-
     hr = dcomp_visual[i]->lpVtbl->SetContent(dcomp_visual[i], dcomp_surface[i]);
     if (hr) {
       err_log("SetContent failed: %d\n", (int)hr);
       return hr;
     }
 
-    hr = dcomp_device[i]->lpVtbl->Commit(dcomp_device[i]);
-    if (hr) {
-      err_log("Commit failed: %d\n", (int)hr);
-      return hr;
+    for (int j = 0; j < SCREEN_COUNT; ++j) {
+      hr = dcomp_device[j]->lpVtbl->Commit(dcomp_device[j]);
+      if (hr) {
+        err_log("Commit failed: %d\n", (int)hr);
+        return hr;
+      }
     }
   }
   return 0;
@@ -1116,13 +1080,13 @@ static int composition_swapchain_device_init(void) {
       err_log("EnablePresentStatisticsKind PresentStatus failed: %d\n", (int)hr);
       return hr;
     }
+#endif
 
     hr = IPresentationManager_EnablePresentStatisticsKind(presentation_manager[i], PresentStatisticsKind_IndependentFlipFrame, true);
     if (hr) {
       err_log("EnablePresentStatisticsKind IndependentFlipFrame failed: %d\n", (int)hr);
       return hr;
     }
-#endif
 
     hr = IPresentationManager_GetLostEvent(presentation_manager[i], &pres_man_lost_event[i]);
     if (hr) {
@@ -1156,13 +1120,13 @@ static int composition_swapchain_device_init(void) {
           err_log("EnablePresentStatisticsKind PresentStatus failed: %d\n", (int)hr);
           return hr;
         }
+#endif
 
         hr = IPresentationManager_EnablePresentStatisticsKind(pres_man_child[j], PresentStatisticsKind_IndependentFlipFrame, true);
         if (hr) {
           err_log("EnablePresentStatisticsKind IndependentFlipFrame failed: %d\n", (int)hr);
           return hr;
         }
-#endif
 
         hr = IPresentationManager_GetLostEvent(pres_man_child[j], &pres_man_child_lost_event[j]);
         if (hr) {
@@ -1193,6 +1157,7 @@ static int composition_swapchain_device_init(void) {
   }
 
   prev_sc_vm = -1;
+  prev_hide_windows = 0;
   return 0;
 }
 
@@ -1226,13 +1191,6 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
     hr = dcomp_device[i]->lpVtbl->CreateVisual(dcomp_device[i], &dcomp_visual[i]);
     if (hr) {
       err_log("CreateVisual failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    D2D_MATRIX_3X2_F trans_mat = { .m = { { 1.0f, 0.0f }, { 0.0f, -1.0f }, { 0.0f, 0.0f } } };
-    hr = dcomp_visual[i]->lpVtbl->SetTransform2(dcomp_visual[i], &trans_mat);
-    if (hr) {
-      err_log("SetTransform failed: %d\n", (int)hr);
       return hr;
     }
 
@@ -3551,9 +3509,9 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     win_w = ctx_width = prev_ctx_width[top_bot];
     win_h = ctx_height = prev_ctx_height[top_bot];
     ctx_left_f = -1.0f;
-    ctx_top_f = -1.0f;
+    ctx_top_f = 1.0f;
     ctx_right_f = 1.0f;
-    ctx_bot_f = 1.0f;
+    ctx_bot_f = -1.0f;
     tb = top_bot;
   } else {
     // int tb;
@@ -3633,6 +3591,14 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
   vVertices_pos[2][1] = ctx_bot_f;
   vVertices_pos[3][0] = ctx_right_f;
   vVertices_pos[3][1] = ctx_top_f;
+#ifdef USE_COMPOSITION_SWAPCHAIN
+  if (use_composition_swapchain) {
+    vVertices_pos[0][1] = ctx_bot_f;
+    vVertices_pos[1][1] = ctx_top_f;
+    vVertices_pos[2][1] = ctx_top_f;
+    vVertices_pos[3][1] = ctx_bot_f;
+  }
+#endif
 #ifdef USE_VAO
   struct vao_vertice_t vertices[4];
   for (int i = 0; i < 4; ++i) {
@@ -4304,7 +4270,8 @@ ThreadLoop(int i)
       if (sc_tb == SCREEN_TOP && (prev_win_width[sc_top_bot] != win_width[sc_tb] || prev_win_height[sc_top_bot] != win_height[sc_tb])) {
         HRESULT hr;
 
-        hr = dcomp_vis_util[SURFACE_UTIL_UI]->lpVtbl->SetTransform1(dcomp_vis_util[SURFACE_UTIL_UI], NULL);
+        D2D_MATRIX_3X2_F ui_trans_mat = { .m = { { 1.0f, 0.0f }, { 0.0f, -1.0f }, { 0.0f, (FLOAT)win_height[sc_tb] } } };
+        hr = dcomp_vis_util[SURFACE_UTIL_UI]->lpVtbl->SetTransform2(dcomp_vis_util[SURFACE_UTIL_UI], &ui_trans_mat);
         if (hr) {
           err_log("SetTransform failed: %d\n", (int)hr);
           goto sc_tb_fail;
@@ -4422,6 +4389,13 @@ ThreadLoop(int i)
 #ifdef USE_COMPOSITION_SWAPCHAIN
   if (use_composition_swapchain) {
     if (i == SCREEN_TOP) {
+      HRESULT hr;
+      hr = dcomp_vis_util[SURFACE_UTIL_UI]->lpVtbl->SetContent(dcomp_vis_util[SURFACE_UTIL_UI], hide_windows ? NULL : dcomp_surf_util[SURFACE_UTIL_UI]);
+      if (hr) {
+        err_log("SetContent failed: %d\n", (int)hr);
+        goto sc_tb_fail;
+      }
+
       GLuint ui_tex;
       HANDLE ui_handle;
       if (render_buffer_get(&ui_render_buf, sc_tb, prev_win_width[sc_top_bot], prev_win_height[sc_top_bot], &ui_tex, &ui_handle)) {
@@ -4469,7 +4443,31 @@ ThreadLoop(int i)
         err_log("wglDXUnlockObjectsNV failed: %d\n", (int)GetLastError());
       }
 
-      if (ui_buffer_present(COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN)) {
+      if (prev_hide_windows != hide_windows) {
+        int j = SURFACE_UTIL_UI;
+        if (hide_windows) {
+          hr = dcomp_visual[i]->lpVtbl->RemoveVisual(dcomp_visual[i], (IDCompositionVisual *)dcomp_vis_util[j]);
+          if (hr) {
+            err_log("RemoveVisual failed: %d\n", (int)hr);
+            goto sc_tb_fail;
+          }
+        } else {
+          hr = dcomp_visual[i]->lpVtbl->AddVisual(dcomp_visual[i], (IDCompositionVisual *)dcomp_vis_util[j], j == SURFACE_UTIL_BG ? TRUE : FALSE, NULL);
+          if (hr) {
+            err_log("AddVisual failed: %d\n", (int)hr);
+            goto sc_tb_fail;
+          }
+        }
+        hr = dcomp_device[i]->lpVtbl->Commit(dcomp_device[i]);
+        if (hr) {
+          err_log("Commit failed: %d\n", (int)hr);
+          goto sc_tb_fail;
+        }
+
+        prev_hide_windows = hide_windows;
+      }
+
+      if (!hide_windows && ui_buffer_present(COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN)) {
         compositing = 0;
         goto sc_tb_fail;
       }
