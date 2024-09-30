@@ -3130,10 +3130,9 @@ static GLbyte fShaderStr[] =
   "void main()\n"
   "{\n"
   " vec4 color = texture2D(s_texture, v_texCoord);\n"
-  " if (color == vec4(0.0))\n"
-  "  gl_FragColor = color;\n"
-  " else\n"
-  "  gl_FragColor = vec4(color.rgb, 15.0 / 16.0); \n"
+  " if (color.a != 0.0)\n"
+  "  color.a = 15.0 / 16.0;\n"
+  " gl_FragColor = color;\n"
   "}\n";
 
 #ifdef USE_OGL_ES
@@ -4031,6 +4030,7 @@ ThreadLoop(int i)
   }
 #endif
 
+  int sc_tb_success = 0;
   int sc_tb = i;
   int sc_top_bot = i;
   int sc_vm = 0;
@@ -4105,11 +4105,10 @@ ThreadLoop(int i)
       err_log("gl error unrecoverable, shutting down\n");
       running = 0;
 #ifdef USE_COMPOSITION_SWAPCHAIN
-      if (sc_tb == SCREEN_TOP) {
-        rp_lock_rel(comp_lock);
-      }
-#endif
+      goto sc_tb_fail;
+#else
       return;
+#endif
     }
   }
 
@@ -4122,10 +4121,7 @@ ThreadLoop(int i)
     if (sc_tb == SCREEN_TOP && prev_sc_vm != sc_vm) {
       if (i == SCREEN_TOP) {
         if (presentation_render_reset(sc_vm)) {
-          if (sc_tb == SCREEN_TOP) {
-            rp_lock_rel(comp_lock);
-          }
-          return;
+          goto sc_tb_fail;
         }
         prev_sc_vm = sc_vm;
       } else {
@@ -4169,42 +4165,33 @@ ThreadLoop(int i)
         hr = dcomp_vis_child[sc_top_bot]->lpVtbl->SetOffsetX2(dcomp_vis_child[sc_top_bot], (FLOAT)ctx_left);
         if (hr) {
           err_log("SetOffsetX failed: %d\n", (int)hr);
-          if (sc_tb == SCREEN_TOP) {
-            rp_lock_rel(comp_lock);
-          }
-          return;
+          goto sc_tb_fail;
         }
 
         hr = dcomp_vis_child[sc_top_bot]->lpVtbl->SetOffsetY2(dcomp_vis_child[sc_top_bot], (FLOAT)ctx_top);
         if (hr) {
           err_log("SetOffsetY failed: %d\n", (int)hr);
-          if (sc_tb == SCREEN_TOP) {
-            rp_lock_rel(comp_lock);
-          }
-          return;
+          goto sc_tb_fail;
         }
 
         D2D_MATRIX_3X2_F bg_trans_mat = { .m = { { (FLOAT)win_width[sc_tb], 0.0f }, { 0.0f, (FLOAT)win_height[sc_tb] }, { 0.0f, 0.0f } } };
         hr = dcomp_vis_util[SURFACE_UTIL_BG]->lpVtbl->SetTransform2(dcomp_vis_util[SURFACE_UTIL_BG], &bg_trans_mat);
         if (hr) {
           err_log("SetTransform failed: %d\n", (int)hr);
-          return;
+          goto sc_tb_fail;
         }
 
         D2D_MATRIX_3X2_F ui_trans_mat = { .m = { { 1.0f, 0.0f }, { 0.0f, -1.0f }, { 0.0f, (FLOAT)win_height[sc_tb] } } };
         hr = dcomp_vis_util[SURFACE_UTIL_UI]->lpVtbl->SetTransform2(dcomp_vis_util[SURFACE_UTIL_UI], &ui_trans_mat);
         if (hr) {
           err_log("SetTransform failed: %d\n", (int)hr);
-          return;
+          goto sc_tb_fail;
         }
 
         hr = dcomp_device[SCREEN_TOP]->lpVtbl->Commit(dcomp_device[SCREEN_TOP]);
         if (hr) {
           err_log("Commit failed: %d\n", (int)hr);
-          if (sc_tb == SCREEN_TOP) {
-            rp_lock_rel(comp_lock);
-          }
-          return;
+          goto sc_tb_fail;
         }
 
         prev_win_width[sc_top_bot] = win_width[sc_tb];
@@ -4220,16 +4207,13 @@ ThreadLoop(int i)
         hr = dcomp_vis_util[SURFACE_UTIL_UI]->lpVtbl->SetTransform1(dcomp_vis_util[SURFACE_UTIL_UI], NULL);
         if (hr) {
           err_log("SetTransform failed: %d\n", (int)hr);
-          return;
+          goto sc_tb_fail;
         }
 
         hr = dcomp_device[SCREEN_TOP]->lpVtbl->Commit(dcomp_device[SCREEN_TOP]);
         if (hr) {
           err_log("Commit failed: %d\n", (int)hr);
-          if (sc_tb == SCREEN_TOP) {
-            rp_lock_rel(comp_lock);
-          }
-          return;
+          goto sc_tb_fail;
         }
 
         prev_win_width[sc_top_bot] = win_width[sc_tb];
@@ -4239,19 +4223,13 @@ ThreadLoop(int i)
     struct render_buffer_t *sc_render_buf = &render_buffers[sc_tb][sc_top_bot];
     if (render_buffer_get(sc_render_buf, sc_tb, ctx_width, ctx_height, &tex_sc, &handle_sc) != 0) {
       compositing = 0;
-      if (sc_tb == SCREEN_TOP) {
-        rp_lock_rel(comp_lock);
-      }
-      return;
+      goto sc_tb_fail;
     }
     // Hang on AMD (there may be other hang locations) when gl device is lost.
     if (!wglDXLockObjectsNV(gl_d3ddevice[sc_tb], 1, &handle_sc)) {
       err_log("wglDXLockObjectsNV failed: %d\n", (int)GetLastError());
       compositing = 0;
-      if (sc_tb == SCREEN_TOP) {
-        rp_lock_rel(comp_lock);
-      }
-      return;
+      goto sc_tb_fail;
     }
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[sc_top_bot]);
     glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, tex_sc);
@@ -4348,19 +4326,13 @@ ThreadLoop(int i)
       HANDLE ui_handle;
       if (render_buffer_get(&ui_render_buf, sc_tb, prev_win_width[sc_top_bot], prev_win_height[sc_top_bot], &ui_tex, &ui_handle)) {
         compositing = 0;
-        if (sc_tb == SCREEN_TOP) {
-          rp_lock_rel(comp_lock);
-        }
-        return;
+        goto sc_tb_fail;
       }
 
       if (!wglDXLockObjectsNV(gl_d3ddevice[sc_tb], 1, &ui_handle)) {
         err_log("wglDXLockObjectsNV failed: %d\n", (int)GetLastError());
         compositing = 0;
-        if (sc_tb == SCREEN_TOP) {
-          rp_lock_rel(comp_lock);
-        }
-        return;
+        goto sc_tb_fail;
       }
 
       GLuint ui_nk_tex = ui_render_tex_get(prev_win_width[sc_top_bot], prev_win_height[sc_top_bot]);
@@ -4399,10 +4371,7 @@ ThreadLoop(int i)
 
       if (ui_buffer_present(COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN)) {
         compositing = 0;
-        if (sc_tb == SCREEN_TOP) {
-          rp_lock_rel(comp_lock);
-        }
-        return;
+        goto sc_tb_fail;
       }
     }
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
@@ -4416,9 +4385,15 @@ ThreadLoop(int i)
     }
     SDL_GL_SwapWindow(win[i]);
   }
+
+  sc_tb_success = 1;
+sc_tb_fail:
   if (sc_tb == SCREEN_TOP) {
     rp_lock_rel(comp_lock);
   }
+
+  if (!sc_tb_success)
+    return;
 #else
   if (i == SCREEN_TOP) {
     nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
