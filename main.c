@@ -157,6 +157,7 @@ static bool compositing;
 static rp_sem_t compositing_begin_sem;
 static rp_sem_t compositing_end_sem;
 static int prev_sc_vm;
+// Serialize d3d11device_context[SCREEN_TOP] calls (including indirectly through gl interop)
 static rp_lock_t comp_lock;
 
 enum {
@@ -4441,7 +4442,7 @@ ThreadLoop(int i)
       glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
       glClear(GL_COLOR_BUFFER_BIT);
 
-      nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
+      nk_sdl_render(NK_ANTI_ALIASING_OFF, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
 
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_2D, ui_nk_tex);
