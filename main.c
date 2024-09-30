@@ -326,7 +326,7 @@ static const char *d3d_ps_src =
   "{\n"
   " PSOutput output = (PSOutput)0;\n"
   " float4 color = my_tex.Sample(my_samp, input.uv);\n"
-  " if (color.a != 0.0)\n"
+  " if (any(color != float4(0.0, 0.0, 0.0, 0.0)))\n"
   "  color.a = 15.0 / 16.0;\n"
   " output.color = color;\n"
   " return output;\n"
@@ -4668,6 +4668,8 @@ ThreadLoop(int i)
       }
       struct presentation_buffer_t *buf = &bufs[index_sc];
       ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &d3d_ui_rtv, NULL);
+      float clearColor[4] = {};
+      ID3D11DeviceContext_ClearRenderTargetView(d3d11device_context[i], d3d_ui_rtv, clearColor);
       nk_d3d11_render(d3d11device_context[i], NK_ANTI_ALIASING_ON, (float)USER_DEFAULT_SCREEN_DPI / win_dpi[i]);
       nk_gui_next = 1;
 
@@ -4831,6 +4833,7 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
   int i = GetWindowLongPtrA(hwnd, GWLP_USERDATA);
 
+  int need_handle_input = 0;
   switch (msg) {
     case WM_DESTROY:
       PostQuitMessage(0);
@@ -4920,9 +4923,31 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
       y = y * USER_DEFAULT_SCREEN_DPI / win_dpi[i];
       lparam = MAKELPARAM(x, y);
     }
+    // fallthru
+    case WM_MOUSEWHEEL:
+    case WM_CHAR:
+    case WM_KEYDOWN:
+    case WM_KEYUP:
+    case WM_SYSKEYDOWN:
+    case WM_SYSKEYUP:
+      need_handle_input = 1;
   }
 
-  nk_d3d11_handle_event(hwnd, msg, wparam, lparam);
+  if (need_handle_input) {
+#ifndef SDL_GL_SINGLE_THREAD
+    rp_lock_wait(nk_input_lock);
+#endif
+    if (!nk_input_current) {
+      nk_input_begin(nk_ctx);
+      nk_input_current = 1;
+    }
+    int ret;
+    if ((ret = nk_d3d11_handle_event(hwnd, msg, wparam, lparam))) {
+    }
+#ifndef SDL_GL_SINGLE_THREAD
+    rp_lock_rel(nk_input_lock);
+#endif
+  }
   return CallWindowProcA((WNDPROC)sdl_wnd_proc[i], hwnd, msg, wparam, lparam);
 }
 #endif
@@ -4957,20 +4982,6 @@ MainLoop(void *loopArg)
 #endif
 
   struct nk_context *ctx = (struct nk_context *)loopArg;
-
-#ifdef USE_D3D11
-  SDL_Event evt;
-  while (SDL_PollEvent(&evt))
-  {
-    if (
-      evt.type == SDL_QUIT ||
-      (evt.type == SDL_WINDOWEVENT && evt.window.event == SDL_WINDOWEVENT_CLOSE)
-    ) {
-      running = 0;
-      return;
-    }
-  }
-#else
   /* Input */
   SDL_Event evt;
   while (SDL_PollEvent(&evt))
@@ -5041,6 +5052,7 @@ MainLoop(void *loopArg)
           break;
       }
 
+#ifndef USE_D3D11
 #ifndef SDL_GL_SINGLE_THREAD
       rp_lock_wait(nk_input_lock);
 #endif
@@ -5052,11 +5064,11 @@ MainLoop(void *loopArg)
 #ifndef SDL_GL_SINGLE_THREAD
       rp_lock_rel(nk_input_lock);
 #endif
+#endif
 
 skip_evt:
     }
   }
-#endif
 
   view_mode_t vm = __atomic_load_n(&view_mode, __ATOMIC_RELAXED);
   if (prev_view_mode != vm) {
@@ -6777,7 +6789,7 @@ start_use_c_sc:
     D3D11_BLEND_DESC blend_desc = {
       .RenderTarget = {
         {
-          .BlendEnable = TRUE,
+          .BlendEnable = FALSE,
           .SrcBlend = D3D11_BLEND_ONE,
           .DestBlend = D3D11_BLEND_ZERO,
           .BlendOp = D3D11_BLEND_OP_ADD,
