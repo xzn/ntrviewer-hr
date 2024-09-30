@@ -72,7 +72,7 @@ static struct nk_color nk_window_bgcolor = { 28, 48, 62, 255 };
 // #define GL_DEBUG
 // #define USE_ANGLE
 // #define USE_OGL_ES
-#if !defined(USE_OGL_ES) && !defined(USE_SDL_RENDERER)
+#if !defined(USE_OGL_ES) && !defined(USE_SDL_RENDERER) && !defined(USE_D3D11)
 #define USE_VAO
 #endif
 // #define PRINT_PACKET_LOSS_INFO
@@ -260,10 +260,12 @@ static void updateViewMode(view_mode_t vm) {
 // #define TDR_TEST_HOTKEY
 #include "dcomp.h"
 #include <winstring.h>
+#ifndef USE_D3D11
 #include "glad/glad_wgl.h"
+static GLuint gl_fbo_sc[SCREEN_COUNT];
+#endif
 static bool use_composition_swapchain;
 static SDL_Window *win_sc[SCREEN_COUNT];
-GLuint gl_fbo_sc[SCREEN_COUNT];
 
 static bool compositing;
 static rp_sem_t compositing_begin_sem;
@@ -337,7 +339,9 @@ static HANDLE gl_d3ddevice[SCREEN_COUNT];
 
 static struct render_buffer_t {
   ID3D11Texture2D *tex;
+#ifndef USE_D3D11
   GLuint gl_tex;
+#endif
   HANDLE gl_handle;
   int width;
   int height;
@@ -743,7 +747,7 @@ static int render_buffer_gen(struct render_buffer_t *b, int tb, int width, int h
   tex_desc.SampleDesc.Count = 1;
   tex_desc.SampleDesc.Quality = 0;
   tex_desc.Usage = D3D11_USAGE_DEFAULT;
-  tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+  tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET;
   tex_desc.MiscFlags = 0;
   tex_desc.CPUAccessFlags = 0;
 
@@ -2928,6 +2932,7 @@ static void check_nav_slider_prev(struct nk_context *ctx, enum NK_FOCUS nk_focus
 
 static void guiMain(struct nk_context *ctx)
 {
+  int focus_window = 0;
   ctx->style.window.fixed_background = nk_style_item_hide();
   const char *background_wnd = "Background";
   if (nk_begin(ctx, background_wnd, nk_rect(0, 0, win_width[SCREEN_TOP], win_height[SCREEN_TOP]),
@@ -2938,7 +2943,7 @@ static void guiMain(struct nk_context *ctx)
     {
       hide_windows = !hide_windows;
       if (!hide_windows)
-        nk_window_set_focus(ctx, remote_play_wnd);
+        focus_window = 1;
     }
   }
   nk_end(ctx);
@@ -2948,7 +2953,7 @@ static void guiMain(struct nk_context *ctx)
   if (hide_windows && (nav_command == NK_NAV_CANCEL || nav_command == NK_NAV_CONFIRM)) {
     hide_windows = 0;
     __atomic_store_n(&nk_nav_command, NK_NAV_NONE, __ATOMIC_RELAXED);
-    nk_window_set_focus(ctx, remote_play_wnd);
+    focus_window = 1;
   }
 
   enum nk_show_states show_window = !hide_windows;
@@ -3154,6 +3159,9 @@ static void guiMain(struct nk_context *ctx)
   }
   nk_end(ctx);
   nk_window_show(ctx, remote_play_wnd, show_window);
+
+  if (focus_window)
+    nk_window_set_focus(ctx, remote_play_wnd);
 
   if (nk_begin(ctx, debug_msg_wnd, nk_rect(475, 10, 150, 250),
                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE) && show_window)
@@ -4437,7 +4445,7 @@ ThreadLoop(int i)
       glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
       glClear(GL_COLOR_BUFFER_BIT);
 
-      nk_sdl_render(NK_ANTI_ALIASING_OFF, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
+      nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
 
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_2D, ui_nk_tex);

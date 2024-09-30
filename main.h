@@ -32,7 +32,10 @@
 #define NK_SDL_RENDERER_SDL_H <SDL2/SDL.h>
 #include "nuklear_sdl_renderer.h"
 #else
-#ifdef USE_OGL_ES
+#if defined(_WIN32) && defined(USE_D3D11)
+#include <SDL2/SDL.h>
+#include "nuklear_d3d11.h"
+#elif defined(USE_OGL_ES)
 #include "nuklear_sdl_gles2.h"
 #else
 #include "nuklear_sdl_gl3.h"

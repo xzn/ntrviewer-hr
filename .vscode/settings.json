@@ -7,7 +7,9 @@
         "NK_SDL_GL3_IMPLEMENTATION",
         "NK_SDL_GLES2_IMPLEMENTATION",
         "NK_SDL_RENDERER_IMPLEMENTATION",
-        "USE_COMPOSITION_SWAPCHAIN"
+        "NK_D3D11_IMPLEMENTATION",
+        "USE_COMPOSITION_SWAPCHAIN",
+        "USE_D3D11"
     ],
     "clangd.fallbackFlags": [
         "-I${workspaceFolder}/include"

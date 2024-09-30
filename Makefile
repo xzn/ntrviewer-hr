@@ -6,6 +6,7 @@ CFLAGS := -Ofast -g -fno-strict-aliasing
 CFLAGS += -mssse3 -mavx2
 EMBED_JPEG_TURBO := 1
 USE_SDL_RENDERER := 0
+USE_D3D11 := 1
 USE_COMPOSITION_SWAPCHAIN := 1
 USE_OGL_ES := 0
 USE_ANGLE := 0
@@ -15,7 +16,7 @@ ifeq ($(OS),Windows_NT)
 	LDLIBS := -Llib -static -lmingw32 -lSDL2main -lSDL2 -lwindowsapp
 	LDLIBS += -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8
 	LDLIBS += -lws2_32 -liphlpapi
-ifeq ($(USE_COMPOSITION_SWAPCHAIN),1)
+ifeq ($(findstring 1,$(USE_D3D11) $(USE_COMPOSITION_SWAPCHAIN)),1)
 	LDLIBS += -ld3d11
 endif
 	TARGET := ntrviewer.exe
@@ -32,7 +33,11 @@ endif
 ifeq ($(USE_SDL_RENDERER),1)
 GL_OBJ :=
 else
+ifeq ($(USE_D3D11),1)
+GL_OBJ :=
+else
 GL_OBJ := realcugan.o realcugan_lib.o libGLAD.o fsr/fsr_main.o fsr/image_utils.o libNKSDL.o
+endif
 ifeq ($(OS),Windows_NT)
 GL_OBJ += ntrviewer.res
 ifeq ($(USE_COMPOSITION_SWAPCHAIN),1)
@@ -74,13 +79,19 @@ endif
 
 # LDLIBS += -Wl,-Bdynamic
 
-ifeq ($(USE_COMPOSITION_SWAPCHAIN),1)
-CPPFLAGS += -DUSE_COMPOSITION_SWAPCHAIN
-endif
-
 ifeq ($(USE_SDL_RENDERER),1)
 CPPFLAGS += -DUSE_SDL_RENDERER
 else
+
+ifeq ($(OS),Windows_NT)
+ifeq ($(USE_D3D11),1)
+CPPFLAGS += -DUSE_D3D11
+endif
+
+ifeq ($(USE_COMPOSITION_SWAPCHAIN),1)
+CPPFLAGS += -DUSE_COMPOSITION_SWAPCHAIN
+endif
+endif
 
 ifeq ($(USE_OGL_ES),1)
 CPPFLAGS += -DUSE_OGL_ES
