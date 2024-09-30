@@ -28,13 +28,15 @@ typedef STDMETHODIMP (*DCompositionCreateDevice3_t)(IUnknown *renderingDevice, R
 typedef STDMETHODIMP (*DCompositionCreateSurfaceHandle_t)(DWORD desiredAccess, SECURITY_ATTRIBUTES *securityAttributes, HANDLE *surfaceHandle);
 typedef STDMETHODIMP (*DCompositionGetStatistics_t)(COMPOSITION_FRAME_ID frameId, COMPOSITION_FRAME_STATS *frameStats, UINT targetIdCount, COMPOSITION_TARGET_ID *targetIds, UINT *actualTargetIdCount);
 typedef STDMETHODIMP (*DCompositionGetTargetStatistics_t)(COMPOSITION_FRAME_ID frameId, const COMPOSITION_TARGET_ID *targetId, COMPOSITION_TARGET_STATS *targetStats);
-typedef STDMETHODIMP (*CreatePresentationFactory_t)(IUnknown  *d3dDevice, REFIID riid, void  **presentationFactory);
+typedef STDMETHODIMP (*CreatePresentationFactory_t)(IUnknown *d3dDevice, REFIID riid, void **presentationFactory);
+typedef STDMETHODIMP (*DCompositionBoostCompositorClock_t)(BOOL enable);
 
 static DCompositionCreateDevice3_t DCompositionCreateDevice3;
 static DCompositionCreateSurfaceHandle_t DCompositionCreateSurfaceHandle;
 static DCompositionGetStatistics_t DCompositionGetStatistics;
 static DCompositionGetTargetStatistics_t DCompositionGetTargetStatistics;
 static CreatePresentationFactory_t pfn_CreatePresentationFactory;
+static DCompositionBoostCompositorClock_t DCompositionBoostCompositorClock;
 
 static int dcomp_pfn_init(void) {
     HMODULE dcomp = GetModuleHandleA("dcomp.dll");
@@ -52,6 +54,9 @@ static int dcomp_pfn_init(void) {
 
     DCompositionGetTargetStatistics = (DCompositionGetTargetStatistics_t)(void *)GetProcAddress(dcomp, "DCompositionGetTargetStatistics");
     if (!DCompositionGetTargetStatistics) return -1;
+
+    DCompositionBoostCompositorClock = (DCompositionBoostCompositorClock_t)(void *)GetProcAddress(dcomp, "DCompositionBoostCompositorClock");
+    if (!DCompositionBoostCompositorClock) return -1;
 
     pfn_CreatePresentationFactory = (CreatePresentationFactory_t)(void *)GetProcAddress(dcomp, "CreatePresentationFactory");
     if (!pfn_CreatePresentationFactory) return -1;

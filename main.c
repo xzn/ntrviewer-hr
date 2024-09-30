@@ -175,6 +175,8 @@ static IPresentationFactory *presentation_factory[SCREEN_COUNT];
 static bool displayable_surface_support[SCREEN_COUNT];
 static HANDLE pres_man_lost_event[SCREEN_COUNT];
 static HANDLE pres_man_stat_avail_event[SCREEN_COUNT];
+static HANDLE pres_man_child_lost_event[SCREEN_COUNT];
+static HANDLE pres_man_child_stat_avail_event[SCREEN_COUNT];
 static IPresentationManager *presentation_manager[SCREEN_COUNT];
 static IPresentationManager *pres_man_child[SCREEN_COUNT];
 static HANDLE composition_surface[SCREEN_COUNT];
@@ -318,9 +320,9 @@ static void pres_man_proc_stat(int tb, int top_bot, int sc_vm) {
     return;
   }
 
-  UINT64 pres_id = IPresentStatistics_GetPresentId(pres_stat);
   PresentStatisticsKind pres_kind = IPresentStatistics_GetKind(pres_stat);
-  err_log("Present stat %d %llu %d\n", tb, (unsigned long long)pres_id, (int)pres_kind);
+  UINT64 pres_id = IPresentStatistics_GetPresentId(pres_stat);
+  err_log("Present stat %d %llu %d\n", sc_vm ? top_bot: tb, (unsigned long long)pres_id, (int)pres_kind);
 
   switch (pres_kind) {
     case PresentStatisticsKind_PresentStatus: {
@@ -356,6 +358,32 @@ static void pres_man_proc_stat(int tb, int top_bot, int sc_vm) {
 
       err_log("Comp stat %llu %d\n", (unsigned long long)comp_frame_id, (int)disp_inst_count);
 
+      COMPOSITION_FRAME_STATS comp_frame_stats;
+      UINT target_count;
+      hr = DCompositionGetStatistics(comp_frame_id, &comp_frame_stats, 0, NULL, &target_count);
+      if (hr) {
+        err_log("DCompositionGetStatistics failed: %d\n", (int)hr);
+        goto done;
+      }
+      COMPOSITION_TARGET_ID comp_target_ids[target_count];
+      hr = DCompositionGetStatistics(comp_frame_id, &comp_frame_stats, target_count, comp_target_ids, &target_count);
+      if (hr) {
+        err_log("DCompositionGetStatistics failed: %d\n", (int)hr);
+        goto done;
+      }
+
+      for (int i = 0; i < (int)target_count; ++i) {
+        COMPOSITION_TARGET_STATS comp_target_stats;
+        hr = DCompositionGetTargetStatistics(comp_frame_id, &comp_target_ids[i], &comp_target_stats);
+        if (hr) {
+          err_log("DCompositionGetTargetStatistics failed: %d\n", (int)hr);
+          goto done;
+        }
+
+        if (comp_target_stats.presentTime)
+          err_log("Comp target stat %llu %llu\n", (unsigned long long)comp_target_stats.presentTime, (unsigned long long)comp_target_stats.vblankDuration);
+      }
+
       ICompositionFramePresentStatistics_Release(comp_stat);
       break;
     }
@@ -368,14 +396,19 @@ static void pres_man_proc_stat(int tb, int top_bot, int sc_vm) {
         goto done;
       }
 
-      SystemInterruptTime disp_time = IIndependentFlipFramePresentStatistics_GetDisplayedTime(iflip_stat);
-      SystemInterruptTime pres_dura = IIndependentFlipFramePresentStatistics_GetPresentDuration(iflip_stat);
+      ULONGLONG disp_time;
+      IIndependentFlipFramePresentStatistics_GetDisplayedTime(iflip_stat, disp_time);
 
-      err_log("I flip frame stat %llu %llu\n", (unsigned long long)disp_time.value, (unsigned long long)pres_dura.value);
+      ULONGLONG pres_dura;
+      IIndependentFlipFramePresentStatistics_GetPresentDuration(iflip_stat, pres_dura);
+
+      err_log("I flip frame stat %llu %llu\n", (unsigned long long)disp_time, (unsigned long long)pres_dura);
 
       IIndependentFlipFramePresentStatistics_Release(iflip_stat);
       break;
     }
+
+    default:
   }
 
 done:
@@ -383,10 +416,7 @@ done:
 }
 
 static int presentation_buffer_get(struct presentation_buffer_t *bufs, int tb, int top_bot, int sc_vm, int count_max, int width, int height, int *index) {
-  int events_count = count_max + 1;
-  if (tb == SCREEN_TOP)
-    ++events_count;
-  HANDLE events[events_count];
+  HANDLE events[count_max];
   for (int i = 0; i < count_max; ++i) {
     if (!bufs[i].tex) {
       struct presentation_buffer_t *b = &bufs[i];
@@ -400,32 +430,40 @@ static int presentation_buffer_get(struct presentation_buffer_t *bufs, int tb, i
     events[i] = bufs[i].buf_avail_event;
   }
 
+  enum {
+    pres_man_event_lost,
+    pres_man_event_stat_avail,
+    pres_man_event_count,
+  };
+  HANDLE pres_man_events[pres_man_event_count];
   if (sc_vm) {
-    // TODO
-    events_count = count_max;
+    pres_man_events[pres_man_event_lost] = pres_man_child_lost_event[top_bot];
+    pres_man_events[pres_man_event_stat_avail] = pres_man_child_stat_avail_event[top_bot];
   } else {
-    events[count_max] = pres_man_lost_event[tb];
-    events[count_max + 1] = pres_man_stat_avail_event[tb];
+    pres_man_events[pres_man_event_lost] = pres_man_lost_event[tb];
+    pres_man_events[pres_man_event_stat_avail] = pres_man_stat_avail_event[tb];
   }
 
   DWORD res;
   while (1) {
-    res = WaitForMultipleObjects(events_count, events, FALSE, 0);
-    if ((int)(res - WAIT_OBJECT_0) >= events_count) {
-      if (res == WAIT_TIMEOUT) {
-        break;
-      }
+    res = WaitForMultipleObjects(pres_man_event_count, pres_man_events, FALSE, 0);
+    if (res == WAIT_TIMEOUT) {
+      break;
+    }
+
+    if (res == WAIT_FAILED) {
+      err_log("WaitForMultipleObjects failed: %d\n", (int)GetLastError());
       return -1;
     }
 
     res -= WAIT_OBJECT_0;
-    if ((int)res == count_max) {
+    if (res == pres_man_event_lost) {
       err_log("Presentation manager lost\n");
       compositing = 0;
       return -1;
     }
 
-    if ((int)res == count_max + 1) {
+    if (res == pres_man_event_stat_avail) {
       pres_man_proc_stat(tb, top_bot, sc_vm);
       continue;
     }
@@ -434,7 +472,7 @@ static int presentation_buffer_get(struct presentation_buffer_t *bufs, int tb, i
   }
 
   res = WaitForMultipleObjects(count_max, events, FALSE, INFINITE);
-  if ((int)(res - WAIT_OBJECT_0) >= count_max) {
+  if (res - WAIT_OBJECT_0 >= (DWORD)count_max) {
     return -1;
   }
   res -= WAIT_OBJECT_0;
@@ -1103,6 +1141,48 @@ static int composition_swapchain_device_init(void) {
       return hr;
     }
 
+    if (i == SCREEN_TOP) {
+      for (int j = 0; j < SCREEN_COUNT; ++j) {
+#if 0
+        hr = IPresentationManager_EnablePresentStatisticsKind(pres_man_child[j], PresentStatisticsKind_CompositionFrame, true);
+        if (hr) {
+          err_log("EnablePresentStatisticsKind CompositionFrame failed: %d\n", (int)hr);
+          return hr;
+        }
+
+        hr = IPresentationManager_EnablePresentStatisticsKind(pres_man_child[j], PresentStatisticsKind_PresentStatus, true);
+        if (hr) {
+          err_log("EnablePresentStatisticsKind PresentStatus failed: %d\n", (int)hr);
+          return hr;
+        }
+
+        hr = IPresentationManager_EnablePresentStatisticsKind(pres_man_child[j], PresentStatisticsKind_IndependentFlipFrame, true);
+        if (hr) {
+          err_log("EnablePresentStatisticsKind IndependentFlipFrame failed: %d\n", (int)hr);
+          return hr;
+        }
+#endif
+
+        hr = IPresentationManager_GetLostEvent(pres_man_child[j], &pres_man_child_lost_event[j]);
+        if (hr) {
+          err_log("GetLostEvent failed: %d\n", (int)hr);
+          return hr;
+        }
+
+        hr = IPresentationManager_ForceVSyncInterrupt(pres_man_child[j], false);
+        if (hr) {
+          err_log("ForceVSyncInterrupt failed: %d\n", (int)hr);
+          return hr;
+        }
+
+        hr = IPresentationManager_GetPresentStatisticsAvailableEvent(pres_man_child[j], &pres_man_child_stat_avail_event[j]);
+        if (hr) {
+          err_log("GetPresentStatisticsAvailableEvent failed: %d\n", (int)hr);
+          return hr;
+        }
+      }
+    }
+
     gl_d3ddevice[i] = wglDXOpenDeviceNV(d3d11device[i]);
     if (!gl_d3ddevice[i]) {
       hr = GetLastError();
@@ -1204,6 +1284,11 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
     }
   }
 
+  hr = DCompositionBoostCompositorClock(TRUE);
+  if (hr) {
+    err_log("DCompositionBoostCompositorClock failed: %d\n", (int)hr);
+  }
+
   return composition_swapchain_device_init();
 }
 
@@ -1219,6 +1304,20 @@ static void composition_swapchain_device_close(void) {
     if (gl_d3ddevice[i]) {
       wglDXCloseDeviceNV(gl_d3ddevice[i]);
       gl_d3ddevice[i] = NULL;
+    }
+
+    if (i == SCREEN_TOP) {
+      for (int j = 0; j < SCREEN_COUNT; ++j) {
+        if (pres_man_child_stat_avail_event[i]) {
+          CloseHandle(pres_man_child_stat_avail_event[i]);
+          pres_man_child_stat_avail_event[i] = NULL;
+        }
+
+        if (pres_man_child_lost_event[i]) {
+          CloseHandle(pres_man_child_lost_event[i]);
+          pres_man_child_lost_event[i] = NULL;
+        }
+      }
     }
 
     if (pres_man_stat_avail_event[i]) {
