@@ -144,6 +144,118 @@ static int acquire_sem(rp_sem_t *sem) {
   }
 }
 
+#ifdef _WIN32
+typedef HANDLE event_t;
+
+static void event_init(HANDLE *event) {
+  *event = CreateEventA(NULL, FALSE, FALSE, NULL);
+}
+
+static void event_close(HANDLE *event) {
+  CloseHandle(*event);
+  *event = NULL;
+}
+
+static int event_wait(HANDLE *event, int to_ns) {
+  DWORD res = WaitForSingleObject(*event, to_ns / 1000000);
+  if (res == WAIT_TIMEOUT) {
+    return ETIMEDOUT;
+  }
+  return (int)res;
+}
+
+static void event_rel(HANDLE *event) {
+  SetEvent(*event);
+}
+#else
+typedef struct event_t {
+  pthread_cond_t cond;
+  pthread_mutex_t mutex;
+  int flag;
+} event_t;
+
+static void event_init(struct event_t *event) {
+  pthread_cond_init(&event->cond, &rp_cond_attr);
+  pthread_mutex_init(&event->mutex, NULL);
+  event->flag = 0;
+}
+
+static void event_close(struct event_t *event) {
+  pthread_cond_destroy(&event->cond);
+  pthread_mutex_destroy(&event->mutex);
+  event->flag = 0;
+}
+
+static int event_wait(struct event_t *event, int to_ns) {
+  pthread_mutex_lock(&event->mutex);
+  while (!event->flag) {
+    struct timespec to = clock_monotonic_abs_ns_from_now(to_ns);
+    int res = pthread_cond_timedwait(&event->cond, &event->mutex, &to);
+    if (res) {
+      pthread_mutex_unlock(&event->mutex);
+      return res;
+    }
+  }
+  event->flag = 0;
+  pthread_mutex_unlock(&event->mutex);
+  return 0;
+}
+
+static void event_rel(struct event_t *event) {
+  pthread_mutex_lock(&event->mutex);
+  event->flag = 1;
+  pthread_cond_signal(&event->cond);
+  pthread_mutex_unlock(&event->mutex);
+}
+#endif
+
+#ifndef SDL_GL_SINGLE_THREAD
+static event_t updateBottomScreenEvent;
+#endif
+
+static void updateViewMode(view_mode_t vm) {
+  switch (vm) {
+    case VIEW_MODE_TOP_BOT:
+    case VIEW_MODE_TOP:
+    case VIEW_MODE_BOT:
+      SDL_HideWindow(win[SCREEN_BOT]);
+      break;
+
+    case VIEW_MODE_SEPARATE:
+      SDL_ShowWindow(win[SCREEN_BOT]);
+      break;
+  }
+
+  SDL_SetWindowFullscreen(win[SCREEN_TOP], 0);
+  SDL_RestoreWindow(win[SCREEN_TOP]);
+  SDL_SetWindowFullscreen(win[SCREEN_BOT], 0);
+  SDL_RestoreWindow(win[SCREEN_BOT]);
+  switch (vm) {
+    case VIEW_MODE_TOP_BOT:
+      SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT);
+      break;
+
+    case VIEW_MODE_TOP:
+      SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT12);
+      break;
+
+    case VIEW_MODE_BOT:
+      SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH2, WINDOW_HEIGHT12);
+      break;
+
+    case VIEW_MODE_SEPARATE:
+      SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT12);
+      SDL_SetWindowSize(win[SCREEN_BOT], WINDOW_WIDTH2, WINDOW_HEIGHT12);
+      break;
+  }
+
+#ifndef SDL_GL_SINGLE_THREAD
+  if (vm == VIEW_MODE_SEPARATE) {
+    event_rel(&updateBottomScreenEvent);
+  }
+#endif
+}
+
 #ifdef USE_COMPOSITION_SWAPCHAIN
 // #define TDR_TEST_HOTKEY
 #include "dcomp.h"
@@ -156,7 +268,7 @@ GLuint gl_fbo_sc[SCREEN_COUNT];
 static bool compositing;
 static rp_sem_t compositing_begin_sem;
 static rp_sem_t compositing_end_sem;
-static int prev_sc_vm;
+static int prev_sc_child;
 static int prev_hide_windows;
 // Serialize d3d11device_context[SCREEN_TOP] calls (including indirectly through gl interop)
 static rp_lock_t comp_lock;
@@ -181,6 +293,7 @@ static HANDLE pres_man_child_lost_event[SCREEN_COUNT];
 static HANDLE pres_man_child_stat_avail_event[SCREEN_COUNT];
 static IPresentationManager *presentation_manager[SCREEN_COUNT];
 static IPresentationManager *pres_man_child[SCREEN_COUNT];
+static IPresentationManager *pres_man_util[SCREEN_COUNT];
 static HANDLE composition_surface[SCREEN_COUNT];
 static IPresentationSurface *presentation_surface[SCREEN_COUNT];
 static RECT src_rect[SCREEN_COUNT];
@@ -260,7 +373,7 @@ static int presentation_buffer_delete(struct presentation_buffer_t *b) {
   return 0;
 }
 
-static int presentation_buffer_gen(struct presentation_buffer_t *b, int tb, int top_bot, int sc_vm, int width, int height) {
+static int presentation_buffer_gen(struct presentation_buffer_t *b, int tb, int sc_child, int width, int height) {
   D3D11_TEXTURE2D_DESC tex_desc = {};
   tex_desc.Width = width;
   tex_desc.Height = height;
@@ -285,7 +398,7 @@ static int presentation_buffer_gen(struct presentation_buffer_t *b, int tb, int 
   }
 
   hr = IPresentationManager_AddBufferFromResource(
-    sc_vm ? pres_man_child[top_bot] : presentation_manager[tb],
+    sc_child >= 0 ? sc_child ? pres_man_child[tb] : presentation_manager[tb] : pres_man_util[tb],
     (IUnknown *)b->tex, &b->buf
   );
   if (hr) {
@@ -309,12 +422,12 @@ fail:
   return -1;
 }
 
-static void pres_man_proc_stat(int tb, int top_bot, int sc_vm) {
+static void pres_man_proc_stat(int tb, int sc_child) {
   HRESULT hr;
 
   IPresentStatistics *pres_stat;
   hr = IPresentationManager_GetNextPresentStatistics(
-    sc_vm ? pres_man_child[top_bot] : presentation_manager[tb],
+    sc_child ? pres_man_child[tb] : presentation_manager[tb],
     &pres_stat
   );
   if (hr) {
@@ -324,7 +437,7 @@ static void pres_man_proc_stat(int tb, int top_bot, int sc_vm) {
 
   PresentStatisticsKind pres_kind = IPresentStatistics_GetKind(pres_stat);
   UINT64 pres_id = IPresentStatistics_GetPresentId(pres_stat);
-  err_log("Present stat %d %llu %d\n", sc_vm ? top_bot: tb, (unsigned long long)pres_id, (int)pres_kind);
+  err_log("Present stat %d %llu %d\n", tb, (unsigned long long)pres_id, (int)pres_kind);
 
   switch (pres_kind) {
     case PresentStatisticsKind_PresentStatus: {
@@ -417,12 +530,12 @@ done:
   IPresentStatistics_Release(pres_stat);
 }
 
-static int presentation_buffer_get(struct presentation_buffer_t *bufs, int tb, int top_bot, int sc_vm, int count_max, int width, int height, int *index) {
+static int presentation_buffer_get(struct presentation_buffer_t *bufs, int tb, int sc_child, int count_max, int width, int height, int *index) {
   HANDLE events[count_max];
   for (int i = 0; i < count_max; ++i) {
     if (!bufs[i].tex) {
       struct presentation_buffer_t *b = &bufs[i];
-      if (presentation_buffer_gen(b, tb, top_bot, sc_vm, width, height) != 0) {
+      if (presentation_buffer_gen(b, tb, sc_child, width, height) != 0) {
         return -1;
       }
       *index = i;
@@ -432,45 +545,47 @@ static int presentation_buffer_get(struct presentation_buffer_t *bufs, int tb, i
     events[i] = bufs[i].buf_avail_event;
   }
 
-  enum {
-    pres_man_event_lost,
-    pres_man_event_stat_avail,
-    pres_man_event_count,
-  };
-  HANDLE pres_man_events[pres_man_event_count];
-  if (sc_vm) {
-    pres_man_events[pres_man_event_lost] = pres_man_child_lost_event[top_bot];
-    pres_man_events[pres_man_event_stat_avail] = pres_man_child_stat_avail_event[top_bot];
-  } else {
-    pres_man_events[pres_man_event_lost] = pres_man_lost_event[tb];
-    pres_man_events[pres_man_event_stat_avail] = pres_man_stat_avail_event[tb];
-  }
-
   DWORD res;
-  while (1) {
-    res = WaitForMultipleObjects(pres_man_event_count, pres_man_events, FALSE, 0);
-    if (res == WAIT_TIMEOUT) {
+  if (sc_child >= 0) {
+    enum {
+      pres_man_event_lost,
+      pres_man_event_stat_avail,
+      pres_man_event_count,
+    };
+    HANDLE pres_man_events[pres_man_event_count];
+    if (sc_child) {
+      pres_man_events[pres_man_event_lost] = pres_man_child_lost_event[tb];
+      pres_man_events[pres_man_event_stat_avail] = pres_man_child_stat_avail_event[tb];
+    } else {
+      pres_man_events[pres_man_event_lost] = pres_man_lost_event[tb];
+      pres_man_events[pres_man_event_stat_avail] = pres_man_stat_avail_event[tb];
+    }
+
+    while (1) {
+      res = WaitForMultipleObjects(pres_man_event_count, pres_man_events, FALSE, 0);
+      if (res == WAIT_TIMEOUT) {
+        break;
+      }
+
+      if (res == WAIT_FAILED) {
+        err_log("WaitForMultipleObjects failed: %d\n", (int)GetLastError());
+        return -1;
+      }
+
+      res -= WAIT_OBJECT_0;
+      if (res == pres_man_event_lost) {
+        err_log("Presentation manager lost\n");
+        compositing = 0;
+        return -1;
+      }
+
+      if (res == pres_man_event_stat_avail) {
+        pres_man_proc_stat(tb, sc_child);
+        continue;
+      }
+
       break;
     }
-
-    if (res == WAIT_FAILED) {
-      err_log("WaitForMultipleObjects failed: %d\n", (int)GetLastError());
-      return -1;
-    }
-
-    res -= WAIT_OBJECT_0;
-    if (res == pres_man_event_lost) {
-      err_log("Presentation manager lost\n");
-      compositing = 0;
-      return -1;
-    }
-
-    if (res == pres_man_event_stat_avail) {
-      pres_man_proc_stat(tb, top_bot, sc_vm);
-      continue;
-    }
-
-    break;
   }
 
   res = WaitForMultipleObjects(count_max, events, FALSE, INFINITE);
@@ -483,7 +598,7 @@ static int presentation_buffer_get(struct presentation_buffer_t *bufs, int tb, i
   if (bufs[i].width != width || bufs[i].height != height) {
     struct presentation_buffer_t *b = &bufs[i];
     presentation_buffer_delete(b);
-    if (presentation_buffer_gen(b, tb, top_bot, sc_vm, width, height) != 0) {
+    if (presentation_buffer_gen(b, tb, sc_child, width, height) != 0) {
       return -1;
     }
   }
@@ -491,20 +606,19 @@ static int presentation_buffer_get(struct presentation_buffer_t *bufs, int tb, i
   return 0;
 }
 
-static int presentation_buffer_present(int tb, int top_bot, int sc_vm, __attribute__ ((unused)) int count_max) {
-
+static int presentation_buffer_present(int tb, int top_bot, int sc_child, __attribute__ ((unused)) int count_max) {
   struct render_buffer_t *b = &render_buffers[tb][top_bot];
 
   int index_sc;
   struct presentation_buffer_t *bufs = presentation_buffers[tb][top_bot];
-  if (presentation_buffer_get(bufs, tb, top_bot, sc_vm, count_max, b->width, b->height, &index_sc) != 0) {
+  if (presentation_buffer_get(bufs, sc_child ? top_bot : tb, sc_child, count_max, b->width, b->height, &index_sc) != 0) {
     return -1;
   }
 
   HRESULT hr;
 
   hr = IPresentationSurface_SetBuffer(
-    sc_vm ? pres_surf_child[top_bot] : presentation_surface[tb],
+    sc_child ? pres_surf_child[top_bot] : presentation_surface[tb],
     bufs[index_sc].buf
   );
   if (hr) {
@@ -513,12 +627,12 @@ static int presentation_buffer_present(int tb, int top_bot, int sc_vm, __attribu
   }
 
   RECT *rect;
-  rect = sc_vm ? &src_rect_child[top_bot] : &src_rect[tb];
+  rect = sc_child ? &src_rect_child[top_bot] : &src_rect[tb];
   if (rect->right != b->width || rect->bottom != b->height) {
     rect->right = b->width;
     rect->bottom = b->height;
     hr = IPresentationSurface_SetSourceRect(
-      sc_vm ? pres_surf_child[top_bot] : presentation_surface[tb],
+      sc_child ? pres_surf_child[top_bot] : presentation_surface[tb],
       rect
     );
     if (hr) {
@@ -529,10 +643,10 @@ static int presentation_buffer_present(int tb, int top_bot, int sc_vm, __attribu
 
   ID3D11DeviceContext_CopyResource(d3d11device_context[tb], (ID3D11Resource *)bufs[index_sc].tex, (ID3D11Resource *)b->tex);
 
-  // err_log("%d %llu\n", sc_vm ? top_bot : tb, (unsigned long long)IPresentationManager_GetNextPresentId(sc_vm ? pres_man_child[top_bot] : presentation_manager[tb]));
-  hr = IPresentationManager_Present(sc_vm ? pres_man_child[top_bot] : presentation_manager[tb]);
+  // err_log("%d %llu\n", sc_child ? top_bot : tb, (unsigned long long)IPresentationManager_GetNextPresentId(sc_child ? pres_man_child[top_bot] : presentation_manager[tb]));
+  hr = IPresentationManager_Present(sc_child ? pres_man_child[top_bot] : presentation_manager[tb]);
   if (hr) {
-    err_log("Present failed: %d\n", (int)hr);
+    err_log("Present %d %d failed: %d\n", sc_child, sc_child ? top_bot : tb, (int)hr);
     if (hr == DXGI_ERROR_DEVICE_REMOVED) {
       hr = ID3D11Device_GetDeviceRemovedReason(d3d11device[tb]);
       err_log("GetDeviceRemovedReason: %d\n", (int)hr);
@@ -547,27 +661,27 @@ static int presentation_buffer_present(int tb, int top_bot, int sc_vm, __attribu
 static int ui_buffer_present(__attribute__ ((unused)) int count_max) {
   struct render_buffer_t *b = &ui_render_buf;
 
-  int tb = SCREEN_TOP;
+  int tb = SURFACE_UTIL_UI;
   int index_sc;
   struct presentation_buffer_t *bufs = ui_pres_bufs;
-  if (presentation_buffer_get(bufs, tb, 0, 0, count_max, b->width, b->height, &index_sc) != 0) {
+  if (presentation_buffer_get(bufs, tb, -1, count_max, b->width, b->height, &index_sc) != 0) {
     return -1;
   }
 
   HRESULT hr;
 
-  hr = IPresentationSurface_SetBuffer(pres_surf_util[SURFACE_UTIL_UI], bufs[index_sc].buf);
+  hr = IPresentationSurface_SetBuffer(pres_surf_util[tb], bufs[index_sc].buf);
   if (hr) {
     err_log("SetBuffer failed: %d\n", (int)hr);
     return -1;
   }
 
   RECT *rect;
-  rect = &src_rect_util[SURFACE_UTIL_UI];
+  rect = &src_rect_util[tb];
   if (rect->right != b->width || rect->bottom != b->height) {
     rect->right = b->width;
     rect->bottom = b->height;
-    hr = IPresentationSurface_SetSourceRect(pres_surf_util[SURFACE_UTIL_UI], rect);
+    hr = IPresentationSurface_SetSourceRect(pres_surf_util[tb], rect);
     if (hr) {
       err_log("SetSourceRect failed: %d\n", (int)hr);
       return hr;
@@ -576,7 +690,7 @@ static int ui_buffer_present(__attribute__ ((unused)) int count_max) {
 
   ID3D11DeviceContext_CopyResource(d3d11device_context[tb], (ID3D11Resource *)bufs[index_sc].tex, (ID3D11Resource *)b->tex);
 
-  hr = IPresentationManager_Present(presentation_manager[tb]);
+  hr = IPresentationManager_Present(pres_man_util[tb]);
   if (hr) {
     err_log("Present failed: %d\n", (int)hr);
     if (hr == DXGI_ERROR_DEVICE_REMOVED) {
@@ -738,13 +852,21 @@ static void composition_buffer_cleanup(int tb) {
   }
 }
 
-static int presentation_render_reset(int sc_vm) {
+static int presentation_render_reset(int sc_child) {
   int i = SCREEN_TOP;
   composition_buffer_cleanup(i);
 
   HRESULT hr;
-  if (sc_vm) {
+  if (sc_child) {
     // set background color
+    {
+      int j = SURFACE_UTIL_BG;
+      hr = dcomp_visual[i]->lpVtbl->AddVisual(dcomp_visual[i], (IDCompositionVisual *)dcomp_vis_util[j], j == SURFACE_UTIL_BG ? TRUE : FALSE, NULL);
+      if (hr) {
+        err_log("AddVisual failed: %d\n", (int)hr);
+        return hr;
+      }
+    }
     {
       D3D11_TEXTURE2D_DESC textureDesc = {};
       textureDesc.Width = 1;
@@ -768,7 +890,7 @@ static int presentation_render_reset(int sc_vm) {
         return hr;
       }
 
-      hr = IPresentationManager_AddBufferFromResource(presentation_manager[i], (IUnknown *)tex, &buf);
+      hr = IPresentationManager_AddBufferFromResource(pres_man_util[SURFACE_UTIL_BG], (IUnknown *)tex, &buf);
       if (hr) {
         err_log("AddBufferFromResource failed: %d\n", (int)hr);
         return hr;
@@ -803,7 +925,7 @@ static int presentation_render_reset(int sc_vm) {
         }
       }
 
-      hr = IPresentationManager_Present(presentation_manager[i]);
+      hr = IPresentationManager_Present(pres_man_util[SURFACE_UTIL_BG]);
       if (hr) {
         err_log("Present failed: %d\n", (int)hr);
         return -1;
@@ -822,6 +944,15 @@ static int presentation_render_reset(int sc_vm) {
       }
     }
   } else {
+    {
+      int j = SURFACE_UTIL_BG;
+      hr = dcomp_visual[i]->lpVtbl->RemoveVisual(dcomp_visual[i], (IDCompositionVisual *)dcomp_vis_util[j]);
+      if (hr) {
+        err_log("RemoveVisual failed: %d\n", (int)hr);
+        return hr;
+      }
+    }
+
     for (int j = 0; j < SCREEN_COUNT; ++j) {
       hr = dcomp_vis_child[j]->lpVtbl->SetContent(dcomp_vis_child[j], NULL);
       if (hr) {
@@ -843,15 +974,16 @@ static int presentation_render_reset(int sc_vm) {
       err_log("SetContent failed: %d\n", (int)hr);
       return hr;
     }
+  }
 
-    for (int j = 0; j < SCREEN_COUNT; ++j) {
-      hr = dcomp_device[j]->lpVtbl->Commit(dcomp_device[j]);
-      if (hr) {
-        err_log("Commit failed: %d\n", (int)hr);
-        return hr;
-      }
+  for (int j = 0; j < SCREEN_COUNT; ++j) {
+    hr = dcomp_device[j]->lpVtbl->Commit(dcomp_device[j]);
+    if (hr) {
+      err_log("Commit failed: %d\n", (int)hr);
+      return hr;
     }
   }
+
   return 0;
 }
 
@@ -946,6 +1078,14 @@ static int composition_swapchain_device_init(void) {
           return hr;
         }
       }
+
+      for (int j = 0; j < SURFACE_UTIL_COUNT; ++j) {
+        hr = IPresentationFactory_CreatePresentationManager(presentation_factory[i], &pres_man_util[j]);
+        if (hr) {
+          err_log("CreatePresentationManager failed: %d\n", (int)hr);
+          return hr;
+        }
+      }
     }
 
     hr = DCompositionCreateSurfaceHandle(COMPOSITIONOBJECT_ALL_ACCESS, NULL, &composition_surface[i]);
@@ -1006,7 +1146,7 @@ static int composition_swapchain_device_init(void) {
           return hr;
         }
 
-        hr = IPresentationManager_CreatePresentationSurface(presentation_manager[i], comp_surf_util[j], &pres_surf_util[j]);
+        hr = IPresentationManager_CreatePresentationSurface(pres_man_util[j], comp_surf_util[j], &pres_surf_util[j]);
         if (hr) {
           err_log("CreatePresentationSurface failed: %d\n", (int)hr);
           return hr;
@@ -1156,8 +1296,6 @@ static int composition_swapchain_device_init(void) {
     }
   }
 
-  prev_sc_vm = -1;
-  prev_hide_windows = 0;
   return 0;
 }
 
@@ -1228,6 +1366,8 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
           return hr;
         }
 
+        if (j == SURFACE_UTIL_BG)
+          continue;
         hr = dcomp_visual[i]->lpVtbl->AddVisual(dcomp_visual[i], (IDCompositionVisual *)dcomp_vis_util[j], j == SURFACE_UTIL_BG ? TRUE : FALSE, NULL);
         if (hr) {
           err_log("AddVisual failed: %d\n", (int)hr);
@@ -2451,118 +2591,6 @@ static void getAdapterIPs(void) {
 }
 #endif
 
-#ifdef _WIN32
-typedef HANDLE event_t;
-
-static void event_init(HANDLE *event) {
-  *event = CreateEventA(NULL, FALSE, FALSE, NULL);
-}
-
-static void event_close(HANDLE *event) {
-  CloseHandle(*event);
-  *event = NULL;
-}
-
-static int event_wait(HANDLE *event, int to_ns) {
-  DWORD res = WaitForSingleObject(*event, to_ns / 1000000);
-  if (res == WAIT_TIMEOUT) {
-    return ETIMEDOUT;
-  }
-  return (int)res;
-}
-
-static void event_rel(HANDLE *event) {
-  SetEvent(*event);
-}
-#else
-typedef struct event_t {
-  pthread_cond_t cond;
-  pthread_mutex_t mutex;
-  int flag;
-} event_t;
-
-static void event_init(struct event_t *event) {
-  pthread_cond_init(&event->cond, &rp_cond_attr);
-  pthread_mutex_init(&event->mutex, NULL);
-  event->flag = 0;
-}
-
-static void event_close(struct event_t *event) {
-  pthread_cond_destroy(&event->cond);
-  pthread_mutex_destroy(&event->mutex);
-  event->flag = 0;
-}
-
-static int event_wait(struct event_t *event, int to_ns) {
-  pthread_mutex_lock(&event->mutex);
-  while (!event->flag) {
-    struct timespec to = clock_monotonic_abs_ns_from_now(to_ns);
-    int res = pthread_cond_timedwait(&event->cond, &event->mutex, &to);
-    if (res) {
-      pthread_mutex_unlock(&event->mutex);
-      return res;
-    }
-  }
-  event->flag = 0;
-  pthread_mutex_unlock(&event->mutex);
-  return 0;
-}
-
-static void event_rel(struct event_t *event) {
-  pthread_mutex_lock(&event->mutex);
-  event->flag = 1;
-  pthread_cond_signal(&event->cond);
-  pthread_mutex_unlock(&event->mutex);
-}
-#endif
-
-#ifndef SDL_GL_SINGLE_THREAD
-static event_t updateBottomScreenEvent;
-#endif
-
-static void updateViewMode(view_mode_t vm) {
-  switch (vm) {
-    case VIEW_MODE_TOP_BOT:
-    case VIEW_MODE_TOP:
-    case VIEW_MODE_BOT:
-      SDL_HideWindow(win[SCREEN_BOT]);
-      break;
-
-    case VIEW_MODE_SEPARATE:
-      SDL_ShowWindow(win[SCREEN_BOT]);
-      break;
-  }
-
-  SDL_SetWindowFullscreen(win[SCREEN_TOP], 0);
-  SDL_RestoreWindow(win[SCREEN_TOP]);
-  SDL_SetWindowFullscreen(win[SCREEN_BOT], 0);
-  SDL_RestoreWindow(win[SCREEN_BOT]);
-  switch (vm) {
-    case VIEW_MODE_TOP_BOT:
-      SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT);
-      break;
-
-    case VIEW_MODE_TOP:
-      SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT12);
-      break;
-
-    case VIEW_MODE_BOT:
-      SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH2, WINDOW_HEIGHT12);
-      break;
-
-    case VIEW_MODE_SEPARATE:
-      SDL_SetWindowSize(win[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT12);
-      SDL_SetWindowSize(win[SCREEN_BOT], WINDOW_WIDTH2, WINDOW_HEIGHT12);
-      break;
-  }
-
-#ifndef SDL_GL_SINGLE_THREAD
-  if (vm == VIEW_MODE_SEPARATE) {
-    event_rel(&updateBottomScreenEvent);
-  }
-#endif
-}
-
 // HACK
 // Try to get Nuklear to accept keyboard navigation
 
@@ -3422,7 +3450,7 @@ static void do_hr_draw_screen(
   uint8_t *data, int width, int height, int top_bot, int tb,
   __attribute__ ((unused)) int index,
   __attribute__ ((unused)) view_mode_t vm,
-  __attribute__ ((unused)) int sc_vm
+  __attribute__ ((unused)) int sc_child
 )
 {
   if (data) {
@@ -3495,7 +3523,7 @@ static void do_hr_draw_screen(
   SDL_RenderCopyEx(sdlRenderer[tb], sdlTexture[tb][top_bot], NULL, &rect, -90, &center, SDL_FLIP_NONE);
 }
 #else
-static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot, int tb, int index, view_mode_t vm, int sc_vm)
+static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot, int tb, int index, view_mode_t vm, int sc_child)
 {
   double ctx_left_f;
   double ctx_top_f;
@@ -3505,7 +3533,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
   int ctx_height;
   int win_w;
   int win_h;
-  if (sc_vm) {
+  if (sc_child) {
     win_w = ctx_width = prev_ctx_width[top_bot];
     win_h = ctx_height = prev_ctx_height[top_bot];
     ctx_left_f = -1.0f;
@@ -3855,7 +3883,7 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
 }
 #endif
 
-static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot, int tb, view_mode_t vm, int sc_vm)
+static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int top_bot, int tb, view_mode_t vm, int sc_child)
 {
   sr_next(tb, top_bot, ctx->index_display_2);
 
@@ -3885,12 +3913,12 @@ static int hr_draw_screen(FrameBufferContext *ctx, int width, int height, int to
   if (status >= FBS_UPDATED)
   {
     __atomic_add_fetch(&frame_rate_displayed_tracker[top_bot], 1, __ATOMIC_RELAXED);
-    do_hr_draw_screen(ctx, data, width, height, top_bot, tb, index_display, vm, sc_vm);
+    do_hr_draw_screen(ctx, data, width, height, top_bot, tb, index_display, vm, sc_child);
     return 1;
   }
   else
   {
-    do_hr_draw_screen(ctx, NULL, width, height, top_bot, tb, index_display, vm, sc_vm);
+    do_hr_draw_screen(ctx, NULL, width, height, top_bot, tb, index_display, vm, sc_child);
     return -1;
   }
 }
@@ -4099,7 +4127,7 @@ ThreadLoop(int i)
   int sc_tb_success = 0;
   int sc_tb = i;
   int sc_top_bot = i;
-  int sc_vm = 0;
+  int sc_child = 0;
   /* Draw */
   int screen_count = SCREEN_COUNT;
   view_mode_t vm = __atomic_load_n(&view_mode, __ATOMIC_RELAXED);
@@ -4107,8 +4135,8 @@ ThreadLoop(int i)
     screen_count = 1;
 #ifdef USE_COMPOSITION_SWAPCHAIN
   if (use_composition_swapchain) {
-    sc_vm = vm == VIEW_MODE_TOP_BOT;
-    if (sc_vm) {
+    sc_child = vm == VIEW_MODE_TOP_BOT;
+    if (sc_child) {
       screen_count = SCREEN_COUNT;
       sc_tb = SCREEN_TOP;
     }
@@ -4184,12 +4212,12 @@ ThreadLoop(int i)
   GLuint tex_sc;
   HANDLE handle_sc;
   if (use_composition_swapchain) {
-    if (sc_tb == SCREEN_TOP && prev_sc_vm != sc_vm) {
+    if (sc_tb == SCREEN_TOP && __atomic_load_n(&prev_sc_child, __ATOMIC_RELAXED) != sc_child) {
       if (i == SCREEN_TOP) {
-        if (presentation_render_reset(sc_vm)) {
+        if (presentation_render_reset(sc_child)) {
           goto sc_tb_fail;
         }
-        prev_sc_vm = sc_vm;
+        __atomic_store_n(&prev_sc_child, sc_child, __ATOMIC_RELAXED);
       } else {
         if (sc_tb == SCREEN_TOP) {
           rp_lock_rel(comp_lock);
@@ -4198,7 +4226,7 @@ ThreadLoop(int i)
         return;
       }
     }
-    if (sc_vm) {
+    if (sc_child) {
       int ctx_left;
       int ctx_top;
 
@@ -4304,19 +4332,19 @@ ThreadLoop(int i)
 #endif
 
   glViewport(0, 0, ctx_width, ctx_height);
-  if (!sc_vm) {
+  if (!sc_child) {
     glClearColor(bg[0], bg[1], bg[2], bg[3]);
     glClear(GL_COLOR_BUFFER_BIT);
   }
 #endif
 
-  if (vm == VIEW_MODE_TOP_BOT && !sc_vm) {
-    hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400, 240, SCREEN_TOP, i, vm, sc_vm);
-    hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT, i, vm, sc_vm);
+  if (vm == VIEW_MODE_TOP_BOT && !sc_child) {
+    hr_draw_screen(&buffer_ctx[SCREEN_TOP], 400, 240, SCREEN_TOP, i, vm, sc_child);
+    hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT, i, vm, sc_child);
   } else if (vm == VIEW_MODE_BOT)
-    hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT, i, vm, sc_vm);
+    hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT, i, vm, sc_child);
   else {
-    if (!hr_draw_screen(&buffer_ctx[sc_top_bot], width, height, sc_top_bot, sc_tb, vm, sc_vm)) {
+    if (!hr_draw_screen(&buffer_ctx[sc_top_bot], width, height, sc_top_bot, sc_tb, vm, sc_child)) {
 #ifndef USE_SDL_RENDERER
       glClearColor(bg[0], bg[1], bg[2], bg[3]);
       glClear(GL_COLOR_BUFFER_BIT);
@@ -4476,7 +4504,7 @@ ThreadLoop(int i)
     if (!wglDXUnlockObjectsNV(gl_d3ddevice[sc_tb], 1, &handle_sc)) {
       err_log("wglDXUnlockObjectsNV failed: %d\n", (int)GetLastError());
     }
-    presentation_buffer_present(sc_tb, sc_top_bot, sc_vm, COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN);
+    presentation_buffer_present(sc_tb, sc_top_bot, sc_child, COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN);
   } else {
     if (i == SCREEN_TOP) {
       nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
