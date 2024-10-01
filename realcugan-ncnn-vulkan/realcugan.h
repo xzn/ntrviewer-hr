@@ -48,11 +48,16 @@ public:
 #else
     int memory = 0;
 #endif
+#ifdef USE_D3D11
+    ID3D11Resource *d3d_resource = NULL;
+#else
     GLuint gl_memory = 0;
     GLuint gl_texture = 0;
+#endif
     bool dedicated = 0;
     VkExternalMemoryHandleTypeFlagBits memory_type = (VkExternalMemoryHandleTypeFlagBits)0;
 
+#ifndef USE_D3D11
     VkSemaphore vk_sem = 0, vk_sem_next = 0;
 #ifdef _WIN32
     HANDLE sem = 0, sem_next = 0;
@@ -60,6 +65,7 @@ public:
     int sem = 0, sem_next = 0;
 #endif
     GLuint gl_sem = 0, gl_sem_next = 0;
+#endif
     void create_sem(const RealCUGAN* cugan);
     void destroy_sem(const RealCUGAN* cugan);
 

@@ -775,7 +775,11 @@ int RealCUGAN::process(int index, const ncnn::Mat& inimage, ncnn::Mat& outimage)
         if (support_ext_mem) {
             out_gpu_tex[index]->create_like(this, out_gpu, opt);
             cmd.record_clone(out_gpu, *out_gpu_tex[index], opt);
+#ifdef USE_D3D11
+            cmd.submit_and_wait(NULL, 0, NULL, &out_gpu_tex[index]->fence);
+#else
             cmd.submit_and_wait(out_gpu_tex[index]->first_subseq ? out_gpu_tex[index]->vk_sem_next : nullptr, VK_PIPELINE_STAGE_TRANSFER_BIT, out_gpu_tex[index]->vk_sem, &out_gpu_tex[index]->fence);
+#endif
             out_gpu_tex[index]->need_wait = out_gpu_tex[index]->first_subseq = true;
         }
 
@@ -4031,6 +4035,10 @@ typedef VkResult (VKAPI_PTR *PFN_vkGetSemaphoreFdKHR)(VkDevice device, const VkS
 static PFN_vkGetSemaphoreFdKHR vkGetSemaphoreFdKHR;
 #endif
 
+#ifdef USE_D3D11
+void OutVkImageMat::create_sem(const RealCUGAN*) {}
+void OutVkImageMat::destroy_sem(const RealCUGAN*) {}
+#else
 static bool shared_sem_supported(const RealCUGAN* cugan)
 {
     bool ret = cugan->vkdev->info.support_VK_KHR_external_semaphore() && GLAD_GL_EXT_semaphore &&
@@ -4232,6 +4240,7 @@ void OutVkImageMat::destroy_sem(const RealCUGAN* cugan)
         }
     }
 }
+#endif
 
 void OutVkImageMat::create_like(const RealCUGAN* cugan, const ncnn::VkMat& m, const ncnn::Option& opt) {
     int _dims = m.dims;
@@ -4585,6 +4594,10 @@ void OutVkImageMat::release(const RealCUGAN* cugan)
     width = height = depth = 0;
 }
 
+#ifdef USE_D3D11
+void OutVkImageMat::create_handles(const RealCUGAN*) {}
+void OutVkImageMat::release_handles() {}
+#else
 void OutVkImageMat::create_handles(const RealCUGAN* cugan)
 {
     release_handles();
@@ -4692,3 +4705,4 @@ void OutVkImageMat::release_handles()
         memory = 0;
     }
 }
+#endif

@@ -1202,25 +1202,22 @@ static int presentation_render_reset(int sc_child, int bg) {
   } \
 } while (0)
 
-#define print_luid(luid, name, ...) ({ \
-  fprintf(stderr, name "%02x-%02x-%02x-%02x-%02x-%02x-%02x-%02x\n", \
-    ##__VA_ARGS__, \
-    (int)*(uint8_t *)&(luid)[0], (int)*(uint8_t *)&(luid)[1], (int)*(uint8_t *)&(luid)[2], (int)*(uint8_t *)&(luid)[3], (int)*(uint8_t *)&(luid)[4], (int)*(uint8_t *)&(luid)[5], (int)*(uint8_t *)&(luid)[6], (int)*(uint8_t *)&(luid)[7] \
-  ); \
-})
-
 static int composition_swapchain_device_init(void) {
   HRESULT hr;
 
-  hr = CreateDXGIFactory1(&IID_IDXGIFactory2, (void **)&dxgi_factory);
-  if (hr) {
-    err_log("CreateDXGIFactory1 failed: %d\n", (int)hr);
-    return hr;
+  if (!dxgi_factory) {
+    hr = CreateDXGIFactory1(&IID_IDXGIFactory2, (void **)&dxgi_factory);
+    if (hr) {
+      err_log("CreateDXGIFactory1 failed: %d\n", (int)hr);
+      return hr;
+    }
   }
 
+  CHECK_AND_RELEASE(dxgi_adapter);
   for (int i = 0;; ++i) {
     hr = IDXGIFactory2_EnumAdapters1(dxgi_factory, i, &dxgi_adapter);
     if (hr == DXGI_ERROR_NOT_FOUND) {
+      err_log("EnumAdapters1 exhausted\n");
       dxgi_adapter = NULL;
       break;
     } else if (hr) {
@@ -1234,7 +1231,10 @@ static int composition_swapchain_device_init(void) {
       return hr;
     }
 
-    print_luid((const char *)&adapter_desc.AdapterLuid, "Adapter %d LUID: ", i);
+    bool is_hardware = adapter_desc.Flags == DXGI_ADAPTER_FLAG_NONE;
+    if (is_hardware)
+      break;
+
     CHECK_AND_RELEASE(dxgi_adapter);
   }
 
@@ -1242,8 +1242,8 @@ static int composition_swapchain_device_init(void) {
     D3D_FEATURE_LEVEL featureLevelSupported;
 
     hr = D3D11CreateDevice(
-      NULL,
-      D3D_DRIVER_TYPE_HARDWARE,
+      (IDXGIAdapter *)dxgi_adapter,
+      dxgi_adapter ? 0 : D3D_DRIVER_TYPE_HARDWARE,
       NULL,
       D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS,
       NULL,
@@ -1706,9 +1706,6 @@ static void composition_swapchain_device_close(void) {
 
     CHECK_AND_RELEASE(d3d11device[i]);
   }
-  CHECK_AND_RELEASE(dxgi_adapter);
-
-  CHECK_AND_RELEASE(dxgi_factory);
 }
 
 static void composition_swapchain_close(void) {
@@ -1748,9 +1745,13 @@ static void composition_swapchain_device_restart(void) {
 }
 #endif
 
-#if !defined(USE_SDL_RENDERER) && !defined(USE_D3D11)
+#ifndef USE_SDL_RENDERER
 #define screen_upscale_factor REALCUGAN_SCALE
+#ifdef USE_D3D11
+#define sr_create() realcugan_create(d3d11device, d3d11device_context, dxgi_adapter)
+#else
 #define sr_create realcugan_create
+#endif
 #define sr_run realcugan_run
 #define sr_next realcugan_next
 #define sr_destroy realcugan_destroy
@@ -6873,8 +6874,8 @@ start_use_c_sc:
       D3D_FEATURE_LEVEL featureLevelSupported;
       HRESULT hr;
       hr = D3D11CreateDevice(
-        NULL,
-        D3D_DRIVER_TYPE_HARDWARE,
+        (IDXGIAdapter *)dxgi_adapter,
+        dxgi_adapter ? 0 : D3D_DRIVER_TYPE_HARDWARE,
         NULL,
         D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS,
         NULL,
@@ -7429,6 +7430,8 @@ start_use_c_sc:
       CHECK_AND_RELEASE(d3d11device[i]);
     }
   }
+  CHECK_AND_RELEASE(dxgi_adapter);
+  CHECK_AND_RELEASE(dxgi_factory);
 #endif
   SDL_DestroyWindow(win_ogl[SCREEN_BOT]);
   SDL_DestroyWindow(win_ogl[SCREEN_TOP]);

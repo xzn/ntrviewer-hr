@@ -7,7 +7,7 @@ CFLAGS += -mssse3 -mavx2
 CFLAGS += -flarge-source-files
 EMBED_JPEG_TURBO := 1
 USE_SDL_RENDERER := 0
-USE_D3D11 := 0
+USE_D3D11 := 1
 USE_COMPOSITION_SWAPCHAIN := 1
 USE_OGL_ES := 0
 USE_ANGLE := 0
@@ -35,7 +35,7 @@ ifeq ($(USE_SDL_RENDERER),1)
 GL_OBJ :=
 else
 ifeq ($(USE_D3D11),1)
-GL_OBJ :=
+GL_OBJ := realcugan.o realcugan_lib.o
 else
 GL_OBJ := realcugan.o realcugan_lib.o libGLAD.o fsr/fsr_main.o fsr/image_utils.o libNKSDL.o
 endif

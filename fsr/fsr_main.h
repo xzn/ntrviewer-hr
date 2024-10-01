@@ -1,3 +1,6 @@
+#ifndef FSR_MAIN_H
+#define FSR_MAIN_H
+
 #ifndef USE_D3D11
 #include <glad/glad.h>
 #endif
@@ -31,4 +34,6 @@ GLuint fsr_main(int tb, int top_bot, GLuint inputTexture, uint32_t in_w, uint32_
 
 #ifdef __cplusplus
 }
+#endif
+
 #endif
