@@ -5025,15 +5025,18 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
       return 0;
 
     case WM_SIZE:
+      if (i == SCREEN_TOP) {
+        rp_lock_wait(comp_lock);
+      }
+
       int width = NK_MAX(LOWORD(lparam), 1);
       int height = NK_MAX(HIWORD(lparam), 1);
       win_width[i] = width;
       win_height[i] = height;
       win_w[i] = win_width[i] * USER_DEFAULT_SCREEN_DPI / win_dpi[i];
       win_h[i] = win_height[i] * USER_DEFAULT_SCREEN_DPI / win_dpi[i];
-      if (i == SCREEN_TOP) {
-        rp_lock_wait(comp_lock);
 
+      if (i == SCREEN_TOP) {
         CHECK_AND_RELEASE(d3d_ui_srv);
         CHECK_AND_RELEASE(d3d_ui_rtv);
         CHECK_AND_RELEASE(d3d_ui_tex);
