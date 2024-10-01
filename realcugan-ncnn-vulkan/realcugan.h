@@ -78,7 +78,11 @@ public:
 class RealCUGAN
 {
 public:
+#ifdef USE_D3D11
+    RealCUGAN(int gpuid, ID3D11Device **dev, ID3D11DeviceContext **ctx, bool tta_mode = false, int num_threads = 1);
+#else
     RealCUGAN(int gpuid, bool tta_mode = false, int num_threads = 1);
+#endif
     ~RealCUGAN();
 
 #if _WIN32

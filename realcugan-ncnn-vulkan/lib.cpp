@@ -31,6 +31,12 @@ static int realcugan_work_indices[SCREEN_COUNT];
 static std::vector<std::unique_ptr<std::mutex>> realcugan_locks;
 static bool realcugan_support_ext_mem;
 
+#ifdef USE_D3D11
+// Non-owning
+ID3D11Device **d3d_device;
+ID3D11DeviceContext **d3d_context;
+#endif
+
 static int realcugan_size()
 {
     return realcugan_support_ext_mem ? sizeof(realcugan) / sizeof(realcugan[0]) : 1;
@@ -180,10 +186,7 @@ int realcugan_create()
 
     int use_gpu_count = ncnn::get_gpu_count();
 
-    if (tilesize.empty())
-    {
-        tilesize.resize(use_gpu_count, 0);
-    }
+    tilesize.resize(use_gpu_count, 0);
 
 #ifdef USE_D3D11
     DXGI_ADAPTER_DESC1 adapter_desc;
@@ -355,6 +358,8 @@ int realcugan_create()
     if (realcugan_support_ext_mem) {
 #ifdef USE_D3D11
         fprintf(stderr, "using D3D/Vk interop\n");
+        d3d_device = device;
+        d3d_context = context;
 #else
         fprintf(stderr, "using OGL/Vk interop\n");
 #endif
@@ -365,7 +370,11 @@ int realcugan_create()
             delete realcugan[j];
         }
 
+#ifdef USE_D3D11
+        realcugan[j] = new RealCUGAN(i, d3d_device, d3d_context, tta_mode);
+#else
         realcugan[j] = new RealCUGAN(i, tta_mode);
+#endif
         realcugan[j]->load(paramfullpath, modelfullpath);
         realcugan[j]->noise = noise;
         realcugan[j]->scale = scale;
@@ -400,7 +409,10 @@ GLuint realcugan_run(int tb, int top_bot, int index, int w, int h, int c, const 
     }
 
     realcugan_locks[locks_index]->lock();
-    if (realcugan[locks_index]->process(tb, inimage, outimage) != 0) {
+    if (
+        realcugan[locks_index]->process(tb, inimage, outimage)
+        != 0
+    ) {
         realcugan_locks[locks_index]->unlock();
 
         *success = false;
@@ -410,7 +422,10 @@ GLuint realcugan_run(int tb, int top_bot, int index, int w, int h, int c, const 
 
 
 #ifdef USE_D3D11
-    return NULL;
+    OutVkImageMat *out = realcugan[locks_index]->out_gpu_tex[tb];
+    *dim3 = out->depth > 1;
+    *success = true;
+    return out->d3d_resource;
 #else
     OutVkImageMat *out = realcugan[locks_index]->out_gpu_tex[tb];
     GLuint tex = out->gl_texture;
@@ -464,4 +479,6 @@ extern "C" void realcugan_destroy()
     }
 
     ncnn::destroy_gpu_instance();
+    d3d_context = NULL;
+    d3d_device = NULL;
 }

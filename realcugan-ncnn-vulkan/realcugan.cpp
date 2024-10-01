@@ -66,7 +66,11 @@ public:
     std::map<std::string, ncnn::Mat> cpu_cache;
 };
 
+#ifdef USE_D3D11
+RealCUGAN::RealCUGAN(int gpuid, ID3D11Device **dev, ID3D11DeviceContext **ctx, bool _tta_mode, int num_threads)
+#else
 RealCUGAN::RealCUGAN(int gpuid, bool _tta_mode, int num_threads)
+#endif
 {
     vkdev = gpuid == -1 ? 0 : ncnn::get_gpu_device(gpuid);
 
@@ -4297,6 +4301,9 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
             return 0;
         }
     }
+
+#ifdef USE_D3D11
+#endif
 
     bool found = false;
     if (vkGetPhysicalDeviceExternalBufferPropertiesKHR) {
