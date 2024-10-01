@@ -92,6 +92,8 @@ static struct nk_color nk_window_bgcolor = { 28, 48, 62, 255 };
 #define GL_INT_FORMAT GL_RGBA8
 #define TJ_FORMAT TJPF_RGBA
 #define JCS_FORMAT JCS_EXT_RGBA
+#define D3D_FORMAT DXGI_FORMAT_R8G8B8A8_UNORM
+#define SDL_FORMAT SDL_PIXELFORMAT_RGBA32
 
 static SDL_Window *win[SCREEN_COUNT];
 static SDL_Window *win_ogl[SCREEN_COUNT];
@@ -287,6 +289,8 @@ static ID3D11PixelShader *d3d_ps[SCREEN_COUNT];
 static ID3D11SamplerState *d3d_ss_point[SCREEN_COUNT];
 static ID3D11SamplerState *d3d_ss_linear[SCREEN_COUNT];
 static ID3D11BlendState *d3d_ui_bs[SCREEN_COUNT];
+static ID3D11Buffer *d3d_child_vb[SCREEN_COUNT][SCREEN_COUNT];
+
 static const char *d3d_vs_src =
   "struct VSInput\n"
   "{\n"
@@ -412,6 +416,7 @@ static void d3d11_trigger_tdr(void) {
 #ifdef USE_D3D11
 static ID3D11Texture2D *d3d_ui_tex;
 static ID3D11RenderTargetView *d3d_ui_rtv;
+struct presentation_buffer_t *d3d_pres_buf[SCREEN_COUNT]; // Non-owning
 static ID3D11ShaderResourceView *d3d_ui_srv;
 #else
 static HANDLE gl_d3ddevice[SCREEN_COUNT];
@@ -717,6 +722,47 @@ static int presentation_buffer_get(struct presentation_buffer_t *bufs, int tb, i
 }
 
 #ifdef USE_D3D11
+static int presentation_buffer_present(struct presentation_buffer_t *buf, int tb, int top_bot, int sc_child, int width, int height) {
+  HRESULT hr;
+
+  hr = IPresentationSurface_SetBuffer(
+    sc_child ? pres_surf_child[top_bot] : presentation_surface[tb],
+    buf->buf
+  );
+  if (hr) {
+    err_log("SetBuffer failed: %d\n", (int)hr);
+    return -1;
+  }
+
+  RECT *rect;
+  rect = sc_child ? &src_rect_child[top_bot] : &src_rect[tb];
+  if (rect->right != width || rect->bottom != height) {
+    rect->right = width;
+    rect->bottom = height;
+    hr = IPresentationSurface_SetSourceRect(
+      sc_child ? pres_surf_child[top_bot] : presentation_surface[tb],
+      rect
+    );
+    if (hr) {
+      err_log("SetSourceRect failed: %d\n", (int)hr);
+      return hr;
+    }
+  }
+
+  hr = IPresentationManager_Present(sc_child ? pres_man_child[top_bot] : presentation_manager[tb]);
+  if (hr) {
+    err_log("Present %d %d failed: %d\n", sc_child, sc_child ? top_bot : tb, (int)hr);
+    if (hr == DXGI_ERROR_DEVICE_REMOVED) {
+      hr = ID3D11Device_GetDeviceRemovedReason(d3d11device[tb]);
+      err_log("GetDeviceRemovedReason: %d\n", (int)hr);
+    }
+    compositing = 0;
+    return -1;
+  }
+
+  return 0;
+}
+
 static int ui_buffer_present(struct presentation_buffer_t *buf, int width, int height) {
   int j = SURFACE_UTIL_UI;
   int tb = SCREEN_TOP;
@@ -3615,7 +3661,10 @@ GLint gl_fbo_sampler_loc[SCREEN_COUNT];
 
 typedef struct _FrameBufferContext
 {
-#ifndef USE_D3D11
+#ifdef USE_D3D11
+  ID3D11Texture2D *d3d_tex[SCREEN_COUNT];
+  ID3D11ShaderResourceView *d3d_srv[SCREEN_COUNT];
+#else
   GLuint gl_tex_id[SCREEN_COUNT];
   GLuint gl_tex_upscaled[SCREEN_COUNT];
   GLuint gl_fbo_upscaled[SCREEN_COUNT];
@@ -3655,6 +3704,112 @@ struct vao_vertice_t {
   GLfloat tex_coord[2];
 };
 #endif
+
+static void get_draw_screen_dims(
+  int top_bot, int tb, int sc_child, view_mode_t vm, int width, int height,
+  double *out_ctx_left_f,
+  double *out_ctx_top_f,
+  double *out_ctx_right_f,
+  double *out_ctx_bot_f,
+  int *out_ctx_width,
+  int *out_ctx_height,
+  int *out_win_w,
+  int *out_win_h
+) {
+  double ctx_left_f;
+  double ctx_top_f;
+  double ctx_right_f;
+  double ctx_bot_f;
+  int ctx_width;
+  int ctx_height;
+  int win_w;
+  int win_h;
+  if (sc_child) {
+    win_w = ctx_width = prev_ctx_width[top_bot];
+    win_h = ctx_height = prev_ctx_height[top_bot];
+    ctx_left_f = -1.0f;
+    ctx_top_f = 1.0f;
+    ctx_right_f = 1.0f;
+    ctx_bot_f = -1.0f;
+  } else {
+    // int tb;
+    if (vm == VIEW_MODE_TOP_BOT) {
+      // tb = SCREEN_TOP;
+      win_w = win_width[tb];
+      win_h = win_height[tb];
+
+      ctx_height = (double)win_height[tb] / 2;
+      int ctx_left;
+      int ctx_top;
+      if ((double)win_width[tb] / width * height > ctx_height)
+      {
+        ctx_width = (double)ctx_height / height * width;
+        ctx_left = (double)(win_width[tb] - ctx_width) / 2;
+        ctx_top = 0;
+      }
+      else
+      {
+        ctx_height = (double)win_width[tb] / width * height;
+        ctx_left = 0;
+        ctx_width = win_width[tb];
+        ctx_top = (double)win_height[tb] / 2 - ctx_height;
+      }
+
+      if (top_bot == SCREEN_TOP)
+      {
+        ctx_left_f = (double)ctx_left / win_width[tb] * 2 - 1;
+        ctx_top_f = 1 - (double)ctx_top / win_height[tb] * 2;
+        ctx_right_f = -ctx_left_f;
+        ctx_bot_f = 0;
+      }
+      else
+      {
+        ctx_left_f = (double)ctx_left / win_width[tb] * 2 - 1;
+        ctx_top_f = 0;
+        ctx_right_f = -ctx_left_f;
+        ctx_bot_f = -1 + (double)ctx_top / win_height[tb] * 2;
+      }
+    } else {
+      // tb = top_bot;
+      // if (vm == VIEW_MODE_BOT)
+        // tb = SCREEN_TOP;
+
+      win_w = win_width[tb];
+      win_h = win_height[tb];
+
+      ctx_height = (double)win_height[tb];
+      int ctx_left;
+      int ctx_top;
+      if ((double)win_width[tb] / width * height > ctx_height)
+      {
+        ctx_width = (double)ctx_height / height * width;
+        ctx_left = (double)(win_width[tb] - ctx_width) / 2;
+        ctx_top = 0;
+      }
+      else
+      {
+        ctx_height = (double)win_width[tb] / width * height;
+        ctx_left = 0;
+        ctx_width = win_width[tb];
+        ctx_top = ((double)win_height[tb] - ctx_height) / 2;
+      }
+
+      ctx_left_f = (double)ctx_left / win_width[tb] * 2 - 1;
+      ctx_top_f = 1 - (double)ctx_top / win_height[tb] * 2;
+      ctx_right_f = -ctx_left_f;
+      ctx_bot_f = -ctx_top_f;
+    }
+  }
+
+  *out_ctx_left_f = ctx_left_f;
+  *out_ctx_top_f = ctx_top_f;
+  *out_ctx_right_f = ctx_right_f;
+  *out_ctx_bot_f = ctx_bot_f;
+  *out_ctx_width = ctx_width;
+  *out_ctx_height = ctx_height;
+  *out_win_w = win_w;
+  *out_win_h = win_h;
+}
 
 #ifdef USE_SDL_RENDERER
 static void do_hr_draw_screen(
@@ -3735,8 +3890,76 @@ static void do_hr_draw_screen(
   SDL_RenderCopyEx(sdlRenderer[tb], sdlTexture[tb][top_bot], NULL, &rect, -90, &center, SDL_FLIP_NONE);
 }
 #elif defined(USE_D3D11)
-static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot, int tb, int index, view_mode_t vm, int sc_child)
+static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot, int tb, __attribute__ ((unused)) int index, view_mode_t vm, int sc_child)
 {
+  double ctx_left_f;
+  double ctx_top_f;
+  double ctx_right_f;
+  double ctx_bot_f;
+  int ctx_width;
+  int ctx_height;
+  int win_w;
+  int win_h;
+  get_draw_screen_dims(
+    top_bot, tb, sc_child, vm, width, height,
+    &ctx_left_f, &ctx_top_f, &ctx_right_f, &ctx_bot_f, &ctx_width, &ctx_height, &win_w, &win_h
+  );
+
+  struct d3d_vertex_t vertices[] = {
+    { { ctx_left_f, ctx_bot_f }, { 0.0f, 0.0f } },
+    { { ctx_right_f, ctx_bot_f }, { 0.0f, 1.0f } },
+    { { ctx_left_f, ctx_top_f }, { 1.0f, 0.0f } },
+    { { ctx_right_f, ctx_top_f }, { 1.0f, 1.0f } },
+  };
+
+  HRESULT hr;
+
+  if (width != (top_bot == 0 ? 400 : 320) || height != 240) {
+    err_log("Invalid size\n");
+    return;
+  }
+
+  if (data) {
+    D3D11_MAPPED_SUBRESOURCE tex_mapped = {};
+    hr = ID3D11DeviceContext_Map(d3d11device_context[tb], (ID3D11Resource *)ctx->d3d_tex[tb], 0, D3D11_MAP_WRITE_DISCARD, 0, &tex_mapped);
+    if (hr) {
+      err_log("Map failed: %d", (int)hr);
+      return;
+    }
+    for (int i = 0; i < width; ++i) {
+      memcpy(tex_mapped.pData + i * tex_mapped.RowPitch, data + i * height * 4, height * 4);
+    }
+
+    ID3D11DeviceContext_Unmap(d3d11device_context[tb], (ID3D11Resource *)ctx->d3d_tex[tb], 0);
+  }
+
+  {
+    D3D11_MAPPED_SUBRESOURCE tex_mapped = {};
+    hr = ID3D11DeviceContext_Map(d3d11device_context[tb], (ID3D11Resource *)d3d_child_vb[tb][top_bot], 0, D3D11_MAP_WRITE_DISCARD, 0, &tex_mapped);
+    if (hr) {
+      err_log("Map failed: %d", (int)hr);
+      return;
+    }
+    memcpy(tex_mapped.pData, vertices, sizeof(struct d3d_vertex_t) * 4);
+
+    ID3D11DeviceContext_Unmap(d3d11device_context[tb], (ID3D11Resource *)d3d_child_vb[tb][top_bot], 0);
+  }
+
+  ID3D11DeviceContext_IASetPrimitiveTopology(d3d11device_context[tb], D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+  unsigned vb_stride = sizeof(struct d3d_vertex_t);
+  unsigned vb_offset = 0;
+  ID3D11DeviceContext_IASetVertexBuffers(d3d11device_context[tb], 0, 1, &d3d_child_vb[tb][top_bot], &vb_stride, &vb_offset);
+  ID3D11DeviceContext_IASetIndexBuffer(d3d11device_context[tb], d3d_ib[tb], DXGI_FORMAT_R32_UINT, 0);
+  ID3D11DeviceContext_IASetInputLayout(d3d11device_context[tb], d3d_il[tb]);
+  ID3D11DeviceContext_OMSetBlendState(d3d11device_context[tb], d3d_ui_bs[tb], NULL, 0xffffffff);
+  ID3D11DeviceContext_VSSetShader(d3d11device_context[tb], d3d_vs[tb], NULL, 0);
+  ID3D11DeviceContext_PSSetShader(d3d11device_context[tb], d3d_ps[tb], NULL, 0);
+  ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[tb], 0, 1, &ctx->d3d_srv[tb]);
+  ID3D11DeviceContext_PSSetSamplers(d3d11device_context[tb], 0, 1, &d3d_ss_linear[tb]);
+  ID3D11DeviceContext_RSSetState(d3d11device_context[tb], NULL);
+  ID3D11DeviceContext_DrawIndexed(d3d11device_context[tb], 6, 0, 0);
+  ID3D11ShaderResourceView *ptr_null = NULL;
+  ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[tb], 0, 1, &ptr_null);
 }
 #else
 static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot, int tb, int index, view_mode_t vm, int sc_child)
@@ -3749,82 +3972,12 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
   int ctx_height;
   int win_w;
   int win_h;
+  get_draw_screen_dims(
+    top_bot, tb, sc_child, vm, width, height,
+    &ctx_left_f, &ctx_top_f, &ctx_right_f, &ctx_bot_f, &ctx_width, &ctx_height, &win_w, &win_h
+  );
   if (sc_child) {
-    win_w = ctx_width = prev_ctx_width[top_bot];
-    win_h = ctx_height = prev_ctx_height[top_bot];
-    ctx_left_f = -1.0f;
-    ctx_top_f = 1.0f;
-    ctx_right_f = 1.0f;
-    ctx_bot_f = -1.0f;
     tb = top_bot;
-  } else {
-    // int tb;
-    if (vm == VIEW_MODE_TOP_BOT) {
-      // tb = SCREEN_TOP;
-      win_w = win_width[tb];
-      win_h = win_height[tb];
-
-      ctx_height = (double)win_height[tb] / 2;
-      int ctx_left;
-      int ctx_top;
-      if ((double)win_width[tb] / width * height > ctx_height)
-      {
-        ctx_width = (double)ctx_height / height * width;
-        ctx_left = (double)(win_width[tb] - ctx_width) / 2;
-        ctx_top = 0;
-      }
-      else
-      {
-        ctx_height = (double)win_width[tb] / width * height;
-        ctx_left = 0;
-        ctx_width = win_width[tb];
-        ctx_top = (double)win_height[tb] / 2 - ctx_height;
-      }
-
-      if (top_bot == SCREEN_TOP)
-      {
-        ctx_left_f = (double)ctx_left / win_width[tb] * 2 - 1;
-        ctx_top_f = 1 - (double)ctx_top / win_height[tb] * 2;
-        ctx_right_f = -ctx_left_f;
-        ctx_bot_f = 0;
-      }
-      else
-      {
-        ctx_left_f = (double)ctx_left / win_width[tb] * 2 - 1;
-        ctx_top_f = 0;
-        ctx_right_f = -ctx_left_f;
-        ctx_bot_f = -1 + (double)ctx_top / win_height[tb] * 2;
-      }
-    } else {
-      // tb = top_bot;
-      // if (vm == VIEW_MODE_BOT)
-        // tb = SCREEN_TOP;
-
-      win_w = win_width[tb];
-      win_h = win_height[tb];
-
-      ctx_height = (double)win_height[tb];
-      int ctx_left;
-      int ctx_top;
-      if ((double)win_width[tb] / width * height > ctx_height)
-      {
-        ctx_width = (double)ctx_height / height * width;
-        ctx_left = (double)(win_width[tb] - ctx_width) / 2;
-        ctx_top = 0;
-      }
-      else
-      {
-        ctx_height = (double)win_width[tb] / width * height;
-        ctx_left = 0;
-        ctx_width = win_width[tb];
-        ctx_top = ((double)win_height[tb] - ctx_height) / 2;
-      }
-
-      ctx_left_f = (double)ctx_left / win_width[tb] * 2 - 1;
-      ctx_top_f = 1 - (double)ctx_top / win_height[tb] * 2;
-      ctx_right_f = -ctx_left_f;
-      ctx_bot_f = -ctx_top_f;
-    }
   }
   GLfloat vVertices_pos[4][3] = { 0 };
   vVertices_pos[0][0] = ctx_left_f;
@@ -4319,6 +4472,40 @@ static bool decode_cond_wait(event_t *event)
   return true;
 }
 
+static int update_hide_ui(void) {
+  int i = SCREEN_TOP;
+  if (prev_hide_windows != hide_windows) {
+    HRESULT hr;
+    int j = SURFACE_UTIL_UI;
+    if (hide_windows) {
+      hr = dcomp_visual[i]->lpVtbl->RemoveVisual(dcomp_visual[i], (IDCompositionVisual *)dcomp_vis_util[j]);
+      if (hr) {
+        err_log("RemoveVisual failed: %d\n", (int)hr);
+        return hr;
+      }
+    } else {
+      hr = dcomp_visual[i]->lpVtbl->AddVisual(dcomp_visual[i], (IDCompositionVisual *)dcomp_vis_util[j], j == SURFACE_UTIL_BG ? TRUE : FALSE, NULL);
+      if (hr) {
+        err_log("AddVisual failed: %d\n", (int)hr);
+        return hr;
+      }
+    }
+    hr = dcomp_vis_util[j]->lpVtbl->SetContent(dcomp_vis_util[j], hide_windows ? NULL : dcomp_surf_util[j]);
+    if (hr) {
+      err_log("SetContent failed: %d\n", (int)hr);
+      return hr;
+    }
+    hr = dcomp_device[i]->lpVtbl->Commit(dcomp_device[i]);
+    if (hr) {
+      err_log("Commit failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    prev_hide_windows = hide_windows;
+  }
+  return 0;
+}
+
 struct nk_vec2 font_scale;
 
 static void
@@ -4341,7 +4528,7 @@ ThreadLoop(int i)
   }
 #endif
 
-  int sc_tb_success = 0;
+  __attribute__ ((unused)) int sc_tb_success = 0;
   int sc_tb = i;
   int sc_top_bot = i;
   int sc_child = 0;
@@ -4536,12 +4723,20 @@ ThreadLoop(int i)
           err_log("Commit failed: %d\n", (int)hr);
           goto sc_tb_fail;
         }
-#endif
         prev_win_width[sc_top_bot] = win_width[sc_tb];
         prev_win_height[sc_top_bot] = win_height[sc_tb];
+#endif
       }
     }
-#ifndef USE_D3D11
+#ifdef USE_D3D11
+    struct presentation_buffer_t *bufs = presentation_buffers[sc_tb][sc_top_bot];
+    int index_sc;
+    if (presentation_buffer_get(bufs, sc_child ? sc_top_bot : sc_tb, sc_child, COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN, ctx_width, ctx_height, &index_sc) != 0) {
+      goto sc_tb_fail;
+    }
+    d3d_pres_buf[sc_top_bot] = &bufs[index_sc];
+    ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[sc_tb], 1, &d3d_pres_buf[sc_top_bot]->rtv, NULL);
+#else
     struct render_buffer_t *sc_render_buf = &render_buffers[sc_tb][sc_top_bot];
     if (render_buffer_get(sc_render_buf, sc_tb, ctx_width, ctx_height, &tex_sc, &handle_sc) != 0) {
       compositing = 0;
@@ -4559,7 +4754,13 @@ ThreadLoop(int i)
   }
 #endif
 
-#ifndef USE_D3D11
+#ifdef USE_D3D11
+  D3D11_VIEWPORT vp = { .Width = ctx_width, .Height = ctx_height };
+  ID3D11DeviceContext_RSSetViewports(d3d11device_context[sc_tb], 1, &vp);
+  if (!sc_child) {
+    ID3D11DeviceContext_ClearRenderTargetView(d3d11device_context[sc_tb], d3d_pres_buf[sc_top_bot]->rtv, bg);
+  }
+#else
   glViewport(0, 0, ctx_width, ctx_height);
   if (!sc_child) {
     glClearColor(bg[0], bg[1], bg[2], bg[3]);
@@ -4575,9 +4776,13 @@ ThreadLoop(int i)
     hr_draw_screen(&buffer_ctx[SCREEN_BOT], 320, 240, SCREEN_BOT, i, vm, sc_child);
   else {
     if (!hr_draw_screen(&buffer_ctx[sc_top_bot], width, height, sc_top_bot, sc_tb, vm, sc_child)) {
-#if !defined(USE_SDL_RENDERER) && !defined(USE_D3D11)
+#ifndef USE_SDL_RENDERER
+#ifdef USE_D3D11
+      ID3D11DeviceContext_ClearRenderTargetView(d3d11device_context[sc_tb], d3d_pres_buf[sc_top_bot]->rtv, bg);
+#else
       glClearColor(bg[0], bg[1], bg[2], bg[3]);
       glClear(GL_COLOR_BUFFER_BIT);
+#endif
 #endif
     }
   }
@@ -4655,8 +4860,8 @@ ThreadLoop(int i)
       struct presentation_buffer_t *bufs = ui_pres_bufs;
       int j = SURFACE_UTIL_UI;
       int index_sc;
-      int width = NK_MAX(prev_win_width[sc_top_bot], 1);
-      int height = NK_MAX(prev_win_height[sc_top_bot], 1);
+      int width = NK_MAX(win_width[sc_top_bot], 1);
+      int height = NK_MAX(win_height[sc_top_bot], 1);
       if (presentation_buffer_get(bufs, j, -1, COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN, width, height, &index_sc) != 0) {
         goto sc_tb_fail;
       }
@@ -4679,7 +4884,7 @@ ThreadLoop(int i)
       ID3D11DeviceContext_PSSetShader(d3d11device_context[i], d3d_ps[i], NULL, 0);
       ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[i], 0, 1, &d3d_ui_srv);
       ID3D11DeviceContext_PSSetSamplers(d3d11device_context[i], 0, 1, &d3d_ss_point[i]);
-      ID3D11DeviceContext_RSSetState(d3d11device_context[i], NULL);
+
       D3D11_VIEWPORT vp = { .Width = width, .Height = height };
       ID3D11DeviceContext_RSSetViewports(d3d11device_context[i], 1, &vp);
       ID3D11DeviceContext_DrawIndexed(d3d11device_context[i], 6, 0, 0);
@@ -4687,11 +4892,18 @@ ThreadLoop(int i)
       ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 0, NULL, NULL);
       ID3D11ShaderResourceView *ptr_null = NULL;
       ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[i], 0, 1, &ptr_null);
-      if (ui_buffer_present(buf, width, height)) {
+
+      if (update_hide_ui()) {
+        goto sc_tb_fail;
+      }
+
+      if (!hide_windows && ui_buffer_present(buf, width, height)) {
         goto sc_tb_fail;
       }
     }
-    // TODO present
+    if (presentation_buffer_present(d3d_pres_buf[sc_top_bot], sc_tb, sc_top_bot, sc_child, ctx_width, ctx_height)) {
+      goto sc_tb_fail;
+    }
   } else {
     if (i == SCREEN_TOP) {
       nk_d3d11_render(d3d11device_context[i], NK_ANTI_ALIASING_ON, (float)USER_DEFAULT_SCREEN_DPI / win_dpi[i]);
@@ -4750,34 +4962,8 @@ ThreadLoop(int i)
         err_log("wglDXUnlockObjectsNV failed: %d\n", (int)GetLastError());
       }
 
-      if (prev_hide_windows != hide_windows) {
-        HRESULT hr;
-        int j = SURFACE_UTIL_UI;
-        if (hide_windows) {
-          hr = dcomp_visual[i]->lpVtbl->RemoveVisual(dcomp_visual[i], (IDCompositionVisual *)dcomp_vis_util[j]);
-          if (hr) {
-            err_log("RemoveVisual failed: %d\n", (int)hr);
-            goto sc_tb_fail;
-          }
-        } else {
-          hr = dcomp_visual[i]->lpVtbl->AddVisual(dcomp_visual[i], (IDCompositionVisual *)dcomp_vis_util[j], j == SURFACE_UTIL_BG ? TRUE : FALSE, NULL);
-          if (hr) {
-            err_log("AddVisual failed: %d\n", (int)hr);
-            goto sc_tb_fail;
-          }
-        }
-        hr = dcomp_vis_util[j]->lpVtbl->SetContent(dcomp_vis_util[j], hide_windows ? NULL : dcomp_surf_util[j]);
-        if (hr) {
-          err_log("SetContent failed: %d\n", (int)hr);
-          goto sc_tb_fail;
-        }
-        hr = dcomp_device[i]->lpVtbl->Commit(dcomp_device[i]);
-        if (hr) {
-          err_log("Commit failed: %d\n", (int)hr);
-          goto sc_tb_fail;
-        }
-
-        prev_hide_windows = hide_windows;
+      if (update_hide_ui()) {
+        goto sc_tb_fail;
       }
 
       if (!hide_windows && ui_buffer_present(COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN)) {
@@ -4977,7 +5163,7 @@ MainLoop(void *loopArg)
   }
 #endif
 
-  struct nk_context *ctx = (struct nk_context *)loopArg;
+  __attribute__ ((unused)) struct nk_context *ctx = (struct nk_context *)loopArg;
   /* Input */
   SDL_Event evt;
   while (SDL_PollEvent(&evt))
@@ -6456,7 +6642,7 @@ int main(int argc, char *argv[])
   hwnd[SCREEN_TOP] = wmInfo[SCREEN_TOP].info.win.window;
   hwnd[SCREEN_BOT] = wmInfo[SCREEN_BOT].info.win.window;
 #ifdef USE_COMPOSITION_SWAPCHAIN
-  HDC hdc[SCREEN_COUNT];
+  __attribute__ ((unused)) HDC hdc[SCREEN_COUNT];
   hdc[SCREEN_TOP] = wmInfo[SCREEN_TOP].info.win.hdc;
   hdc[SCREEN_BOT] = wmInfo[SCREEN_BOT].info.win.hdc;
 #endif
@@ -6481,7 +6667,7 @@ int main(int argc, char *argv[])
   SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
   for (int j = 0; j < SCREEN_COUNT; ++j) {
     for (int i = 0; i < SCREEN_COUNT; ++i) {
-      sdlTexture[j][i] = SDL_CreateTexture(sdlRenderer[j], SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, 240, i == SCREEN_TOP ? 400 : 320);
+      sdlTexture[j][i] = SDL_CreateTexture(sdlRenderer[j], SDL_FORMAT, SDL_TEXTUREACCESS_STREAMING, 240, i == SCREEN_TOP ? 400 : 320);
       if (!sdlTexture[j][i]) {
         err_log("SDL_CreateTexture: %s\n", SDL_GetError());
         return -1;
@@ -6820,6 +7006,44 @@ start_use_c_sc:
       err_log("CreateSamplerState failed: %d\n", (int)hr);
       return -1;
     }
+
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      D3D11_BUFFER_DESC child_vb_desc = {};
+      child_vb_desc.ByteWidth      = sizeof(struct d3d_vertex_t) * 4;
+      child_vb_desc.Usage          = D3D11_USAGE_DYNAMIC;
+      child_vb_desc.BindFlags      = D3D11_BIND_VERTEX_BUFFER;
+      child_vb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+      hr = ID3D11Device_CreateBuffer(d3d11device[j], &child_vb_desc, NULL, &d3d_child_vb[j][i]);
+      if (hr) {
+        err_log("CreateBuffer failed: %d\n", (int)hr);
+        return -1;
+      }
+
+      D3D11_TEXTURE2D_DESC tex_desc = {};
+      tex_desc.Width = 240;
+      tex_desc.Height = i == SCREEN_TOP ? 400 : 320;
+      tex_desc.MipLevels = 1;
+      tex_desc.ArraySize = 1;
+      tex_desc.Format = D3D_FORMAT;
+      tex_desc.SampleDesc.Count = 1;
+      tex_desc.SampleDesc.Quality = 0;
+      tex_desc.Usage = D3D11_USAGE_DYNAMIC;
+      tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+      tex_desc.MiscFlags = 0;
+      tex_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+      hr = ID3D11Device_CreateTexture2D(d3d11device[j], &tex_desc, NULL, &buffer_ctx[i].d3d_tex[j]);
+      if (hr) {
+        err_log("CreateTexture2D failed: %d\n", (int)hr);
+        return -1;
+      }
+
+      hr = ID3D11Device_CreateShaderResourceView(d3d11device[j], (ID3D11Resource *)buffer_ctx[i].d3d_tex[j], NULL, &buffer_ctx[i].d3d_srv[j]);
+      if (hr) {
+        err_log("CreateShaderResourceView failed: %d\n", (int)hr);
+        return -1;
+      }
+    }
   }
 #else
   for (int j = 0; j < SCREEN_COUNT; ++j) {
@@ -7134,6 +7358,12 @@ start_use_c_sc:
   CHECK_AND_RELEASE(d3d_ui_rtv);
   CHECK_AND_RELEASE(d3d_ui_tex);
   for (int j = 0; j < SCREEN_COUNT; ++j) {
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      CHECK_AND_RELEASE(buffer_ctx[j].d3d_srv[i]);
+      CHECK_AND_RELEASE(buffer_ctx[j].d3d_tex[i]);
+      CHECK_AND_RELEASE(d3d_child_vb[j][i]);
+    }
+
     CHECK_AND_RELEASE(d3d_ui_bs[j]);
     CHECK_AND_RELEASE(d3d_ib[j]);
     CHECK_AND_RELEASE(d3d_vb[j]);
