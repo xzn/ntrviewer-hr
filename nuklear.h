@@ -20216,7 +20216,7 @@ nk_panel_end(struct nk_context *ctx)
             /* horizontal scrollbar */
             nk_flags state = 0;
             scroll.x = layout->bounds.x;
-            scroll.y = layout->bounds.y + layout->bounds.h;
+            scroll.y = layout->bounds.y + layout->bounds.h + panel_padding.y;
             scroll.w = layout->bounds.w;
             scroll.h = scrollbar_size.y;
 
@@ -23042,10 +23042,10 @@ nk_group_scrolled_end(struct nk_context *ctx)
     /* dummy window */
     nk_zero_struct(pan);
     panel_padding = nk_panel_get_padding(&ctx->style, NK_PANEL_GROUP);
-    pan.bounds.y = g->bounds.y - (g->header_height + g->menu.h);
+    pan.bounds.y = g->bounds.y - (g->header_height + g->menu.h) - panel_padding.y;
     pan.bounds.x = g->bounds.x - panel_padding.x;
     pan.bounds.w = g->bounds.w + 2 * panel_padding.x;
-    pan.bounds.h = g->bounds.h + g->header_height + g->menu.h;
+    pan.bounds.h = g->bounds.h + g->header_height + g->menu.h + 2 * panel_padding.y;
     if (g->flags & NK_WINDOW_BORDER) {
         pan.bounds.x -= g->border;
         pan.bounds.y -= g->border;
@@ -23066,7 +23066,7 @@ nk_group_scrolled_end(struct nk_context *ctx)
 
     /* make sure group has correct clipping rectangle */
     nk_unify(&clip, &parent->clip, pan.bounds.x, pan.bounds.y,
-        pan.bounds.x + pan.bounds.w, pan.bounds.y + pan.bounds.h + panel_padding.x);
+        pan.bounds.x + pan.bounds.w, pan.bounds.y + pan.bounds.h);
     nk_push_scissor(&pan.buffer, clip);
     nk_end(ctx);
 
