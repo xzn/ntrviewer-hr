@@ -156,8 +156,7 @@ int RealCUGAN::load(const std::string& parampath, const std::string& modelpath)
         net.opt.use_int8_storage = true;
     } else {
 #ifdef USE_D3D11
-        NCNN_LOGE("GPU float16 and int8 support required for upscaling interop");
-        return -1;
+        support_ext_mem = false;
 #endif
         net.opt.use_fp16_packed = false;
         net.opt.use_fp16_storage = false;

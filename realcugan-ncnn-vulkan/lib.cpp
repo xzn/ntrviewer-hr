@@ -355,6 +355,13 @@ int realcugan_create()
 #endif
 #endif
 
+    if (!(vkdev->info.support_fp16_packed() && vkdev->info.support_fp16_storage() && vkdev->info.support_int8_storage())) {
+#ifdef USE_D3D11
+        realcugan_support_ext_mem = false;
+#endif
+        fprintf(stderr, "no float16 and int8 support, using slow path\n");
+    }
+
     if (realcugan_support_ext_mem) {
 #ifdef USE_D3D11
         fprintf(stderr, "using D3D/Vk interop\n");
@@ -375,17 +382,23 @@ int realcugan_create()
 #else
         realcugan[j] = new RealCUGAN(i, tta_mode);
 #endif
+
+        realcugan[j]->support_ext_mem = realcugan_support_ext_mem;
         if (realcugan[j]->load(paramfullpath, modelfullpath) != 0) {
             realcugan_destroy();
             return -1;
         }
+        if (realcugan_support_ext_mem) {
+            if (!realcugan[j]->support_ext_mem) {
+                realcugan_support_ext_mem = false;
+            }
+        }
+
         realcugan[j]->noise = noise;
         realcugan[j]->scale = scale;
         realcugan[j]->tilesize = tilesize[i];
         realcugan[j]->prepadding = prepadding;
         realcugan[j]->syncgap = syncgap;
-
-        realcugan[j]->support_ext_mem = realcugan_support_ext_mem;
         realcugan[j]->tiling_linear = false;
     }
 
