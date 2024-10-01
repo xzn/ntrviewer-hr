@@ -222,10 +222,17 @@ static int win_w[SCREEN_COUNT], win_h[SCREEN_COUNT];
 static int win_width[SCREEN_COUNT], win_height[SCREEN_COUNT];
 static int win_dpi[SCREEN_COUNT];
 
+static const float font_scale_step_factor = 32.0;
+static const float font_scale_epsilon = 1.0 / font_scale_step_factor;
+
 static void updateWindowSize(int tb) {
   SDL_GetWindowSize(win[tb], &win_w[tb], &win_h[tb]);
   SDL_GL_GetDrawableSize(win[tb], &win_width[tb], &win_height[tb]);
-  win_dpi[tb] = win_width[tb] * USER_DEFAULT_SCREEN_DPI / win_w[tb];
+  float scale_x = (float)(win_width[tb]) / (float)(win_w[tb]);
+  float scale_y = (float)(win_height[tb]) / (float)(win_h[tb]);
+  scale_x = roundf(scale_x * font_scale_step_factor) / font_scale_step_factor;
+  scale_y = roundf(scale_y * font_scale_step_factor) / font_scale_step_factor;
+  win_dpi[tb] = NK_MAX(USER_DEFAULT_SCREEN_DPI * scale_x, USER_DEFAULT_SCREEN_DPI * scale_y);
 }
 
 static void updateViewMode(view_mode_t vm) {
@@ -4511,7 +4518,7 @@ static int update_hide_ui(void) {
 }
 #endif
 
-struct nk_vec2 font_scale;
+static struct nk_vec2 font_scale;
 
 static void
 ThreadLoop(int i)
@@ -4581,16 +4588,21 @@ ThreadLoop(int i)
     SDL_GetWindowSize(win[i], &win_width[i], &win_height[i]);
     scale_x = (float)(render_w) / (float)(win_width[i]);
     scale_y = (float)(render_h) / (float)(win_height[i]);
+    scale_x = roundf(scale_x * font_scale_step_factor) / font_scale_step_factor;
+    scale_x = roundf(scale_y * font_scale_step_factor) / font_scale_step_factor;
     SDL_RenderSetScale(sdlRenderer[i], scale_x, scale_y);
   }
   SDL_SetRenderDrawColor(sdlRenderer[i], bg[0]* 255, bg[1] * 255, bg[2] * 255, bg[3] * 255);
   SDL_RenderClear(sdlRenderer[i]);
 #else
-#ifndef USE_D3D11
+#ifdef USE_D3D11
+  scale_x = (float)win_dpi[sc_tb] / USER_DEFAULT_SCREEN_DPI;
+  scale_y = (float)win_dpi[sc_tb] / USER_DEFAULT_SCREEN_DPI;
+#else
   updateWindowSize(sc_tb);
+  scale_x = (float)win_dpi[sc_tb] / USER_DEFAULT_SCREEN_DPI;
+  scale_y = (float)win_dpi[sc_tb] / USER_DEFAULT_SCREEN_DPI;
 #endif
-  scale_x = (float)win_width[sc_tb] / win_w[sc_tb];
-  scale_y = (float)win_height[sc_tb] / win_h[sc_tb];
 
 #ifdef USE_COMPOSITION_SWAPCHAIN
   if (sc_tb == SCREEN_TOP) {
@@ -4821,7 +4833,10 @@ ThreadLoop(int i)
     rp_lock_rel(nk_input_lock);
 #endif
 
-    if (font_scale.x != scale_x || font_scale.y != scale_y) {
+    if (
+      fabsf(font_scale.x - scale_x) > font_scale_epsilon ||
+      fabsf(font_scale.y - scale_y) > font_scale_epsilon
+    ) {
       font_scale = (struct nk_vec2){ scale_x, scale_y };
 
       struct nk_context *ctx = nk_ctx;
