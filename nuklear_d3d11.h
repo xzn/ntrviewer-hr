@@ -158,10 +158,10 @@ nk_d3d11_render(ID3D11DeviceContext *context, enum nk_anti_aliasing AA, float sc
         ID3D11ShaderResourceView *texture_view = (ID3D11ShaderResourceView *)cmd->texture.ptr;
         if (!cmd->elem_count) continue;
 
-        scissor.left = (LONG)cmd->clip_rect.x * inv_scale;
-        scissor.right = (LONG)(cmd->clip_rect.x + cmd->clip_rect.w) * inv_scale;
-        scissor.top = (LONG)cmd->clip_rect.y * inv_scale;
-        scissor.bottom = (LONG)(cmd->clip_rect.y + cmd->clip_rect.h) * inv_scale;
+        scissor.left = (LONG)nk_roundf(cmd->clip_rect.x * inv_scale);
+        scissor.right = (LONG)nk_roundf((cmd->clip_rect.x + cmd->clip_rect.w) * inv_scale);
+        scissor.top = (LONG)nk_roundf(cmd->clip_rect.y * inv_scale);
+        scissor.bottom = (LONG)nk_roundf((cmd->clip_rect.y + cmd->clip_rect.h) * inv_scale);
 
         ID3D11DeviceContext_PSSetShaderResources(context, 0, 1, &texture_view);
         ID3D11DeviceContext_RSSetScissorRects(context, 1, &scissor);
@@ -173,12 +173,12 @@ nk_d3d11_render(ID3D11DeviceContext *context, enum nk_anti_aliasing AA, float sc
 }
 
 static void
-nk_d3d11_get_projection_matrix(int width, int height, float *result)
+nk_d3d11_get_projection_matrix(float width, float height, float *result)
 {
     const float L = 0.0f;
-    const float R = (float)width;
+    const float R = width;
     const float T = 0.0f;
-    const float B = (float)height;
+    const float B = height;
     float matrix[4][4] =
     {
         { 0.0f, 0.0f, 0.0f, 0.0f },

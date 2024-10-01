@@ -3706,6 +3706,7 @@ struct vao_vertice_t {
 };
 #endif
 
+#ifndef USE_SDL_RENDERER
 static void get_draw_screen_dims(
   int top_bot, int tb, int sc_child, view_mode_t vm, int width, int height,
   double *out_ctx_left_f,
@@ -3811,6 +3812,7 @@ static void get_draw_screen_dims(
   *out_win_w = win_w;
   *out_win_h = win_h;
 }
+#endif
 
 #ifdef USE_SDL_RENDERER
 static void do_hr_draw_screen(
@@ -4473,6 +4475,7 @@ static bool decode_cond_wait(event_t *event)
   return true;
 }
 
+#ifdef USE_COMPOSITION_SWAPCHAIN
 static int update_hide_ui(void) {
   int i = SCREEN_TOP;
   if (prev_hide_windows != hide_windows) {
@@ -4506,6 +4509,7 @@ static int update_hide_ui(void) {
   }
   return 0;
 }
+#endif
 
 struct nk_vec2 font_scale;
 
