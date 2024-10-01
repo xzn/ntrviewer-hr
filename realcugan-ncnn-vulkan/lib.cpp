@@ -49,14 +49,20 @@ static int realcugan_index(int top_bot, int index, int next)
     return realcugan_support_ext_mem ? realcugan_indices[index] : 0;
 }
 
+#define print_uuid(uuid, name, ...) ({ \
+  fprintf(stderr, name "%08x-%04x-%04x-%04x-%02x%02x%02x%02x%02x%02x\n", \
+    ##__VA_ARGS__, \
+    (int)*(uint32_t *)(char *)(uuid), (int)*(uint16_t *)&((char *)uuid)[4], (int)*(uint16_t *)&((char *)uuid)[6], (int)*(uint16_t *)&((char *)uuid)[8], \
+    (int)*(uint8_t *)&(uuid)[10], (int)*(uint8_t *)&(uuid)[11], (int)*(uint8_t *)&(uuid)[12], (int)*(uint8_t *)&(uuid)[13], (int)*(uint8_t *)&(uuid)[14], (int)*(uint8_t *)&(uuid)[15] \
+  ); \
+})
+
 extern "C" int realcugan_create()
 {
     int noise = -1;
     std::vector<int> tilesize;
     path_t model = PATHSTR("models-se");
-    std::vector<int> gpuid;
-    int syncgap = 3;
-    // int syncgap = 0;
+    int syncgap = 0;
     int tta_mode = 0;
     int scale = REALCUGAN_SCALE;
 
@@ -69,12 +75,6 @@ extern "C" int realcugan_create()
     if (!(scale == 1 || scale == 2 || scale == 3 || scale == 4))
     {
         fprintf(stderr, "invalid scale argument\n");
-        return -1;
-    }
-
-    if (tilesize.size() != (gpuid.empty() ? 1 : gpuid.size()) && !tilesize.empty())
-    {
-        fprintf(stderr, "invalid tilesize argument\n");
         return -1;
     }
 
@@ -167,29 +167,27 @@ extern "C" int realcugan_create()
 
     ncnn::create_gpu_instance();
 
-    if (gpuid.empty())
-    {
-        gpuid.push_back(ncnn::get_default_gpu_index());
-    }
-
-    int use_gpu_count = (int)gpuid.size();
+    int use_gpu_count = ncnn::get_gpu_count();
 
     if (tilesize.empty())
     {
         tilesize.resize(use_gpu_count, 0);
     }
 
-    int gpu_count = ncnn::get_gpu_count();
-    for (int i=0; i<use_gpu_count; i++)
-    {
-        if (gpuid[i] < -1 || gpuid[i] >= gpu_count)
-        {
-            fprintf(stderr, "invalid gpu device\n");
-
-            ncnn::destroy_gpu_instance();
-            return -1;
-        }
+    GLint gl_num_device_uuids = 0;
+    glGetIntegerv(GL_NUM_DEVICE_UUIDS_EXT, &gl_num_device_uuids);
+    GLubyte gl_device_uuids[gl_num_device_uuids][GL_UUID_SIZE_EXT];
+    for (int i = 0; i < gl_num_device_uuids; ++i) {
+        glGetUnsignedBytei_vEXT(GL_DEVICE_UUID_EXT, i, gl_device_uuids[i]);
+        print_uuid(gl_device_uuids[i], "GL Device %d UUID: ", i);
     }
+    GLubyte gl_driver_uuid[GL_UUID_SIZE_EXT];
+    glGetUnsignedBytevEXT(GL_DRIVER_UUID_EXT, gl_driver_uuid);
+    print_uuid(gl_driver_uuid, "GL Driver UUID: ");
+
+    int supported_gl_context = 0;
+
+    int default_i = -1;
 
     int i = 0;
 
@@ -198,14 +196,8 @@ extern "C" int realcugan_create()
         if (tilesize[i] != 0)
             continue;
 
-        if (gpuid[i] == -1)
-        {
-            // cpu only
-            tilesize[i] = 400;
-            continue;
-        }
-
-        uint32_t heap_budget = ncnn::get_gpu_device(gpuid[i])->get_heap_budget();
+        ncnn::VulkanDevice *vkdev = ncnn::get_gpu_device(i);
+        uint32_t heap_budget = vkdev->get_heap_budget();
 
         // more fine-grained tilesize policy here
         if (model.find(PATHSTR("models-nose")) != path_t::npos || model.find(PATHSTR("models-se")) != path_t::npos || model.find(PATHSTR("models-pro")) != path_t::npos)
@@ -250,17 +242,53 @@ extern "C" int realcugan_create()
                     tilesize[i] = 32;
             }
         }
-        break;
+
+        // We have images as large as 400x240; if exceeding tilesize, sync gap will be used which destroys performance
+        if (tilesize[i] < 400) {
+            continue;
+        }
+
+        VkPhysicalDeviceIDProperties dev_id_props {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES
+        };
+        VkPhysicalDeviceProperties2 dev_props2 = {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+            &dev_id_props
+        };
+        ncnn::vkGetPhysicalDeviceProperties2KHR(vkdev->info.physical_device(), &dev_props2);
+        print_uuid(dev_id_props.deviceUUID, "Vk Device %d UUID: ", i);
+        print_uuid(dev_id_props.driverUUID, "Vk Driver %d UUID: ", i);
+        if (
+            gl_num_device_uuids == 1 &&
+            memcmp(gl_device_uuids[0], dev_id_props.deviceUUID, sizeof(dev_id_props.deviceUUID)) == 0 &&
+            memcmp(gl_driver_uuid, dev_id_props.driverUUID, sizeof(dev_id_props.driverUUID)) == 0
+        ) {
+            fprintf(stderr, "matching gpu device found\n");
+            supported_gl_context = 1;
+            break;
+        }
+
+        if (default_i < 0) {
+            default_i = i;
+        }
     }
 
     if (i == use_gpu_count) {
-        fprintf(stderr, "no suitable gpu device\n");
+        if (default_i < 0) {
+            i = ncnn::get_default_gpu_index();
 
-        ncnn::destroy_gpu_instance();
-        return -1;
+            if (i < 0) {
+                fprintf(stderr, "no suitable gpu device\n");
+
+                ncnn::destroy_gpu_instance();
+                return -1;
+            }
+        } else {
+            i = default_i;
+        }
     }
 
-    ncnn::VulkanDevice *vkdev = ncnn::get_gpu_device(gpuid[i]);
+    ncnn::VulkanDevice *vkdev = ncnn::get_gpu_device(i);
     if (!vkdev) {
         fprintf(stderr, "no gpu vulkan device found\n");
 
@@ -277,7 +305,7 @@ extern "C" int realcugan_create()
     // Tested on AMD and NVIDIA for now
     bool supported_gpu_vendor = vkdev->info.vendor_id() == 0x1002 || vkdev->info.vendor_id() == 0x10de;
     supported_gpu_vendor = 1;
-    realcugan_support_ext_mem = supported_gpu_vendor && ncnn::support_VK_KHR_external_memory_capabilities &&
+    realcugan_support_ext_mem = supported_gl_context && supported_gpu_vendor && ncnn::support_VK_KHR_external_memory_capabilities &&
         vkdev->info.support_VK_KHR_external_memory() && GLAD_GL_EXT_memory_object &&
 #if _WIN32
         vkdev->info.support_VK_KHR_external_memory_win32() && GLAD_GL_EXT_memory_object_win32;
@@ -285,12 +313,16 @@ extern "C" int realcugan_create()
         vkdev->info.support_VK_KHR_external_memory_fd() && GLAD_GL_EXT_memory_object_fd;
 #endif
 
+    if (realcugan_support_ext_mem) {
+        fprintf(stderr, "using OGL/Vk interop\n");
+    }
+
     for (int j = 0; j < realcugan_size(); ++j) {
         if (realcugan[j]) {
             delete realcugan[j];
         }
 
-        realcugan[j] = new RealCUGAN(gpuid[i], tta_mode);
+        realcugan[j] = new RealCUGAN(i, tta_mode);
         realcugan[j]->load(paramfullpath, modelfullpath);
         realcugan[j]->noise = noise;
         realcugan[j]->scale = scale;

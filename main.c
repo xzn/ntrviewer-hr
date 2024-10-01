@@ -370,8 +370,8 @@ static ID3D11Device *d3d11device[SCREEN_COUNT];
 static ID3D11DeviceContext *d3d11device_context[SCREEN_COUNT];
 static IDXGIDevice *dxgi_device[SCREEN_COUNT];
 static IDXGIDevice2 *dxgi_device2[SCREEN_COUNT];
-static IDXGIAdapter *dxgi_adapter[SCREEN_COUNT];
-static IDXGIFactory2 *dxgi_factory[SCREEN_COUNT];
+static IDXGIAdapter1 *dxgi_adapter;
+static IDXGIFactory2 *dxgi_factory;
 static IPresentationFactory *presentation_factory[SCREEN_COUNT];
 static bool displayable_surface_support[SCREEN_COUNT];
 static HANDLE pres_man_lost_event[SCREEN_COUNT];
@@ -1195,8 +1195,48 @@ static int presentation_render_reset(int sc_child, int bg) {
   return 0;
 }
 
+#define CHECK_AND_RELEASE(p) do { \
+  if (p) { \
+    IUnknown_Release(p); \
+    (p) = NULL; \
+  } \
+} while (0)
+
+#define print_luid(luid, name, ...) ({ \
+  fprintf(stderr, name "%02x-%02x-%02x-%02x-%02x-%02x-%02x-%02x\n", \
+    ##__VA_ARGS__, \
+    (int)*(uint8_t *)&(luid)[0], (int)*(uint8_t *)&(luid)[1], (int)*(uint8_t *)&(luid)[2], (int)*(uint8_t *)&(luid)[3], (int)*(uint8_t *)&(luid)[4], (int)*(uint8_t *)&(luid)[5], (int)*(uint8_t *)&(luid)[6], (int)*(uint8_t *)&(luid)[7] \
+  ); \
+})
+
 static int composition_swapchain_device_init(void) {
   HRESULT hr;
+
+  hr = CreateDXGIFactory1(&IID_IDXGIFactory2, (void **)&dxgi_factory);
+  if (hr) {
+    err_log("CreateDXGIFactory1 failed: %d\n", (int)hr);
+    return hr;
+  }
+
+  for (int i = 0;; ++i) {
+    hr = IDXGIFactory2_EnumAdapters1(dxgi_factory, i, &dxgi_adapter);
+    if (hr == DXGI_ERROR_NOT_FOUND) {
+      dxgi_adapter = NULL;
+      break;
+    } else if (hr) {
+      err_log("EnumAdapters1 failed: %d\n", (int)hr);
+      return hr;
+    }
+    DXGI_ADAPTER_DESC1 adapter_desc;
+    hr = IDXGIAdapter1_GetDesc1(dxgi_adapter, &adapter_desc);
+    if (hr) {
+      err_log("GetDesc1 failed: %d\n", (int)hr);
+      return hr;
+    }
+
+    print_luid((const char *)&adapter_desc.AdapterLuid, "Adapter %d LUID: ", i);
+    CHECK_AND_RELEASE(dxgi_adapter);
+  }
 
   for (int i = 0; i < SCREEN_COUNT; ++i) {
     D3D_FEATURE_LEVEL featureLevelSupported;
@@ -1226,25 +1266,6 @@ static int composition_swapchain_device_init(void) {
     hr = ID3D11Device_QueryInterface(d3d11device[i], &IID_IDXGIDevice2, (void **)&dxgi_device2[i]);
     if (hr) {
       err_log("QueryInterface IDXGIDevice2 failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    hr = IDXGIDevice2_GetParent(dxgi_device2[i], &IID_IDXGIAdapter, (void **)&dxgi_adapter[i]);
-    if (hr) {
-      err_log("QueryInterface IDXGIAdapter failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    DXGI_ADAPTER_DESC adapter_desc = {};
-    hr = IDXGIAdapter_GetDesc(dxgi_adapter[i], &adapter_desc);
-    if (hr) {
-      err_log("GetDesc failed: %d\n", (int)hr);
-      return hr;
-    }
-
-    hr = IDXGIAdapter_GetParent(dxgi_adapter[i], &IID_IDXGIFactory2, (void **)&dxgi_factory[i]);
-    if (hr) {
-      err_log("QueryInterface IDXGIFactory2 failed: %d\n", (int)hr);
       return hr;
     }
 
@@ -1591,13 +1612,6 @@ static int composition_swapchain_init(HWND hwnd[SCREEN_COUNT]) {
   return composition_swapchain_device_init();
 }
 
-#define CHECK_AND_RELEASE(p) do { \
-  if (p) { \
-    IUnknown_Release(p); \
-    (p) = NULL; \
-  } \
-} while (0)
-
 static void composition_swapchain_device_close(void) {
   for (int i = 0; i < SCREEN_COUNT; ++i) {
 #ifndef USE_D3D11
@@ -1684,10 +1698,6 @@ static void composition_swapchain_device_close(void) {
 
     CHECK_AND_RELEASE(presentation_factory[i]);
 
-    CHECK_AND_RELEASE(dxgi_factory[i]);
-
-    CHECK_AND_RELEASE(dxgi_adapter[i]);
-
     CHECK_AND_RELEASE(dxgi_device2[i]);
 
     CHECK_AND_RELEASE(dxgi_device[i]);
@@ -1696,6 +1706,9 @@ static void composition_swapchain_device_close(void) {
 
     CHECK_AND_RELEASE(d3d11device[i]);
   }
+  CHECK_AND_RELEASE(dxgi_adapter);
+
+  CHECK_AND_RELEASE(dxgi_factory);
 }
 
 static void composition_swapchain_close(void) {

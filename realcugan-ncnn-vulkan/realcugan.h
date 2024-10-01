@@ -16,7 +16,9 @@
 #include "ncnn/layer.h"
 #endif
 
-#ifndef USE_D3D11
+#ifdef USE_D3D11
+#include <d3d11.h>
+#else
 #include "glad/glad.h"
 #endif
 
