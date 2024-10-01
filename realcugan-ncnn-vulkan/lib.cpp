@@ -375,7 +375,10 @@ int realcugan_create()
 #else
         realcugan[j] = new RealCUGAN(i, tta_mode);
 #endif
-        realcugan[j]->load(paramfullpath, modelfullpath);
+        if (realcugan[j]->load(paramfullpath, modelfullpath) != 0) {
+            realcugan_destroy();
+            return -1;
+        }
         realcugan[j]->noise = noise;
         realcugan[j]->scale = scale;
         realcugan[j]->tilesize = tilesize[i];

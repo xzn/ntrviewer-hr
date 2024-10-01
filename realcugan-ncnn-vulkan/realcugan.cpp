@@ -98,29 +98,39 @@ RealCUGAN::RealCUGAN(int gpuid, bool _tta_mode, int num_threads)
     bicubic_4x = 0;
     tta_mode = _tta_mode;
 
-    blob_vkallocator = vkdev->acquire_blob_allocator();
-    staging_vkallocator = vkdev->acquire_staging_allocator();
+    if (vkdev) {
+        blob_vkallocator = vkdev->acquire_blob_allocator();
+        staging_vkallocator = vkdev->acquire_staging_allocator();
+    }
 }
 
 RealCUGAN::~RealCUGAN()
 {
-    vkdev->reclaim_blob_allocator(blob_vkallocator);
-    vkdev->reclaim_staging_allocator(staging_vkallocator);
-
-    // cleanup preprocess and postprocess pipeline
-    {
-        delete realcugan_preproc;
-        delete realcugan_postproc;
+    if (vkdev) {
+        vkdev->reclaim_blob_allocator(blob_vkallocator);
+        vkdev->reclaim_staging_allocator(staging_vkallocator);
     }
 
-    bicubic_2x->destroy_pipeline(net.opt);
-    delete bicubic_2x;
+    // cleanup preprocess and postprocess pipeline
+    if (realcugan_preproc)
+        delete realcugan_preproc;
+    if (realcugan_postproc)
+        delete realcugan_postproc;
 
-    bicubic_3x->destroy_pipeline(net.opt);
-    delete bicubic_3x;
+    if (bicubic_2x) {
+        bicubic_2x->destroy_pipeline(net.opt);
+        delete bicubic_2x;
+    }
 
-    bicubic_4x->destroy_pipeline(net.opt);
-    delete bicubic_4x;
+    if (bicubic_3x) {
+        bicubic_3x->destroy_pipeline(net.opt);
+        delete bicubic_3x;
+    }
+
+    if (bicubic_4x) {
+        bicubic_4x->destroy_pipeline(net.opt);
+        delete bicubic_4x;
+    }
 
     for (int i = 0; i < out_gpu_tex.size(); ++i) {
         if (out_gpu_tex[i]) {
@@ -145,6 +155,10 @@ int RealCUGAN::load(const std::string& parampath, const std::string& modelpath)
         net.opt.use_fp16_arithmetic = false;
         net.opt.use_int8_storage = true;
     } else {
+#ifdef USE_D3D11
+        NCNN_LOGE("GPU float16 and int8 support required for upscaling interop");
+        return -1;
+#endif
         net.opt.use_fp16_packed = false;
         net.opt.use_fp16_storage = false;
         net.opt.use_fp16_arithmetic = false;
@@ -4423,21 +4437,8 @@ VkImageMemory* OutVkImageMat::out_create(const RealCUGAN* cugan,
             return 0;
         }
     } else {
-        D3D11_TEXTURE3D_DESC desc;
-        desc.Width = width;
-        desc.Height = height;
-        desc.Depth = depth;
-        desc.MipLevels = 1;
-        desc.Format = DXGI_FORMAT_R32_FLOAT;
-        desc.Usage = D3D11_USAGE_DEFAULT;
-        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
-        desc.CPUAccessFlags = 0;
-        hr = cugan->dev[index]->CreateTexture3D(&desc, NULL, (ID3D11Texture3D **)&d3d_resource);
-        if (hr) {
-            NCNN_LOGE("CreateTexture3D failed: %d", (int)hr);
-            return 0;
-        }
+        // shared NT handle not supported for 3D textures..
+        return 0;
     }
 
     hr = d3d_resource->QueryInterface(&dxgi_res);
