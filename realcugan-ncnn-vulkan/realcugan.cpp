@@ -4072,18 +4072,16 @@ static bool shared_sem_supported(const RealCUGAN* cugan)
 void OutVkImageMat::create_sem(const RealCUGAN* cugan)
 {
     if (shared_sem_supported(cugan)) {
-        VkExternalSemaphoreHandleTypeFlagBits compatable_semaphore_type;
+        VkExternalSemaphoreHandleTypeFlagBits compatible_semaphore_type;
         bool found = false;
         if (vkGetPhysicalDeviceExternalSemaphorePropertiesKHR) {
             VkExternalSemaphoreHandleTypeFlagBits flags[] = {
 #ifdef _WIN32
                 VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT,
+                VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT,
 #else
                 VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT,
 #endif
-                // VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT,
-                // VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT,
-                // VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT
             };
 
             VkPhysicalDeviceExternalSemaphoreInfo extSemInfo{
@@ -4097,7 +4095,7 @@ void OutVkImageMat::create_sem(const RealCUGAN* cugan)
                 vkGetPhysicalDeviceExternalSemaphorePropertiesKHR(cugan->vkdev->info.physical_device(), &extSemInfo, &extSemProps);
                 if (extSemProps.compatibleHandleTypes & flags[i] && extSemProps.externalSemaphoreFeatures & VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT)
                 {
-                    compatable_semaphore_type = flags[i];
+                    compatible_semaphore_type = flags[i];
                     found = true;
                     break;
                 }
@@ -4105,15 +4103,15 @@ void OutVkImageMat::create_sem(const RealCUGAN* cugan)
         }
         if (!found) {
 #ifdef _WIN32
-            compatable_semaphore_type = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+            compatible_semaphore_type = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
 #else
-            compatable_semaphore_type = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
+            compatible_semaphore_type = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
 #endif
         }
 
         VkExportSemaphoreCreateInfo exportSemaphoreCreateInfo{
             VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO, nullptr,
-            compatable_semaphore_type};
+            compatible_semaphore_type};
         VkSemaphoreCreateInfo semaphoreCreateInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
                                                     &exportSemaphoreCreateInfo};
         VkResult ret;
@@ -4133,13 +4131,13 @@ void OutVkImageMat::create_sem(const RealCUGAN* cugan)
 #ifdef _WIN32
         VkSemaphoreGetWin32HandleInfoKHR semaphoreGetHandleInfo{
             VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR, nullptr,
-            VK_NULL_HANDLE, compatable_semaphore_type};
+            VK_NULL_HANDLE, compatible_semaphore_type};
         semaphoreGetHandleInfo.semaphore = vk_sem;
         ret = vkGetSemaphoreWin32HandleKHR(cugan->vkdev->vkdevice(), &semaphoreGetHandleInfo, &sem);
 #else
         VkSemaphoreGetFdInfoKHR semaphoreGetFdInfo{
             VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR, nullptr,
-            VK_NULL_HANDLE, compatable_semaphore_type};
+            VK_NULL_HANDLE, compatible_semaphore_type};
         semaphoreGetFdInfo.semaphore = vk_sem;
         ret = vkGetSemaphoreFdKHR(cugan->vkdev->vkdevice(), &semaphoreGetFdInfo, &sem);
 #endif
@@ -4164,11 +4162,20 @@ void OutVkImageMat::create_sem(const RealCUGAN* cugan)
         glGenSemaphoresEXT(1, &gl_sem);
         glGenSemaphoresEXT(1, &gl_sem_next);
 #ifdef _WIN32
-        glImportSemaphoreWin32HandleEXT(gl_sem, GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, sem);
-        glImportSemaphoreWin32HandleEXT(gl_sem_next, GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, sem_next);
+        if (compatible_semaphore_type == VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT) {
+            glImportSemaphoreWin32HandleEXT(gl_sem, GL_HANDLE_TYPE_OPAQUE_WIN32_KMT_EXT, sem);
+            glImportSemaphoreWin32HandleEXT(gl_sem_next, GL_HANDLE_TYPE_OPAQUE_WIN32_KMT_EXT, sem_next);
+            sem = NULL;
+            sem_next = NULL;
+        } else {
+            glImportSemaphoreWin32HandleEXT(gl_sem, GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, sem);
+            glImportSemaphoreWin32HandleEXT(gl_sem_next, GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, sem_next);
+        }
 #else
         glImportSemaphoreFdEXT(gl_sem, GL_HANDLE_TYPE_OPAQUE_FD_EXT, sem);
         glImportSemaphoreFdEXT(gl_sem_next, GL_HANDLE_TYPE_OPAQUE_FD_EXT, sem_next);
+        sem = 0;
+        sem_next= 0;
 #endif
     } else {
         vk_sem = 0;
@@ -4236,7 +4243,7 @@ void OutVkImageMat::create_like(const RealCUGAN* cugan, const ncnn::VkMat& m, co
         release(cugan);
 }
 
-static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, size_t elemsize, int elempack, size_t& totalsize, bool& dedicated) {
+static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, size_t elemsize, int elempack, size_t& totalsize, bool& dedicated, VkExternalMemoryHandleTypeFlagBits &compatible_memory_type) {
     if (elempack != 1 && elempack != 4 && elempack != 8)
     {
         NCNN_LOGE("elempack must be 1 4 8");
@@ -4282,14 +4289,50 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
         }
     }
 
+    bool found = false;
+    if (vkGetPhysicalDeviceExternalBufferPropertiesKHR) {
+        VkExternalMemoryHandleTypeFlagBits flags[] = {
+#ifdef _WIN32
+            VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT,
+            VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT,
+#else
+            VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
+#endif
+        };
+
+        VkPhysicalDeviceExternalBufferInfo extBufInfo{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO, nullptr};
+        VkExternalBufferProperties extBufProps{VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES,
+                                            nullptr};
+
+        for (size_t i = 0; i < 5; i++)
+        {
+            extBufInfo.handleType = flags[i];
+            vkGetPhysicalDeviceExternalBufferPropertiesKHR(cugan->vkdev->info.physical_device(), &extBufInfo, &extBufProps);
+            if (
+                extBufProps.externalMemoryProperties.compatibleHandleTypes & flags[i] &&
+                extBufProps.externalMemoryProperties.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT
+            )
+            {
+                compatible_memory_type = flags[i];
+                found = true;
+                // Default behavior for dedicated in case we can't test for it below
+                dedicated = (bool)(extBufProps.externalMemoryProperties.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT);
+                break;
+            }
+        }
+    } else {
+#ifdef _WIN32
+        compatible_memory_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+#else
+        compatible_memory_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+#endif
+    }
+
     VkExternalMemoryImageCreateInfo extImageCreateInfo;
     extImageCreateInfo.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
     extImageCreateInfo.pNext = 0;
-#ifdef _WIN32
-    extImageCreateInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-#else
-    extImageCreateInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
-#endif
+    extImageCreateInfo.handleTypes = compatible_memory_type;
 
     VkImageCreateInfo imageCreateInfo;
     VkImageTiling tiling = cugan->tiling_linear ? VK_IMAGE_TILING_LINEAR : VK_IMAGE_TILING_OPTIMAL;
@@ -4359,9 +4402,6 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
 
         aligned_size = alignSize(size, alignment);
         image_memory_type_index = cugan->vkdev->find_memory_index(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
-
-        // Always use dedicated memory if we can't test for it
-        dedicated = true;
     }
 
     VkMemoryDedicatedAllocateInfoKHR dedAllocInfo;
@@ -4473,7 +4513,7 @@ void OutVkImageMat::create(const RealCUGAN* cugan, int _w, int _h, size_t _elems
 
     if (total() > 0)
     {
-        data = out_create(cugan, w, h, c, elemsize, elempack, totalsize, dedicated);
+        data = out_create(cugan, w, h, c, elemsize, elempack, totalsize, dedicated, memory_type);
 
         if (data) create_handles(cugan);
         else release(cugan);
@@ -4506,7 +4546,7 @@ void OutVkImageMat::create(const RealCUGAN* cugan, int _w, int _h, int _c, size_
 
     if (total() > 0)
     {
-        data = out_create(cugan, w, h, c, elemsize, elempack, totalsize, dedicated);
+        data = out_create(cugan, w, h, c, elemsize, elempack, totalsize, dedicated, memory_type);
 
         if (data) create_handles(cugan);
         else release(cugan);
@@ -4597,9 +4637,15 @@ void OutVkImageMat::create_handles(const RealCUGAN* cugan)
     GLint ded = dedicated ? GL_TRUE : GL_FALSE;
     glMemoryObjectParameterivEXT(gl_memory, GL_DEDICATED_MEMORY_OBJECT_EXT, &ded);
 #if _WIN32
-    glImportMemoryWin32HandleEXT(gl_memory, totalsize, GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, memory);
+    if (memory_type == VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT) {
+        glImportMemoryWin32HandleEXT(gl_memory, totalsize, GL_HANDLE_TYPE_OPAQUE_WIN32_KMT_EXT, memory);
+        memory = NULL;
+    } else {
+        glImportMemoryWin32HandleEXT(gl_memory, totalsize, GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, memory);
+    }
 #else
     glImportMemoryFdEXT(gl_memory, totalsize, GL_HANDLE_TYPE_OPAQUE_FD_EXT, memory);
+    memory = 0;
 #endif
 
     glGenTextures(1, &gl_texture);

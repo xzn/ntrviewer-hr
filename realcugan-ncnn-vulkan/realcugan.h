@@ -16,7 +16,9 @@
 #include "ncnn/layer.h"
 #endif
 
+#ifndef USE_D3D11
 #include "glad/glad.h"
+#endif
 
 class FeatureCache;
 
@@ -47,6 +49,7 @@ public:
     GLuint gl_memory = 0;
     GLuint gl_texture = 0;
     bool dedicated = 0;
+    VkExternalMemoryHandleTypeFlagBits memory_type = (VkExternalMemoryHandleTypeFlagBits)0;
 
     VkSemaphore vk_sem = 0, vk_sem_next = 0;
 #ifdef _WIN32

@@ -5064,12 +5064,13 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
               CHECK_AND_RELEASE(d3d_ui_rtv);
               CHECK_AND_RELEASE(d3d_ui_tex);
               compositing = 0;
+            } else {
+              if (nk_d3d11_resize(d3d11device_context[i], width, height, (float)USER_DEFAULT_SCREEN_DPI / win_dpi[i])) {
+                err_log("nk_d3d11_resize failed\n");
+                compositing = 0;
+              }
             }
           }
-        }
-        if (nk_d3d11_resize(d3d11device_context[i], width, height, (float)USER_DEFAULT_SCREEN_DPI / win_dpi[i])) {
-          err_log("nk_d3d11_resize failed\n");
-          compositing = 0;
         }
         rp_lock_rel(comp_lock);
       }
