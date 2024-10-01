@@ -19783,7 +19783,7 @@ nk_panel_get_padding(const struct nk_style *style, enum nk_panel_type type)
     case NK_PANEL_CONTEXTUAL: return style->window.contextual_padding;
     case NK_PANEL_COMBO: return style->window.combo_padding;
     case NK_PANEL_MENU: return style->window.menu_padding;
-    case NK_PANEL_TOOLTIP: return style->window.menu_padding;}
+    case NK_PANEL_TOOLTIP: return style->window.tooltip_padding;}
 }
 NK_LIB float
 nk_panel_get_border(const struct nk_style *style, nk_flags flags,
@@ -19798,7 +19798,7 @@ nk_panel_get_border(const struct nk_style *style, nk_flags flags,
         case NK_PANEL_CONTEXTUAL: return style->window.contextual_border;
         case NK_PANEL_COMBO: return style->window.combo_border;
         case NK_PANEL_MENU: return style->window.menu_border;
-        case NK_PANEL_TOOLTIP: return style->window.menu_border;
+        case NK_PANEL_TOOLTIP: return style->window.tooltip_border;
     }} else return 0;
 }
 NK_LIB struct nk_color
@@ -19812,7 +19812,7 @@ nk_panel_get_border_color(const struct nk_style *style, enum nk_panel_type type)
     case NK_PANEL_CONTEXTUAL: return style->window.contextual_border_color;
     case NK_PANEL_COMBO: return style->window.combo_border_color;
     case NK_PANEL_MENU: return style->window.menu_border_color;
-    case NK_PANEL_TOOLTIP: return style->window.menu_border_color;}
+    case NK_PANEL_TOOLTIP: return style->window.tooltip_border_color;}
 }
 NK_LIB nk_bool
 nk_panel_is_sub(enum nk_panel_type type)
@@ -19897,6 +19897,8 @@ nk_panel_begin(struct nk_context *ctx, const char *title, enum nk_panel_type pan
     layout->bounds = win->bounds;
     layout->bounds.x += panel_padding.x;
     layout->bounds.w -= 2*panel_padding.x;
+    layout->bounds.y += panel_padding.y;
+    layout->bounds.h -= 2*panel_padding.y;
     if (win->flags & NK_WINDOW_BORDER) {
         layout->border = nk_panel_get_border(style, win->flags, panel_type);
         layout->bounds = nk_shrink_rect(layout->bounds, layout->border);
@@ -20058,102 +20060,12 @@ nk_panel_begin(struct nk_context *ctx, const char *title, enum nk_panel_type pan
     /* set clipping rectangle */
     {struct nk_rect clip;
     layout->clip = layout->bounds;
+    layout->clip.x -= panel_padding.x;
+    layout->clip.w += 2*panel_padding.x;
+    layout->clip.y -= panel_padding.y;
+    layout->clip.h += 2*panel_padding.y;
     nk_unify(&clip, &win->buffer.clip, layout->clip.x, layout->clip.y,
         layout->clip.x + layout->clip.w, layout->clip.y + layout->clip.h);
-
-
-    if (panel_type == NK_PANEL_WINDOW)
-    {
-        /* extend clipping area to allow borders to be properly drawn */
-        clip.x -= style->window.padding.x;
-        clip.y -= style->window.padding.y;
-        clip.w += style->window.padding.x*2;
-        clip.h += style->window.padding.y*2;
-        /* ensure clipping area doesn't exceed window bounds */
-        clip.x = NK_MAX(clip.x, win->bounds.x);
-        clip.w = NK_MIN(clip.w, win->bounds.w);
-        clip.y = NK_MAX(clip.y, win->bounds.y+layout->header_height);
-        clip.h = NK_MIN(clip.h, win->bounds.h-layout->header_height);
-    }
-    else if (panel_type == NK_PANEL_GROUP)
-    {
-        /* extend clipping area to allow borders to be properly drawn */
-        clip.x -= style->window.group_padding.x;
-        clip.y -= style->window.group_padding.y;
-        clip.w += style->window.group_padding.x*2;
-        clip.h += style->window.group_padding.y*2;
-        /* ensure clipping area doesn't exceed window bounds */
-        clip.x = NK_MAX(clip.x, win->bounds.x);
-        clip.w = NK_MIN(clip.w, win->bounds.w);
-        clip.y = NK_MAX(clip.y, win->bounds.y+layout->header_height);
-        clip.h = NK_MIN(clip.h, win->bounds.h-layout->header_height);
-    }
-    else if (panel_type == NK_PANEL_POPUP)
-    {
-        /* extend clipping area to allow borders to be properly drawn */
-        clip.x -= style->window.popup_padding.x;
-        clip.y -= style->window.popup_padding.y;
-        clip.w += style->window.popup_padding.x*2;
-        clip.h += style->window.popup_padding.y*2;
-        /* ensure clipping area doesn't exceed window bounds */
-        clip.x = NK_MAX(clip.x, win->bounds.x);
-        clip.w = NK_MIN(clip.w, win->bounds.w);
-        clip.y = NK_MAX(clip.y, win->bounds.y+layout->header_height);
-        clip.h = NK_MIN(clip.h, win->bounds.h-layout->header_height);
-    }
-    else if (panel_type == NK_PANEL_CONTEXTUAL)
-    {
-        /* extend clipping area to allow borders to be properly drawn */
-        clip.x -= style->window.contextual_padding.x;
-        clip.y -= style->window.contextual_padding.y;
-        clip.w += style->window.contextual_padding.x*2;
-        clip.h += style->window.contextual_padding.y*2;
-        /* ensure clipping area doesn't exceed window bounds */
-        clip.x = NK_MAX(clip.x, win->bounds.x);
-        clip.w = NK_MIN(clip.w, win->bounds.w);
-        clip.y = NK_MAX(clip.y, win->bounds.y+layout->header_height);
-        clip.h = NK_MIN(clip.h, win->bounds.h-layout->header_height);
-    }
-    else if (panel_type == NK_PANEL_MENU)
-    {
-        /* extend clipping area to allow borders to be properly drawn */
-        clip.x -= style->window.menu_padding.x;
-        clip.y -= style->window.menu_padding.y;
-        clip.w += style->window.menu_padding.x*2;
-        clip.h += style->window.menu_padding.y*2;
-        /* ensure clipping area doesn't exceed window bounds */
-        clip.x = NK_MAX(clip.x, win->bounds.x);
-        clip.w = NK_MIN(clip.w, win->bounds.w);
-        clip.y = NK_MAX(clip.y, win->bounds.y+layout->header_height);
-        clip.h = NK_MIN(clip.h, win->bounds.h-layout->header_height);
-    }
-    else if (panel_type == NK_PANEL_TOOLTIP)
-    {
-        /* extend clipping area to allow borders to be properly drawn */
-        clip.x -= style->window.tooltip_padding.x;
-        clip.y -= style->window.tooltip_padding.y;
-        clip.w += style->window.tooltip_padding.x*2;
-        clip.h += style->window.tooltip_padding.y*2;
-        /* ensure clipping area doesn't exceed window bounds */
-        clip.x = NK_MAX(clip.x, win->bounds.x);
-        clip.w = NK_MIN(clip.w, win->bounds.w);
-        clip.y = NK_MAX(clip.y, win->bounds.y+layout->header_height);
-        clip.h = NK_MIN(clip.h, win->bounds.h-layout->header_height);
-    }
-    else if (panel_type == NK_PANEL_COMBO)
-    {
-        /* extend clipping area to allow borders to be properly drawn */
-        clip.x -= style->window.combo_padding.x;
-        clip.y -= style->window.combo_padding.y;
-        clip.w += style->window.combo_padding.x*2;
-        clip.h += style->window.combo_padding.y*2;
-        /* ensure clipping area doesn't exceed window bounds */
-        clip.x = NK_MAX(clip.x, win->bounds.x);
-        clip.w = NK_MIN(clip.w, win->bounds.w);
-        clip.y = NK_MAX(clip.y, win->bounds.y+layout->header_height);
-        clip.h = NK_MIN(clip.h, win->bounds.h-layout->header_height);
-    }
-
     nk_push_scissor(out, clip);
     layout->clip = clip;}
     return !(layout->flags & NK_WINDOW_HIDDEN) && !(layout->flags & NK_WINDOW_MINIMIZED);
