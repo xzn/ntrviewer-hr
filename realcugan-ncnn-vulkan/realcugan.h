@@ -107,6 +107,7 @@ public:
 
     int process(int index, const ncnn::Mat& inimage, ncnn::Mat& outimage) const;
 
+#if 0
     int process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const;
 
     int process_se(const ncnn::Mat& inimage, ncnn::Mat& outimage) const;
@@ -135,6 +136,7 @@ protected:
 
     int process_cpu_se_very_rough_stage0(const ncnn::Mat& inimage, const std::vector<std::string>& names, const std::vector<std::string>& outnames, FeatureCache& cache) const;
     int process_cpu_se_very_rough_sync_gap(const ncnn::Mat& inimage, const std::vector<std::string>& names, FeatureCache& cache) const;
+#endif
 
 public:
     // realcugan parameters

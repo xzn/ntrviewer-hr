@@ -874,6 +874,7 @@ int RealCUGAN::process(int index, const ncnn::Mat& inimage, ncnn::Mat& outimage)
     return 0;
 }
 
+#if 0
 int RealCUGAN::process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 {
     if (noise == -1 && scale == 1)
@@ -3969,6 +3970,7 @@ int RealCUGAN::process_cpu_se_very_rough_sync_gap(const ncnn::Mat& inimage, cons
 
     return 0;
 }
+#endif
 
 using namespace ncnn;
 
