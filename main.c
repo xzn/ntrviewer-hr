@@ -326,7 +326,7 @@ static const char *d3d_ps_src =
   " PSOutput output = (PSOutput)0;\n"
   " float4 color = my_tex.Sample(my_samp, input.uv);\n"
   " if (any(color != float4(0.0, 0.0, 0.0, 0.0)))\n"
-  "  color.a = 15.0 / 16.0;\n"
+  "  color = float4(color.rgb * (15.0 / 16.0), 15.0 / 16.0);\n"
   " output.color = color;\n"
   " return output;\n"
   "}\n";
@@ -492,6 +492,7 @@ static int presentation_buffer_gen(struct presentation_buffer_t *b, int tb, int 
   tex_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
   // sc_child < 0 is UI util surface, which has transparency
   // transparency crashes on NVDIIA when using direct scanout. (AMD doesn't do direct scanout from D3D texture at all apparently)
+  // Update: transparency doesn't crash if alpha mode is set to premultiplied, guess the driver knows to disable direct scanout in that case..
   if (sc_child >= 0 && displayable_surface_support[tb])
     tex_desc.MiscFlags |= D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE;
   tex_desc.CPUAccessFlags = 0;
@@ -1352,7 +1353,7 @@ static int composition_swapchain_device_init(void) {
           return hr;
         }
 
-        hr = IPresentationSurface_SetAlphaMode(pres_surf_util[j], j == SURFACE_UTIL_UI ? DXGI_ALPHA_MODE_STRAIGHT : DXGI_ALPHA_MODE_IGNORE);
+        hr = IPresentationSurface_SetAlphaMode(pres_surf_util[j], j == SURFACE_UTIL_UI ? DXGI_ALPHA_MODE_PREMULTIPLIED : DXGI_ALPHA_MODE_IGNORE);
         if (hr) {
           err_log("SetAlphaMode failed: %d\n", (int)hr);
           return hr;
@@ -3469,8 +3470,8 @@ static GLbyte fShaderStr[] =
   "void main()\n"
   "{\n"
   " vec4 color = texture2D(s_texture, v_texCoord);\n"
-  " if (color.a != 0.0)\n"
-  "  color.a = 15.0 / 16.0;\n"
+  " if (color != vec4(0.0))\n"
+  "  color = vec4(color.rgb * (15.0 / 16.0), 15.0 / 16.0);\n"
   " gl_FragColor = color;\n"
   "}\n";
 
