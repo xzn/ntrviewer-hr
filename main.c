@@ -3154,7 +3154,7 @@ static void guiMain(struct nk_context *ctx)
   static char msg_buf[250];
 
   /* GUI */
-  if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 450, 495),
+  if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 450, 505),
                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_TITLE) && show_window)
   {
     do_nav_next(NK_FOCUS_NONE);
