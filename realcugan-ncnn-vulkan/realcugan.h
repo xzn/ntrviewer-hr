@@ -18,6 +18,7 @@
 
 #ifdef USE_D3D11
 #include <d3d11.h>
+#include <dxgi1_2.h>
 #else
 #include "glad/glad.h"
 #endif
@@ -28,7 +29,8 @@ class RealCUGAN;
 
 class OutVkImageMat : public ncnn::VkImageMat {
 public:
-    OutVkImageMat() : ncnn::VkImageMat() {}
+    OutVkImageMat(int index) : ncnn::VkImageMat(), index(index) {}
+    const int index = 0;
 
     void create_like(const RealCUGAN* cugan, const ncnn::VkMat& m, const ncnn::Option& opt);
     void create(const RealCUGAN* cugan, int _w, int _h, size_t _elemsize, int _elempack, const ncnn::Option& opt);
@@ -50,6 +52,8 @@ public:
 #endif
 #ifdef USE_D3D11
     ID3D11Resource *d3d_resource = NULL;
+    IDXGIResource1 *dxgi_res = NULL;
+    HANDLE d3d_handle = NULL;
 #else
     GLuint gl_memory = 0;
     GLuint gl_texture = 0;
@@ -73,6 +77,11 @@ public:
     bool need_wait = 0;
     ncnn::VkCompute *cmd = 0;
     VkFence fence = 0;
+
+    ncnn::VkImageMemory* out_create(const RealCUGAN* cugan,
+        int w, int h, int c, size_t elemsize, int elempack,
+        size_t& totalsize, bool& dedicated, VkExternalMemoryHandleTypeFlagBits &compatible_memory_type
+    );
 };
 
 class RealCUGAN
@@ -80,6 +89,9 @@ class RealCUGAN
 public:
 #ifdef USE_D3D11
     RealCUGAN(int gpuid, ID3D11Device **dev, ID3D11DeviceContext **ctx, bool tta_mode = false, int num_threads = 1);
+
+    ID3D11Device **const dev = NULL;
+    ID3D11DeviceContext **const ctx = NULL;
 #else
     RealCUGAN(int gpuid, bool tta_mode = false, int num_threads = 1);
 #endif

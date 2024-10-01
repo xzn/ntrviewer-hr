@@ -27,6 +27,20 @@
 #include <unistd.h>
 #endif
 
+typedef struct VkWin32KeyedMutexAcquireReleaseInfoKHR {
+    VkStructureType sType;
+    const void *pNext;
+    uint32_t acquireCount;
+    const VkDeviceMemory *pAcquireSyncs;
+    const uint64_t *pAcquireKeys;
+    const uint32_t *pAcquireTimeouts;
+    uint32_t releaseCount;
+    const VkDeviceMemory *pReleaseSyncs;
+    const uint64_t *pReleaseKeys;
+} VkWin32KeyedMutexAcquireReleaseInfoKHR;
+
+static const VkStructureType VK_STRUCTURE_TYPE_WIN32_KEYED_MUTEX_ACQUIRE_RELEASE_INFO_KHR = (VkStructureType)1000075000;
+
 class FeatureCache
 {
 public:
@@ -67,7 +81,7 @@ public:
 };
 
 #ifdef USE_D3D11
-RealCUGAN::RealCUGAN(int gpuid, ID3D11Device **dev, ID3D11DeviceContext **ctx, bool _tta_mode, int num_threads)
+RealCUGAN::RealCUGAN(int gpuid, ID3D11Device **dev, ID3D11DeviceContext **ctx, bool _tta_mode, int num_threads) : dev(dev), ctx(ctx)
 #else
 RealCUGAN::RealCUGAN(int gpuid, bool _tta_mode, int num_threads)
 #endif
@@ -327,7 +341,7 @@ int RealCUGAN::process(int index, const ncnn::Mat& inimage, ncnn::Mat& outimage)
         out_gpu_tex.resize(index + 1);
     }
     if (!out_gpu_tex[index]) {
-        out_gpu_tex[index] = new OutVkImageMat();
+        out_gpu_tex[index] = new OutVkImageMat(index);
         if (support_ext_mem) {
             out_gpu_tex[index]->create_sem(this);
         }
@@ -780,7 +794,24 @@ int RealCUGAN::process(int index, const ncnn::Mat& inimage, ncnn::Mat& outimage)
             out_gpu_tex[index]->create_like(this, out_gpu, opt);
             cmd.record_clone(out_gpu, *out_gpu_tex[index], opt);
 #ifdef USE_D3D11
-            cmd.submit_and_wait(NULL, 0, NULL, &out_gpu_tex[index]->fence);
+            if (out_gpu_tex[index]->d3d_resource) {
+                const uint64_t acqKey = 0;
+                const uint64_t relKey = 0;
+                const uint32_t timeout = 1000;
+                VkDeviceMemory memory = out_gpu_tex[index]->data->memory;
+                VkWin32KeyedMutexAcquireReleaseInfoKHR keyedMutexInfo { VK_STRUCTURE_TYPE_WIN32_KEYED_MUTEX_ACQUIRE_RELEASE_INFO_KHR };
+                keyedMutexInfo.acquireCount = 1;
+                keyedMutexInfo.pAcquireSyncs = &memory;
+                keyedMutexInfo.pAcquireKeys = &acqKey;
+                keyedMutexInfo.pAcquireTimeouts - &timeout;
+                keyedMutexInfo.releaseCount = 1;
+                keyedMutexInfo.pReleaseSyncs = &memory;
+                keyedMutexInfo.pReleaseKeys = &relKey;
+
+                cmd.submit_and_wait(NULL, 0, NULL, &out_gpu_tex[index]->fence, &keyedMutexInfo);
+            } else {
+                cmd.submit_and_wait(NULL, 0, NULL, &out_gpu_tex[index]->fence);
+            }
 #else
             cmd.submit_and_wait(out_gpu_tex[index]->first_subseq ? out_gpu_tex[index]->vk_sem_next : nullptr, VK_PIPELINE_STAGE_TRANSFER_BIT, out_gpu_tex[index]->vk_sem, &out_gpu_tex[index]->fence);
 #endif
@@ -3928,6 +3959,20 @@ int RealCUGAN::process_cpu_se_very_rough_sync_gap(const ncnn::Mat& inimage, cons
 
 using namespace ncnn;
 
+typedef VkResult (VKAPI_PTR *PFN_vkGetPhysicalDeviceImageFormatProperties2)(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceImageFormatInfo2 *pImageFormatInfo, VkImageFormatProperties2 *pImageFormatProperties);
+
+static PFN_vkGetPhysicalDeviceImageFormatProperties2 vkGetPhysicalDeviceImageFormatProperties2;
+
+typedef struct VkImportMemoryWin32HandleInfoKHR {
+    VkStructureType sType;
+    const void *pNext;
+    VkExternalMemoryHandleTypeFlagBits handleType;
+    HANDLE handle;
+    LPCWSTR name;
+} VkImportMemoryWin32HandleInfoKHR;
+
+static const VkStructureType VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR = (VkStructureType)1000073000;
+
 #if _WIN32
 typedef struct VkMemoryGetWin32HandleInfoKHR
 {
@@ -4101,7 +4146,7 @@ void OutVkImageMat::create_sem(const RealCUGAN* cugan)
             VkExternalSemaphoreProperties extSemProps{VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES,
                                                 nullptr};
 
-            for (size_t i = 0; i < 5; i++)
+            for (size_t i = 0; i < sizeof(flags) / sizeof(flags[0]); i++)
             {
                 extSemInfo.handleType = flags[i];
                 vkGetPhysicalDeviceExternalSemaphorePropertiesKHR(cugan->vkdev->info.physical_device(), &extSemInfo, &extSemProps);
@@ -4256,7 +4301,10 @@ void OutVkImageMat::create_like(const RealCUGAN* cugan, const ncnn::VkMat& m, co
         release(cugan);
 }
 
-static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, size_t elemsize, int elempack, size_t& totalsize, bool& dedicated, VkExternalMemoryHandleTypeFlagBits &compatible_memory_type) {
+VkImageMemory* OutVkImageMat::out_create(const RealCUGAN* cugan,
+    int w, int h, int c, size_t elemsize, int elempack,
+    size_t& totalsize, bool& dedicated, VkExternalMemoryHandleTypeFlagBits &compatible_memory_type
+) {
     if (elempack != 1 && elempack != 4 && elempack != 8)
     {
         NCNN_LOGE("elempack must be 1 4 8");
@@ -4302,9 +4350,107 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
         }
     }
 
-#ifdef USE_D3D11
-#endif
+    VkResult ret;
 
+#ifdef USE_D3D11
+    compatible_memory_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
+
+    VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL;
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+
+    VkPhysicalDeviceExternalImageFormatInfo extImgFmtInfo {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO
+    };
+    extImgFmtInfo.handleType = compatible_memory_type;
+
+    VkPhysicalDeviceImageFormatInfo2 phyDevImgFmtInfo {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2
+    };
+    phyDevImgFmtInfo.format = format;
+    phyDevImgFmtInfo.type = depth == 1 ? VK_IMAGE_TYPE_2D : VK_IMAGE_TYPE_3D;
+    phyDevImgFmtInfo.tiling = tiling;
+    phyDevImgFmtInfo.usage = usage;
+
+    VkExternalImageFormatProperties extImgFmtProps {
+        VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES
+    };
+
+    VkImageFormatProperties2 imgFmtProps {
+        VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2
+    };
+    imgFmtProps.pNext = &extImgFmtProps;
+
+    if (!vkGetPhysicalDeviceImageFormatProperties2) {
+        VkInstance instance = get_gpu_instance();
+        vkGetPhysicalDeviceImageFormatProperties2 = (PFN_vkGetPhysicalDeviceImageFormatProperties2)vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceImageFormatProperties2");
+        if (!vkGetPhysicalDeviceImageFormatProperties2) {
+            NCNN_LOGE("vkGetInstanceProcAddr vkGetPhysicalDeviceImageFormatProperties2 failed");
+            return 0;
+        }
+    }
+
+    ret = vkGetPhysicalDeviceImageFormatProperties2(cugan->vkdev->info.physical_device(), &phyDevImgFmtInfo, &imgFmtProps);
+    if (ret != VK_SUCCESS) {
+        NCNN_LOGE("vkGetPhysicalDeviceImageFormatProperties2 failed: %d", (int)ret);
+        return 0;
+    }
+
+    if (!(extImgFmtProps.externalMemoryProperties.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT)) {
+        NCNN_LOGE("Texture type not importable");
+        return 0;
+    }
+
+    dedicated = (bool)(extImgFmtProps.externalMemoryProperties.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT);
+
+    HRESULT hr;
+    if (depth == 1) {
+        D3D11_TEXTURE2D_DESC desc;
+        desc.Width = width;
+        desc.Height = height;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.SampleDesc.Quality = 0;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
+        desc.CPUAccessFlags = 0;
+        hr = cugan->dev[index]->CreateTexture2D(&desc, NULL, (ID3D11Texture2D **)&d3d_resource);
+        if (hr) {
+            NCNN_LOGE("CreateTexture2D failed: %d", (int)hr);
+            return 0;
+        }
+    } else {
+        D3D11_TEXTURE3D_DESC desc;
+        desc.Width = width;
+        desc.Height = height;
+        desc.Depth = depth;
+        desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_R32_FLOAT;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
+        desc.CPUAccessFlags = 0;
+        hr = cugan->dev[index]->CreateTexture3D(&desc, NULL, (ID3D11Texture3D **)&d3d_resource);
+        if (hr) {
+            NCNN_LOGE("CreateTexture3D failed: %d", (int)hr);
+            return 0;
+        }
+    }
+
+    hr = d3d_resource->QueryInterface(&dxgi_res);
+    if (hr) {
+        NCNN_LOGE("QueryInterface IDXGIResource1 failed: %d", (int)hr);
+        return 0;
+    }
+
+    hr = dxgi_res->CreateSharedHandle(NULL, DXGI_SHARED_RESOURCE_WRITE, NULL, &d3d_handle);
+    if (hr) {
+        NCNN_LOGE("CreateSharedHandle failed: %d", (int)hr);
+        return 0;
+    }
+#else
     bool found = false;
     if (vkGetPhysicalDeviceExternalBufferPropertiesKHR) {
         VkExternalMemoryHandleTypeFlagBits flags[] = {
@@ -4321,7 +4467,7 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
         VkExternalBufferProperties extBufProps{VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES,
                                             nullptr};
 
-        for (size_t i = 0; i < 5; i++)
+        for (size_t i = 0; i < sizeof(flags) / sizeof(flags[0]); i++)
         {
             extBufInfo.handleType = flags[i];
             vkGetPhysicalDeviceExternalBufferPropertiesKHR(cugan->vkdev->info.physical_device(), &extBufInfo, &extBufProps);
@@ -4337,24 +4483,27 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
                 break;
             }
         }
-    } else {
+    }
+    if (!found) {
 #ifdef _WIN32
         compatible_memory_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
 #else
         compatible_memory_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
 #endif
+        dedicated = true;
     }
+#endif
 
-    VkExternalMemoryImageCreateInfo extImageCreateInfo;
-    extImageCreateInfo.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
+    VkExternalMemoryImageCreateInfo extImageCreateInfo { VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO };
     extImageCreateInfo.pNext = 0;
     extImageCreateInfo.handleTypes = compatible_memory_type;
 
-    VkImageCreateInfo imageCreateInfo;
+    VkImageCreateInfo imageCreateInfo { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+#ifndef USE_D3D11
     VkImageTiling tiling = cugan->tiling_linear ? VK_IMAGE_TILING_LINEAR : VK_IMAGE_TILING_OPTIMAL;
     // VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    imageCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+#endif
     imageCreateInfo.pNext = &extImageCreateInfo;
     imageCreateInfo.flags = 0;
     imageCreateInfo.imageType = depth == 1 ? VK_IMAGE_TYPE_2D : VK_IMAGE_TYPE_3D;
@@ -4373,7 +4522,7 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
     imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     VkImage image;
-    VkResult ret = vkCreateImage(cugan->vkdev->vkdevice(), &imageCreateInfo, 0, &image);
+    ret = vkCreateImage(cugan->vkdev->vkdevice(), &imageCreateInfo, 0, &image);
     if (ret != VK_SUCCESS)
     {
         NCNN_LOGE("vkCreateImage failed %d %d %d %d %d %d %d", ret, width, height, depth, format, tiling, usage);
@@ -4408,7 +4557,8 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
         aligned_size = alignSize(size, alignment);
         image_memory_type_index = cugan->vkdev->find_memory_index(memReqs2.memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
 
-        dedicated = dedReqs.requiresDedicatedAllocation;
+        if (!dedicated)
+            dedicated = dedReqs.requiresDedicatedAllocation;
     } else {
         VkMemoryRequirements memoryRequirements;
         vkGetImageMemoryRequirements(cugan->vkdev->vkdevice(), image, &memoryRequirements);
@@ -4420,24 +4570,26 @@ static VkImageMemory* out_create(const RealCUGAN* cugan, int w, int h, int c, si
         image_memory_type_index = cugan->vkdev->find_memory_index(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
     }
 
-    VkMemoryDedicatedAllocateInfoKHR dedAllocInfo;
+    VkMemoryDedicatedAllocateInfoKHR dedAllocInfo { VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO };
+    dedAllocInfo.image = image;
 
-    VkExportMemoryAllocateInfo exportAllocInfo{
+#ifdef USE_D3D11
+    VkImportMemoryWin32HandleInfoKHR extAllocInfo { VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR };
+    extAllocInfo.handleType = compatible_memory_type;
+    extAllocInfo.handle = d3d_handle;
+#else
+    VkExportMemoryAllocateInfo extAllocInfo {
         VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO, nullptr,
-        extImageCreateInfo.handleTypes};
-
+        extImageCreateInfo.handleTypes
+    };
+#endif
     if (dedicated) {
-        memset(&dedAllocInfo, 0, sizeof dedAllocInfo);
-        dedAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
-        dedAllocInfo.image = image;
-        dedAllocInfo.buffer = nullptr;
-
-        exportAllocInfo.pNext = &dedAllocInfo;
+        extAllocInfo.pNext = &dedAllocInfo;
     }
 
     VkMemoryAllocateInfo memoryAllocateInfo;
     memoryAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    memoryAllocateInfo.pNext = &exportAllocInfo;
+    memoryAllocateInfo.pNext = &extAllocInfo;
     memoryAllocateInfo.allocationSize = aligned_size;
     memoryAllocateInfo.memoryTypeIndex = image_memory_type_index;
 
@@ -4579,6 +4731,23 @@ void OutVkImageMat::release(const RealCUGAN* cugan)
     {
         release_handles();
 
+#ifdef _WIN32
+        if (d3d_handle) {
+            CloseHandle(d3d_handle);
+            d3d_handle = NULL;
+        }
+
+        if (dxgi_res) {
+            dxgi_res->Release();
+            dxgi_res = NULL;
+        }
+
+        if (d3d_resource) {
+            d3d_resource->Release();
+            d3d_resource = NULL;
+        }
+#endif
+
         vkDestroyImageView(cugan->vkdev->vkdevice(), data->imageview, 0);
         vkFreeMemory(cugan->vkdev->vkdevice(), data->memory, 0);
         vkDestroyImage(cugan->vkdev->vkdevice(), data->image, 0);
@@ -4588,6 +4757,7 @@ void OutVkImageMat::release(const RealCUGAN* cugan)
         data = 0;
     }
 
+    allocator = NULL;
     elemsize = 0;
     elempack = 0;
 

@@ -420,7 +420,6 @@ GLuint realcugan_run(int tb, int top_bot, int index, int w, int h, int c, const 
     }
     realcugan_locks[locks_index]->unlock();
 
-
 #ifdef USE_D3D11
     OutVkImageMat *out = realcugan[locks_index]->out_gpu_tex[tb];
     *dim3 = out->depth > 1;
