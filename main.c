@@ -3686,6 +3686,8 @@ typedef struct _FrameBufferContext
 #ifdef USE_D3D11
   ID3D11Texture2D *d3d_tex[SCREEN_COUNT];
   ID3D11ShaderResourceView *d3d_srv[SCREEN_COUNT];
+  IDXGIKeyedMutex *d3d_mutex_upscaled[SCREEN_COUNT]; // Non-owning
+  ID3D11ShaderResourceView *d3d_srv_upscaled[SCREEN_COUNT]; // Non-owning
 #else
   GLuint gl_tex_id[SCREEN_COUNT];
   GLuint gl_tex_upscaled[SCREEN_COUNT];
@@ -3737,7 +3739,8 @@ static void get_draw_screen_dims(
   int *out_ctx_width,
   int *out_ctx_height,
   int *out_win_w,
-  int *out_win_h
+  int *out_win_h,
+  bool *out_upscaled
 ) {
   double ctx_left_f;
   double ctx_top_f;
@@ -3832,6 +3835,7 @@ static void get_draw_screen_dims(
   *out_ctx_height = ctx_height;
   *out_win_w = win_w;
   *out_win_h = win_h;
+  *out_upscaled = screen_upscale_factor > 1 && upscaling_filter && upscaling_filter_created;
 }
 #endif
 
@@ -3914,50 +3918,9 @@ static void do_hr_draw_screen(
   SDL_RenderCopyEx(sdlRenderer[tb], sdlTexture[tb][top_bot], NULL, &rect, -90, &center, SDL_FLIP_NONE);
 }
 #elif defined(USE_D3D11)
-static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot, int tb, __attribute__ ((unused)) int index, view_mode_t vm, int sc_child)
-{
-  double ctx_left_f;
-  double ctx_top_f;
-  double ctx_right_f;
-  double ctx_bot_f;
-  int ctx_width;
-  int ctx_height;
-  int win_w;
-  int win_h;
-  get_draw_screen_dims(
-    top_bot, tb, sc_child, vm, width, height,
-    &ctx_left_f, &ctx_top_f, &ctx_right_f, &ctx_bot_f, &ctx_width, &ctx_height, &win_w, &win_h
-  );
-
-  struct d3d_vertex_t vertices[] = {
-    { { ctx_left_f, ctx_bot_f }, { 0.0f, 0.0f } },
-    { { ctx_right_f, ctx_bot_f }, { 0.0f, 1.0f } },
-    { { ctx_left_f, ctx_top_f }, { 1.0f, 0.0f } },
-    { { ctx_right_f, ctx_top_f }, { 1.0f, 1.0f } },
-  };
-
-  HRESULT hr;
-
-  if (width != (top_bot == 0 ? 400 : 320) || height != 240) {
-    err_log("Invalid size\n");
-    return;
-  }
-
-  if (data) {
-    D3D11_MAPPED_SUBRESOURCE tex_mapped = {};
-    hr = ID3D11DeviceContext_Map(d3d11device_context[tb], (ID3D11Resource *)ctx->d3d_tex[tb], 0, D3D11_MAP_WRITE_DISCARD, 0, &tex_mapped);
-    if (hr) {
-      err_log("Map failed: %d", (int)hr);
-      return;
-    }
-    for (int i = 0; i < width; ++i) {
-      memcpy(tex_mapped.pData + i * tex_mapped.RowPitch, data + i * height * 4, height * 4);
-    }
-
-    ID3D11DeviceContext_Unmap(d3d11device_context[tb], (ID3D11Resource *)ctx->d3d_tex[tb], 0);
-  }
-
+static void do_d3d11_draw_screen(int tb, int top_bot, struct d3d_vertex_t *vertices) {
   {
+    HRESULT hr;
     D3D11_MAPPED_SUBRESOURCE tex_mapped = {};
     hr = ID3D11DeviceContext_Map(d3d11device_context[tb], (ID3D11Resource *)d3d_child_vb[tb][top_bot], 0, D3D11_MAP_WRITE_DISCARD, 0, &tex_mapped);
     if (hr) {
@@ -3978,10 +3941,118 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
   ID3D11DeviceContext_OMSetBlendState(d3d11device_context[tb], d3d_ui_bs[tb], NULL, 0xffffffff);
   ID3D11DeviceContext_VSSetShader(d3d11device_context[tb], d3d_vs[tb], NULL, 0);
   ID3D11DeviceContext_PSSetShader(d3d11device_context[tb], d3d_ps[tb], NULL, 0);
-  ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[tb], 0, 1, &ctx->d3d_srv[tb]);
   ID3D11DeviceContext_PSSetSamplers(d3d11device_context[tb], 0, 1, &d3d_ss_linear[tb]);
   ID3D11DeviceContext_RSSetState(d3d11device_context[tb], NULL);
   ID3D11DeviceContext_DrawIndexed(d3d11device_context[tb], 6, 0, 0);
+}
+static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width, int height, int top_bot, int tb, __attribute__ ((unused)) int index, view_mode_t vm, int sc_child)
+{
+  double ctx_left_f;
+  double ctx_top_f;
+  double ctx_right_f;
+  double ctx_bot_f;
+  int ctx_width;
+  int ctx_height;
+  int win_w;
+  int win_h;
+  bool upscaled;
+  get_draw_screen_dims(
+    top_bot, tb, sc_child, vm, width, height,
+    &ctx_left_f, &ctx_top_f, &ctx_right_f, &ctx_bot_f, &ctx_width, &ctx_height, &win_w, &win_h, &upscaled
+  );
+
+  struct d3d_vertex_t vertices[] = {
+    { { ctx_left_f, ctx_bot_f }, { 0.0f, 0.0f } },
+    { { ctx_right_f, ctx_bot_f }, { 0.0f, 1.0f } },
+    { { ctx_left_f, ctx_top_f }, { 1.0f, 0.0f } },
+    { { ctx_right_f, ctx_top_f }, { 1.0f, 1.0f } },
+  };
+
+  HRESULT hr;
+
+  if (width != (top_bot == 0 ? 400 : 320) || height != 240) {
+    err_log("Invalid size\n");
+    return;
+  }
+
+  if (upscaled) {
+    if (!data) {
+      if (!ctx->d3d_srv_upscaled[tb]) {
+        data = ctx->prev_data;
+      }
+    }
+    if (data) {
+      bool dim3;
+      bool success;
+      ctx->d3d_mutex_upscaled[tb] = NULL;
+      ctx->d3d_srv_upscaled[tb] = NULL;
+      ID3D11Resource *res = sr_run(tb, top_bot, index, height, width, GL_CHANNELS_N, data, ctx->screen_upscaled, &ctx->d3d_mutex_upscaled[tb], &ctx->d3d_srv_upscaled[tb], &dim3, &success);
+      if (res) {
+        hr = IDXGIKeyedMutex_AcquireSync(ctx->d3d_mutex_upscaled[tb], 1, 2000);
+        if (hr) {
+          err_log("AcquireSync failed: %d\n", (int)hr);
+          return;
+        }
+
+        ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[tb], 0, 1, &ctx->d3d_srv_upscaled[tb]);
+        do_d3d11_draw_screen(tb, top_bot, vertices);
+        ID3D11ShaderResourceView *ptr_null = NULL;
+        ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[tb], 0, 1, &ptr_null);
+
+        hr = IDXGIKeyedMutex_ReleaseSync(ctx->d3d_mutex_upscaled[tb], 0);
+        if (hr) {
+          err_log("ReleaseSync failed: %d\n", (int)hr);
+          return;
+        }
+        return;
+      } else {
+        // TODO
+        err_log("not implemented\n");
+        if (success) {
+        } else {
+        }
+        return;
+      }
+    } else if (ctx->d3d_srv_upscaled[tb]) {
+      hr = IDXGIKeyedMutex_AcquireSync(ctx->d3d_mutex_upscaled[tb], 0, 2000);
+      if (hr) {
+        err_log("AcquireSync failed: %d\n", (int)hr);
+        return;
+      }
+
+      ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[tb], 0, 1, &ctx->d3d_srv_upscaled[tb]);
+      do_d3d11_draw_screen(tb, top_bot, vertices);
+      ID3D11ShaderResourceView *ptr_null = NULL;
+      ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[tb], 0, 1, &ptr_null);
+
+      hr = IDXGIKeyedMutex_ReleaseSync(ctx->d3d_mutex_upscaled[tb], 0);
+      if (hr) {
+        err_log("ReleaseSync failed: %d\n", (int)hr);
+        return;
+      }
+      return;
+    } else {
+      err_log("no data\n");
+    }
+    return;
+  }
+
+  if (data) {
+    D3D11_MAPPED_SUBRESOURCE tex_mapped = {};
+    hr = ID3D11DeviceContext_Map(d3d11device_context[tb], (ID3D11Resource *)ctx->d3d_tex[tb], 0, D3D11_MAP_WRITE_DISCARD, 0, &tex_mapped);
+    if (hr) {
+      err_log("Map failed: %d", (int)hr);
+      return;
+    }
+    for (int i = 0; i < width; ++i) {
+      memcpy(tex_mapped.pData + i * tex_mapped.RowPitch, data + i * height * 4, height * 4);
+    }
+
+    ID3D11DeviceContext_Unmap(d3d11device_context[tb], (ID3D11Resource *)ctx->d3d_tex[tb], 0);
+  }
+
+  ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[tb], 0, 1, &ctx->d3d_srv[tb]);
+  do_d3d11_draw_screen(tb, top_bot, vertices);
   ID3D11ShaderResourceView *ptr_null = NULL;
   ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[tb], 0, 1, &ptr_null);
 }
@@ -3996,9 +4067,10 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
   int ctx_height;
   int win_w;
   int win_h;
+  bool upscaled;
   get_draw_screen_dims(
     top_bot, tb, sc_child, vm, width, height,
-    &ctx_left_f, &ctx_top_f, &ctx_right_f, &ctx_bot_f, &ctx_width, &ctx_height, &win_w, &win_h
+    &ctx_left_f, &ctx_top_f, &ctx_right_f, &ctx_bot_f, &ctx_width, &ctx_height, &win_w, &win_h, &upscaled
   );
   if (sc_child) {
     tb = top_bot;
@@ -4027,8 +4099,6 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
     memcpy(vertices[i].tex_coord, vVertices_tex_coord[i], sizeof(vertices[i].tex_coord));
   }
 #endif
-
-  nk_bool upscaled = screen_upscale_factor > 1 && upscaling_filter && upscaling_filter_created;
   int scale = upscaled ? screen_upscale_factor : 1;
   GLuint tex = upscaled ? ctx->gl_tex_upscaled[tb] : ctx->gl_tex_id[tb];
   GLuint gl_sem = 0;

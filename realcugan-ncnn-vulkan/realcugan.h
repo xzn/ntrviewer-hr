@@ -52,6 +52,8 @@ public:
 #endif
 #ifdef USE_D3D11
     ID3D11Resource *d3d_resource = NULL;
+    IDXGIKeyedMutex *dxgi_mutex = NULL;
+    ID3D11ShaderResourceView *d3d_srv = NULL;
     IDXGIResource1 *dxgi_res = NULL;
     HANDLE d3d_handle = NULL;
 #else

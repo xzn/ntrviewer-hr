@@ -391,7 +391,7 @@ int realcugan_create()
 
 extern "C"
 #ifdef USE_D3D11
-ID3D11Resource *realcugan_run(int tb, int top_bot, int index, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, bool *dim3, bool *success)
+ID3D11Resource *realcugan_run(int tb, int top_bot, int index, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, IDXGIKeyedMutex **mutex, ID3D11ShaderResourceView **srv, bool *dim3, bool *success)
 #else
 GLuint realcugan_run(int tb, int top_bot, int index, int w, int h, int c, const unsigned char *indata, unsigned char *outdata, GLuint *gl_sem, GLuint *gl_sem_next, bool *dim3, bool *success)
 #endif
@@ -422,6 +422,8 @@ GLuint realcugan_run(int tb, int top_bot, int index, int w, int h, int c, const 
 
 #ifdef USE_D3D11
     OutVkImageMat *out = realcugan[locks_index]->out_gpu_tex[tb];
+    *mutex = out->dxgi_mutex;
+    *srv = out->d3d_srv;
     *dim3 = out->depth > 1;
     *success = true;
     return out->d3d_resource;
@@ -478,6 +480,8 @@ extern "C" void realcugan_destroy()
     }
 
     ncnn::destroy_gpu_instance();
+#ifdef USE_D3D11
     d3d_context = NULL;
     d3d_device = NULL;
+#endif
 }

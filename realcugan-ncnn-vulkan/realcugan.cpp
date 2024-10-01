@@ -796,14 +796,14 @@ int RealCUGAN::process(int index, const ncnn::Mat& inimage, ncnn::Mat& outimage)
 #ifdef USE_D3D11
             if (out_gpu_tex[index]->d3d_resource) {
                 const uint64_t acqKey = 0;
-                const uint64_t relKey = 0;
-                const uint32_t timeout = 1000;
+                const uint64_t relKey = 1;
+                const uint32_t timeout = 2000;
                 VkDeviceMemory memory = out_gpu_tex[index]->data->memory;
                 VkWin32KeyedMutexAcquireReleaseInfoKHR keyedMutexInfo { VK_STRUCTURE_TYPE_WIN32_KEYED_MUTEX_ACQUIRE_RELEASE_INFO_KHR };
                 keyedMutexInfo.acquireCount = 1;
                 keyedMutexInfo.pAcquireSyncs = &memory;
                 keyedMutexInfo.pAcquireKeys = &acqKey;
-                keyedMutexInfo.pAcquireTimeouts - &timeout;
+                keyedMutexInfo.pAcquireTimeouts = &timeout;
                 keyedMutexInfo.releaseCount = 1;
                 keyedMutexInfo.pReleaseSyncs = &memory;
                 keyedMutexInfo.pReleaseKeys = &relKey;
@@ -4356,7 +4356,7 @@ VkImageMemory* OutVkImageMat::out_create(const RealCUGAN* cugan,
     compatible_memory_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
 
     VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL;
-    VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
     VkPhysicalDeviceExternalImageFormatInfo extImgFmtInfo {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO
@@ -4366,6 +4366,7 @@ VkImageMemory* OutVkImageMat::out_create(const RealCUGAN* cugan,
     VkPhysicalDeviceImageFormatInfo2 phyDevImgFmtInfo {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2
     };
+    phyDevImgFmtInfo.pNext = &extImgFmtInfo;
     phyDevImgFmtInfo.format = format;
     phyDevImgFmtInfo.type = depth == 1 ? VK_IMAGE_TYPE_2D : VK_IMAGE_TYPE_3D;
     phyDevImgFmtInfo.tiling = tiling;
@@ -4413,7 +4414,7 @@ VkImageMemory* OutVkImageMat::out_create(const RealCUGAN* cugan,
         desc.SampleDesc.Count = 1;
         desc.SampleDesc.Quality = 0;
         desc.Usage = D3D11_USAGE_DEFAULT;
-        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
         desc.CPUAccessFlags = 0;
         hr = cugan->dev[index]->CreateTexture2D(&desc, NULL, (ID3D11Texture2D **)&d3d_resource);
@@ -4429,7 +4430,7 @@ VkImageMemory* OutVkImageMat::out_create(const RealCUGAN* cugan,
         desc.MipLevels = 1;
         desc.Format = DXGI_FORMAT_R32_FLOAT;
         desc.Usage = D3D11_USAGE_DEFAULT;
-        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
         desc.CPUAccessFlags = 0;
         hr = cugan->dev[index]->CreateTexture3D(&desc, NULL, (ID3D11Texture3D **)&d3d_resource);
@@ -4445,9 +4446,21 @@ VkImageMemory* OutVkImageMat::out_create(const RealCUGAN* cugan,
         return 0;
     }
 
-    hr = dxgi_res->CreateSharedHandle(NULL, DXGI_SHARED_RESOURCE_WRITE, NULL, &d3d_handle);
+    hr = dxgi_res->CreateSharedHandle(NULL, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, NULL, &d3d_handle);
     if (hr) {
         NCNN_LOGE("CreateSharedHandle failed: %d", (int)hr);
+        return 0;
+    }
+
+    hr = d3d_resource->QueryInterface(&dxgi_mutex);
+    if (hr) {
+        NCNN_LOGE("QueryInterface IDXGIKeyedMutex failed: %d\n", (int)hr);
+        return 0;
+    }
+
+    hr = cugan->dev[index]->CreateShaderResourceView(d3d_resource, NULL, &d3d_srv);
+    if (hr) {
+        NCNN_LOGE("CreateShaderResourceView failed: %d\n", (int)hr);
         return 0;
     }
 #else
@@ -4731,7 +4744,7 @@ void OutVkImageMat::release(const RealCUGAN* cugan)
     {
         release_handles();
 
-#ifdef _WIN32
+#ifdef USE_D3D11
         if (d3d_handle) {
             CloseHandle(d3d_handle);
             d3d_handle = NULL;
@@ -4740,6 +4753,16 @@ void OutVkImageMat::release(const RealCUGAN* cugan)
         if (dxgi_res) {
             dxgi_res->Release();
             dxgi_res = NULL;
+        }
+
+        if (d3d_srv) {
+            d3d_srv->Release();
+            d3d_srv = NULL;
+        }
+
+        if (dxgi_mutex) {
+            dxgi_mutex->Release();
+            dxgi_mutex = NULL;
         }
 
         if (d3d_resource) {
