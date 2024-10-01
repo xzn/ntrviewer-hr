@@ -3688,6 +3688,8 @@ typedef struct _FrameBufferContext
   ID3D11ShaderResourceView *d3d_srv[SCREEN_COUNT];
   IDXGIKeyedMutex *d3d_mutex_upscaled[SCREEN_COUNT]; // Non-owning
   ID3D11ShaderResourceView *d3d_srv_upscaled[SCREEN_COUNT]; // Non-owning
+  ID3D11Texture2D *prev_d3d_tex_upscaled[SCREEN_COUNT];
+  ID3D11ShaderResourceView *prev_d3d_srv_upscaled[SCREEN_COUNT];
 #else
   GLuint gl_tex_id[SCREEN_COUNT];
   GLuint gl_tex_upscaled[SCREEN_COUNT];
@@ -4006,10 +4008,59 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
         }
         return;
       } else {
-        // TODO
-        err_log("not implemented\n");
         if (success) {
+          int scale = screen_upscale_factor;
+          width *= scale;
+          height *= scale;
+          if (!ctx->prev_d3d_srv_upscaled[tb]) {
+            CHECK_AND_RELEASE(ctx->prev_d3d_tex_upscaled[tb]);
+
+            D3D11_TEXTURE2D_DESC tex_desc = {};
+            tex_desc.Width = height;
+            tex_desc.Height = width;
+            tex_desc.MipLevels = 1;
+            tex_desc.ArraySize = 1;
+            tex_desc.Format = D3D_FORMAT;
+            tex_desc.SampleDesc.Count = 1;
+            tex_desc.SampleDesc.Quality = 0;
+            tex_desc.Usage = D3D11_USAGE_DYNAMIC;
+            tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            tex_desc.MiscFlags = 0;
+            tex_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+            hr = ID3D11Device_CreateTexture2D(d3d11device[tb], &tex_desc, NULL, &ctx->prev_d3d_tex_upscaled[tb]);
+            if (hr) {
+              err_log("CreateTexture2D failed: %d\n", (int)hr);
+              return;
+            }
+
+            hr = ID3D11Device_CreateShaderResourceView(d3d11device[tb], (ID3D11Resource *)ctx->prev_d3d_tex_upscaled[tb], NULL, &ctx->prev_d3d_srv_upscaled[tb]);
+            if (hr) {
+              err_log("CreateShaderResourceView failed: %d\n", (int)hr);
+              CHECK_AND_RELEASE(ctx->prev_d3d_tex_upscaled[tb]);
+              return;
+            }
+          }
+
+          D3D11_MAPPED_SUBRESOURCE tex_mapped = {};
+          hr = ID3D11DeviceContext_Map(d3d11device_context[tb], (ID3D11Resource *)ctx->prev_d3d_tex_upscaled[tb], 0, D3D11_MAP_WRITE_DISCARD, 0, &tex_mapped);
+          if (hr) {
+            err_log("Map failed: %d", (int)hr);
+            return;
+          }
+          for (int i = 0; i < width; ++i) {
+            memcpy(tex_mapped.pData + i * tex_mapped.RowPitch, ctx->screen_upscaled + i * height * 4, height * 4);
+          }
+
+          ID3D11DeviceContext_Unmap(d3d11device_context[tb], (ID3D11Resource *)ctx->prev_d3d_tex_upscaled[tb], 0);
+
+          ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[tb], 0, 1, &ctx->prev_d3d_srv_upscaled[tb]);
+          do_d3d11_draw_screen(tb, top_bot, vertices);
+          ID3D11ShaderResourceView *ptr_null = NULL;
+          ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[tb], 0, 1, &ptr_null);
         } else {
+          upscaling_filter = 0;
+          err_log("upscaling failed; filter disabled\n");
         }
         return;
       }
@@ -4031,6 +4082,11 @@ static void do_hr_draw_screen(FrameBufferContext *ctx, uint8_t *data, int width,
         return;
       }
       return;
+    } else if (ctx->prev_d3d_srv_upscaled[tb]) {
+      ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[tb], 0, 1, &ctx->prev_d3d_srv_upscaled[tb]);
+      do_d3d11_draw_screen(tb, top_bot, vertices);
+      ID3D11ShaderResourceView *ptr_null = NULL;
+      ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[tb], 0, 1, &ptr_null);
     } else {
       err_log("no data\n");
     }
@@ -7467,6 +7523,8 @@ start_use_c_sc:
   CHECK_AND_RELEASE(d3d_ui_tex);
   for (int j = 0; j < SCREEN_COUNT; ++j) {
     for (int i = 0; i < SCREEN_COUNT; ++i) {
+      CHECK_AND_RELEASE(buffer_ctx[j].prev_d3d_srv_upscaled[i]);
+      CHECK_AND_RELEASE(buffer_ctx[j].prev_d3d_tex_upscaled[i]);
       CHECK_AND_RELEASE(buffer_ctx[j].d3d_srv[i]);
       CHECK_AND_RELEASE(buffer_ctx[j].d3d_tex[i]);
       CHECK_AND_RELEASE(d3d_child_vb[j][i]);
