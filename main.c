@@ -366,6 +366,7 @@ enum {
   SURFACE_UTIL_COUNT,
 };
 
+static IDXGISwapChain *dxgi_sc[SCREEN_COUNT];
 static ID3D11Device *d3d11device[SCREEN_COUNT];
 static ID3D11DeviceContext *d3d11device_context[SCREEN_COUNT];
 static IDXGIDevice *dxgi_device[SCREEN_COUNT];
@@ -423,7 +424,7 @@ static void d3d11_trigger_tdr(void) {
 #ifdef USE_D3D11
 static ID3D11Texture2D *d3d_ui_tex;
 static ID3D11RenderTargetView *d3d_ui_rtv;
-struct presentation_buffer_t *d3d_pres_buf[SCREEN_COUNT]; // Non-owning
+struct ID3D11RenderTargetView *d3d_rtv[SCREEN_COUNT]; // Non-owning
 static ID3D11ShaderResourceView *d3d_ui_srv;
 #else
 static HANDLE gl_d3ddevice[SCREEN_COUNT];
@@ -1202,7 +1203,7 @@ static int presentation_render_reset(int sc_child, int bg) {
   } \
 } while (0)
 
-static int composition_swapchain_device_init(void) {
+static int dxgi_init(void) {
   HRESULT hr;
 
   if (!dxgi_factory) {
@@ -1237,6 +1238,16 @@ static int composition_swapchain_device_init(void) {
 
     CHECK_AND_RELEASE(dxgi_adapter);
   }
+
+  return 0;
+}
+
+static int composition_swapchain_device_init(void) {
+  HRESULT hr;
+
+  hr = dxgi_init();
+  if (hr)
+    return hr;
 
   for (int i = 0; i < SCREEN_COUNT; ++i) {
     D3D_FEATURE_LEVEL featureLevelSupported;
@@ -4747,7 +4758,7 @@ ThreadLoop(int i)
 #ifdef USE_COMPOSITION_SWAPCHAIN
   if (sc_tb == SCREEN_TOP) {
     rp_lock_wait(comp_lock);
-    if (!compositing) {
+    if (use_composition_swapchain && !compositing) {
       goto sc_tb_fail;
     }
   }
@@ -4756,7 +4767,11 @@ ThreadLoop(int i)
   SDL_GL_MakeCurrent(win_ogl[i], glContext[i]);
 #endif
 
-#ifndef USE_D3D11
+#ifdef USE_D3D11
+  ID3D11Texture2D *tex_sc;
+  ID3D11RenderTargetView *rtv_sc;
+  HRESULT hr;
+#else
   GLenum gl_err;
   while ((gl_err = glGetError()) != GL_NO_ERROR) {
     err_log("gl error: %d\n", (int)gl_err);
@@ -4775,7 +4790,9 @@ ThreadLoop(int i)
   int ctx_width = NK_MAX(win_width[sc_tb], 1);
   int ctx_height = NK_MAX(win_height[sc_tb], 1);
 #ifdef USE_COMPOSITION_SWAPCHAIN
-#ifndef USE_D3D11
+#ifdef USE_D3D11
+  struct presentation_buffer_t *d3d_pres_buf = NULL;
+#else
   GLuint tex_sc;
   HANDLE handle_sc;
 #endif
@@ -4891,8 +4908,9 @@ ThreadLoop(int i)
     if (presentation_buffer_get(bufs, sc_child ? sc_top_bot : sc_tb, sc_child, COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN, ctx_width, ctx_height, &index_sc) != 0) {
       goto sc_tb_fail;
     }
-    d3d_pres_buf[sc_top_bot] = &bufs[index_sc];
-    ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[sc_tb], 1, &d3d_pres_buf[sc_top_bot]->rtv, NULL);
+    d3d_pres_buf = &bufs[index_sc];
+    d3d_rtv[sc_top_bot] = d3d_pres_buf->rtv;
+    ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[sc_tb], 1, &d3d_rtv[sc_top_bot], NULL);
 #else
     struct render_buffer_t *sc_render_buf = &render_buffers[sc_tb][sc_top_bot];
     if (render_buffer_get(sc_render_buf, sc_tb, ctx_width, ctx_height, &tex_sc, &handle_sc) != 0) {
@@ -4908,6 +4926,40 @@ ThreadLoop(int i)
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[sc_top_bot]);
     glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, tex_sc);
 #endif
+  } else {
+#ifdef USE_D3D11
+    if (prev_win_width[i] != win_width[i] || prev_win_height[i] != win_height[i]) {
+      prev_win_width[i] = win_width[i];
+      prev_win_height[i] = win_height[i];
+      hr = IDXGISwapChain_ResizeBuffers(dxgi_sc[i], 0, 0, 0, 0, 0);
+      if (hr) {
+        err_log("ResizeBuffers failed: %d\n", (int)hr);
+        goto sc_tb_fail;
+      }
+
+      if (i == SCREEN_TOP) {
+        if (nk_d3d11_resize(d3d11device_context[i], prev_win_width[i], prev_win_height[i], (float)USER_DEFAULT_SCREEN_DPI / win_dpi[i])) {
+          err_log("nk_d3d11_resize failed\n");
+          goto sc_tb_fail;
+        }
+      }
+    }
+    hr = IDXGISwapChain_GetBuffer(dxgi_sc[i], 0, &IID_ID3D11Texture2D, (void **)&tex_sc);
+    if (hr) {
+      err_log("GetBuffer failed: %d\n", (int)hr);
+      goto sc_tb_fail;
+    }
+
+    hr = ID3D11Device_CreateRenderTargetView(d3d11device[i], (ID3D11Resource *)tex_sc, NULL, &rtv_sc);
+    if (hr) {
+      err_log("CreateRenderTargetView failed: %d\n", (int)hr);
+      IUnknown_Release(tex_sc);
+      goto sc_tb_fail;
+    }
+
+    d3d_rtv[sc_top_bot] = rtv_sc;
+    ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &d3d_rtv[sc_top_bot], NULL);
+#endif
   }
 #endif
 
@@ -4915,7 +4967,7 @@ ThreadLoop(int i)
   D3D11_VIEWPORT vp = { .Width = ctx_width, .Height = ctx_height };
   ID3D11DeviceContext_RSSetViewports(d3d11device_context[sc_tb], 1, &vp);
   if (!sc_child) {
-    ID3D11DeviceContext_ClearRenderTargetView(d3d11device_context[sc_tb], d3d_pres_buf[sc_top_bot]->rtv, bg);
+    ID3D11DeviceContext_ClearRenderTargetView(d3d11device_context[sc_tb], d3d_rtv[sc_top_bot], bg);
   }
 #else
   glViewport(0, 0, ctx_width, ctx_height);
@@ -4935,7 +4987,7 @@ ThreadLoop(int i)
     if (!hr_draw_screen(&buffer_ctx[sc_top_bot], width, height, sc_top_bot, sc_tb, vm, sc_child)) {
 #ifndef USE_SDL_RENDERER
 #ifdef USE_D3D11
-      ID3D11DeviceContext_ClearRenderTargetView(d3d11device_context[sc_tb], d3d_pres_buf[sc_top_bot]->rtv, bg);
+      ID3D11DeviceContext_ClearRenderTargetView(d3d11device_context[sc_tb], d3d_rtv[sc_top_bot], bg);
 #else
       glClearColor(bg[0], bg[1], bg[2], bg[3]);
       glClear(GL_COLOR_BUFFER_BIT);
@@ -5061,7 +5113,7 @@ ThreadLoop(int i)
         goto sc_tb_fail;
       }
     }
-    if (presentation_buffer_present(d3d_pres_buf[sc_top_bot], sc_tb, sc_top_bot, sc_child, ctx_width, ctx_height)) {
+    if (presentation_buffer_present(d3d_pres_buf, sc_tb, sc_top_bot, sc_child, ctx_width, ctx_height)) {
       goto sc_tb_fail;
     }
   } else {
@@ -5069,7 +5121,12 @@ ThreadLoop(int i)
       nk_d3d11_render(d3d11device_context[i], NK_ANTI_ALIASING_ON, (float)USER_DEFAULT_SCREEN_DPI / win_dpi[i]);
       nk_gui_next = 1;
     }
-    // TODO present
+    hr = IDXGISwapChain_Present(dxgi_sc[i], 1, 0);
+    if (hr) {
+      err_log("Present failed: %d\n", (int)hr);
+    }
+    IUnknown_Release(rtv_sc);
+    IUnknown_Release(tex_sc);
   }
 #else
   if (use_composition_swapchain) {
@@ -5179,8 +5236,10 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
       PostQuitMessage(0);
       return 0;
 
-    case WM_SIZE:
-      if (i == SCREEN_TOP) {
+    case WM_SIZE: {
+      bool resize_top_and_ui = use_composition_swapchain && i == SCREEN_TOP;
+
+      if (resize_top_and_ui) {
         rp_lock_wait(comp_lock);
       }
 
@@ -5191,7 +5250,7 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
       win_w[i] = win_width[i] * USER_DEFAULT_SCREEN_DPI / win_dpi[i];
       win_h[i] = win_height[i] * USER_DEFAULT_SCREEN_DPI / win_dpi[i];
 
-      if (i == SCREEN_TOP) {
+      if (resize_top_and_ui) {
         CHECK_AND_RELEASE(d3d_ui_srv);
         CHECK_AND_RELEASE(d3d_ui_rtv);
         CHECK_AND_RELEASE(d3d_ui_tex);
@@ -5238,6 +5297,7 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
         rp_lock_rel(comp_lock);
       }
       break;
+    }
 
     case WM_DPICHANGED: {
       win_dpi[i] = HIWORD(wparam);
@@ -5268,8 +5328,10 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
       x = x * USER_DEFAULT_SCREEN_DPI / win_dpi[i];
       y = y * USER_DEFAULT_SCREEN_DPI / win_dpi[i];
       lparam = MAKELPARAM(x, y);
+      need_handle_input = i == SCREEN_TOP;
+      break;
     }
-    // fallthru
+
     case WM_MOUSEWHEEL:
     case WM_CHAR:
     case WM_KEYDOWN:
@@ -5373,9 +5435,11 @@ MainLoop(void *loopArg)
           }
           break;
         case SDL_MOUSEWHEEL:
+#if 0
           if (evt.wheel.windowID != win_id[SCREEN_TOP]) {
             goto skip_evt;
           }
+#endif
           break;
         case SDL_KEYDOWN:
           switch (evt.key.keysym.sym) {
@@ -6996,14 +7060,19 @@ start_use_c_sc:
 
 #ifdef USE_D3D11
   if (!use_composition_swapchain) {
+    HRESULT hr;
+
+    hr = dxgi_init();
+    if (hr)
+      return hr;
+
     for (int i = 0; i < SCREEN_COUNT; ++i) {
       D3D_FEATURE_LEVEL featureLevelSupported;
-      HRESULT hr;
       hr = D3D11CreateDevice(
         (IDXGIAdapter *)dxgi_adapter,
         dxgi_adapter ? 0 : D3D_DRIVER_TYPE_HARDWARE,
         NULL,
-        D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
         NULL,
         0,
         D3D11_SDK_VERSION,
@@ -7012,6 +7081,21 @@ start_use_c_sc:
         &d3d11device_context[i]);
       if (hr) {
         err_log("D3D11CreateDevice failed: %d\n", (int)hr);
+        return -1;
+      }
+
+      DXGI_SWAP_CHAIN_DESC sc_desc = {};
+      sc_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+      sc_desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+      sc_desc.SampleDesc.Count = 1;
+      sc_desc.BufferCount = COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN;
+      sc_desc.OutputWindow = hwnd[i];
+      sc_desc.Windowed = TRUE;
+      sc_desc.SwapEffect = IsWindows10OrGreater() ? DXGI_SWAP_EFFECT_FLIP_DISCARD : DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+
+      hr = IDXGIFactory2_CreateSwapChain(dxgi_factory, (IUnknown *)d3d11device[i], &sc_desc, &dxgi_sc[i]);
+      if (hr) {
+        err_log("CreateSwapChain failed: %d\n", (int)hr);
         return -1;
       }
     }
