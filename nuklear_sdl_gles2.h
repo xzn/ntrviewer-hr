@@ -23,7 +23,7 @@ NK_API struct nk_context*   nk_sdl_init(SDL_Window *win);
 NK_API void                 nk_sdl_font_stash_begin(struct nk_font_atlas **atlas);
 NK_API void                 nk_sdl_font_stash_end(void);
 NK_API int                  nk_sdl_handle_event(SDL_Event *evt);
-NK_API void                 nk_sdl_render(enum nk_anti_aliasing , int max_vertex_buffer, int max_element_buffer);
+NK_API void                 nk_sdl_render(enum nk_anti_aliasing , int max_vertex_buffer, int max_element_buffer, int vflip);
 NK_API void                 nk_sdl_shutdown(void);
 NK_API void                 nk_sdl_device_destroy(void);
 NK_API void                 nk_sdl_device_create(void);
@@ -173,8 +173,12 @@ nk_sdl_device_destroy(void)
     nk_buffer_free(&dev->cmds);
 }
 
+extern int sdl_win_width, sdl_win_height;
+extern int sdl_display_width, sdl_display_height;
+extern float sdl_scale;
+
 NK_API void
-nk_sdl_render(enum nk_anti_aliasing AA, int max_vertex_buffer, int max_element_buffer)
+nk_sdl_render(enum nk_anti_aliasing AA, int max_vertex_buffer, int max_element_buffer, int vflip)
 {
     struct nk_sdl_device *dev = &sdl.ogl;
     int width, height;
@@ -186,18 +190,22 @@ nk_sdl_render(enum nk_anti_aliasing AA, int max_vertex_buffer, int max_element_b
         {  0.0f,  0.0f, -1.0f, 0.0f },
         { -1.0f,  1.0f,  0.0f, 1.0f },
     };
+    if (vflip) {
+        ortho[1][1] *= -1.0;
+        ortho[3][1] *= -1.0;
+    }
 
     Uint64 now = SDL_GetTicks64();
     sdl.ctx.delta_time_seconds = (float)(now - sdl.time_of_last_frame) / 1000;
     sdl.time_of_last_frame = now;
 
-    SDL_GetWindowSize(sdl.win, &width, &height);
-    SDL_GL_GetDrawableSize(sdl.win, &display_width, &display_height);
+    int width = sdl_win_width, height = sdl_win_height;
+    int display_width = sdl_display_width, display_height = sdl_display_height;
     ortho[0][0] /= (GLfloat)width;
     ortho[1][1] /= (GLfloat)height;
 
-    scale.x = (float)display_width/(float)width;
-    scale.y = (float)display_height/(float)height;
+    scale.x = sdl_scale;
+    scale.y = sdl_scale;
 
     /* setup global state */
     glViewport(0,0,display_width,display_height);
@@ -276,10 +284,17 @@ nk_sdl_render(enum nk_anti_aliasing AA, int max_vertex_buffer, int max_element_b
         nk_draw_foreach(cmd, &sdl.ctx, &dev->cmds) {
             if (!cmd->elem_count) continue;
             glBindTexture(GL_TEXTURE_2D, (GLuint)cmd->texture.id);
-            glScissor((GLint)(cmd->clip_rect.x * scale.x),
-                (GLint)((height - (GLint)(cmd->clip_rect.y + cmd->clip_rect.h)) * scale.y),
-                (GLint)(cmd->clip_rect.w * scale.x),
-                (GLint)(cmd->clip_rect.h * scale.y));
+            if (vflip) {
+                glScissor((GLint)(cmd->clip_rect.x * scale.x),
+                    (GLint)(cmd->clip_rect.y * scale.y),
+                    (GLint)(cmd->clip_rect.w * scale.x),
+                    (GLint)(cmd->clip_rect.h * scale.y));
+            } else {
+                glScissor((GLint)(cmd->clip_rect.x * scale.x),
+                    (GLint)((height - (GLint)(cmd->clip_rect.y + cmd->clip_rect.h)) * scale.y),
+                    (GLint)(cmd->clip_rect.w * scale.x),
+                    (GLint)(cmd->clip_rect.h * scale.y));
+            }
             glDrawElements(GL_TRIANGLES, (GLsizei)cmd->elem_count, GL_UNSIGNED_SHORT, offset);
             offset += cmd->elem_count;
         }

@@ -220,19 +220,30 @@ static event_t updateBottomScreenEvent;
 
 static int win_w[SCREEN_COUNT], win_h[SCREEN_COUNT];
 static int win_width[SCREEN_COUNT], win_height[SCREEN_COUNT];
-static int win_dpi[SCREEN_COUNT];
+static struct nk_vec2 win_scale[SCREEN_COUNT];
 
 static const float font_scale_step_factor = 32.0;
 static const float font_scale_epsilon = 1.0 / font_scale_step_factor;
+
+int sdl_win_width, sdl_win_height;
+int sdl_display_width, sdl_display_height;
+float sdl_scale;
 
 static void updateWindowSize(int tb) {
   SDL_GetWindowSize(win[tb], &win_w[tb], &win_h[tb]);
   SDL_GL_GetDrawableSize(win[tb], &win_width[tb], &win_height[tb]);
   float scale_x = (float)(win_width[tb]) / (float)(win_w[tb]);
   float scale_y = (float)(win_height[tb]) / (float)(win_h[tb]);
-  scale_x = roundf(scale_x * font_scale_step_factor) / font_scale_step_factor;
-  scale_y = roundf(scale_y * font_scale_step_factor) / font_scale_step_factor;
-  win_dpi[tb] = NK_MAX(USER_DEFAULT_SCREEN_DPI * scale_x, USER_DEFAULT_SCREEN_DPI * scale_y);
+  win_scale[tb].x = roundf(scale_x * font_scale_step_factor) / font_scale_step_factor;
+  win_scale[tb].y = roundf(scale_y * font_scale_step_factor) / font_scale_step_factor;
+
+  if (tb == SCREEN_TOP) {
+    sdl_win_width = win_w[tb];
+    sdl_win_height = win_h[tb];
+    sdl_display_width = win_width[tb];
+    sdl_display_height = win_height[tb];
+    sdl_scale = win_scale[tb].x;
+  }
 }
 
 static void updateViewMode(view_mode_t vm) {
@@ -852,6 +863,8 @@ static int presentation_buffer_present(int tb, int top_bot, int sc_child, __attr
     return -1;
   }
 
+  ID3D11DeviceContext_CopyResource(d3d11device_context[tb], (ID3D11Resource *)bufs[index_sc].tex, (ID3D11Resource *)b->tex);
+
   HRESULT hr;
 
   hr = IPresentationSurface_SetBuffer(
@@ -877,8 +890,6 @@ static int presentation_buffer_present(int tb, int top_bot, int sc_child, __attr
       return hr;
     }
   }
-
-  ID3D11DeviceContext_CopyResource(d3d11device_context[tb], (ID3D11Resource *)bufs[index_sc].tex, (ID3D11Resource *)b->tex);
 
   // err_log("%d %llu\n", sc_child ? top_bot : tb, (unsigned long long)IPresentationManager_GetNextPresentId(sc_child ? pres_man_child[top_bot] : presentation_manager[tb]));
   hr = IPresentationManager_Present(sc_child ? pres_man_child[top_bot] : presentation_manager[tb]);
@@ -906,6 +917,8 @@ static int ui_buffer_present(int count_max) {
     return -1;
   }
 
+  ID3D11DeviceContext_CopyResource(d3d11device_context[tb], (ID3D11Resource *)bufs[index_sc].tex, (ID3D11Resource *)b->tex);
+
   HRESULT hr;
 
   hr = IPresentationSurface_SetBuffer(pres_surf_util[j], bufs[index_sc].buf);
@@ -925,8 +938,6 @@ static int ui_buffer_present(int count_max) {
       return hr;
     }
   }
-
-  ID3D11DeviceContext_CopyResource(d3d11device_context[tb], (ID3D11Resource *)bufs[index_sc].tex, (ID3D11Resource *)b->tex);
 
   hr = IPresentationManager_Present(pres_man_util[j]);
   if (hr) {
@@ -4773,7 +4784,6 @@ ThreadLoop(int i)
   nk_color_fv(bg, nk_window_bgcolor);
   int width = sc_top_bot == SCREEN_TOP ? 400 : 320;
   int height = 240;
-  float scale_x = 1.0f, scale_y = 1.0f;
 #ifdef USE_SDL_RENDERER
   /* scale the renderer output for High-DPI displays */
   {
@@ -4789,15 +4799,6 @@ ThreadLoop(int i)
   SDL_SetRenderDrawColor(sdlRenderer[i], bg[0]* 255, bg[1] * 255, bg[2] * 255, bg[3] * 255);
   SDL_RenderClear(sdlRenderer[i]);
 #else
-#ifdef USE_D3D11
-  scale_x = (float)win_dpi[sc_tb] / USER_DEFAULT_SCREEN_DPI;
-  scale_y = (float)win_dpi[sc_tb] / USER_DEFAULT_SCREEN_DPI;
-#else
-  updateWindowSize(sc_tb);
-  scale_x = (float)win_dpi[sc_tb] / USER_DEFAULT_SCREEN_DPI;
-  scale_y = (float)win_dpi[sc_tb] / USER_DEFAULT_SCREEN_DPI;
-#endif
-
 #ifdef USE_COMPOSITION_SWAPCHAIN
   if (sc_tb == SCREEN_TOP) {
     rp_lock_wait(comp_lock);
@@ -4828,6 +4829,8 @@ ThreadLoop(int i)
 #endif
     }
   }
+
+  updateWindowSize(sc_tb);
 #endif
 
   int ctx_width = NK_MAX(win_width[sc_tb], 1);
@@ -4904,12 +4907,14 @@ ThreadLoop(int i)
         }
 
 #ifndef USE_D3D11
+#if 0
         D2D_MATRIX_3X2_F ui_trans_mat = { .m = { { 1.0f, 0.0f }, { 0.0f, -1.0f }, { 0.0f, (FLOAT)win_height[sc_tb] } } };
         hr = dcomp_vis_util[SURFACE_UTIL_UI]->lpVtbl->SetTransform2(dcomp_vis_util[SURFACE_UTIL_UI], &ui_trans_mat);
         if (hr) {
           err_log("SetTransform failed: %d\n", (int)hr);
           goto sc_tb_fail;
         }
+#endif
 #endif
 
         hr = dcomp_device[SCREEN_TOP]->lpVtbl->Commit(dcomp_device[SCREEN_TOP]);
@@ -4928,12 +4933,14 @@ ThreadLoop(int i)
       if (sc_tb == SCREEN_TOP && (prev_win_width[sc_top_bot] != win_width[sc_tb] || prev_win_height[sc_top_bot] != win_height[sc_tb])) {
 #ifndef USE_D3D11
         HRESULT hr;
+#if 0
         D2D_MATRIX_3X2_F ui_trans_mat = { .m = { { 1.0f, 0.0f }, { 0.0f, -1.0f }, { 0.0f, (FLOAT)win_height[sc_tb] } } };
         hr = dcomp_vis_util[SURFACE_UTIL_UI]->lpVtbl->SetTransform2(dcomp_vis_util[SURFACE_UTIL_UI], &ui_trans_mat);
         if (hr) {
           err_log("SetTransform failed: %d\n", (int)hr);
           goto sc_tb_fail;
         }
+#endif
 
         hr = dcomp_device[SCREEN_TOP]->lpVtbl->Commit(dcomp_device[SCREEN_TOP]);
         if (hr) {
@@ -4981,7 +4988,7 @@ ThreadLoop(int i)
       }
 
       if (i == SCREEN_TOP) {
-        if (nk_d3d11_resize(d3d11device_context[i], prev_win_width[i], prev_win_height[i], (float)USER_DEFAULT_SCREEN_DPI / win_dpi[i])) {
+        if (nk_d3d11_resize(d3d11device_context[i], prev_win_width[i], prev_win_height[i], win_scale[i].x)) {
           err_log("nk_d3d11_resize failed\n");
           goto sc_tb_fail;
         }
@@ -5069,10 +5076,10 @@ ThreadLoop(int i)
 #endif
 
     if (
-      fabsf(font_scale.x - scale_x) > font_scale_epsilon ||
-      fabsf(font_scale.y - scale_y) > font_scale_epsilon
+      fabsf(font_scale.x - win_scale[sc_tb].x) > font_scale_epsilon ||
+      fabsf(font_scale.y - win_scale[sc_tb].y) > font_scale_epsilon
     ) {
-      font_scale = (struct nk_vec2){ scale_x, scale_y };
+      font_scale = (struct nk_vec2){ win_scale[sc_tb].x, win_scale[sc_tb].y };
 
       struct nk_context *ctx = nk_ctx;
 
@@ -5124,7 +5131,7 @@ ThreadLoop(int i)
       ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &d3d_ui_rtv, NULL);
       float clearColor[4] = {};
       ID3D11DeviceContext_ClearRenderTargetView(d3d11device_context[i], d3d_ui_rtv, clearColor);
-      nk_d3d11_render(d3d11device_context[i], NK_ANTI_ALIASING_ON, (float)USER_DEFAULT_SCREEN_DPI / win_dpi[i]);
+      nk_d3d11_render(d3d11device_context[i], NK_ANTI_ALIASING_ON, win_scale[i].x);
       nk_gui_next = 1;
 
       ID3D11DeviceContext_IASetPrimitiveTopology(d3d11device_context[i], D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -5161,7 +5168,7 @@ ThreadLoop(int i)
     }
   } else {
     if (i == SCREEN_TOP) {
-      nk_d3d11_render(d3d11device_context[i], NK_ANTI_ALIASING_ON, (float)USER_DEFAULT_SCREEN_DPI / win_dpi[i]);
+      nk_d3d11_render(d3d11device_context[i], NK_ANTI_ALIASING_ON, win_scale[i].x);
       nk_gui_next = 1;
     }
     hr = IDXGISwapChain_Present(dxgi_sc[i], 1, 0);
@@ -5194,7 +5201,7 @@ ThreadLoop(int i)
       glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
       glClear(GL_COLOR_BUFFER_BIT);
 
-      nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
+      nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY, use_composition_swapchain);
       nk_gui_next = 1;
 
       glActiveTexture(GL_TEXTURE0);
@@ -5238,7 +5245,7 @@ ThreadLoop(int i)
     presentation_buffer_present(sc_tb, sc_top_bot, sc_child, COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN);
   } else {
     if (i == SCREEN_TOP) {
-      nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
+      nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY, use_composition_swapchain);
       nk_gui_next = 1;
     }
     SDL_GL_SwapWindow(win[i]);
@@ -5255,7 +5262,7 @@ sc_tb_fail:
     return;
 #else
   if (i == SCREEN_TOP) {
-    nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY);
+    nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY, use_composition_swapchain);
     nk_gui_next = 1;
   }
   SDL_GL_SwapWindow(win[i]);
@@ -5291,8 +5298,8 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
       int height = NK_MAX(HIWORD(lparam), 1);
       win_width[i] = width;
       win_height[i] = height;
-      win_w[i] = win_width[i] * USER_DEFAULT_SCREEN_DPI / win_dpi[i];
-      win_h[i] = win_height[i] * USER_DEFAULT_SCREEN_DPI / win_dpi[i];
+      win_w[i] = win_width[i] / win_scale[i].x;
+      win_h[i] = win_height[i] / win_scale[i].y;
 
       if (resize_top_and_ui) {
         d3d11_ui_init();
@@ -5302,7 +5309,7 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
     }
 
     case WM_DPICHANGED: {
-      win_dpi[i] = HIWORD(wparam);
+      win_scale[i].x = win_scale[i].y = (float)HIWORD(wparam) / USER_DEFAULT_SCREEN_DPI;
       // RECT *const rect = (RECT *)lparam;
       // handled by sdl wnd proc already
 #if 0
@@ -5327,8 +5334,8 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
     case WM_LBUTTONDBLCLK: {
       int x = (short)LOWORD(lparam);
       int y = (short)HIWORD(lparam);
-      x = x * USER_DEFAULT_SCREEN_DPI / win_dpi[i];
-      y = y * USER_DEFAULT_SCREEN_DPI / win_dpi[i];
+      x = x / win_scale[i].x;
+      y = y / win_scale[i].y;
       lparam = MAKELPARAM(x, y);
       need_handle_input = i == SCREEN_TOP;
       break;
@@ -6805,7 +6812,7 @@ static void d3d11_ui_init() {
         CHECK_AND_RELEASE(d3d_ui_tex);
         compositing = 0;
       } else {
-        if (nk_d3d11_resize(d3d11device_context[i], win_width[i], win_height[i], (float)USER_DEFAULT_SCREEN_DPI / win_dpi[i])) {
+        if (nk_d3d11_resize(d3d11device_context[i], win_width[i], win_height[i], win_scale[i].x)) {
           err_log("nk_d3d11_resize failed\n");
           compositing = 0;
         }
