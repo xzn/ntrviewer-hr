@@ -279,6 +279,8 @@ static void updateViewMode(view_mode_t vm) {
 }
 
 #ifdef USE_D3D11
+#define MAX_VERTEX_BUFFER 512 * 1024
+#define MAX_INDEX_BUFFER 128 * 1024
 #define SDL_GL_MakeCurrent(w, c) ((void)0)
 #define nk_sdl_font_stash_begin nk_d3d11_font_stash_begin
 #define nk_sdl_font_stash_end nk_d3d11_font_stash_end
@@ -342,7 +344,7 @@ static const char *d3d_ps_src =
 #endif
 
 #ifdef USE_COMPOSITION_SWAPCHAIN
-// #define TDR_TEST_HOTKEY
+#define TDR_TEST_HOTKEY
 #include "dcomp.h"
 #include <winstring.h>
 #ifndef USE_D3D11
@@ -1242,6 +1244,11 @@ static int dxgi_init(void) {
   return 0;
 }
 
+static void dxgi_close(void) {
+  CHECK_AND_RELEASE(dxgi_adapter);
+  CHECK_AND_RELEASE(dxgi_factory);
+}
+
 static int composition_swapchain_device_init(void) {
   HRESULT hr;
 
@@ -1743,25 +1750,14 @@ static void composition_swapchain_close(void) {
   }
 }
 
-static void composition_swapchain_device_restart(void) {
-  composition_swapchain_device_close();
-  HRESULT hr;
-  hr = composition_swapchain_device_init();
-  if (hr) {
-    err_log("composition_swapchain_device_init failed\n");
-    running = 0;
-  } else {
-    err_log("successful\n");
-  }
-}
-#endif
-
 #ifndef USE_SDL_RENDERER
 #define screen_upscale_factor REALCUGAN_SCALE
 #ifdef USE_D3D11
 #define sr_create() realcugan_create(d3d11device, d3d11device_context, dxgi_adapter)
+#define sr_reset() realcugan_reset(d3d11device, d3d11device_context, dxgi_adapter)
 #else
 #define sr_create realcugan_create
+#define sr_reset() ((void)0)
 #endif
 #define sr_run realcugan_run
 #define sr_next realcugan_next
@@ -1772,6 +1768,57 @@ static void composition_swapchain_device_restart(void) {
 #define sr_run(...) (0)
 #define sr_next(...) ((void)0)
 #define sr_destroy(...) ((void)0)
+#define sr_reset() ((void)0)
+#endif
+
+#ifndef USE_SDL_RENDERER
+static nk_bool fsr_filter;
+static nk_bool upscaling_filter;
+static nk_bool upscaling_filter_created;
+#endif
+
+static struct nk_context *nk_ctx;
+static struct nk_vec2 font_scale;
+
+static void nk_backend_font_init(void);
+static int d3d11_init(void);
+static void d3d11_close(void);
+static void composition_swapchain_device_restart(void) {
+  rp_lock_wait(comp_lock);
+  composition_swapchain_device_close();
+#ifdef USE_D3D11
+  d3d11_close();
+  nk_d3d11_shutdown();
+#endif
+  dxgi_close();
+  HRESULT hr;
+  hr = composition_swapchain_device_init();
+  if (hr) {
+    err_log("composition_swapchain_device_init failed\n");
+    running = 0;
+  } else {
+    err_log("swapchain restart successful\n");
+  }
+#ifdef USE_D3D11
+  font_scale.x = font_scale.y = 0.0f;
+  nk_ctx = nk_d3d11_init(d3d11device[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT, MAX_VERTEX_BUFFER, MAX_INDEX_BUFFER);
+  nk_backend_font_init();
+  hr = d3d11_init();
+  if (hr) {
+    err_log("d3d11_init failed\n");
+    running = 0;
+  } else {
+    err_log("d3d11 restart successful\n");
+  }
+  if (upscaling_filter_created) {
+    if (sr_reset() != 0) {
+      upscaling_filter_created = 0;
+      upscaling_filter = 0;
+    }
+  }
+#endif
+  rp_lock_rel(comp_lock);
+}
 #endif
 
 #define HR_MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -1972,7 +2019,6 @@ static const char *connection_msg[CS_MAX] = {
 
 #define TITLE "NTR Viewer HR"
 
-static struct nk_context *nk_ctx;
 static const char *nk_property_name = "#";
 static enum {
   NK_NAV_NONE,
@@ -1991,11 +2037,6 @@ static int ntr_rp_port = 8001;
 static int ntr_rp_port_changed;
 static int ntr_rp_bound_port;
 
-#ifndef USE_SDL_RENDERER
-static nk_bool fsr_filter;
-static nk_bool upscaling_filter;
-static nk_bool upscaling_filter_created;
-#endif
 static int fullscreen;
 
 static atomic_uint_fast8_t ip_octets[4];
@@ -4669,8 +4710,6 @@ static int update_hide_ui(void) {
 }
 #endif
 
-static struct nk_vec2 font_scale;
-
 static void
 ThreadLoop(int i)
 {
@@ -5225,6 +5264,7 @@ sc_tb_fail:
 }
 
 #ifdef USE_D3D11
+static void d3d11_ui_init();
 static LRESULT CALLBACK
 WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
@@ -5251,49 +5291,7 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
       win_h[i] = win_height[i] * USER_DEFAULT_SCREEN_DPI / win_dpi[i];
 
       if (resize_top_and_ui) {
-        CHECK_AND_RELEASE(d3d_ui_srv);
-        CHECK_AND_RELEASE(d3d_ui_rtv);
-        CHECK_AND_RELEASE(d3d_ui_tex);
-
-        D3D11_TEXTURE2D_DESC tex_desc = {};
-        tex_desc.Width = width;
-        tex_desc.Height = height;
-        tex_desc.MipLevels = 1;
-        tex_desc.ArraySize = 1;
-        tex_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-        tex_desc.SampleDesc.Count = 1;
-        tex_desc.SampleDesc.Quality = 0;
-        tex_desc.Usage = D3D11_USAGE_DEFAULT;
-        tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-        tex_desc.MiscFlags = 0;
-        tex_desc.CPUAccessFlags = 0;
-
-        HRESULT hr;
-        hr = ID3D11Device_CreateTexture2D(d3d11device[i], &tex_desc, NULL, &d3d_ui_tex);
-        if (hr) {
-          err_log("CreateTexture2D failed: %d\n", (int)hr);
-          compositing = 0;
-        } else {
-          hr = ID3D11Device_CreateRenderTargetView(d3d11device[i], (ID3D11Resource *)d3d_ui_tex, NULL, &d3d_ui_rtv);
-          if (hr) {
-            err_log("CreateRenderTargetView failed: %d\n", (int)hr);
-            CHECK_AND_RELEASE(d3d_ui_tex);
-            compositing = 0;
-          } else {
-            hr = ID3D11Device_CreateShaderResourceView(d3d11device[i], (ID3D11Resource *)d3d_ui_tex, NULL, &d3d_ui_srv);
-            if (hr) {
-              err_log("CreateShaderResourceView failed: %d\n", (int)hr);
-              CHECK_AND_RELEASE(d3d_ui_rtv);
-              CHECK_AND_RELEASE(d3d_ui_tex);
-              compositing = 0;
-            } else {
-              if (nk_d3d11_resize(d3d11device_context[i], width, height, (float)USER_DEFAULT_SCREEN_DPI / win_dpi[i])) {
-                err_log("nk_d3d11_resize failed\n");
-                compositing = 0;
-              }
-            }
-          }
-        }
+        d3d11_ui_init();
         rp_lock_rel(comp_lock);
       }
       break;
@@ -6763,7 +6761,243 @@ final_socket:
   return 0;
 }
 
+static void d3d11_ui_init() {
+  CHECK_AND_RELEASE(d3d_ui_srv);
+  CHECK_AND_RELEASE(d3d_ui_rtv);
+  CHECK_AND_RELEASE(d3d_ui_tex);
+
+  int i = SCREEN_TOP;
+
+  D3D11_TEXTURE2D_DESC tex_desc = {};
+  tex_desc.Width = win_width[i];
+  tex_desc.Height = win_height[i];
+  tex_desc.MipLevels = 1;
+  tex_desc.ArraySize = 1;
+  tex_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+  tex_desc.SampleDesc.Count = 1;
+  tex_desc.SampleDesc.Quality = 0;
+  tex_desc.Usage = D3D11_USAGE_DEFAULT;
+  tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+  tex_desc.MiscFlags = 0;
+  tex_desc.CPUAccessFlags = 0;
+
+  HRESULT hr;
+  hr = ID3D11Device_CreateTexture2D(d3d11device[i], &tex_desc, NULL, &d3d_ui_tex);
+  if (hr) {
+    err_log("CreateTexture2D failed: %d\n", (int)hr);
+    compositing = 0;
+  } else {
+    hr = ID3D11Device_CreateRenderTargetView(d3d11device[i], (ID3D11Resource *)d3d_ui_tex, NULL, &d3d_ui_rtv);
+    if (hr) {
+      err_log("CreateRenderTargetView failed: %d\n", (int)hr);
+      CHECK_AND_RELEASE(d3d_ui_tex);
+      compositing = 0;
+    } else {
+      hr = ID3D11Device_CreateShaderResourceView(d3d11device[i], (ID3D11Resource *)d3d_ui_tex, NULL, &d3d_ui_srv);
+      if (hr) {
+        err_log("CreateShaderResourceView failed: %d\n", (int)hr);
+        CHECK_AND_RELEASE(d3d_ui_rtv);
+        CHECK_AND_RELEASE(d3d_ui_tex);
+        compositing = 0;
+      } else {
+        if (nk_d3d11_resize(d3d11device_context[i], win_width[i], win_height[i], (float)USER_DEFAULT_SCREEN_DPI / win_dpi[i])) {
+          err_log("nk_d3d11_resize failed\n");
+          compositing = 0;
+        }
+      }
+    }
+  }
+}
+
+static int d3d11_init(void) {
+  for (int j = 0; j < SCREEN_COUNT; ++j) {
+    HRESULT hr;
+
+    ID3DBlob *vs_code;
+    d3d_vs[j] = loadVS(d3d11device[j], d3d_vs_src, &vs_code);
+    if (!d3d_vs[j]) {
+      return -1;
+    }
+    d3d_ps[j] = loadPS(d3d11device[j], d3d_ps_src);
+    if (!d3d_ps[j]) {
+      return -1;
+    }
+
+    D3D11_INPUT_ELEMENT_DESC input_desc[] =
+    {
+      { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+      { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    };
+
+    hr = ID3D11Device_CreateInputLayout(
+      d3d11device[j],
+      input_desc,
+      ARRAYSIZE(input_desc),
+      vs_code->lpVtbl->GetBufferPointer(vs_code),
+      vs_code->lpVtbl->GetBufferSize(vs_code),
+      &d3d_il[j]
+    );
+    if (hr) {
+      err_log("CreateInputLayout failed: %d\n", (int)hr);
+      return -1;
+    }
+    CHECK_AND_RELEASE(vs_code);
+
+    const struct d3d_vertex_t vb_data[] = {
+      { { -1.0f, 1.0f }, { 0.0f, 0.0f } },
+      { { -1.0f, -1.0f }, { 0.0f, 1.0f } },
+      { { 1.0f, 1.0f }, { 1.0f, 0.0f } },
+      { { 1.0f, -1.0f }, { 1.0f, 1.0f } },
+    };
+    D3D11_BUFFER_DESC vb_desc = {};
+    vb_desc.ByteWidth = sizeof(vb_data);
+    vb_desc.Usage     = D3D11_USAGE_IMMUTABLE;
+    vb_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA vb_srd = { .pSysMem = vb_data };
+    hr = ID3D11Device_CreateBuffer(d3d11device[j], &vb_desc, &vb_srd, &d3d_vb[j]);
+    if (hr) {
+      err_log("CreateBuffer failed: %d\n", (int)hr);
+      return -1;
+    }
+
+    const unsigned ib_data[] =
+      {0, 2, 1, 1, 2, 3};
+    D3D11_BUFFER_DESC ib_desc = {};
+    ib_desc.ByteWidth = sizeof(ib_data);
+    ib_desc.Usage     = D3D11_USAGE_IMMUTABLE;
+    ib_desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA ib_srd = { .pSysMem = ib_data };
+    hr = ID3D11Device_CreateBuffer(d3d11device[j], &ib_desc, &ib_srd, &d3d_ib[j]);
+    if (hr) {
+      err_log("CreateBuffer failed: %d\n", (int)hr);
+      return -1;
+    }
+
+    D3D11_BLEND_DESC blend_desc = {
+      .RenderTarget = {
+        {
+          .BlendEnable = FALSE,
+          .SrcBlend = D3D11_BLEND_ONE,
+          .DestBlend = D3D11_BLEND_ZERO,
+          .BlendOp = D3D11_BLEND_OP_ADD,
+          .SrcBlendAlpha = D3D11_BLEND_ONE,
+          .DestBlendAlpha = D3D11_BLEND_ZERO,
+          .BlendOpAlpha = D3D11_BLEND_OP_ADD,
+          .RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL,
+        }
+      }
+    };
+    hr = ID3D11Device_CreateBlendState(d3d11device[j], &blend_desc, &d3d_ui_bs[j]);
+    if (hr) {
+      err_log("CreateBlendState failed: %d\n", (int)hr);
+      return -1;
+    }
+
+    D3D11_SAMPLER_DESC sampler_desc = {};
+    sampler_desc.Filter         = D3D11_FILTER_MIN_MAG_MIP_POINT;
+    sampler_desc.AddressU       = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler_desc.AddressV       = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler_desc.AddressW       = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler_desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    hr = ID3D11Device_CreateSamplerState(d3d11device[j], &sampler_desc, &d3d_ss_point[j]);
+    if (hr) {
+      err_log("CreateSamplerState failed: %d\n", (int)hr);
+      return -1;
+    }
+
+    sampler_desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    hr = ID3D11Device_CreateSamplerState(d3d11device[j], &sampler_desc, &d3d_ss_linear[j]);
+    if (hr) {
+      err_log("CreateSamplerState failed: %d\n", (int)hr);
+      return -1;
+    }
+
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      D3D11_BUFFER_DESC child_vb_desc = {};
+      child_vb_desc.ByteWidth      = sizeof(struct d3d_vertex_t) * 4;
+      child_vb_desc.Usage          = D3D11_USAGE_DYNAMIC;
+      child_vb_desc.BindFlags      = D3D11_BIND_VERTEX_BUFFER;
+      child_vb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+      hr = ID3D11Device_CreateBuffer(d3d11device[j], &child_vb_desc, NULL, &d3d_child_vb[j][i]);
+      if (hr) {
+        err_log("CreateBuffer failed: %d\n", (int)hr);
+        return -1;
+      }
+
+      D3D11_TEXTURE2D_DESC tex_desc = {};
+      tex_desc.Width = 240;
+      tex_desc.Height = i == SCREEN_TOP ? 400 : 320;
+      tex_desc.MipLevels = 1;
+      tex_desc.ArraySize = 1;
+      tex_desc.Format = D3D_FORMAT;
+      tex_desc.SampleDesc.Count = 1;
+      tex_desc.SampleDesc.Quality = 0;
+      tex_desc.Usage = D3D11_USAGE_DYNAMIC;
+      tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+      tex_desc.MiscFlags = 0;
+      tex_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+      hr = ID3D11Device_CreateTexture2D(d3d11device[j], &tex_desc, NULL, &buffer_ctx[i].d3d_tex[j]);
+      if (hr) {
+        err_log("CreateTexture2D failed: %d\n", (int)hr);
+        return -1;
+      }
+
+      hr = ID3D11Device_CreateShaderResourceView(d3d11device[j], (ID3D11Resource *)buffer_ctx[i].d3d_tex[j], NULL, &buffer_ctx[i].d3d_srv[j]);
+      if (hr) {
+        err_log("CreateShaderResourceView failed: %d\n", (int)hr);
+        return -1;
+      }
+    }
+  }
+  d3d11_ui_init();
+  return 0;
+}
+
+static void d3d11_close(void) {
+  CHECK_AND_RELEASE(d3d_ui_srv);
+  CHECK_AND_RELEASE(d3d_ui_rtv);
+  CHECK_AND_RELEASE(d3d_ui_tex);
+  for (int j = 0; j < SCREEN_COUNT; ++j) {
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      CHECK_AND_RELEASE(buffer_ctx[j].prev_d3d_srv_upscaled[i]);
+      CHECK_AND_RELEASE(buffer_ctx[j].prev_d3d_tex_upscaled[i]);
+      CHECK_AND_RELEASE(buffer_ctx[j].d3d_srv[i]);
+      CHECK_AND_RELEASE(buffer_ctx[j].d3d_tex[i]);
+      CHECK_AND_RELEASE(d3d_child_vb[j][i]);
+    }
+
+    CHECK_AND_RELEASE(d3d_ui_bs[j]);
+    CHECK_AND_RELEASE(d3d_ib[j]);
+    CHECK_AND_RELEASE(d3d_vb[j]);
+    CHECK_AND_RELEASE(d3d_ss_point[j]);
+    CHECK_AND_RELEASE(d3d_ss_linear[j]);
+    CHECK_AND_RELEASE(d3d_il[j]);
+    CHECK_AND_RELEASE(d3d_vs[j]);
+    CHECK_AND_RELEASE(d3d_ps[j]);
+  }
+}
+
 #include "style.h"
+
+static void nk_backend_font_init(void) {
+  /* Load Fonts: if none of these are loaded a default font will be used  */
+  /* Load Cursor: if you uncomment cursor loading please hide the cursor */
+  {
+    struct nk_font_atlas *atlas;
+    nk_sdl_font_stash_begin(&atlas);
+    nk_sdl_font_stash_end();
+    /*nk_style_load_all_cursors(ctx, atlas->cursors);*/
+    /*nk_style_set_font(ctx, &roboto->handle)*/;
+  }
+
+  /* style.c */
+  // set_style(ctx, THEME_WHITE);
+  // set_style(ctx, THEME_RED);
+  // set_style(ctx, THEME_BLUE);
+  set_style(nk_ctx, THEME_DARK);
+  nk_style_current = nk_ctx->style;
+}
 
 #ifdef GL_DEBUG
 static void on_gl_error(
@@ -7108,9 +7342,6 @@ start_use_c_sc:
     sdl_wnd_proc[i] = GetWindowLongPtrA(hwnd[i], GWLP_WNDPROC);
     SetWindowLongPtrA(hwnd[i], GWLP_WNDPROC, (LONG_PTR)WindowProc);
   }
-
-#define MAX_VERTEX_BUFFER 512 * 1024
-#define MAX_INDEX_BUFFER 128 * 1024
   struct nk_context *ctx = nk_ctx = nk_d3d11_init(d3d11device[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT, MAX_VERTEX_BUFFER, MAX_INDEX_BUFFER);
 #else
   struct nk_context *ctx = nk_ctx = nk_sdl_init(win[SCREEN_TOP]);
@@ -7125,22 +7356,7 @@ start_use_c_sc:
   win_id[SCREEN_TOP] = SDL_GetWindowID(win[SCREEN_TOP]);
   win_id[SCREEN_BOT] = SDL_GetWindowID(win[SCREEN_BOT]);
 
-  /* Load Fonts: if none of these are loaded a default font will be used  */
-  /* Load Cursor: if you uncomment cursor loading please hide the cursor */
-  {
-    struct nk_font_atlas *atlas;
-    nk_sdl_font_stash_begin(&atlas);
-    nk_sdl_font_stash_end();
-    /*nk_style_load_all_cursors(ctx, atlas->cursors);*/
-    /*nk_style_set_font(ctx, &roboto->handle)*/;
-  }
-
-  /* style.c */
-  // set_style(ctx, THEME_WHITE);
-  // set_style(ctx, THEME_RED);
-  // set_style(ctx, THEME_BLUE);
-  set_style(ctx, THEME_DARK);
-  nk_style_current = ctx->style;
+  nk_backend_font_init();
 
 #ifdef _WIN32
   HBRUSH brush = CreateSolidBrush(
@@ -7153,145 +7369,11 @@ start_use_c_sc:
 
 #ifndef USE_SDL_RENDERER
 #ifdef USE_D3D11
-  for (int j = 0; j < SCREEN_COUNT; ++j) {
+  {
     HRESULT hr;
-
-    ID3DBlob *vs_code;
-    d3d_vs[j] = loadVS(d3d11device[j], d3d_vs_src, &vs_code);
-    if (!d3d_vs[j]) {
-      return -1;
-    }
-    d3d_ps[j] = loadPS(d3d11device[j], d3d_ps_src);
-    if (!d3d_ps[j]) {
-      return -1;
-    }
-
-    D3D11_INPUT_ELEMENT_DESC input_desc[] =
-    {
-      { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-      { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-    };
-
-    hr = ID3D11Device_CreateInputLayout(
-      d3d11device[j],
-      input_desc,
-      ARRAYSIZE(input_desc),
-      vs_code->lpVtbl->GetBufferPointer(vs_code),
-      vs_code->lpVtbl->GetBufferSize(vs_code),
-      &d3d_il[j]
-    );
-    if (hr) {
-      err_log("CreateInputLayout failed: %d\n", (int)hr);
-      return -1;
-    }
-    CHECK_AND_RELEASE(vs_code);
-
-    const struct d3d_vertex_t vb_data[] = {
-      { { -1.0f, 1.0f }, { 0.0f, 0.0f } },
-      { { -1.0f, -1.0f }, { 0.0f, 1.0f } },
-      { { 1.0f, 1.0f }, { 1.0f, 0.0f } },
-      { { 1.0f, -1.0f }, { 1.0f, 1.0f } },
-    };
-    D3D11_BUFFER_DESC vb_desc = {};
-    vb_desc.ByteWidth = sizeof(vb_data);
-    vb_desc.Usage     = D3D11_USAGE_IMMUTABLE;
-    vb_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-    D3D11_SUBRESOURCE_DATA vb_srd = { .pSysMem = vb_data };
-    hr = ID3D11Device_CreateBuffer(d3d11device[j], &vb_desc, &vb_srd, &d3d_vb[j]);
-    if (hr) {
-      err_log("CreateBuffer failed: %d\n", (int)hr);
-      return -1;
-    }
-
-    const unsigned ib_data[] =
-      {0, 2, 1, 1, 2, 3};
-    D3D11_BUFFER_DESC ib_desc = {};
-    ib_desc.ByteWidth = sizeof(ib_data);
-    ib_desc.Usage     = D3D11_USAGE_IMMUTABLE;
-    ib_desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
-    D3D11_SUBRESOURCE_DATA ib_srd = { .pSysMem = ib_data };
-    hr = ID3D11Device_CreateBuffer(d3d11device[j], &ib_desc, &ib_srd, &d3d_ib[j]);
-    if (hr) {
-      err_log("CreateBuffer failed: %d\n", (int)hr);
-      return -1;
-    }
-
-    D3D11_BLEND_DESC blend_desc = {
-      .RenderTarget = {
-        {
-          .BlendEnable = FALSE,
-          .SrcBlend = D3D11_BLEND_ONE,
-          .DestBlend = D3D11_BLEND_ZERO,
-          .BlendOp = D3D11_BLEND_OP_ADD,
-          .SrcBlendAlpha = D3D11_BLEND_ONE,
-          .DestBlendAlpha = D3D11_BLEND_ZERO,
-          .BlendOpAlpha = D3D11_BLEND_OP_ADD,
-          .RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL,
-        }
-      }
-    };
-    hr = ID3D11Device_CreateBlendState(d3d11device[j], &blend_desc, &d3d_ui_bs[j]);
-    if (hr) {
-      err_log("CreateBlendState failed: %d\n", (int)hr);
-      return -1;
-    }
-
-    D3D11_SAMPLER_DESC sampler_desc = {};
-    sampler_desc.Filter         = D3D11_FILTER_MIN_MAG_MIP_POINT;
-    sampler_desc.AddressU       = D3D11_TEXTURE_ADDRESS_CLAMP;
-    sampler_desc.AddressV       = D3D11_TEXTURE_ADDRESS_CLAMP;
-    sampler_desc.AddressW       = D3D11_TEXTURE_ADDRESS_CLAMP;
-    sampler_desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
-    hr = ID3D11Device_CreateSamplerState(d3d11device[j], &sampler_desc, &d3d_ss_point[j]);
-    if (hr) {
-      err_log("CreateSamplerState failed: %d\n", (int)hr);
-      return -1;
-    }
-
-    sampler_desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-    hr = ID3D11Device_CreateSamplerState(d3d11device[j], &sampler_desc, &d3d_ss_linear[j]);
-    if (hr) {
-      err_log("CreateSamplerState failed: %d\n", (int)hr);
-      return -1;
-    }
-
-    for (int i = 0; i < SCREEN_COUNT; ++i) {
-      D3D11_BUFFER_DESC child_vb_desc = {};
-      child_vb_desc.ByteWidth      = sizeof(struct d3d_vertex_t) * 4;
-      child_vb_desc.Usage          = D3D11_USAGE_DYNAMIC;
-      child_vb_desc.BindFlags      = D3D11_BIND_VERTEX_BUFFER;
-      child_vb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-      hr = ID3D11Device_CreateBuffer(d3d11device[j], &child_vb_desc, NULL, &d3d_child_vb[j][i]);
-      if (hr) {
-        err_log("CreateBuffer failed: %d\n", (int)hr);
-        return -1;
-      }
-
-      D3D11_TEXTURE2D_DESC tex_desc = {};
-      tex_desc.Width = 240;
-      tex_desc.Height = i == SCREEN_TOP ? 400 : 320;
-      tex_desc.MipLevels = 1;
-      tex_desc.ArraySize = 1;
-      tex_desc.Format = D3D_FORMAT;
-      tex_desc.SampleDesc.Count = 1;
-      tex_desc.SampleDesc.Quality = 0;
-      tex_desc.Usage = D3D11_USAGE_DYNAMIC;
-      tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-      tex_desc.MiscFlags = 0;
-      tex_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-
-      hr = ID3D11Device_CreateTexture2D(d3d11device[j], &tex_desc, NULL, &buffer_ctx[i].d3d_tex[j]);
-      if (hr) {
-        err_log("CreateTexture2D failed: %d\n", (int)hr);
-        return -1;
-      }
-
-      hr = ID3D11Device_CreateShaderResourceView(d3d11device[j], (ID3D11Resource *)buffer_ctx[i].d3d_tex[j], NULL, &buffer_ctx[i].d3d_srv[j]);
-      if (hr) {
-        err_log("CreateShaderResourceView failed: %d\n", (int)hr);
-        return -1;
-      }
-    }
+    hr = d3d11_init();
+    if (hr)
+      return hr;
   }
 #else
   for (int j = 0; j < SCREEN_COUNT; ++j) {
@@ -7602,28 +7684,7 @@ start_use_c_sc:
   if (!use_composition_swapchain) {
     rp_lock_close(comp_lock);
   }
-  CHECK_AND_RELEASE(d3d_ui_srv);
-  CHECK_AND_RELEASE(d3d_ui_rtv);
-  CHECK_AND_RELEASE(d3d_ui_tex);
-  for (int j = 0; j < SCREEN_COUNT; ++j) {
-    for (int i = 0; i < SCREEN_COUNT; ++i) {
-      CHECK_AND_RELEASE(buffer_ctx[j].prev_d3d_srv_upscaled[i]);
-      CHECK_AND_RELEASE(buffer_ctx[j].prev_d3d_tex_upscaled[i]);
-      CHECK_AND_RELEASE(buffer_ctx[j].d3d_srv[i]);
-      CHECK_AND_RELEASE(buffer_ctx[j].d3d_tex[i]);
-      CHECK_AND_RELEASE(d3d_child_vb[j][i]);
-    }
-
-    CHECK_AND_RELEASE(d3d_ui_bs[j]);
-    CHECK_AND_RELEASE(d3d_ib[j]);
-    CHECK_AND_RELEASE(d3d_vb[j]);
-    CHECK_AND_RELEASE(d3d_ss_point[j]);
-    CHECK_AND_RELEASE(d3d_ss_linear[j]);
-    CHECK_AND_RELEASE(d3d_ps[j]);
-    CHECK_AND_RELEASE(d3d_il[j]);
-    CHECK_AND_RELEASE(d3d_vs[j]);
-    CHECK_AND_RELEASE(d3d_ps[j]);
-  }
+  d3d11_close();
 #endif
 #ifdef USE_COMPOSITION_SWAPCHAIN
   if (use_composition_swapchain) {
@@ -7642,8 +7703,7 @@ start_use_c_sc:
       CHECK_AND_RELEASE(d3d11device[i]);
     }
   }
-  CHECK_AND_RELEASE(dxgi_adapter);
-  CHECK_AND_RELEASE(dxgi_factory);
+  dxgi_close();
 #endif
   SDL_DestroyWindow(win_ogl[SCREEN_BOT]);
   SDL_DestroyWindow(win_ogl[SCREEN_TOP]);

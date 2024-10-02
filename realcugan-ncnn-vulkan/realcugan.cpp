@@ -114,8 +114,12 @@ RealCUGAN::~RealCUGAN()
     // cleanup preprocess and postprocess pipeline
     if (realcugan_preproc)
         delete realcugan_preproc;
+
     if (realcugan_postproc)
         delete realcugan_postproc;
+
+    if (realcugan_4x_postproc)
+        delete realcugan_4x_postproc;
 
     if (bicubic_2x) {
         bicubic_2x->destroy_pipeline(net.opt);

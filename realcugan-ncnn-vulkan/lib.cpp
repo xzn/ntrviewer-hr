@@ -69,121 +69,34 @@ static int realcugan_index(int top_bot, int index, int next)
   ); \
 })
 
-extern "C"
-#ifdef USE_D3D11
-int realcugan_create(ID3D11Device *device[SCREEN_COUNT], ID3D11DeviceContext *context[SCREEN_COUNT], IDXGIAdapter1 *adapter)
-#else
-int realcugan_create()
-#endif
-{
-    int noise = -1;
-    std::vector<int> tilesize;
-    path_t model = PATHSTR("models-se");
-    int syncgap = 0;
-    int tta_mode = 0;
-    int scale = REALCUGAN_SCALE;
-
-    if (noise < -1 || noise > 3)
-    {
-        fprintf(stderr, "invalid noise argument\n");
-        return -1;
-    }
-
-    if (!(scale == 1 || scale == 2 || scale == 3 || scale == 4))
-    {
-        fprintf(stderr, "invalid scale argument\n");
-        return -1;
-    }
-
-    if (!(syncgap == 0 || syncgap == 1 || syncgap == 2 || syncgap == 3))
-    {
-        fprintf(stderr, "invalid syncgap argument\n");
-        return -1;
-    }
-
-    for (int i=0; i<(int)tilesize.size(); i++)
-    {
-        if (tilesize[i] != 0 && tilesize[i] < 32)
-        {
-            fprintf(stderr, "invalid tilesize argument\n");
-            return -1;
+static void realcugan_close() {
+    for (int k = 0; k < SCREEN_COUNT; ++k) {
+        for (int j = 0; j < SCREEN_COUNT; ++j) {
+            for (int i = 0; i < FrameBufferCount; ++i) {
+                realcugan_next(k, j, i);
+            }
         }
     }
 
-    int prepadding = 0;
-
-    if (model.find(PATHSTR("models-se")) != path_t::npos
-        || model.find(PATHSTR("models-nose")) != path_t::npos
-        || model.find(PATHSTR("models-pro")) != path_t::npos)
-    {
-        if (scale == 2)
-        {
-            prepadding = 18;
-        }
-        if (scale == 3)
-        {
-            prepadding = 14;
-        }
-        if (scale == 4)
-        {
-            prepadding = 19;
+    for (int j = 0; j < realcugan_size(); ++j) {
+        if (realcugan[j]) {
+            delete realcugan[j];
+            realcugan[j] = nullptr;
         }
     }
-    else
-    {
-        fprintf(stderr, "unknown model dir type\n");
-        return -1;
-    }
+}
 
-    if (model.find(PATHSTR("models-nose")) != path_t::npos)
-    {
-        // force syncgap off for nose models
-        syncgap = 0;
-    }
+static int noise = -1;
+static std::vector<int> tilesize;
+static path_t model = PATHSTR("models-se");
+static int syncgap = 0;
+static int tta_mode = 0;
+static int scale = REALCUGAN_SCALE;
+static path_t paramfullpath;
+static path_t modelfullpath;
+static int prepadding = 0;
 
-#if _WIN32
-    wchar_t parampath[256];
-    wchar_t modelpath[256];
-    if (noise == -1)
-    {
-        swprintf(parampath, 256, L"%ls/up%dx-conservative.param", model.c_str(), scale);
-        swprintf(modelpath, 256, L"%ls/up%dx-conservative.bin", model.c_str(), scale);
-    }
-    else if (noise == 0)
-    {
-        swprintf(parampath, 256, L"%ls/up%dx-no-denoise.param", model.c_str(), scale);
-        swprintf(modelpath, 256, L"%ls/up%dx-no-denoise.bin", model.c_str(), scale);
-    }
-    else
-    {
-        swprintf(parampath, 256, L"%ls/up%dx-denoise%dx.param", model.c_str(), scale, noise);
-        swprintf(modelpath, 256, L"%ls/up%dx-denoise%dx.bin", model.c_str(), scale, noise);
-    }
-#else
-    char parampath[256];
-    char modelpath[256];
-    if (noise == -1)
-    {
-        sprintf(parampath, "%s/up%dx-conservative.param", model.c_str(), scale);
-        sprintf(modelpath, "%s/up%dx-conservative.bin", model.c_str(), scale);
-    }
-    else if (noise == 0)
-    {
-        sprintf(parampath, "%s/up%dx-no-denoise.param", model.c_str(), scale);
-        sprintf(modelpath, "%s/up%dx-no-denoise.bin", model.c_str(), scale);
-    }
-    else
-    {
-        sprintf(parampath, "%s/up%dx-denoise%dx.param", model.c_str(), scale, noise);
-        sprintf(modelpath, "%s/up%dx-denoise%dx.bin", model.c_str(), scale, noise);
-    }
-#endif
-
-    path_t paramfullpath = sanitize_filepath(parampath);
-    path_t modelfullpath = sanitize_filepath(modelpath);
-
-    ncnn::create_gpu_instance();
-
+static int realcugan_open(ID3D11Device *device[SCREEN_COUNT], ID3D11DeviceContext *context[SCREEN_COUNT], IDXGIAdapter1 *adapter) {
     int use_gpu_count = ncnn::get_gpu_count();
 
     tilesize.resize(use_gpu_count, 0);
@@ -316,8 +229,6 @@ int realcugan_create()
 
             if (i < 0) {
                 fprintf(stderr, "no suitable gpu device\n");
-
-                ncnn::destroy_gpu_instance();
                 return -1;
             }
         } else {
@@ -328,14 +239,10 @@ int realcugan_create()
     ncnn::VulkanDevice *vkdev = ncnn::get_gpu_device(i);
     if (!vkdev) {
         fprintf(stderr, "no gpu vulkan device found\n");
-
-        ncnn::destroy_gpu_instance();
         return -1;
     }
     if (tilesize[i] < 400) {
         fprintf(stderr, "insufficient vram\n");
-
-        ncnn::destroy_gpu_instance();
         return -1;
     }
 
@@ -400,6 +307,127 @@ int realcugan_create()
         realcugan[j]->prepadding = prepadding;
         realcugan[j]->syncgap = syncgap;
         realcugan[j]->tiling_linear = false;
+    }
+
+    return 0;
+}
+
+#ifdef USE_D3D11
+int realcugan_reset(ID3D11Device *device[SCREEN_COUNT], ID3D11DeviceContext *context[SCREEN_COUNT], IDXGIAdapter1 *adapter) {
+    realcugan_close();
+    return realcugan_open(device, context, adapter);
+}
+#endif
+
+extern "C"
+#ifdef USE_D3D11
+int realcugan_create(ID3D11Device *device[SCREEN_COUNT], ID3D11DeviceContext *context[SCREEN_COUNT], IDXGIAdapter1 *adapter)
+#else
+int realcugan_create()
+#endif
+{
+    if (noise < -1 || noise > 3)
+    {
+        fprintf(stderr, "invalid noise argument\n");
+        return -1;
+    }
+
+    if (!(scale == 1 || scale == 2 || scale == 3 || scale == 4))
+    {
+        fprintf(stderr, "invalid scale argument\n");
+        return -1;
+    }
+
+    if (!(syncgap == 0 || syncgap == 1 || syncgap == 2 || syncgap == 3))
+    {
+        fprintf(stderr, "invalid syncgap argument\n");
+        return -1;
+    }
+
+    for (int i=0; i<(int)tilesize.size(); i++)
+    {
+        if (tilesize[i] != 0 && tilesize[i] < 32)
+        {
+            fprintf(stderr, "invalid tilesize argument\n");
+            return -1;
+        }
+    }
+
+    if (model.find(PATHSTR("models-se")) != path_t::npos
+        || model.find(PATHSTR("models-nose")) != path_t::npos
+        || model.find(PATHSTR("models-pro")) != path_t::npos)
+    {
+        if (scale == 2)
+        {
+            prepadding = 18;
+        }
+        if (scale == 3)
+        {
+            prepadding = 14;
+        }
+        if (scale == 4)
+        {
+            prepadding = 19;
+        }
+    }
+    else
+    {
+        fprintf(stderr, "unknown model dir type\n");
+        return -1;
+    }
+
+    if (model.find(PATHSTR("models-nose")) != path_t::npos)
+    {
+        // force syncgap off for nose models
+        syncgap = 0;
+    }
+
+#if _WIN32
+    wchar_t parampath[256];
+    wchar_t modelpath[256];
+    if (noise == -1)
+    {
+        swprintf(parampath, 256, L"%ls/up%dx-conservative.param", model.c_str(), scale);
+        swprintf(modelpath, 256, L"%ls/up%dx-conservative.bin", model.c_str(), scale);
+    }
+    else if (noise == 0)
+    {
+        swprintf(parampath, 256, L"%ls/up%dx-no-denoise.param", model.c_str(), scale);
+        swprintf(modelpath, 256, L"%ls/up%dx-no-denoise.bin", model.c_str(), scale);
+    }
+    else
+    {
+        swprintf(parampath, 256, L"%ls/up%dx-denoise%dx.param", model.c_str(), scale, noise);
+        swprintf(modelpath, 256, L"%ls/up%dx-denoise%dx.bin", model.c_str(), scale, noise);
+    }
+#else
+    char parampath[256];
+    char modelpath[256];
+    if (noise == -1)
+    {
+        sprintf(parampath, "%s/up%dx-conservative.param", model.c_str(), scale);
+        sprintf(modelpath, "%s/up%dx-conservative.bin", model.c_str(), scale);
+    }
+    else if (noise == 0)
+    {
+        sprintf(parampath, "%s/up%dx-no-denoise.param", model.c_str(), scale);
+        sprintf(modelpath, "%s/up%dx-no-denoise.bin", model.c_str(), scale);
+    }
+    else
+    {
+        sprintf(parampath, "%s/up%dx-denoise%dx.param", model.c_str(), scale, noise);
+        sprintf(modelpath, "%s/up%dx-denoise%dx.bin", model.c_str(), scale, noise);
+    }
+#endif
+
+    paramfullpath = sanitize_filepath(parampath);
+    modelfullpath = sanitize_filepath(modelpath);
+
+    ncnn::create_gpu_instance();
+
+    if (realcugan_open(device, context, adapter) != 0) {
+        ncnn::destroy_gpu_instance();
+        return -1;
     }
 
     return 0;
@@ -480,21 +508,7 @@ extern "C" void realcugan_next(int tb, int top_bot, int index)
 
 extern "C" void realcugan_destroy()
 {
-    for (int k = 0; k < SCREEN_COUNT; ++k) {
-        for (int j = 0; j < SCREEN_COUNT; ++j) {
-            for (int i = 0; i < FrameBufferCount; ++i) {
-                realcugan_next(k, j, i);
-            }
-        }
-    }
-
-    for (int j = 0; j < realcugan_size(); ++j) {
-        if (realcugan[j]) {
-            delete realcugan[j];
-            realcugan[j] = nullptr;
-        }
-    }
-
+    realcugan_close();
     ncnn::destroy_gpu_instance();
 #ifdef USE_D3D11
     d3d_context = NULL;
