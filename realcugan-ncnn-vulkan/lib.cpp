@@ -96,9 +96,15 @@ static path_t paramfullpath;
 static path_t modelfullpath;
 static int prepadding = 0;
 
-static int realcugan_open(ID3D11Device *device[SCREEN_COUNT], ID3D11DeviceContext *context[SCREEN_COUNT], IDXGIAdapter1 *adapter) {
+#ifdef USE_D3D11
+static int realcugan_open(ID3D11Device *device[SCREEN_COUNT], ID3D11DeviceContext *context[SCREEN_COUNT], IDXGIAdapter1 *adapter)
+#else
+static int realcugan_open()
+#endif
+{
     int use_gpu_count = ncnn::get_gpu_count();
 
+    tilesize.clear();
     tilesize.resize(use_gpu_count, 0);
 
 #ifdef USE_D3D11
@@ -425,10 +431,17 @@ int realcugan_create()
 
     ncnn::create_gpu_instance();
 
+#ifdef USE_D3D11
     if (realcugan_open(device, context, adapter) != 0) {
         ncnn::destroy_gpu_instance();
         return -1;
     }
+#else
+    if (realcugan_open() != 0) {
+        ncnn::destroy_gpu_instance();
+        return -1;
+    }
+#endif
 
     return 0;
 }

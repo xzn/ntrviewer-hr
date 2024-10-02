@@ -343,8 +343,38 @@ static const char *d3d_ps_src =
 #include <d3dcompiler.h>
 #endif
 
+#ifndef USE_SDL_RENDERER
+#define screen_upscale_factor REALCUGAN_SCALE
+#ifdef USE_D3D11
+#define sr_create() realcugan_create(d3d11device, d3d11device_context, dxgi_adapter)
+#define sr_reset() realcugan_reset(d3d11device, d3d11device_context, dxgi_adapter)
+#else
+#define sr_create realcugan_create
+#define sr_reset() ((void)0)
+#endif
+#define sr_run realcugan_run
+#define sr_next realcugan_next
+#define sr_destroy realcugan_destroy
+#else
+#define screen_upscale_factor (1)
+#define sr_create(...) (0)
+#define sr_run(...) (0)
+#define sr_next(...) ((void)0)
+#define sr_destroy(...) ((void)0)
+#define sr_reset() ((void)0)
+#endif
+
+#ifndef USE_SDL_RENDERER
+static nk_bool fsr_filter;
+static nk_bool upscaling_filter;
+static nk_bool upscaling_filter_created;
+#endif
+
+static struct nk_context *nk_ctx;
+static struct nk_vec2 font_scale;
+
 #ifdef USE_COMPOSITION_SWAPCHAIN
-#define TDR_TEST_HOTKEY
+// #define TDR_TEST_HOTKEY
 #include "dcomp.h"
 #include <winstring.h>
 #ifndef USE_D3D11
@@ -368,7 +398,9 @@ enum {
   SURFACE_UTIL_COUNT,
 };
 
+#ifdef USE_D3D11
 static IDXGISwapChain *dxgi_sc[SCREEN_COUNT];
+#endif
 static ID3D11Device *d3d11device[SCREEN_COUNT];
 static ID3D11DeviceContext *d3d11device_context[SCREEN_COUNT];
 static IDXGIDevice *dxgi_device[SCREEN_COUNT];
@@ -1750,39 +1782,11 @@ static void composition_swapchain_close(void) {
   }
 }
 
-#ifndef USE_SDL_RENDERER
-#define screen_upscale_factor REALCUGAN_SCALE
 #ifdef USE_D3D11
-#define sr_create() realcugan_create(d3d11device, d3d11device_context, dxgi_adapter)
-#define sr_reset() realcugan_reset(d3d11device, d3d11device_context, dxgi_adapter)
-#else
-#define sr_create realcugan_create
-#define sr_reset() ((void)0)
-#endif
-#define sr_run realcugan_run
-#define sr_next realcugan_next
-#define sr_destroy realcugan_destroy
-#else
-#define screen_upscale_factor (1)
-#define sr_create(...) (0)
-#define sr_run(...) (0)
-#define sr_next(...) ((void)0)
-#define sr_destroy(...) ((void)0)
-#define sr_reset() ((void)0)
-#endif
-
-#ifndef USE_SDL_RENDERER
-static nk_bool fsr_filter;
-static nk_bool upscaling_filter;
-static nk_bool upscaling_filter_created;
-#endif
-
-static struct nk_context *nk_ctx;
-static struct nk_vec2 font_scale;
-
-static void nk_backend_font_init(void);
 static int d3d11_init(void);
 static void d3d11_close(void);
+#endif
+static void nk_backend_font_init(void);
 static void composition_swapchain_device_restart(void) {
   rp_lock_wait(comp_lock);
   composition_swapchain_device_close();
@@ -6761,6 +6765,7 @@ final_socket:
   return 0;
 }
 
+#ifdef USE_D3D11
 static void d3d11_ui_init() {
   CHECK_AND_RELEASE(d3d_ui_srv);
   CHECK_AND_RELEASE(d3d_ui_rtv);
@@ -6977,6 +6982,7 @@ static void d3d11_close(void) {
     CHECK_AND_RELEASE(d3d_ps[j]);
   }
 }
+#endif
 
 #include "style.h"
 
