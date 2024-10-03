@@ -229,23 +229,6 @@ int sdl_win_width, sdl_win_height;
 int sdl_display_width, sdl_display_height;
 float sdl_scale;
 
-static void updateWindowSize(int tb) {
-  SDL_GetWindowSize(win[tb], &win_w[tb], &win_h[tb]);
-  SDL_GL_GetDrawableSize(win[tb], &win_width[tb], &win_height[tb]);
-  float scale_x = (float)(win_width[tb]) / (float)(win_w[tb]);
-  float scale_y = (float)(win_height[tb]) / (float)(win_h[tb]);
-  win_scale[tb].x = roundf(scale_x * font_scale_step_factor) / font_scale_step_factor;
-  win_scale[tb].y = roundf(scale_y * font_scale_step_factor) / font_scale_step_factor;
-
-  if (tb == SCREEN_TOP) {
-    sdl_win_width = win_w[tb];
-    sdl_win_height = win_h[tb];
-    sdl_display_width = win_width[tb];
-    sdl_display_height = win_height[tb];
-    sdl_scale = win_scale[tb].x;
-  }
-}
-
 static void updateViewMode(view_mode_t vm) {
   switch (vm) {
     case VIEW_MODE_TOP_BOT:
@@ -1835,6 +1818,31 @@ static void composition_swapchain_device_restart(void) {
   rp_lock_rel(comp_lock);
 }
 #endif
+
+static void updateWindowSize(int tb) {
+#ifdef USE_COMPOSITION_SWAPCHAIN
+  if (tb == SCREEN_TOP)
+    rp_lock_wait(comp_lock);
+#endif
+  SDL_GetWindowSize(win[tb], &win_w[tb], &win_h[tb]);
+  SDL_GL_GetDrawableSize(win[tb], &win_width[tb], &win_height[tb]);
+  float scale_x = (float)(win_width[tb]) / (float)(win_w[tb]);
+  float scale_y = (float)(win_height[tb]) / (float)(win_h[tb]);
+  win_scale[tb].x = roundf(scale_x * font_scale_step_factor) / font_scale_step_factor;
+  win_scale[tb].y = roundf(scale_y * font_scale_step_factor) / font_scale_step_factor;
+
+  if (tb == SCREEN_TOP) {
+    sdl_win_width = win_w[tb];
+    sdl_win_height = win_h[tb];
+    sdl_display_width = win_width[tb];
+    sdl_display_height = win_height[tb];
+    sdl_scale = win_scale[tb].x;
+  }
+#ifdef USE_COMPOSITION_SWAPCHAIN
+  if (tb == SCREEN_TOP)
+    rp_lock_rel(comp_lock);
+#endif
+}
 
 #define HR_MAX(a, b) ((a) > (b) ? (a) : (b))
 #define HR_MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -4790,8 +4798,8 @@ ThreadLoop(int i)
     int render_w, render_h;
     SDL_GetRendererOutputSize(sdlRenderer[i], &render_w, &render_h);
     SDL_GetWindowSize(win[i], &win_width[i], &win_height[i]);
-    scale_x = (float)(render_w) / (float)(win_width[i]);
-    scale_y = (float)(render_h) / (float)(win_height[i]);
+    float scale_x = (float)(render_w) / (float)(win_width[i]);
+    float scale_y = (float)(render_h) / (float)(win_height[i]);
     scale_x = roundf(scale_x * font_scale_step_factor) / font_scale_step_factor;
     scale_x = roundf(scale_y * font_scale_step_factor) / font_scale_step_factor;
     SDL_RenderSetScale(sdlRenderer[i], scale_x, scale_y);
@@ -4829,8 +4837,6 @@ ThreadLoop(int i)
 #endif
     }
   }
-
-  updateWindowSize(sc_tb);
 #endif
 
   int ctx_width = NK_MAX(win_width[sc_tb], 1);
@@ -5201,13 +5207,14 @@ ThreadLoop(int i)
       glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
       glClear(GL_COLOR_BUFFER_BIT);
 
+      glBindTexture(GL_TEXTURE_2D, ui_nk_tex);
       nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY, use_composition_swapchain);
       nk_gui_next = 1;
 
+      glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_2D, ui_nk_tex);
       glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, ui_tex);
-
       glUseProgram(gl_program[sc_tb]);
 #ifdef USE_VAO
       glBindVertexArray(glFboVao[sc_tb]);
@@ -5224,6 +5231,7 @@ ThreadLoop(int i)
 #else
       glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, fbo_indices);
 #endif
+      glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, 0);
 
       if (!wglDXUnlockObjectsNV(gl_d3ddevice[sc_tb], 1, &ui_handle)) {
         err_log("wglDXUnlockObjectsNV failed: %d\n", (int)GetLastError());
@@ -5262,7 +5270,7 @@ sc_tb_fail:
     return;
 #else
   if (i == SCREEN_TOP) {
-    nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY, use_composition_swapchain);
+    nk_sdl_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY, 0);
     nk_gui_next = 1;
   }
   SDL_GL_SwapWindow(win[i]);
@@ -5366,6 +5374,23 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 #endif
   }
   return CallWindowProcA((WNDPROC)sdl_wnd_proc[i], hwnd, msg, wparam, lparam);
+}
+#endif
+
+#if !defined(USE_SDL_RENDERER) && !defined(USE_D3D11)
+static int win_resize_event_watcher(void *, SDL_Event *event) {
+  if (event->type == SDL_WINDOWEVENT && (event->window.event == SDL_WINDOWEVENT_RESIZED || event->window.event == SDL_WINDOWEVENT_SIZE_CHANGED)) {
+    int i;
+    for (i = 0; i < SCREEN_COUNT; ++i) {
+      if (event->window.windowID == win_id[i]) {
+        break;
+      }
+    }
+    if (i < SCREEN_COUNT) {
+      updateWindowSize(i);
+    }
+  }
+  return 0;
 }
 #endif
 
@@ -7368,6 +7393,9 @@ start_use_c_sc:
   updateViewMode(view_mode);
   win_id[SCREEN_TOP] = SDL_GetWindowID(win[SCREEN_TOP]);
   win_id[SCREEN_BOT] = SDL_GetWindowID(win[SCREEN_BOT]);
+#if !defined(USE_SDL_RENDERER) && !defined(USE_D3D11)
+  SDL_AddEventWatch(win_resize_event_watcher, NULL);
+#endif
 
   nk_backend_font_init();
 
