@@ -185,9 +185,8 @@ nk_sdl_device_destroy(void)
     nk_buffer_free(&dev->cmds);
 }
 
-extern int sdl_win_width, sdl_win_height;
 extern int sdl_display_width, sdl_display_height;
-extern float sdl_scale;
+extern struct nk_vec2 sdl_scale;
 
 NK_API void
 nk_sdl_render(enum nk_anti_aliasing AA, int max_vertex_buffer, int max_element_buffer, int vflip)
@@ -209,13 +208,12 @@ nk_sdl_render(enum nk_anti_aliasing AA, int max_vertex_buffer, int max_element_b
     sdl.ctx.delta_time_seconds = (float)(now - sdl.time_of_last_frame) / 1000;
     sdl.time_of_last_frame = now;
 
-    int width = sdl_win_width, height = sdl_win_height;
-    int display_width = sdl_display_width, display_height = sdl_display_height;
-    ortho[0][0] /= (GLfloat)width;
-    ortho[1][1] /= (GLfloat)height;
+    scale = sdl_scale;
 
-    scale.x = sdl_scale;
-    scale.y = sdl_scale;
+    int display_width = sdl_display_width, display_height = sdl_display_height;
+    GLfloat width = (GLfloat)display_width / scale.x, height = (GLfloat)display_height / scale.y;
+    ortho[0][0] /= width;
+    ortho[1][1] /= height;
 
     /* setup global state */
     glViewport(0,0,display_width,display_height);

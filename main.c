@@ -131,6 +131,7 @@ static int prev_ctx_width[SCREEN_COUNT], prev_ctx_height[SCREEN_COUNT];
 static bool ro_init;
 #define RO_INIT() (ro_init ? RoInitialize(RO_INIT_MULTITHREADED) : CoInitializeEx(NULL, COINIT_MULTITHREADED))
 #define RO_UNINIT() (ro_init ? RoUninitialize() : CoUninitialize())
+static LONG_PTR sdl_wnd_proc[SCREEN_COUNT];
 #else
 #define RO_INIT()
 #define RO_UNINIT()
@@ -225,9 +226,8 @@ static struct nk_vec2 win_scale[SCREEN_COUNT];
 static const float font_scale_step_factor = 32.0;
 static const float font_scale_epsilon = 1.0 / font_scale_step_factor;
 
-int sdl_win_width, sdl_win_height;
 int sdl_display_width, sdl_display_height;
-float sdl_scale;
+struct nk_vec2 sdl_scale;
 
 static void updateViewMode(view_mode_t vm) {
   switch (vm) {
@@ -278,7 +278,6 @@ static void updateViewMode(view_mode_t vm) {
 #define SDL_GL_MakeCurrent(w, c) ((void)0)
 #define nk_sdl_font_stash_begin nk_d3d11_font_stash_begin
 #define nk_sdl_font_stash_end nk_d3d11_font_stash_end
-static LONG_PTR sdl_wnd_proc[SCREEN_COUNT];
 
 struct d3d_vertex_t {
   float pos[2];
@@ -1819,11 +1818,9 @@ static void composition_swapchain_device_restart(void) {
 }
 #endif
 
+#include <shellscalingapi.h>
+
 static void updateWindowSize(int tb) {
-#ifdef USE_COMPOSITION_SWAPCHAIN
-  if (tb == SCREEN_TOP)
-    rp_lock_wait(comp_lock);
-#endif
   SDL_GetWindowSize(win[tb], &win_w[tb], &win_h[tb]);
   SDL_GL_GetDrawableSize(win[tb], &win_width[tb], &win_height[tb]);
   float scale_x = (float)(win_width[tb]) / (float)(win_w[tb]);
@@ -1832,16 +1829,10 @@ static void updateWindowSize(int tb) {
   win_scale[tb].y = roundf(scale_y * font_scale_step_factor) / font_scale_step_factor;
 
   if (tb == SCREEN_TOP) {
-    sdl_win_width = win_w[tb];
-    sdl_win_height = win_h[tb];
     sdl_display_width = win_width[tb];
     sdl_display_height = win_height[tb];
-    sdl_scale = win_scale[tb].x;
+    sdl_scale = win_scale[tb];
   }
-#ifdef USE_COMPOSITION_SWAPCHAIN
-  if (tb == SCREEN_TOP)
-    rp_lock_rel(comp_lock);
-#endif
 }
 
 #define HR_MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -5282,8 +5273,10 @@ sc_tb_fail:
 #endif
 }
 
+#ifdef _WIN32
 #ifdef USE_D3D11
 static void d3d11_ui_init();
+#endif
 static LRESULT CALLBACK
 WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
@@ -5306,11 +5299,17 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
       int height = NK_MAX(HIWORD(lparam), 1);
       win_width[i] = width;
       win_height[i] = height;
-      win_w[i] = win_width[i] / win_scale[i].x;
-      win_h[i] = win_height[i] / win_scale[i].y;
+      win_w[i] = roundf(win_width[i] / win_scale[i].x);
+      win_h[i] = roundf(win_height[i] / win_scale[i].y);
 
       if (resize_top_and_ui) {
+#ifdef USE_D3D11
         d3d11_ui_init();
+#else
+        sdl_display_width = win_width[i];
+        sdl_display_height = win_height[i];
+        sdl_scale = win_scale[i];
+#endif
         rp_lock_rel(comp_lock);
       }
       break;
@@ -5366,9 +5365,11 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
       nk_input_begin(nk_ctx);
       nk_input_current = 1;
     }
+#ifdef USE_D3D11
     int ret;
     if ((ret = nk_d3d11_handle_event(hwnd, msg, wparam, lparam))) {
     }
+#endif
 #ifndef SDL_GL_SINGLE_THREAD
     rp_lock_rel(nk_input_lock);
 #endif
@@ -5377,9 +5378,9 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 }
 #endif
 
-#if !defined(USE_SDL_RENDERER) && !defined(USE_D3D11)
+#if !defined(USE_SDL_RENDERER) && !defined(_WIN32)
 static int win_resize_event_watcher(void *, SDL_Event *event) {
-  if (event->type == SDL_WINDOWEVENT && (event->window.event == SDL_WINDOWEVENT_RESIZED || event->window.event == SDL_WINDOWEVENT_SIZE_CHANGED)) {
+  if (event->type == SDL_WINDOWEVENT && event->window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
     int i;
     for (i = 0; i < SCREEN_COUNT; ++i) {
       if (event->window.windowID == win_id[i]) {
@@ -7261,6 +7262,11 @@ int main(int argc, char *argv[])
 
 #ifdef USE_COMPOSITION_SWAPCHAIN
   if (use_composition_swapchain) {
+    HWND d3d_hwnd[SCREEN_COUNT];
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      d3d_hwnd[i] = hwnd[i];
+    }
+
 #ifndef USE_D3D11
     win_flags &= ~SDL_WINDOW_OPENGL;
 
@@ -7290,16 +7296,15 @@ int main(int argc, char *argv[])
     SDL_VERSION(&wmInfo[SCREEN_BOT].version);
     SDL_GetWindowWMInfo(win_sc[SCREEN_BOT], &wmInfo[SCREEN_BOT]);
 
-    HWND hwnd[SCREEN_COUNT];
-    hwnd[SCREEN_TOP] = wmInfo[SCREEN_TOP].info.win.window;
-    hwnd[SCREEN_BOT] = wmInfo[SCREEN_BOT].info.win.window;
+    d3d_hwnd[SCREEN_TOP] = wmInfo[SCREEN_TOP].info.win.window;
+    d3d_hwnd[SCREEN_BOT] = wmInfo[SCREEN_BOT].info.win.window;
 
     // HDC hdc[SCREEN_COUNT];
     // hdc[SCREEN_TOP] = wmInfo[SCREEN_TOP].info.win.hdc;
     // hdc[SCREEN_BOT] = wmInfo[SCREEN_BOT].info.win.hdc;
 #endif
 
-    if (composition_swapchain_init(hwnd) != 0) {
+    if (composition_swapchain_init(d3d_hwnd) != 0) {
       goto end_use_c_sc;
     }
 
@@ -7307,6 +7312,10 @@ int main(int argc, char *argv[])
     rp_sem_create(compositing_begin_sem, 0, SCREEN_COUNT);
     rp_sem_create(compositing_end_sem, 0, SCREEN_COUNT);
     rp_lock_init(comp_lock);
+
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+      hwnd[i] = d3d_hwnd[i];
+    }
 
 #ifndef USE_D3D11
     win[SCREEN_TOP] = win_sc[SCREEN_TOP];
@@ -7374,16 +7383,22 @@ start_use_c_sc:
 
     rp_lock_init(comp_lock);
   }
+  struct nk_context *ctx = nk_ctx = nk_d3d11_init(d3d11device[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT, MAX_VERTEX_BUFFER, MAX_INDEX_BUFFER);
+#else
+  struct nk_context *ctx = nk_ctx = nk_sdl_init(win[SCREEN_TOP]);
+#endif
+#endif
 
+#ifdef _WIN32
   for (int i = 0; i < SCREEN_COUNT; ++i) {
     SetWindowLongPtrA(hwnd[i], GWLP_USERDATA, i);
     sdl_wnd_proc[i] = GetWindowLongPtrA(hwnd[i], GWLP_WNDPROC);
     SetWindowLongPtrA(hwnd[i], GWLP_WNDPROC, (LONG_PTR)WindowProc);
   }
-  struct nk_context *ctx = nk_ctx = nk_d3d11_init(d3d11device[SCREEN_TOP], WINDOW_WIDTH, WINDOW_HEIGHT, MAX_VERTEX_BUFFER, MAX_INDEX_BUFFER);
-#else
-  struct nk_context *ctx = nk_ctx = nk_sdl_init(win[SCREEN_TOP]);
-#endif
+  HBRUSH brush = CreateSolidBrush(
+      RGB(nk_window_bgcolor.r, nk_window_bgcolor.g, nk_window_bgcolor.b));
+  SetClassLongPtr(hwnd[SCREEN_TOP], GCLP_HBRBACKGROUND, (LONG_PTR)brush);
+  SetClassLongPtr(hwnd[SCREEN_BOT], GCLP_HBRBACKGROUND, (LONG_PTR)brush);
 #endif
 
   for (int i = 0; i < SCREEN_COUNT; ++i) {
@@ -7393,18 +7408,11 @@ start_use_c_sc:
   updateViewMode(view_mode);
   win_id[SCREEN_TOP] = SDL_GetWindowID(win[SCREEN_TOP]);
   win_id[SCREEN_BOT] = SDL_GetWindowID(win[SCREEN_BOT]);
-#if !defined(USE_SDL_RENDERER) && !defined(USE_D3D11)
+#if !defined(USE_SDL_RENDERER) && !defined(_WIN32)
   SDL_AddEventWatch(win_resize_event_watcher, NULL);
 #endif
 
   nk_backend_font_init();
-
-#ifdef _WIN32
-  HBRUSH brush = CreateSolidBrush(
-      RGB(nk_window_bgcolor.r, nk_window_bgcolor.g, nk_window_bgcolor.b));
-  SetClassLongPtr(hwnd[SCREEN_TOP], GCLP_HBRBACKGROUND, (LONG_PTR)brush);
-  SetClassLongPtr(hwnd[SCREEN_BOT], GCLP_HBRBACKGROUND, (LONG_PTR)brush);
-#endif
 
   sock_startup();
 
