@@ -7400,11 +7400,11 @@ start_use_c_sc:
   SetClassLongPtr(hwnd[SCREEN_BOT], GCLP_HBRBACKGROUND, (LONG_PTR)brush);
 #endif
 
+  SDL_ShowWindow(win[SCREEN_TOP]);
+  updateViewMode(view_mode);
   for (int i = 0; i < SCREEN_COUNT; ++i) {
     updateWindowSize(i);
   }
-  SDL_ShowWindow(win[SCREEN_TOP]);
-  updateViewMode(view_mode);
   win_id[SCREEN_TOP] = SDL_GetWindowID(win[SCREEN_TOP]);
   win_id[SCREEN_BOT] = SDL_GetWindowID(win[SCREEN_BOT]);
 #if !defined(USE_SDL_RENDERER) && !defined(_WIN32)
