@@ -127,6 +127,7 @@ static int prev_ctx_width[SCREEN_COUNT], prev_ctx_height[SCREEN_COUNT];
 #endif
 
 #ifdef _WIN32
+#include <shellscalingapi.h>
 #include <versionhelpers.h>
 static bool ro_init;
 #define RO_INIT() (ro_init ? RoInitialize(RO_INIT_MULTITHREADED) : CoInitializeEx(NULL, COINIT_MULTITHREADED))
@@ -1817,8 +1818,6 @@ static void composition_swapchain_device_restart(void) {
   rp_lock_rel(comp_lock);
 }
 #endif
-
-#include <shellscalingapi.h>
 
 static void updateWindowSize(int tb) {
   SDL_GetWindowSize(win[tb], &win_w[tb], &win_h[tb]);

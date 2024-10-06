@@ -3982,6 +3982,7 @@ typedef VkResult (VKAPI_PTR *PFN_vkGetPhysicalDeviceImageFormatProperties2)(VkPh
 
 static PFN_vkGetPhysicalDeviceImageFormatProperties2 vkGetPhysicalDeviceImageFormatProperties2;
 
+#ifdef _WIN32
 typedef struct VkImportMemoryWin32HandleInfoKHR {
     VkStructureType sType;
     const void *pNext;
@@ -3992,7 +3993,6 @@ typedef struct VkImportMemoryWin32HandleInfoKHR {
 
 static const VkStructureType VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR = (VkStructureType)1000073000;
 
-#if _WIN32
 typedef struct VkMemoryGetWin32HandleInfoKHR
 {
     VkStructureType sType;

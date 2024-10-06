@@ -34,12 +34,11 @@ endif
 ifeq ($(USE_SDL_RENDERER),1)
 GL_OBJ :=
 else
+GL_OBJ := realcugan.o realcugan_lib.o libGLAD.o fsr/fsr_main.o fsr/image_utils.o libNKSDL.o
+ifeq ($(OS),Windows_NT)
 ifeq ($(USE_D3D11),1)
 GL_OBJ := realcugan.o realcugan_lib.o
-else
-GL_OBJ := realcugan.o realcugan_lib.o libGLAD.o fsr/fsr_main.o fsr/image_utils.o libNKSDL.o
 endif
-ifeq ($(OS),Windows_NT)
 GL_OBJ += ntrviewer.res
 ifeq ($(USE_COMPOSITION_SWAPCHAIN),1)
 GL_OBJ += libGLAD_WGL.o
