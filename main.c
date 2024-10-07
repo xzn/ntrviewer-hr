@@ -6030,6 +6030,7 @@ static int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
 #define RP_KCP_HDR_W_NBITS (1)
 #define RP_KCP_HDR_T_NBITS (2)
 #define RP_KCP_HDR_QUALITY_NBITS (7)
+#define RP_KCP_HDR_CHROMASS_NBITS (2)
 #define RP_KCP_HDR_SIZE_NBITS (11)
 #define RP_KCP_HDR_RC_NBITS (5)
 
@@ -6044,6 +6045,7 @@ static struct KcpRecv {
 static struct KcpRecvInfo {
   bool is_top;
   u16 jpeg_quality;
+  u8 chroma_ss;
   u8 core_count;
   u8 v_adjusted;
   u8 v_last_adjusted;
@@ -6124,17 +6126,20 @@ static void socket_action(int ret) {
   }
 }
 
-static unsigned char jpeg_header_top_buffer_kcp[400 * 240 * 3 + 2048];
-static unsigned char jpeg_header_bot_buffer_kcp[320 * 240 * 3 + 2048];
+static unsigned char jpeg_header_top_buffer_kcp[400 * 240 * 6 + 2048];
+static unsigned char jpeg_header_bot_buffer_kcp[320 * 240 * 6 + 2048];
 static unsigned char jpeg_header_empty_src_kcp[400 * 240 * 3];
 static u16 jpeg_header_top_quality_kcp;
 static u16 jpeg_header_bot_quality_kcp;
-static int set_decode_quality_kcp(bool is_top, int quality, int rc)
+static u16 jpeg_header_top_chroma_ss_kcp;
+static u16 jpeg_header_bot_chroma_ss_kcp;
+static int set_decode_quality_kcp(bool is_top, int quality, int chroma_ss, int rc)
 {
   u16 *hdr_quality = is_top ? &jpeg_header_top_quality_kcp : &jpeg_header_bot_quality_kcp;
+  u16 *hdr_chroma_ss = is_top ? &jpeg_header_top_chroma_ss_kcp : &jpeg_header_bot_chroma_ss_kcp;
 
   // No need to check for rc as we change restart interval manually later
-  if (*hdr_quality != quality) {
+  if (*hdr_quality != quality || *hdr_chroma_ss != chroma_ss) {
     tjhandle tjInst = tj3Init(TJINIT_COMPRESS);
     if (!tjInst) {
       return -1;
@@ -6159,14 +6164,15 @@ static int set_decode_quality_kcp(bool is_top, int quality, int rc)
       goto final;
     }
 
-    ret = tj3Set(tjInst, TJPARAM_SUBSAMP, TJSAMP_420);
+    enum TJSAMP tjsamp = chroma_ss == 2 ? TJSAMP_444 : chroma_ss == 1 ? TJSAMP_422 : TJSAMP_420;
+    ret = tj3Set(tjInst, TJPARAM_SUBSAMP, tjsamp);
     if (ret < 0) {
       ret = ret * 0x10 - 7;
       goto final;
     }
 
     size_t size = is_top ? sizeof(jpeg_header_top_buffer_kcp) : sizeof(jpeg_header_bot_buffer_kcp);
-    size_t buf_size = tj3JPEGBufSize(240, is_top ? 400 : 320, TJSAMP_420);
+    size_t buf_size = tj3JPEGBufSize(240, is_top ? 400 : 320, tjsamp);
     if (size < buf_size) {
       err_log("buf size %d size %d\n", (int)buf_size, (int)size);
       ret = -3;
@@ -6187,6 +6193,7 @@ static int set_decode_quality_kcp(bool is_top, int quality, int rc)
 
     ret = 0;
     *hdr_quality = quality;
+    *hdr_chroma_ss = chroma_ss;
 
 final:
     tj3Destroy(tjInst);
@@ -6222,7 +6229,7 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
   struct KcpRecvInfo *info = &kcp_recv_info[w][queue_w];
 
   int ret;
-  if ((ret = set_decode_quality_kcp(info->is_top, info->jpeg_quality, info->v_adjusted)) < 0) {
+  if ((ret = set_decode_quality_kcp(info->is_top, info->jpeg_quality, info->chroma_ss, info->v_adjusted)) < 0) {
     return ret * 0x100 - 1;
   }
 
@@ -6236,7 +6243,7 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
           if (i + 6 >= jpeg_header_size_max) {
             return -6;
           }
-          *(u16 *)&jpeg_header[i + 4] = htons(info->v_adjusted * (240 / (8 * 2)));
+          *(u16 *)&jpeg_header[i + 4] = htons(info->v_adjusted * (240 / (8 * (info->chroma_ss == 2 ? 1 : 2))));
         } else if (jpeg_header[i + 1] == 0xda) {
           jpeg_header_size = i + 2;
           if (jpeg_header_size + 2 >= jpeg_header_size_max) {
@@ -6360,6 +6367,7 @@ static int handle_recv_kcp(uint8_t *buf, int size)
       u16 jpeg_quality = hdr & ((1 << RP_KCP_HDR_QUALITY_NBITS) - 1);
       u16 core_count = (hdr >> RP_KCP_HDR_QUALITY_NBITS) & ((1 << RP_KCP_HDR_T_NBITS) - 1);
       bool top_bot = (hdr >> (RP_KCP_HDR_QUALITY_NBITS + RP_KCP_HDR_T_NBITS)) & ((1 << 1) - 1);
+      u16 chroma_ss = (hdr >> (RP_KCP_HDR_QUALITY_NBITS + RP_KCP_HDR_T_NBITS + 1)) & ((1 << RP_KCP_HDR_CHROMASS_NBITS) - 1);
 
       // err_log("w %d quality %d cores %d top %d\n", (int)w, (int)jpeg_quality, (int)core_count, (int)is_top);
 
@@ -6371,6 +6379,7 @@ static int handle_recv_kcp(uint8_t *buf, int size)
       info->jpeg_quality = jpeg_quality;
       info->core_count = core_count;
       info->is_top = top_bot == 0;
+      info->chroma_ss = chroma_ss;
 
       for (int t = 0; t < core_count; ++t) {
         if (size < (int)sizeof(u16)) {
