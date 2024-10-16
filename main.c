@@ -132,7 +132,9 @@ static int prev_ctx_width[SCREEN_COUNT], prev_ctx_height[SCREEN_COUNT];
 static bool ro_init;
 #define RO_INIT() (ro_init ? RoInitialize(RO_INIT_MULTITHREADED) : CoInitializeEx(NULL, COINIT_MULTITHREADED))
 #define RO_UNINIT() (ro_init ? RoUninitialize() : CoUninitialize())
+#ifndef USE_SDL_RENDERER
 static LONG_PTR sdl_wnd_proc[SCREEN_COUNT];
+#endif
 #else
 #define RO_INIT()
 #define RO_UNINIT()
@@ -5272,7 +5274,7 @@ sc_tb_fail:
 #endif
 }
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(USE_SDL_RENDERER)
 #ifdef USE_D3D11
 static void d3d11_ui_init();
 #endif
@@ -7159,10 +7161,16 @@ int main(int argc, char *argv[])
 
 #ifdef USE_SDL_RENDERER
   Uint32 renderer_flags = SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC;
+renderer_init_retry:
   sdlRenderer[SCREEN_TOP] = SDL_CreateRenderer(win[SCREEN_TOP], -1, renderer_flags);
   if (!sdlRenderer[SCREEN_TOP])
   {
     err_log("SDL_CreateRenderer: %s\n", SDL_GetError());
+
+    if (renderer_flags) {
+      renderer_flags = 0;
+      goto renderer_init_retry;
+    }
     return -1;
   }
 
@@ -7398,11 +7406,13 @@ start_use_c_sc:
 #endif
 
 #ifdef _WIN32
+#ifndef USE_SDL_RENDERER
   for (int i = 0; i < SCREEN_COUNT; ++i) {
     SetWindowLongPtrA(hwnd[i], GWLP_USERDATA, i);
     sdl_wnd_proc[i] = GetWindowLongPtrA(hwnd[i], GWLP_WNDPROC);
     SetWindowLongPtrA(hwnd[i], GWLP_WNDPROC, (LONG_PTR)WindowProc);
   }
+#endif
   HBRUSH brush = CreateSolidBrush(
       RGB(nk_window_bgcolor.r, nk_window_bgcolor.g, nk_window_bgcolor.b));
   SetClassLongPtr(hwnd[SCREEN_TOP], GCLP_HBRBACKGROUND, (LONG_PTR)brush);
