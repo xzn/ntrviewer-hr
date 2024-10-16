@@ -2530,6 +2530,7 @@ static void getIPMapMAC(void) {
     if (ret == NO_ERROR) {
       return;
     } else {
+      err_log("GetIpNetTable failed: %d\n", (int)ret);
       free(ipNetBuf);
       ipNetBuf = 0;
       ipNetBufSize = 0;
@@ -2599,15 +2600,17 @@ static uint32_t parseIPAddress(const char *ip) {
 
 static int getAdaptorCount(void) {
   int count = 0;
-  PIP_ADAPTER_INFO next = adapterInfos;
-  while (next) {
-    PIP_ADDR_STRING ip = &next->IpAddressList;
-    while (ip) {
-      if (parseIPAddress(ip->IpAddress.String) != 0)
-        ++count;
-      ip = ip->Next;
+  if (adapterInfos && adaptorInfosSize) {
+    PIP_ADAPTER_INFO next = adapterInfos;
+    while (next) {
+      PIP_ADDR_STRING ip = &next->IpAddressList;
+      while (ip) {
+        if (parseIPAddress(ip->IpAddress.String) != 0)
+          ++count;
+        ip = ip->Next;
+      }
+      next = next->Next;
     }
-    next = next->Next;
   }
   return count;
 }
@@ -2622,19 +2625,21 @@ static void updateAdapterIPs(void) {
   strcpy(adaptorIPs[0], "0.0.0.0 (Any)");
   memset(adaptorIPsOctets[0], 0, 4);
 
-  PIP_ADAPTER_INFO next = adapterInfos;
-  for (int i = 0; i < count;) {
-    PIP_ADDR_STRING ip = &next->IpAddressList;
-    while (ip) {
-      int addr;
-      if ((addr = parseIPAddress(ip->IpAddress.String)) != 0) {
-        sprintf(adaptorIPs[i + 1], "%s", ip->IpAddress.String);
-        memcpy(adaptorIPsOctets[i + 1], &addr, 4);
-        ++i;
+  if (adapterInfos && adaptorInfosSize) {
+    PIP_ADAPTER_INFO next = adapterInfos;
+    for (int i = 0; i < count;) {
+      PIP_ADDR_STRING ip = &next->IpAddressList;
+      while (ip) {
+        int addr;
+        if ((addr = parseIPAddress(ip->IpAddress.String)) != 0) {
+          sprintf(adaptorIPs[i + 1], "%s", ip->IpAddress.String);
+          memcpy(adaptorIPsOctets[i + 1], &addr, 4);
+          ++i;
+        }
+        ip = ip->Next;
       }
-      ip = ip->Next;
+      next = next->Next;
     }
-    next = next->Next;
   }
 
   strcpy(adaptorIPs[1 + count], "Auto-Select");
@@ -2661,12 +2666,13 @@ static void getAdapterIPs(void) {
   adapterInfos = malloc(adaptorInfosSize);
   ULONG ret = GetAdaptersInfo(adapterInfos, &adaptorInfosSize);
   if (ret == ERROR_SUCCESS) {
-    updateAdapterIPs();
   } else {
+    err_log("GetAdaptersInfo failed: %d\n", (int)ret);
     free(adapterInfos);
     adapterInfos = 0;
     adaptorInfosSize = 0;
   }
+  updateAdapterIPs();
 }
 #else
 
@@ -3334,7 +3340,8 @@ static void guiMain(struct nk_context *ctx)
     check_nav_button_prev(ctx);
     selected = selectedIP;
     do_nav_combobox_next(ctx, NK_FOCUS_IP_COMBO, &selected, autoIPsCount);
-    nk_combobox(ctx, (const char **)autoIPs, autoIPsCount, &selected, 30, comboIPsSize);
+    const char *combo_items_null;
+    nk_combobox(ctx, autoIPs ? (const char **)autoIPs : &combo_items_null, autoIPsCount, &selected, 30, comboIPsSize);
     check_nav_combobox_prev(ctx);
     if (selected != selectedIP) {
       set_nav_combobox_prev(NK_FOCUS_IP_COMBO);
@@ -3349,7 +3356,7 @@ static void guiMain(struct nk_context *ctx)
     nk_label(ctx, "Viewer IP", NK_TEXT_CENTERED);
     selected = selectedAdaptor;
     do_nav_combobox_next(ctx, NK_FOCUS_VIEWER_IP, &selected, adaptorIPsCount);
-    nk_combobox(ctx, (const char **)adaptorIPs, adaptorIPsCount, &selected, 30, comboIPsSize);
+    nk_combobox(ctx, adaptorIPs ? (const char **)adaptorIPs : &combo_items_null, adaptorIPsCount, &selected, 30, comboIPsSize);
     check_nav_combobox_prev(ctx);
     if (selected != selectedAdaptor) {
       set_nav_combobox_prev(NK_FOCUS_VIEWER_IP);
@@ -6747,7 +6754,7 @@ static thread_ret_t udp_recv_thread_func(void *)
     struct sockaddr_in si_other;
     si_other.sin_family = AF_INET;
     si_other.sin_port = htons(ntr_rp_bound_port);
-    si_other.sin_addr.s_addr = *(uint32_t *)adaptorIPsOctets[selectedAdaptor];
+    si_other.sin_addr.s_addr = adaptorIPsOctets ? *(uint32_t *)adaptorIPsOctets[selectedAdaptor] : 0;
 
     if (bind(s, (struct sockaddr *)&si_other, sizeof(si_other)) == SOCKET_ERROR)
     {
@@ -6756,7 +6763,8 @@ static thread_ret_t udp_recv_thread_func(void *)
       socket_error_pause();
       goto final_socket;
     }
-    uint8_t *octets = adaptorIPsOctets[selectedAdaptor];
+    uint8_t octets_null[] = { 0, 0, 0, 0 };
+    uint8_t *octets = adaptorIPsOctets ? adaptorIPsOctets[selectedAdaptor] : octets_null;
     err_log("port bound at %d.%d.%d.%d:%d\n", (int)octets[0], (int)octets[1], (int)octets[2], (int)octets[3], ntr_rp_bound_port);
     ntr_rp_port_changed = 0;
     ntr_rp_port = ntr_rp_bound_port;
