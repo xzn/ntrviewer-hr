@@ -18,7 +18,10 @@ ifeq ($(OS),Windows_NT)
 	LDLIBS += -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8
 	LDLIBS += -lws2_32 -liphlpapi
 ifeq ($(findstring 1,$(USE_D3D11) $(USE_COMPOSITION_SWAPCHAIN)),1)
-	LDLIBS += -ld3d11 -lwindowsapp
+ifeq ($(USE_D3D11),1)
+	LDLIBS += -ld3dcompiler
+endif
+	LDLIBS += -ld3d11 -ldxgi
 endif
 	TARGET := ntrviewer.exe
 
