@@ -178,12 +178,14 @@ void ikcp_allocator(void* (*new_malloc)(size_t), void (*new_free)(void*))
 // create a new kcpcb
 //---------------------------------------------------------------------
 #include "fecal/fecal.h"
+// #include "fecal/gf256.h"
 
 ikcpcb* ikcp_create(IUINT16 cid, void *user)
 {
 	if (fecal_init() != 0) {
 		return 0;
 	}
+	// err_log("CPU SSSE3: %d, AVX2: %d\n", CpuHasSSSE3, CpuHasAVX2);
 
 	ikcpcb *kcp = (ikcpcb*)ikcp_malloc(sizeof(struct IKCPCB));
 	if (kcp == NULL) return NULL;

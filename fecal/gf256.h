@@ -45,7 +45,7 @@
 */
 
 #include <stdint.h> // uint32_t etc
-#include <cstring> // memcpy, memset
+#include <string.h> // memcpy, memset
 
 /// Library header version
 #define GF256_VERSION 2
@@ -60,10 +60,12 @@
 #if defined(__AVX2__) || (defined (_MSC_VER) && _MSC_VER >= 1900)
     #define GF256_TRY_AVX2 /* 256-bit */
     #include <immintrin.h>
-    #define GF256_ALIGN_BYTES 32
+    // #define GF256_ALIGN_BYTES 32
 #else // __AVX2__
-    #define GF256_ALIGN_BYTES 16
+    // #define GF256_ALIGN_BYTES 16
 #endif // __AVX2__
+
+#define GF256_ALIGN_BYTES 32
 
 #if !defined(GF256_TARGET_MOBILE)
     // Note: MSVC currently only supports SSSE3 but not AVX2
@@ -77,7 +79,7 @@
 
 #if defined(GF256_TARGET_MOBILE)
 
-    #define GF256_ALIGNED_ACCESSES /* Inputs must be aligned to GF256_ALIGN_BYTES */
+    // #define GF256_ALIGNED_ACCESSES /* Inputs must be aligned to GF256_ALIGN_BYTES */
 
 # if defined(HAVE_ARM_NEON_H)
     // Compiler-specific 128-bit SIMD register keyword
@@ -93,6 +95,8 @@
     #define GF256_M128 __m128i
 
 #endif // GF256_TARGET_MOBILE
+
+#define GF256_ALIGNED_ACCESSES
 
 #ifdef GF256_TRY_AVX2
     // Compiler-specific 256-bit SIMD register keyword
@@ -126,7 +130,7 @@ extern "C" {
 // Portability
 
 /// Swap two memory buffers in-place
-extern void gf256_memswap(void * GF256_RESTRICT vx, void * GF256_RESTRICT vy, int bytes);
+// extern void gf256_memswap(void * GF256_RESTRICT vx, void * GF256_RESTRICT vy, int bytes);
 
 
 //------------------------------------------------------------------------------
@@ -138,68 +142,170 @@ extern void gf256_memswap(void * GF256_RESTRICT vx, void * GF256_RESTRICT vy, in
 #endif // _MSC_VER
 
 /// The context object stores tables required to perform library calculations
-struct gf256_ctx
+typedef struct gf256_ctx
 {
-    /// We require memory to be aligned since the SIMD instructions benefit from
-    /// or require aligned accesses to the table data.
-    struct
-    {
-        GF256_ALIGNED GF256_M128 TABLE_LO_Y[256];
-        GF256_ALIGNED GF256_M128 TABLE_HI_Y[256];
-    } MM128;
-#ifdef GF256_TRY_AVX2
-    struct
-    {
-        GF256_ALIGNED GF256_M256 TABLE_LO_Y[256];
-        GF256_ALIGNED GF256_M256 TABLE_HI_Y[256];
-    } MM256;
-#endif // GF256_TRY_AVX2
-
     /// Mul/Div/Inv/Sqr tables
     uint8_t GF256_MUL_TABLE[256 * 256];
     uint8_t GF256_DIV_TABLE[256 * 256];
     uint8_t GF256_INV_TABLE[256];
     uint8_t GF256_SQR_TABLE[256];
-
-    /// Log/Exp tables
-    uint16_t GF256_LOG_TABLE[256];
-    uint8_t GF256_EXP_TABLE[512 * 2 + 1];
-
-    /// Polynomial used
-    unsigned Polynomial;
-};
+} gf256_ctx;
 
 #ifdef _MSC_VER
     #pragma warning(pop)
 #endif // _MSC_VER
 
-extern gf256_ctx GF256Ctx;
+#define GF_NAME_SUFFIX_INNER(name, suffix) name ## suffix
+#define GF_NAME_SUFFIX(name, suffix) GF_NAME_SUFFIX_INNER(name, suffix)
 
+#define GF_NAME(name) GF_NAME_SUFFIX(name, GF_SUFFIX)
+
+#ifndef GF_SUFFIX
+#define GF_SUFFIX _mobile
+#define GF_IMPL_DEFAULT
+#endif
+
+extern gf256_ctx GF256Ctx_mobile;
+extern gf256_ctx GF256Ctx_ssse3;
+extern gf256_ctx GF256Ctx_avx2;
+
+extern bool CpuHasAVX2;
+extern bool CpuHasSSSE3;
+
+static void _cpuid(unsigned int cpu_info[4U], const unsigned int cpu_info_type)
+{
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_AMD64) || defined(_M_IX86))
+    __cpuid((int *) cpu_info, cpu_info_type);
+#else //if defined(HAVE_CPUID)
+    cpu_info[0] = cpu_info[1] = cpu_info[2] = cpu_info[3] = 0;
+# ifdef __i386__
+    __asm__ __volatile__ ("pushfl; pushfl; "
+                          "popl %0; "
+                          "movl %0, %1; xorl %2, %0; "
+                          "pushl %0; "
+                          "popfl; pushfl; popl %0; popfl" :
+                          "=&r" (cpu_info[0]), "=&r" (cpu_info[1]) :
+                          "i" (0x200000));
+    if (((cpu_info[0] ^ cpu_info[1]) & 0x200000) == 0) {
+        return; /* LCOV_EXCL_LINE */
+    }
+# endif
+# ifdef __i386__
+    __asm__ __volatile__ ("xchgl %%ebx, %k1; cpuid; xchgl %%ebx, %k1" :
+                          "=a" (cpu_info[0]), "=&r" (cpu_info[1]),
+                          "=c" (cpu_info[2]), "=d" (cpu_info[3]) :
+                          "0" (cpu_info_type), "2" (0U));
+# elif defined(__x86_64__)
+    __asm__ __volatile__ ("xchgq %%rbx, %q1; cpuid; xchgq %%rbx, %q1" :
+                          "=a" (cpu_info[0]), "=&r" (cpu_info[1]),
+                          "=c" (cpu_info[2]), "=d" (cpu_info[3]) :
+                          "0" (cpu_info_type), "2" (0U));
+# else
+    __asm__ __volatile__ ("cpuid" :
+                          "=a" (cpu_info[0]), "=b" (cpu_info[1]),
+                          "=c" (cpu_info[2]), "=d" (cpu_info[3]) :
+                          "0" (cpu_info_type), "2" (0U));
+# endif
+#endif
+}
+
+#define CPUID_EBX_AVX2    0x00000020
+#define CPUID_ECX_SSSE3   0x00000200
+
+static void gf256_architecture_init()
+{
+#if defined(GF256_TRY_NEON)
+
+    // Check for NEON support on Android platform
+#if defined(HAVE_ANDROID_GETCPUFEATURES)
+    AndroidCpuFamily family = android_getCpuFamily();
+    if (family == ANDROID_CPU_FAMILY_ARM)
+    {
+        if (android_getCpuFeatures() & ANDROID_CPU_ARM_FEATURE_NEON)
+            CpuHasNeon = true;
+    }
+    else if (family == ANDROID_CPU_FAMILY_ARM64)
+    {
+        CpuHasNeon = true;
+        if (android_getCpuFeatures() & ANDROID_CPU_ARM64_FEATURE_ASIMD)
+            CpuHasNeon64 = true;
+    }
+#endif
+
+#if defined(LINUX_ARM)
+    // Check for NEON support on other ARM/Linux platforms
+    checkLinuxARMNeonCapabilities(CpuHasNeon);
+#endif
+
+#endif //GF256_TRY_NEON
+
+// #if !defined(GF256_TARGET_MOBILE)
+    unsigned int cpu_info[4];
+
+    _cpuid(cpu_info, 1);
+    CpuHasSSSE3 = ((cpu_info[2] & CPUID_ECX_SSSE3) != 0);
+
+// #if defined(GF256_TRY_AVX2)
+    _cpuid(cpu_info, 7);
+    CpuHasAVX2 = ((cpu_info[1] & CPUID_EBX_AVX2) != 0);
+// #endif // GF256_TRY_AVX2
+
+    // When AVX2 and SSSE3 are unavailable, Siamese takes 4x longer to decode
+    // and 2.6x longer to encode.  Encoding requires a lot more simple XOR ops
+    // so it is still pretty fast.  Decoding is usually really quick because
+    // average loss rates are low, but when needed it requires a lot more
+    // GF multiplies requiring table lookups which is slower.
+
+// #endif // GF256_TARGET_MOBILE
+}
+
+#define GF_DECL(SUFFIX) \
+    extern int GF_NAME_SUFFIX(gf256_init_, SUFFIX)(int version); \
+    extern void GF_NAME_SUFFIX(gf256_add_mem, SUFFIX)(void * GF256_RESTRICT vx, const void * GF256_RESTRICT vy, int bytes); \
+    extern void GF_NAME_SUFFIX(gf256_add2_mem, SUFFIX)(void * GF256_RESTRICT vz, const void * GF256_RESTRICT vx, const void * GF256_RESTRICT vy, int bytes); \
+    extern void GF_NAME_SUFFIX(gf256_addset_mem, SUFFIX)(void * GF256_RESTRICT vz, const void * GF256_RESTRICT vx, const void * GF256_RESTRICT vy, int bytes); \
+    extern void GF_NAME_SUFFIX(gf256_mul_mem, SUFFIX)(void * GF256_RESTRICT vz, const void * GF256_RESTRICT vx, uint8_t y, int bytes); \
+    extern void GF_NAME_SUFFIX(gf256_muladd_mem, SUFFIX)(void * GF256_RESTRICT vz, uint8_t y, const void * GF256_RESTRICT vx, int bytes); \
+    extern void GF_NAME_SUFFIX(gf256_memswap, SUFFIX)(void * GF256_RESTRICT vx, void * GF256_RESTRICT vy, int bytes);
+
+GF_DECL(_mobile)
+GF_DECL(_ssse3)
+GF_DECL(_avx2)
 
 //------------------------------------------------------------------------------
 // Initialization
 
 /**
     Initialize a context, filling in the tables.
-    
+
     Thread-safety / Usage Notes:
-    
+
     It is perfectly safe and encouraged to use a gf256_ctx object from multiple
     threads.  The gf256_init() is relatively expensive and should only be done
     once, though it will take less than a millisecond.
-    
+
     The gf256_ctx object must be aligned to 16 byte boundary.
     Simply tag the object with GF256_ALIGNED to achieve this.
-    
+
     Example:
        static GF256_ALIGNED gf256_ctx TheGF256Context;
        gf256_init(&TheGF256Context, 0);
-    
+
     Returns 0 on success and other values on failure.
 */
-extern int gf256_init_(int version);
-#define gf256_init() gf256_init_(GF256_VERSION)
+static GF256_FORCE_INLINE int gf256_init()
+{
+    gf256_architecture_init();
+    if (CpuHasAVX2) {
+        return gf256_init__avx2(GF256_VERSION);
+    } else if (CpuHasSSSE3) {
+        return gf256_init__ssse3(GF256_VERSION);
+    } else {
+        return gf256_init__mobile(GF256_VERSION);
+    }
+}
 
+#define gf256_init_ GF_NAME(gf256_init_)
 
 //------------------------------------------------------------------------------
 // Math Operations
@@ -214,58 +320,127 @@ static GF256_FORCE_INLINE uint8_t gf256_add(uint8_t x, uint8_t y)
 /// For repeated multiplication by a constant, it is faster to put the constant in y.
 static GF256_FORCE_INLINE uint8_t gf256_mul(uint8_t x, uint8_t y)
 {
-    return GF256Ctx.GF256_MUL_TABLE[((unsigned)y << 8) + x];
+    if (CpuHasAVX2) {
+        return GF256Ctx_avx2.GF256_MUL_TABLE[((unsigned)y << 8) + x];
+    } else if (CpuHasSSSE3) {
+        return GF256Ctx_ssse3.GF256_MUL_TABLE[((unsigned)y << 8) + x];
+    } else {
+        return GF256Ctx_mobile.GF256_MUL_TABLE[((unsigned)y << 8) + x];
+    }
 }
 
 /// return x / y
 /// Memory-access optimized for constant divisors in y.
 static GF256_FORCE_INLINE uint8_t gf256_div(uint8_t x, uint8_t y)
 {
-    return GF256Ctx.GF256_DIV_TABLE[((unsigned)y << 8) + x];
+    if (CpuHasAVX2) {
+        return GF256Ctx_avx2.GF256_DIV_TABLE[((unsigned)y << 8) + x];
+    } else if (CpuHasSSSE3) {
+        return GF256Ctx_ssse3.GF256_DIV_TABLE[((unsigned)y << 8) + x];
+    } else {
+        return GF256Ctx_mobile.GF256_DIV_TABLE[((unsigned)y << 8) + x];
+    }
 }
 
 /// return 1 / x
 static GF256_FORCE_INLINE uint8_t gf256_inv(uint8_t x)
 {
-    return GF256Ctx.GF256_INV_TABLE[x];
+    if (CpuHasAVX2) {
+        return GF256Ctx_avx2.GF256_INV_TABLE[x];
+    } else if (CpuHasSSSE3) {
+        return GF256Ctx_ssse3.GF256_INV_TABLE[x];
+    } else {
+        return GF256Ctx_mobile.GF256_INV_TABLE[x];
+    }
 }
 
 /// return x * x
 static GF256_FORCE_INLINE uint8_t gf256_sqr(uint8_t x)
 {
-    return GF256Ctx.GF256_SQR_TABLE[x];
+    if (CpuHasAVX2) {
+        return GF256Ctx_avx2.GF256_SQR_TABLE[x];
+    } else if (CpuHasSSSE3) {
+        return GF256Ctx_ssse3.GF256_SQR_TABLE[x];
+    } else {
+        return GF256Ctx_mobile.GF256_SQR_TABLE[x];
+    }
 }
-
 
 //------------------------------------------------------------------------------
 // Bulk Memory Math Operations
 
 /// Performs "x[] += y[]" bulk memory XOR operation
-extern void gf256_add_mem(void * GF256_RESTRICT vx,
-                          const void * GF256_RESTRICT vy, int bytes);
+static GF256_FORCE_INLINE void gf256_add_mem(void * GF256_RESTRICT vx, const void * GF256_RESTRICT vy, int bytes)
+{
+    if (CpuHasAVX2) {
+        gf256_add_mem_avx2(vx, vy, bytes);
+    } else if (CpuHasSSSE3) {
+        gf256_add_mem_ssse3(vx, vy, bytes);
+    } else {
+        gf256_add_mem_mobile(vx, vy, bytes);
+    }
+}
 
 /// Performs "z[] += x[] + y[]" bulk memory operation
-extern void gf256_add2_mem(void * GF256_RESTRICT vz, const void * GF256_RESTRICT vx,
-                           const void * GF256_RESTRICT vy, int bytes);
+static GF256_FORCE_INLINE void gf256_add2_mem(void * GF256_RESTRICT vz, const void * GF256_RESTRICT vx, const void * GF256_RESTRICT vy, int bytes)
+{
+    if (CpuHasAVX2) {
+        gf256_add2_mem_avx2(vz, vx, vy, bytes);
+    } else if (CpuHasSSSE3) {
+        gf256_add2_mem_ssse3(vz, vx, vy, bytes);
+    } else {
+        gf256_add2_mem_mobile(vz, vx, vy, bytes);
+    }
+}
 
 /// Performs "z[] = x[] + y[]" bulk memory operation
-extern void gf256_addset_mem(void * GF256_RESTRICT vz, const void * GF256_RESTRICT vx,
-                             const void * GF256_RESTRICT vy, int bytes);
+static GF256_FORCE_INLINE void gf256_addset_mem(void * GF256_RESTRICT vz, const void * GF256_RESTRICT vx, const void * GF256_RESTRICT vy, int bytes)
+{
+    if (CpuHasAVX2) {
+        gf256_addset_mem_avx2(vz, vx, vy, bytes);
+    } else if (CpuHasSSSE3) {
+        gf256_addset_mem_ssse3(vz, vx, vy, bytes);
+    } else {
+        gf256_addset_mem_mobile(vz, vx, vy, bytes);
+    }
+}
 
 /// Performs "z[] = x[] * y" bulk memory operation
-extern void gf256_mul_mem(void * GF256_RESTRICT vz,
-                          const void * GF256_RESTRICT vx, uint8_t y, int bytes);
+static GF256_FORCE_INLINE void gf256_mul_mem(void * GF256_RESTRICT vz, const void * GF256_RESTRICT vx, uint8_t y, int bytes)
+{
+    if (CpuHasAVX2) {
+        gf256_mul_mem_avx2(vz, vx, y, bytes);
+    } else if (CpuHasSSSE3) {
+        gf256_mul_mem_ssse3(vz, vx, y, bytes);
+    } else {
+        gf256_mul_mem_mobile(vz, vx, y, bytes);
+    }
+}
 
 /// Performs "z[] += x[] * y" bulk memory operation
-extern void gf256_muladd_mem(void * GF256_RESTRICT vz, uint8_t y,
-                             const void * GF256_RESTRICT vx, int bytes);
+static GF256_FORCE_INLINE void gf256_muladd_mem(void * GF256_RESTRICT vz, uint8_t y, const void * GF256_RESTRICT vx, int bytes)
+{
+    if (CpuHasAVX2) {
+        gf256_muladd_mem_avx2(vz, y, vx, bytes);
+    } else if (CpuHasSSSE3) {
+        gf256_muladd_mem_ssse3(vz, y, vx, bytes);
+    } else {
+        gf256_muladd_mem_mobile(vz, y, vx, bytes);
+    }
+}
 
 /// Performs "x[] /= y" bulk memory operation
 static GF256_FORCE_INLINE void gf256_div_mem(void * GF256_RESTRICT vz,
                                              const void * GF256_RESTRICT vx, uint8_t y, int bytes)
 {
     // Multiply by inverse
-    gf256_mul_mem(vz, vx, y == 1 ? (uint8_t)1 : GF256Ctx.GF256_INV_TABLE[y], bytes);
+    if (CpuHasAVX2) {
+        gf256_mul_mem(vz, vx, y == 1 ? (uint8_t)1 : GF256Ctx_avx2.GF256_INV_TABLE[y], bytes);
+    } else if (CpuHasSSSE3) {
+        gf256_mul_mem(vz, vx, y == 1 ? (uint8_t)1 : GF256Ctx_ssse3.GF256_INV_TABLE[y], bytes);
+    } else {
+        gf256_mul_mem(vz, vx, y == 1 ? (uint8_t)1 : GF256Ctx_mobile.GF256_INV_TABLE[y], bytes);
+    }
 }
 
 
@@ -273,8 +448,16 @@ static GF256_FORCE_INLINE void gf256_div_mem(void * GF256_RESTRICT vz,
 // Misc Operations
 
 /// Swap two memory buffers in-place
-extern void gf256_memswap(void * GF256_RESTRICT vx, void * GF256_RESTRICT vy, int bytes);
-
+static GF256_FORCE_INLINE void gf256_memswap(void * GF256_RESTRICT vx, void * GF256_RESTRICT vy, int bytes)
+{
+    if (CpuHasAVX2) {
+        gf256_memswap_avx2(vx, vy, bytes);
+    } else if (CpuHasSSSE3) {
+        gf256_memswap_ssse3(vx, vy, bytes);
+    } else {
+        gf256_memswap_mobile(vx, vy, bytes);
+    }
+}
 
 #ifdef __cplusplus
 }

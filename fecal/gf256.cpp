@@ -36,6 +36,19 @@
 #include <linux/auxvec.h>
 #endif
 
+#ifdef GF_IMPL_DEFAULT
+bool CpuHasAVX2 = false;
+bool CpuHasSSSE3 = false;
+#endif
+
+#define gf256_add_mem GF_NAME(gf256_add_mem)
+#define gf256_add2_mem GF_NAME(gf256_add2_mem)
+#define gf256_addset_mem GF_NAME(gf256_addset_mem)
+#define gf256_mul_mem GF_NAME(gf256_mul_mem)
+#define gf256_muladd_mem GF_NAME(gf256_muladd_mem)
+
+#define gf256_memswap GF_NAME(gf256_memswap)
+
 //------------------------------------------------------------------------------
 // Detect host byte order.
 // This check works with GCC and LLVM; assume little-endian byte order when
@@ -223,51 +236,15 @@ static bool CpuHasNeon64 = false;   // And we don't have ASIMD
 #endif
 
 #ifdef GF256_TRY_AVX2
-static bool CpuHasAVX2 = false;
+#define CpuHasAVX2 1
+#else
+#define CpuHasAVX2 0
 #endif
-static bool CpuHasSSSE3 = false;
-
-#define CPUID_EBX_AVX2    0x00000020
-#define CPUID_ECX_SSSE3   0x00000200
-
-static void _cpuid(unsigned int cpu_info[4U], const unsigned int cpu_info_type)
-{
-#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_AMD64) || defined(_M_IX86))
-    __cpuid((int *) cpu_info, cpu_info_type);
-#else //if defined(HAVE_CPUID)
-    cpu_info[0] = cpu_info[1] = cpu_info[2] = cpu_info[3] = 0;
-# ifdef __i386__
-    __asm__ __volatile__ ("pushfl; pushfl; "
-                          "popl %0; "
-                          "movl %0, %1; xorl %2, %0; "
-                          "pushl %0; "
-                          "popfl; pushfl; popl %0; popfl" :
-                          "=&r" (cpu_info[0]), "=&r" (cpu_info[1]) :
-                          "i" (0x200000));
-    if (((cpu_info[0] ^ cpu_info[1]) & 0x200000) == 0) {
-        return; /* LCOV_EXCL_LINE */
-    }
-# endif
-# ifdef __i386__
-    __asm__ __volatile__ ("xchgl %%ebx, %k1; cpuid; xchgl %%ebx, %k1" :
-                          "=a" (cpu_info[0]), "=&r" (cpu_info[1]),
-                          "=c" (cpu_info[2]), "=d" (cpu_info[3]) :
-                          "0" (cpu_info_type), "2" (0U));
-# elif defined(__x86_64__)
-    __asm__ __volatile__ ("xchgq %%rbx, %q1; cpuid; xchgq %%rbx, %q1" :
-                          "=a" (cpu_info[0]), "=&r" (cpu_info[1]),
-                          "=c" (cpu_info[2]), "=d" (cpu_info[3]) :
-                          "0" (cpu_info_type), "2" (0U));
-# else
-    __asm__ __volatile__ ("cpuid" :
-                          "=a" (cpu_info[0]), "=b" (cpu_info[1]),
-                          "=c" (cpu_info[2]), "=d" (cpu_info[3]) :
-                          "0" (cpu_info_type), "2" (0U));
-# endif
-#endif
-}
+#define CpuHasSSSE3 1
 
 #else
+#define CpuHasAVX2 0
+#define CpuHasSSSE3 0
 #if defined(LINUX_ARM)
 static void checkLinuxARMNeonCapabilities( bool& cpuHasNeon )
 {
@@ -294,61 +271,36 @@ static void checkLinuxARMNeonCapabilities( bool& cpuHasNeon )
 #endif
 #endif // defined(GF256_TARGET_MOBILE)
 
-static void gf256_architecture_init()
-{
-#if defined(GF256_TRY_NEON)
-
-    // Check for NEON support on Android platform
-#if defined(HAVE_ANDROID_GETCPUFEATURES)
-    AndroidCpuFamily family = android_getCpuFamily();
-    if (family == ANDROID_CPU_FAMILY_ARM)
-    {
-        if (android_getCpuFeatures() & ANDROID_CPU_ARM_FEATURE_NEON)
-            CpuHasNeon = true;
-    }
-    else if (family == ANDROID_CPU_FAMILY_ARM64)
-    {
-        CpuHasNeon = true;
-        if (android_getCpuFeatures() & ANDROID_CPU_ARM64_FEATURE_ASIMD)
-            CpuHasNeon64 = true;
-    }
-#endif
-
-#if defined(LINUX_ARM)
-    // Check for NEON support on other ARM/Linux platforms
-    checkLinuxARMNeonCapabilities(CpuHasNeon);
-#endif
-
-#endif //GF256_TRY_NEON
-
-#if !defined(GF256_TARGET_MOBILE)
-    unsigned int cpu_info[4];
-
-    _cpuid(cpu_info, 1);
-    CpuHasSSSE3 = ((cpu_info[2] & CPUID_ECX_SSSE3) != 0);
-
-#if defined(GF256_TRY_AVX2)
-    _cpuid(cpu_info, 7);
-    CpuHasAVX2 = ((cpu_info[1] & CPUID_EBX_AVX2) != 0);
-#endif // GF256_TRY_AVX2
-
-    // When AVX2 and SSSE3 are unavailable, Siamese takes 4x longer to decode
-    // and 2.6x longer to encode.  Encoding requires a lot more simple XOR ops
-    // so it is still pretty fast.  Decoding is usually really quick because
-    // average loss rates are low, but when needed it requires a lot more
-    // GF multiplies requiring table lookups which is slower.
-
-#endif // GF256_TARGET_MOBILE
-}
-
 
 //------------------------------------------------------------------------------
 // Context Object
 
 // Context object for GF(2^^8) math
+#define GF256Ctx GF_NAME(GF256Ctx)
 GF256_ALIGNED gf256_ctx GF256Ctx;
 static bool Initialized = false;
 
+/// Log/Exp tables
+static uint16_t GF256_LOG_TABLE[256];
+static uint8_t GF256_EXP_TABLE[512 * 2 + 1];
+
+/// Polynomial used
+static unsigned GF256_Polynomial;
+
+/// We require memory to be aligned since the SIMD instructions benefit from
+/// or require aligned accesses to the table data.
+static struct
+{
+    GF256_ALIGNED GF256_M128 TABLE_LO_Y[256];
+    GF256_ALIGNED GF256_M128 TABLE_HI_Y[256];
+} GF256_MM128;
+#ifdef GF256_TRY_AVX2
+static struct
+{
+    GF256_ALIGNED GF256_M256 TABLE_LO_Y[256];
+    GF256_ALIGNED GF256_M256 TABLE_HI_Y[256];
+} GF256_MM256;
+#endif // GF256_TRY_AVX2
 
 //------------------------------------------------------------------------------
 // Generator Polynomial
@@ -368,7 +320,7 @@ static void gf256_poly_init(int polynomialIndex)
     if (polynomialIndex < 0 || polynomialIndex >= GF256_GEN_POLY_COUNT)
         polynomialIndex = kDefaultPolynomialIndex;
 
-    GF256Ctx.Polynomial = (GF256_GEN_POLY[polynomialIndex] << 1) | 1;
+    GF256_Polynomial = (GF256_GEN_POLY[polynomialIndex] << 1) | 1;
 }
 
 
@@ -378,9 +330,9 @@ static void gf256_poly_init(int polynomialIndex)
 // Construct EXP and LOG tables from polynomial
 static void gf256_explog_init()
 {
-    unsigned poly = GF256Ctx.Polynomial;
-    uint8_t* exptab = GF256Ctx.GF256_EXP_TABLE;
-    uint16_t* logtab = GF256Ctx.GF256_LOG_TABLE;
+    unsigned poly = GF256_Polynomial;
+    uint8_t* exptab = GF256_EXP_TABLE;
+    uint16_t* logtab = GF256_LOG_TABLE;
 
     logtab[0] = 512;
     exptab[0] = 1;
@@ -421,7 +373,7 @@ static void gf256_muldiv_init()
     for (int y = 1; y < 256; ++y)
     {
         // Calculate log(y) for mult and 255 - log(y) for div
-        const uint8_t log_y = static_cast<uint8_t>(GF256Ctx.GF256_LOG_TABLE[y]);
+        const uint8_t log_y = static_cast<uint8_t>(GF256_LOG_TABLE[y]);
         const uint8_t log_yn = 255 - log_y;
 
         // Next subtable
@@ -433,10 +385,10 @@ static void gf256_muldiv_init()
         // Calculate x * y, x / y
         for (int x = 1; x < 256; ++x)
         {
-            uint16_t log_x = GF256Ctx.GF256_LOG_TABLE[x];
+            uint16_t log_x = GF256_LOG_TABLE[x];
 
-            m[x] = GF256Ctx.GF256_EXP_TABLE[log_x + log_y];
-            d[x] = GF256Ctx.GF256_EXP_TABLE[log_x + log_yn];
+            m[x] = GF256_EXP_TABLE[log_x + log_y];
+            d[x] = GF256_EXP_TABLE[log_x + log_yn];
         }
     }
 }
@@ -574,21 +526,21 @@ static void gf256_mul_mem_init()
 #if defined(GF256_TRY_NEON)
         if (CpuHasNeon)
         {
-            GF256Ctx.MM128.TABLE_LO_Y[y] = vld1q_u8(lo);
-            GF256Ctx.MM128.TABLE_HI_Y[y] = vld1q_u8(hi);
+            GF256_MM128.TABLE_LO_Y[y] = vld1q_u8(lo);
+            GF256_MM128.TABLE_HI_Y[y] = vld1q_u8(hi);
         }
 #elif !defined(GF256_TARGET_MOBILE)
         const GF256_M128 table_lo = _mm_loadu_si128((GF256_M128*)lo);
         const GF256_M128 table_hi = _mm_loadu_si128((GF256_M128*)hi);
-        _mm_storeu_si128(GF256Ctx.MM128.TABLE_LO_Y + y, table_lo);
-        _mm_storeu_si128(GF256Ctx.MM128.TABLE_HI_Y + y, table_hi);
+        _mm_storeu_si128(GF256_MM128.TABLE_LO_Y + y, table_lo);
+        _mm_storeu_si128(GF256_MM128.TABLE_HI_Y + y, table_hi);
 # ifdef GF256_TRY_AVX2
         if (CpuHasAVX2)
         {
             const GF256_M256 table_lo2 = _mm256_broadcastsi128_si256(table_lo);
             const GF256_M256 table_hi2 = _mm256_broadcastsi128_si256(table_hi);
-            _mm256_storeu_si256(GF256Ctx.MM256.TABLE_LO_Y + y, table_lo2);
-            _mm256_storeu_si256(GF256Ctx.MM256.TABLE_HI_Y + y, table_hi2);
+            _mm256_storeu_si256(GF256_MM256.TABLE_LO_Y + y, table_lo2);
+            _mm256_storeu_si256(GF256_MM256.TABLE_HI_Y + y, table_hi2);
         }
 # endif // GF256_TRY_AVX2
 #endif // GF256_TARGET_MOBILE
@@ -632,7 +584,7 @@ extern "C" int gf256_init_(int version)
     if (!IsExpectedEndian())
         return -2; // Unexpected byte order.
 
-    gf256_architecture_init();
+    // gf256_architecture_init();
     gf256_poly_init(kDefaultPolynomialIndex);
     gf256_explog_init();
     gf256_muldiv_init();
@@ -1121,8 +1073,8 @@ extern "C" void gf256_mul_mem(void * GF256_RESTRICT vz, const void * GF256_RESTR
     if (bytes >= 16 && CpuHasNeon)
     {
         // Partial product tables; see above
-        const GF256_M128 table_lo_y = vld1q_u8((uint8_t*)(GF256Ctx.MM128.TABLE_LO_Y + y));
-        const GF256_M128 table_hi_y = vld1q_u8((uint8_t*)(GF256Ctx.MM128.TABLE_HI_Y + y));
+        const GF256_M128 table_lo_y = vld1q_u8((uint8_t*)(GF256_MM128.TABLE_LO_Y + y));
+        const GF256_M128 table_hi_y = vld1q_u8((uint8_t*)(GF256_MM128.TABLE_HI_Y + y));
 
         // clr_mask = 0x0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f
         const GF256_M128 clr_mask = vdupq_n_u8(0x0f);
@@ -1148,8 +1100,8 @@ extern "C" void gf256_mul_mem(void * GF256_RESTRICT vz, const void * GF256_RESTR
     if (bytes >= 32 && CpuHasAVX2)
     {
         // Partial product tables; see above
-        const GF256_M256 table_lo_y = _mm256_loadu_si256(GF256Ctx.MM256.TABLE_LO_Y + y);
-        const GF256_M256 table_hi_y = _mm256_loadu_si256(GF256Ctx.MM256.TABLE_HI_Y + y);
+        const GF256_M256 table_lo_y = _mm256_loadu_si256(GF256_MM256.TABLE_LO_Y + y);
+        const GF256_M256 table_hi_y = _mm256_loadu_si256(GF256_MM256.TABLE_HI_Y + y);
 
         // clr_mask = 0x0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f
         const GF256_M256 clr_mask = _mm256_set1_epi8(0x0f);
@@ -1179,8 +1131,8 @@ extern "C" void gf256_mul_mem(void * GF256_RESTRICT vz, const void * GF256_RESTR
     if (bytes >= 16 && CpuHasSSSE3)
     {
         // Partial product tables; see above
-        const GF256_M128 table_lo_y = _mm_loadu_si128(GF256Ctx.MM128.TABLE_LO_Y + y);
-        const GF256_M128 table_hi_y = _mm_loadu_si128(GF256Ctx.MM128.TABLE_HI_Y + y);
+        const GF256_M128 table_lo_y = _mm_loadu_si128(GF256_MM128.TABLE_LO_Y + y);
+        const GF256_M128 table_hi_y = _mm_loadu_si128(GF256_MM128.TABLE_HI_Y + y);
 
         // clr_mask = 0x0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f
         const GF256_M128 clr_mask = _mm_set1_epi8(0x0f);
@@ -1284,8 +1236,8 @@ extern "C" void gf256_muladd_mem(void * GF256_RESTRICT vz, uint8_t y,
     if (bytes >= 16 && CpuHasNeon)
     {
         // Partial product tables; see above
-        const GF256_M128 table_lo_y = vld1q_u8((uint8_t*)(GF256Ctx.MM128.TABLE_LO_Y + y));
-        const GF256_M128 table_hi_y = vld1q_u8((uint8_t*)(GF256Ctx.MM128.TABLE_HI_Y + y));
+        const GF256_M128 table_lo_y = vld1q_u8((uint8_t*)(GF256_MM128.TABLE_LO_Y + y));
+        const GF256_M128 table_hi_y = vld1q_u8((uint8_t*)(GF256_MM128.TABLE_HI_Y + y));
 
         // clr_mask = 0x0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f
         const GF256_M128 clr_mask = vdupq_n_u8(0x0f);
@@ -1314,8 +1266,8 @@ extern "C" void gf256_muladd_mem(void * GF256_RESTRICT vz, uint8_t y,
     if (bytes >= 32 && CpuHasAVX2)
     {
         // Partial product tables; see above
-        const GF256_M256 table_lo_y = _mm256_loadu_si256(GF256Ctx.MM256.TABLE_LO_Y + y);
-        const GF256_M256 table_hi_y = _mm256_loadu_si256(GF256Ctx.MM256.TABLE_HI_Y + y);
+        const GF256_M256 table_lo_y = _mm256_loadu_si256(GF256_MM256.TABLE_LO_Y + y);
+        const GF256_M256 table_hi_y = _mm256_loadu_si256(GF256_MM256.TABLE_HI_Y + y);
 
         // clr_mask = 0x0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f
         const GF256_M256 clr_mask = _mm256_set1_epi8(0x0f);
@@ -1376,8 +1328,8 @@ extern "C" void gf256_muladd_mem(void * GF256_RESTRICT vz, uint8_t y,
     if (bytes >= 16 && CpuHasSSSE3)
     {
         // Partial product tables; see above
-        const GF256_M128 table_lo_y = _mm_loadu_si128(GF256Ctx.MM128.TABLE_LO_Y + y);
-        const GF256_M128 table_hi_y = _mm_loadu_si128(GF256Ctx.MM128.TABLE_HI_Y + y);
+        const GF256_M128 table_lo_y = _mm_loadu_si128(GF256_MM128.TABLE_LO_Y + y);
+        const GF256_M128 table_hi_y = _mm_loadu_si128(GF256_MM128.TABLE_HI_Y + y);
 
         // clr_mask = 0x0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f
         const GF256_M128 clr_mask = _mm_set1_epi8(0x0f);
