@@ -130,8 +130,13 @@ static int prev_ctx_width[SCREEN_COUNT], prev_ctx_height[SCREEN_COUNT];
 #include <shellscalingapi.h>
 #include <versionhelpers.h>
 static bool ro_init;
+#if 0
 #define RO_INIT() (ro_init ? RoInitialize(RO_INIT_MULTITHREADED) : CoInitializeEx(NULL, COINIT_MULTITHREADED))
 #define RO_UNINIT() (ro_init ? RoUninitialize() : CoUninitialize())
+#else
+#define RO_INIT() CoInitializeEx(NULL, COINIT_MULTITHREADED)
+#define RO_UNINIT() CoUninitialize()
+#endif
 #ifndef USE_SDL_RENDERER
 static LONG_PTR sdl_wnd_proc[SCREEN_COUNT];
 #endif
@@ -5299,12 +5304,15 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
       return 0;
 
     case WM_SIZE: {
+#ifdef USE_COMPOSITION_SWAPCHAIN
       bool resize_top_and_ui = use_composition_swapchain && i == SCREEN_TOP;
 
       if (resize_top_and_ui) {
         rp_lock_wait(comp_lock);
       }
-
+#else
+      bool resize_top_and_ui = i == SCREEN_TOP;
+#endif
       int width = NK_MAX(LOWORD(lparam), 1);
       int height = NK_MAX(HIWORD(lparam), 1);
       win_width[i] = width;
@@ -5320,7 +5328,9 @@ WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
         sdl_display_height = win_height[i];
         sdl_scale = win_scale[i];
 #endif
+#ifdef USE_COMPOSITION_SWAPCHAIN
         rp_lock_rel(comp_lock);
+#endif
       }
       break;
     }
