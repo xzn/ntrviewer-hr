@@ -3,7 +3,7 @@ CXX := g++
 CPPFLAGS := -Iinclude
 # CFLAGS := -Og -g
 CFLAGS := -Ofast -g -fno-strict-aliasing
-CFLAGS += -mssse3 -mavx2
+# CFLAGS += -mssse3 -mavx2
 CFLAGS += -flarge-source-files
 EMBED_JPEG_TURBO := 1
 USE_SDL_RENDERER := 0
@@ -154,6 +154,9 @@ realcugan_lib.o: realcugan-ncnn-vulkan/lib.cpp $(wildcard srmd-realcugan-vulkan/
 
 realcugan.o: realcugan-ncnn-vulkan/realcugan.cpp $(wildcard realcugan-ncnn-vulkan/*.h)
 	$(CXX) realcugan-ncnn-vulkan/realcugan.cpp -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-attributes
+
+fecal/gf256.o: fecal/gf256.cpp
+	$(CXX) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -mssse3 -mavx2
 
 main.o: main.c
 	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wall -Wextra
