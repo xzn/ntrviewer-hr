@@ -2658,20 +2658,22 @@ static void getAdapterIPs(void) {
     adaptorInfosSize = 0;
   }
 
-  if (ERROR_BUFFER_OVERFLOW != GetAdaptersInfo(adapterInfos, &adaptorInfosSize)) {
+  ULONG ret = GetAdaptersInfo(adapterInfos, &adaptorInfosSize);
+  if (ret == ERROR_BUFFER_OVERFLOW) {
+    adapterInfos = malloc(adaptorInfosSize);
+    ret = GetAdaptersInfo(adapterInfos, &adaptorInfosSize);
+    if (ret == ERROR_SUCCESS) {
+    } else {
+      err_log("GetAdaptersInfo failed: %d\n", (int)ret);
+      free(adapterInfos);
+      adapterInfos = 0;
+      adaptorInfosSize = 0;
+    }
+  } else if (ret != ERROR_SUCCESS) {
+    err_log("GetAdaptersInfo failed: %d\n", (int)ret);
     adaptorInfosSize = 0;
-    return;
   }
 
-  adapterInfos = malloc(adaptorInfosSize);
-  ULONG ret = GetAdaptersInfo(adapterInfos, &adaptorInfosSize);
-  if (ret == ERROR_SUCCESS) {
-  } else {
-    err_log("GetAdaptersInfo failed: %d\n", (int)ret);
-    free(adapterInfos);
-    adapterInfos = 0;
-    adaptorInfosSize = 0;
-  }
   updateAdapterIPs();
 }
 #else
