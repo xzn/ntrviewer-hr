@@ -39,6 +39,7 @@
 #ifdef GF_IMPL_DEFAULT
 bool CpuHasAVX2 = false;
 bool CpuHasSSSE3 = false;
+GF256_ALIGNED gf256_ctx GF256Ctx;
 #endif
 
 #define gf256_add_mem GF_NAME(gf256_add_mem)
@@ -276,8 +277,6 @@ static void checkLinuxARMNeonCapabilities( bool& cpuHasNeon )
 // Context Object
 
 // Context object for GF(2^^8) math
-#define GF256Ctx GF_NAME(GF256Ctx)
-GF256_ALIGNED gf256_ctx GF256Ctx;
 static bool Initialized = false;
 
 /// Log/Exp tables

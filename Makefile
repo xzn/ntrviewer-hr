@@ -112,7 +112,7 @@ endif
 endif
 
 FEC_SRC := $(wildcard fecal/*.cpp)
-FEC_OBJ := $(FEC_SRC:.cpp=.o) fecal/gf256_ssse3.o fecal/gf256_avx2.o
+FEC_OBJ := $(FEC_SRC:.cpp=.o) fecal/gf256_ssse3.o fecal/gf256_avx2.o fecal/gf256_ssse3_avx2.o
 
 $(TARGET): main.o rp_syn.o ikcp.o libNK.o $(GL_OBJ) $(JT_OBJ) $(JT_OBJ_S) $(FEC_OBJ)
 	$(CXX) $^ -o $@ $(CFLAGS) $(LDLIBS) $(LDFLAGS)
@@ -163,6 +163,9 @@ fecal/gf256_ssse3.o: fecal/gf256.cpp
 
 fecal/gf256_avx2.o: fecal/gf256.cpp
 	$(CXX) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -mavx2 -DGF_SUFFIX=_avx2
+
+fecal/gf256_ssse3_avx2.o: fecal/gf256.cpp
+	$(CXX) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -mssse3 -mavx2 -DGF_SUFFIX=_ssse3_avx2
 
 main.o: main.c
 	$(CC) $^ -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wall -Wextra

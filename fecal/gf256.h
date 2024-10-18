@@ -165,10 +165,7 @@ typedef struct gf256_ctx
 #define GF_IMPL_DEFAULT
 #endif
 
-extern gf256_ctx GF256Ctx_mobile;
-extern gf256_ctx GF256Ctx_ssse3;
-extern gf256_ctx GF256Ctx_avx2;
-
+extern gf256_ctx GF256Ctx;
 extern bool CpuHasAVX2;
 extern bool CpuHasSSSE3;
 
@@ -271,6 +268,7 @@ static void gf256_architecture_init()
 GF_DECL(_mobile)
 GF_DECL(_ssse3)
 GF_DECL(_avx2)
+GF_DECL(_ssse3_avx2)
 
 //------------------------------------------------------------------------------
 // Initialization
@@ -296,7 +294,9 @@ GF_DECL(_avx2)
 static GF256_FORCE_INLINE int gf256_init()
 {
     gf256_architecture_init();
-    if (CpuHasAVX2) {
+    if (CpuHasAVX2 && CpuHasSSSE3) {
+        return gf256_init__ssse3_avx2(GF256_VERSION);
+    } else if (CpuHasAVX2) {
         return gf256_init__avx2(GF256_VERSION);
     } else if (CpuHasSSSE3) {
         return gf256_init__ssse3(GF256_VERSION);
@@ -320,50 +320,26 @@ static GF256_FORCE_INLINE uint8_t gf256_add(uint8_t x, uint8_t y)
 /// For repeated multiplication by a constant, it is faster to put the constant in y.
 static GF256_FORCE_INLINE uint8_t gf256_mul(uint8_t x, uint8_t y)
 {
-    if (CpuHasAVX2) {
-        return GF256Ctx_avx2.GF256_MUL_TABLE[((unsigned)y << 8) + x];
-    } else if (CpuHasSSSE3) {
-        return GF256Ctx_ssse3.GF256_MUL_TABLE[((unsigned)y << 8) + x];
-    } else {
-        return GF256Ctx_mobile.GF256_MUL_TABLE[((unsigned)y << 8) + x];
-    }
+    return GF256Ctx.GF256_MUL_TABLE[((unsigned)y << 8) + x];
 }
 
 /// return x / y
 /// Memory-access optimized for constant divisors in y.
 static GF256_FORCE_INLINE uint8_t gf256_div(uint8_t x, uint8_t y)
 {
-    if (CpuHasAVX2) {
-        return GF256Ctx_avx2.GF256_DIV_TABLE[((unsigned)y << 8) + x];
-    } else if (CpuHasSSSE3) {
-        return GF256Ctx_ssse3.GF256_DIV_TABLE[((unsigned)y << 8) + x];
-    } else {
-        return GF256Ctx_mobile.GF256_DIV_TABLE[((unsigned)y << 8) + x];
-    }
+    return GF256Ctx.GF256_DIV_TABLE[((unsigned)y << 8) + x];
 }
 
 /// return 1 / x
 static GF256_FORCE_INLINE uint8_t gf256_inv(uint8_t x)
 {
-    if (CpuHasAVX2) {
-        return GF256Ctx_avx2.GF256_INV_TABLE[x];
-    } else if (CpuHasSSSE3) {
-        return GF256Ctx_ssse3.GF256_INV_TABLE[x];
-    } else {
-        return GF256Ctx_mobile.GF256_INV_TABLE[x];
-    }
+    return GF256Ctx.GF256_INV_TABLE[x];
 }
 
 /// return x * x
 static GF256_FORCE_INLINE uint8_t gf256_sqr(uint8_t x)
 {
-    if (CpuHasAVX2) {
-        return GF256Ctx_avx2.GF256_SQR_TABLE[x];
-    } else if (CpuHasSSSE3) {
-        return GF256Ctx_ssse3.GF256_SQR_TABLE[x];
-    } else {
-        return GF256Ctx_mobile.GF256_SQR_TABLE[x];
-    }
+    return GF256Ctx.GF256_SQR_TABLE[x];
 }
 
 //------------------------------------------------------------------------------
@@ -372,7 +348,9 @@ static GF256_FORCE_INLINE uint8_t gf256_sqr(uint8_t x)
 /// Performs "x[] += y[]" bulk memory XOR operation
 static GF256_FORCE_INLINE void gf256_add_mem(void * GF256_RESTRICT vx, const void * GF256_RESTRICT vy, int bytes)
 {
-    if (CpuHasAVX2) {
+    if (CpuHasAVX2 && CpuHasSSSE3) {
+        gf256_add_mem_ssse3_avx2(vx, vy, bytes);
+    } else if (CpuHasAVX2) {
         gf256_add_mem_avx2(vx, vy, bytes);
     } else if (CpuHasSSSE3) {
         gf256_add_mem_ssse3(vx, vy, bytes);
@@ -384,7 +362,9 @@ static GF256_FORCE_INLINE void gf256_add_mem(void * GF256_RESTRICT vx, const voi
 /// Performs "z[] += x[] + y[]" bulk memory operation
 static GF256_FORCE_INLINE void gf256_add2_mem(void * GF256_RESTRICT vz, const void * GF256_RESTRICT vx, const void * GF256_RESTRICT vy, int bytes)
 {
-    if (CpuHasAVX2) {
+    if (CpuHasAVX2 && CpuHasSSSE3) {
+        gf256_add2_mem_ssse3_avx2(vz, vx, vy, bytes);
+    } else if (CpuHasAVX2) {
         gf256_add2_mem_avx2(vz, vx, vy, bytes);
     } else if (CpuHasSSSE3) {
         gf256_add2_mem_ssse3(vz, vx, vy, bytes);
@@ -396,7 +376,9 @@ static GF256_FORCE_INLINE void gf256_add2_mem(void * GF256_RESTRICT vz, const vo
 /// Performs "z[] = x[] + y[]" bulk memory operation
 static GF256_FORCE_INLINE void gf256_addset_mem(void * GF256_RESTRICT vz, const void * GF256_RESTRICT vx, const void * GF256_RESTRICT vy, int bytes)
 {
-    if (CpuHasAVX2) {
+    if (CpuHasAVX2 && CpuHasSSSE3) {
+        gf256_addset_mem_ssse3_avx2(vz, vx, vy, bytes);
+    } else if (CpuHasAVX2) {
         gf256_addset_mem_avx2(vz, vx, vy, bytes);
     } else if (CpuHasSSSE3) {
         gf256_addset_mem_ssse3(vz, vx, vy, bytes);
@@ -408,7 +390,9 @@ static GF256_FORCE_INLINE void gf256_addset_mem(void * GF256_RESTRICT vz, const 
 /// Performs "z[] = x[] * y" bulk memory operation
 static GF256_FORCE_INLINE void gf256_mul_mem(void * GF256_RESTRICT vz, const void * GF256_RESTRICT vx, uint8_t y, int bytes)
 {
-    if (CpuHasAVX2) {
+    if (CpuHasAVX2 && CpuHasSSSE3) {
+        gf256_mul_mem_ssse3_avx2(vz, vx, y, bytes);
+    } else if (CpuHasAVX2) {
         gf256_mul_mem_avx2(vz, vx, y, bytes);
     } else if (CpuHasSSSE3) {
         gf256_mul_mem_ssse3(vz, vx, y, bytes);
@@ -420,7 +404,9 @@ static GF256_FORCE_INLINE void gf256_mul_mem(void * GF256_RESTRICT vz, const voi
 /// Performs "z[] += x[] * y" bulk memory operation
 static GF256_FORCE_INLINE void gf256_muladd_mem(void * GF256_RESTRICT vz, uint8_t y, const void * GF256_RESTRICT vx, int bytes)
 {
-    if (CpuHasAVX2) {
+    if (CpuHasAVX2 && CpuHasSSSE3) {
+        gf256_muladd_mem_ssse3_avx2(vz, y, vx, bytes);
+    } else if (CpuHasAVX2) {
         gf256_muladd_mem_avx2(vz, y, vx, bytes);
     } else if (CpuHasSSSE3) {
         gf256_muladd_mem_ssse3(vz, y, vx, bytes);
@@ -434,13 +420,7 @@ static GF256_FORCE_INLINE void gf256_div_mem(void * GF256_RESTRICT vz,
                                              const void * GF256_RESTRICT vx, uint8_t y, int bytes)
 {
     // Multiply by inverse
-    if (CpuHasAVX2) {
-        gf256_mul_mem(vz, vx, y == 1 ? (uint8_t)1 : GF256Ctx_avx2.GF256_INV_TABLE[y], bytes);
-    } else if (CpuHasSSSE3) {
-        gf256_mul_mem(vz, vx, y == 1 ? (uint8_t)1 : GF256Ctx_ssse3.GF256_INV_TABLE[y], bytes);
-    } else {
-        gf256_mul_mem(vz, vx, y == 1 ? (uint8_t)1 : GF256Ctx_mobile.GF256_INV_TABLE[y], bytes);
-    }
+    gf256_mul_mem(vz, vx, y == 1 ? (uint8_t)1 : GF256Ctx.GF256_INV_TABLE[y], bytes);
 }
 
 
@@ -450,7 +430,9 @@ static GF256_FORCE_INLINE void gf256_div_mem(void * GF256_RESTRICT vz,
 /// Swap two memory buffers in-place
 static GF256_FORCE_INLINE void gf256_memswap(void * GF256_RESTRICT vx, void * GF256_RESTRICT vy, int bytes)
 {
-    if (CpuHasAVX2) {
+    if (CpuHasAVX2 && CpuHasSSSE3) {
+        gf256_memswap_ssse3_avx2(vx, vy, bytes);
+    } else if (CpuHasAVX2) {
         gf256_memswap_avx2(vx, vy, bytes);
     } else if (CpuHasSSSE3) {
         gf256_memswap_ssse3(vx, vy, bytes);
