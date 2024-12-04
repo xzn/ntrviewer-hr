@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-SDL_VIDEODRIVER=wayland $(realpath ./ntrviewer)
+SDL_VIDEODRIVER=wayland "$(realpath ./ntrviewer)"
