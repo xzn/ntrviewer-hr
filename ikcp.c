@@ -454,8 +454,10 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 
 	kcp->session_data_received = true;
 
-	kcp->fid = fid;
-	kcp->gid = gid;
+	if (((fid - kcp->fid) & ((1 << FID_NBITS) - 1)) < (1 << (FID_NBITS - 1))) {
+		kcp->fid = fid;
+		kcp->gid = gid;
+	}
 
 	int ret = ikcp_remove_fec_for(kcp, fid);
 	if (ret < 0) {
