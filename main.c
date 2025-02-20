@@ -546,7 +546,7 @@ static void main_loop(void) {
     // TODO csc
 
     SDL_Event evt;
-    while (SDL_PollEvent(&evt))
+    while (!renderer_single_thread && !renderer_evt_sync ? SDL_WaitEventTimeout(&evt, REST_EVERY_MS) : SDL_PollEvent(&evt))
     {
         if (
             evt.type == SDL_QUIT ||

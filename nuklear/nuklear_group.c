@@ -106,7 +106,7 @@ nk_group_scrolled_end(struct nk_context *ctx)
 
     /* make sure group has correct clipping rectangle */
     nk_unify(&clip, &parent->clip, pan.bounds.x, pan.bounds.y,
-        pan.bounds.x + pan.bounds.w, pan.bounds.y + pan.bounds.h + panel_padding.y);
+        pan.bounds.x + pan.bounds.w, pan.bounds.y + pan.bounds.h + panel_padding.x);
     nk_push_scissor(&pan.buffer, clip);
     nk_end(ctx);
 

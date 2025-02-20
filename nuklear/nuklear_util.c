@@ -169,7 +169,7 @@ nk_strtod(const char *str, char **endptr)
 {
     double m;
     double neg = 1.0;
-    const char *p = str;
+    char *p = (char *)str;
     double value = 0;
     double number = 0;
 
@@ -218,7 +218,7 @@ nk_strtod(const char *str, char **endptr)
     }
     number = value * neg;
     if (endptr)
-        *endptr = (char *)p;
+        *endptr = p;
     return number;
 }
 NK_API float
@@ -630,7 +630,7 @@ nk_vsnprintf(char *buf, int buf_size, const char *fmt, va_list args)
         /* width argument */
         width = NK_DEFAULT;
         if (*iter >= '1' && *iter <= '9') {
-            const char *end;
+            char *end;
             width = nk_strtoi(iter, &end);
             if (end == iter)
                 width = -1;
@@ -648,7 +648,7 @@ nk_vsnprintf(char *buf, int buf_size, const char *fmt, va_list args)
                 precision = va_arg(args, int);
                 iter++;
             } else {
-                const char *end;
+                char *end;
                 precision = nk_strtoi(iter, &end);
                 if (end == iter)
                     precision = -1;
