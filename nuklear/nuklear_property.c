@@ -1,6 +1,7 @@
 #include "nuklear.h"
 #include "nuklear_internal.h"
 
+int NK_PROPERTY_EDIT_IMPL = NK_PROPERTY_EDIT;
 /* ===============================================================
  *
  *                              PROPERTY

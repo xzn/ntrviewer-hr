@@ -156,6 +156,7 @@ static nk_hash nk_hash_from_name(const char *name, struct nk_window *win)
 }
 
 NK_LIB char *nk_itoa(char *s, long n);
+extern int NK_PROPERTY_EDIT_IMPL;
 static void focus_next_property(struct nk_context *ctx, const char *name, int val)
 {
     struct nk_window *win = ctx->current;
@@ -165,7 +166,7 @@ static void focus_next_property(struct nk_context *ctx, const char *name, int va
     nk_itoa(win->property.buffer, val);
     win->property.length = nk_strlen(win->property.buffer);
     win->property.cursor = 0;
-    win->property.state = 1 /* NK_PROPERTY_EDIT */;
+    win->property.state = NK_PROPERTY_EDIT_IMPL;
     win->property.name = hash;
     win->property.select_start = 0;
     win->property.select_end = win->property.length;
@@ -175,7 +176,7 @@ static void cancel_next_property(struct nk_context *ctx)
 {
     struct nk_window *win = ctx->current;
 
-    if (win->property.active && win->property.state == 0 /* NK_PROPERTY_DEFAULT */)
+    if (win->property.active && win->property.state == NK_PROPERTY_EDIT_IMPL)
     {
         win->property.active = 0;
         win->property.buffer[0] = 0;
