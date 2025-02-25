@@ -43,7 +43,7 @@ LDLIBS += -lunwind -llzma
 endif
 endif
 
-GL_OBJ += libNK_SDL_renderer.o ui_common_sdl.o ui_renderer_sdl.o ui_main_nk.o ntr_common.o ntr_hb.o ntr_rp.o
+GL_OBJ += libNK_SDL_renderer.o ui_common_sdl.o ui_renderer_sdl.o ui_main_nk.o ntr_common.o ntr_hb.o ntr_rp.o ntr_jpeg_delta.o
 ifeq ($(OS),Windows_NT)
 GL_OBJ += ntrviewer.res.o
 endif
