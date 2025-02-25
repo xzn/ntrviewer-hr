@@ -71,6 +71,7 @@ static struct kcp_recv_t {
 
 static struct kcp_recv_info_t {
     bool is_top;
+    bool delta_prog;
     u16 jpeg_quality;
     u8 chroma_ss;
     u8 core_count;
@@ -351,11 +352,22 @@ static uint8_t *copy_with_escape(uint8_t *out, const uint8_t *in, int size)
     return out;
 }
 
+static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, struct kcp_recv_info_t *info) {
+    memset(recvs, 0, sizeof(struct kcp_recv_t) * RP_CORE_COUNT_MAX);
+    memset(info, 0, sizeof(struct kcp_recv_info_t));
+
+    return 0;
+}
+
 static unsigned char jpeg_buffer_kcp[SCREEN_HEIGHT0 * SCREEN_WIDTH * RGB_CHANNELS_N + 2048];
 static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
 {
     struct kcp_recv_t *recvs = kcp_recv[w][queue_w];
     struct kcp_recv_info_t *info = &kcp_recv_info[w][queue_w];
+
+    if (info->delta_prog) {
+        return handle_decode_delta_prog(out, recvs, info);
+    }
 
     int ret;
     if ((ret = set_decode_quality_kcp(info->is_top, info->jpeg_quality, info->chroma_ss, info->v_adjusted)) < 0)
@@ -743,6 +755,7 @@ static int handle_recv_kcp(uint8_t *buf, int size)
             u16 core_count = (hdr >> RP_KCP_HDR_QUALITY_NBITS) & ((1 << RP_KCP_HDR_T_NBITS) - 1);
             bool top_bot = (hdr >> (RP_KCP_HDR_QUALITY_NBITS + RP_KCP_HDR_T_NBITS)) & ((1 << 1) - 1);
             u16 chroma_ss = (hdr >> (RP_KCP_HDR_QUALITY_NBITS + RP_KCP_HDR_T_NBITS + 1)) & ((1 << RP_KCP_HDR_CHROMASS_NBITS) - 1);
+            bool delta_prog = (hdr >> (RP_KCP_HDR_QUALITY_NBITS + RP_KCP_HDR_T_NBITS + 1 + RP_KCP_HDR_CHROMASS_NBITS)) & ((1 << 1) - 1);
 
             // err_log("w %d quality %d cores %d top %d\n", (int)w, (int)jpeg_quality, (int)core_count, (int)is_top);
 
@@ -755,6 +768,7 @@ static int handle_recv_kcp(uint8_t *buf, int size)
             info->core_count = core_count;
             info->is_top = top_bot == SCREEN_TOP;
             info->chroma_ss = chroma_ss;
+            info->delta_prog = delta_prog;
 
             for (int t = 0; t < core_count; ++t) {
                 if (size < (int)sizeof(u16)) {
