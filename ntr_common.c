@@ -26,7 +26,7 @@ void ntr_config_set_default(void) {
         .screen_priority_factor = 2,
         .jpeg_quality = 75,
         .bandwidth_limit = 16,
-        .kcp_mode = 1,
+        .kcp_mode = 2,
     };
 }
 

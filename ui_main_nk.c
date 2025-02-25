@@ -141,7 +141,7 @@ static const char *connection_msg[CONNECTION_STATE_COUNT] = {
 
 static nk_hash nk_hash_from_name_prev(const char *name, struct nk_window *win, int prev)
 {
-    // copied from nuklear.h since I don't want to edit that file
+    // copied from nuklear_property.c
     if (name[0] == '#')
     {
         return nk_murmur_hash(name, (int)nk_strlen(name), win->property.seq - prev);
@@ -689,6 +689,7 @@ void ui_main_nk(void)
         const char *reliable_stream_options[] = {
             "Off",
             "On",
+            "On + Delta",
         };
         do_nav_combobox_next(ctx, NK_FOCUS_RELIABLE_STREAM, &selected, sizeof(reliable_stream_options) / sizeof(*reliable_stream_options));
         nk_combobox(ctx, reliable_stream_options, sizeof(reliable_stream_options) / sizeof(*reliable_stream_options), &selected, 30, combo_size);

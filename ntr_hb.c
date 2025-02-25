@@ -299,7 +299,9 @@ thread_ret_t tcp_thread_func(void *arg)
                     (uint32_t)ntr_rp_config.jpeg_quality,
                     (uint32_t)ntr_rp_config.bandwidth_limit * 128 * 1024,
                     1404036572 /* guarding magic */,
-                    (uint32_t)ntr_rp_port_bound | (ntr_rp_config.kcp_mode ? (uint32_t)(1 << 30) : (uint32_t)0)};
+                    (uint32_t)ntr_rp_port_bound |
+                        (ntr_rp_config.kcp_mode ? (uint32_t)(1 << 30) : (uint32_t)0) |
+                        (ntr_rp_config.kcp_mode == 2 ? (uint32_t)(1 << 31) : (uint32_t)0)};
 
                 ret = tcp_send_packet_header(
                     sockfd, packet_seq, 0, 901,
