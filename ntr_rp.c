@@ -356,37 +356,46 @@ static uint8_t *copy_with_escape(uint8_t *out, const uint8_t *in, int size)
 static unsigned char jpeg_buffer_kcp[SCREEN_HEIGHT0 * SCREEN_WIDTH * RGB_CHANNELS_N + 2048];
 
 static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, struct kcp_recv_info_t *info) {
-    memset(jpeg_buffer_kcp, 0, sizeof(jpeg_buffer_kcp));
+    // memset(out, 0, SCREEN_WIDTH * SCREEN_HEIGHT0 * GL_CHANNELS_N);
 
     int max_h_samp_fact = info->chroma_ss == 2 ? 1 : 2;
     int max_v_samp_fact = info->chroma_ss == 0 ? 2 : 1;
 
     for (int t = 0; t < info->core_count; ++t)
     {
-        unsigned char *ptr = jpeg_buffer_kcp;
-
         struct kcp_recv_t *recv = &recvs[t];
-        for (int i = 0; i < recv->count; ++i)
-        {
-            int size;
-            if (i == recv->count - 1)
-            {
-                size = recv->term_size;
-            }
-            else
-            {
-                size = RP_PACKET_SIZE - sizeof(IUINT16) - sizeof(u16);
-            }
-            memcpy(ptr, recv->buf[i], size);
-            ptr += size;
-        }
-
         int rows_in_mcus = t == info->core_count - 1 ? info->v_last_adjusted : info->v_adjusted;
         int height_per_mcu_row = SCREEN_WIDTH * GL_CHANNELS_N * JPEG_DCTSIZE * max_v_samp_fact;
         uint8_t *out_t = out + t * info->v_adjusted * height_per_mcu_row;
         int res;
+
+        unsigned char *ptr = jpeg_buffer_kcp;
+        for (int i = 0; i < recv->count; ++i)
+        {
+            if (i == recv->count - 1)
+            {
+                ptr = copy_with_escape(ptr, recv->buf[i], recv->term_size);
+            }
+            else
+            {
+                ptr = copy_with_escape(ptr, recv->buf[i], RP_PACKET_SIZE - sizeof(IUINT16) - sizeof(u16));
+            }
+        }
+        *ptr = 0xff;
+        ++ptr;
+        if (t == info->core_count - 1)
+        {
+            *ptr = 0xd9;
+        }
+        else
+        {
+            *ptr = 0xd0 + t;
+        }
+        ++ptr;
+
         if ((res = decode_jpeg_delta(
-            out_t, jpeg_buffer_kcp, ptr - jpeg_buffer_kcp,
+            out_t,
+            jpeg_buffer_kcp, ptr - jpeg_buffer_kcp,
             rows_in_mcus,
             max_h_samp_fact, max_v_samp_fact, info->jpeg_quality
         )) < 0) {
@@ -409,6 +418,7 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
     if (info->delta_prog) {
         return handle_decode_delta_prog(out, recvs, info);
     }
+    // info->jpeg_quality = 100;
 
     int ret;
     if ((ret = set_decode_quality_kcp(info->is_top, info->jpeg_quality, info->chroma_ss, info->v_adjusted)) < 0)

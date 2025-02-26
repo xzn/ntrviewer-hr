@@ -1,5 +1,951 @@
 #include "ntr_jpeg_delta.h"
 
-int decode_jpeg_delta(uint8_t *out, uint8_t *in, int in_size, int rows_in_mcus, int l_h_samp, int l_v_samp, int quality) {
+#define DCTSIZE JPEG_DCTSIZE
+#define DCTSIZE2 (DCTSIZE * DCTSIZE)
+
+struct jhuff_tbl_t {
+    uint8_t bits[17];
+    uint8_t huffval[256];
+};
+
+#if !defined(_WIN32) && !defined(SIZEOF_SIZE_T)
+#error Cannot determine word size
+#endif
+
+#if SIZEOF_SIZE_T == 8 || defined(_WIN64)
+
+typedef size_t bit_buf_type; /* type of bit-extraction buffer */
+#define BIT_BUF_SIZE 64      /* size of buffer in bits */
+
+#elif defined(__x86_64__) && defined(__ILP32__)
+
+typedef unsigned long long bit_buf_type; /* type of bit-extraction buffer */
+#define BIT_BUF_SIZE 64 /* size of buffer in bits */
+
+#else
+
+typedef unsigned long bit_buf_type; /* type of bit-extraction buffer */
+#define BIT_BUF_SIZE 32 /* size of buffer in bits */
+
+#endif
+
+struct bitread_perm_state_t {
+    bit_buf_type get_buffer;
+    int bits_left;
+};
+
+#define FAST_FLOAT float
+#define FLOAT_MULT_TYPE FAST_FLOAT
+
+#define RP_NUM_QUANT_TBLS 2
+#define RP_NUM_HUFF_TBLS 2
+#define RP_NUM_JPEG_COMP 3
+
+struct jpeg_comp_info_t {
+    int dc_tbl_no;
+    int ac_tbl_no;
+    FLOAT_MULT_TYPE *dct_table;
+};
+
+#define HUFF_LOOKAHEAD 8
+struct d_derived_tbl_t {
+    int32_t maxcode[18];
+    int32_t valoffset[18];
+    struct jhuff_tbl_t *tbl;
+    int lookup[1 << HUFF_LOOKAHEAD];
+};
+
+typedef short JCOEF;
+typedef JCOEF JBLOCK[DCTSIZE2];
+typedef JBLOCK *JBLOCKROW;
+typedef JBLOCKROW *JBLOCKARRAY;
+typedef JBLOCKARRAY *JBLOCKIMAGE;
+
+typedef unsigned char JSAMPLE;
+typedef JSAMPLE *JSAMPROW;
+typedef JSAMPROW *JSAMPARRAY;
+typedef JSAMPARRAY *JSAMPIMAGE;
+
+typedef JCOEF *JCOEFPTR;
+
+#define D_MAX_BLOCKS_IN_MCU (6)
+struct jpeg_shared_t {
+    int h_samp_factor;
+    int v_samp_factor;
+    int rows_in_mcus;
+
+    struct jhuff_tbl_t dc_huff_tbl_ptrs[RP_NUM_HUFF_TBLS];
+    struct jhuff_tbl_t ac_huff_tbl_ptrs[RP_NUM_HUFF_TBLS];
+    struct d_derived_tbl_t dc_derived_tbls[RP_NUM_HUFF_TBLS];
+    struct d_derived_tbl_t ac_derived_tbls[RP_NUM_HUFF_TBLS];
+    struct d_derived_tbl_t *dc_cur_tbls[D_MAX_BLOCKS_IN_MCU];
+    struct d_derived_tbl_t *ac_cur_tbls[D_MAX_BLOCKS_IN_MCU];
+    struct jpeg_comp_info_t comp_infos[RP_NUM_JPEG_COMP];
+
+    struct bitread_perm_state_t bitstate;
+    int last_dc_val[RP_NUM_JPEG_COMP];
+    int blocks_in_MCU;
+    int MCU_membership[D_MAX_BLOCKS_IN_MCU];
+
+    const uint8_t *next_input_byte;
+    size_t bytes_in_buffer;
+    uint8_t *out;
+    int unread_marker;
+
+    JBLOCK MCU_buffer_base[D_MAX_BLOCKS_IN_MCU];
+    JBLOCKROW MCU_buffer[D_MAX_BLOCKS_IN_MCU];
+    FLOAT_MULT_TYPE dct_table[RP_NUM_QUANT_TBLS][DCTSIZE2];
+};
+
+static void add_huff_table(struct jhuff_tbl_t *htblptr, const uint8_t *bits, const uint8_t *val)
+{
+    int nsymbols, len;
+
+    /* Copy the number-of-symbols-of-each-code-length counts */
+    memcpy(htblptr->bits, bits, sizeof(htblptr->bits));
+
+    /* Validate the counts.  We do this here mainly so we can copy the right
+     * number of symbols from the val[] array, without risking marching off
+     * the end of memory.  jchuff.c will do a more thorough test later.
+     */
+    nsymbols = 0;
+    for (len = 1; len <= 16; len++)
+        nsymbols += bits[len];
+    if (nsymbols < 1 || nsymbols > 256) {
+        err_log("nsymbols out or range %d\n", nsymbols);
+        exit(1);
+    }
+
+    memcpy(htblptr->huffval, val, nsymbols * sizeof(uint8_t));
+    memset(&htblptr->huffval[nsymbols], 0, (256 - nsymbols) * sizeof(uint8_t));
+}
+
+static void std_huff_tables(struct jpeg_shared_t *shared)
+/* Set up the standard Huffman tables (cf. JPEG standard section K.3) */
+/* IMPORTANT: these are only valid for 8-bit data precision! */
+{
+    static const UINT8 bits_dc_luminance[17] = {
+        /* 0-base */ 0, 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0};
+    static const UINT8 val_dc_luminance[] = {
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+
+    static const UINT8 bits_dc_chrominance[17] = {
+        /* 0-base */ 0, 0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0};
+    static const UINT8 val_dc_chrominance[] = {
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+
+    static const UINT8 bits_ac_luminance[17] = {
+        /* 0-base */ 0, 0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 0x7d};
+    static const UINT8 val_ac_luminance[] = {
+        0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12,
+        0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07,
+        0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xa1, 0x08,
+        0x23, 0x42, 0xb1, 0xc1, 0x15, 0x52, 0xd1, 0xf0,
+        0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0a, 0x16,
+        0x17, 0x18, 0x19, 0x1a, 0x25, 0x26, 0x27, 0x28,
+        0x29, 0x2a, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,
+        0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49,
+        0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
+        0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69,
+        0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79,
+        0x7a, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89,
+        0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98,
+        0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
+        0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6,
+        0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5,
+        0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4,
+        0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe1, 0xe2,
+        0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea,
+        0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8,
+        0xf9, 0xfa};
+
+    static const UINT8 bits_ac_chrominance[17] = {
+        /* 0-base */ 0, 0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 0x77};
+    static const UINT8 val_ac_chrominance[] = {
+        0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21,
+        0x31, 0x06, 0x12, 0x41, 0x51, 0x07, 0x61, 0x71,
+        0x13, 0x22, 0x32, 0x81, 0x08, 0x14, 0x42, 0x91,
+        0xa1, 0xb1, 0xc1, 0x09, 0x23, 0x33, 0x52, 0xf0,
+        0x15, 0x62, 0x72, 0xd1, 0x0a, 0x16, 0x24, 0x34,
+        0xe1, 0x25, 0xf1, 0x17, 0x18, 0x19, 0x1a, 0x26,
+        0x27, 0x28, 0x29, 0x2a, 0x35, 0x36, 0x37, 0x38,
+        0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48,
+        0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58,
+        0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68,
+        0x69, 0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78,
+        0x79, 0x7a, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
+        0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96,
+        0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5,
+        0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4,
+        0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3,
+        0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2,
+        0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda,
+        0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9,
+        0xea, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8,
+        0xf9, 0xfa};
+
+    add_huff_table(&shared->dc_huff_tbl_ptrs[0], bits_dc_luminance,
+                   val_dc_luminance);
+    add_huff_table(&shared->ac_huff_tbl_ptrs[0], bits_ac_luminance,
+                   val_ac_luminance);
+    add_huff_table(&shared->dc_huff_tbl_ptrs[1], bits_dc_chrominance,
+                   val_dc_chrominance);
+    add_huff_table(&shared->ac_huff_tbl_ptrs[1], bits_ac_chrominance,
+                   val_ac_chrominance);
+}
+
+static void jpeg_make_d_derived_tbl(boolean isDC, struct jhuff_tbl_t *htbl, struct d_derived_tbl_t *dtbl)
+{
+    int p, i, l, si, numsymbols;
+    int lookbits, ctr;
+    char huffsize[257];
+    unsigned int huffcode[257];
+    unsigned int code;
+
+    /* Note that huffsize[] and huffcode[] are filled in code-length order,
+     * paralleling the order of the symbols themselves in htbl->huffval[].
+     */
+
+    /* Find the input Huffman table */
+
+    /* Allocate a workspace if we haven't already done so. */
+    dtbl->tbl = htbl; /* fill in back link */
+
+    /* Figure C.1: make table of Huffman code length for each symbol */
+
+    p = 0;
+    for (l = 1; l <= 16; l++) {
+        i = (int)htbl->bits[l];
+        if (i < 0 || p + i > 256) /* protect against table overrun */
+            exit(2);
+        while (i--)
+            huffsize[p++] = (char)l;
+    }
+    huffsize[p] = 0;
+    numsymbols = p;
+
+    /* Figure C.2: generate the codes themselves */
+    /* We also validate that the counts represent a legal Huffman code tree. */
+
+    code = 0;
+    si = huffsize[0];
+    p = 0;
+    while (huffsize[p]) {
+        while (((int)huffsize[p]) == si) {
+            huffcode[p++] = code;
+            code++;
+        }
+        /* code is now 1 more than the last code used for codelength si; but
+         * it must still fit in si bits, since no code is allowed to be all ones.
+         */
+        if (((int32_t)code) >= (((int32_t)1) << si))
+            exit(2);
+        code <<= 1;
+        si++;
+    }
+
+    /* Figure F.15: generate decoding tables for bit-sequential decoding */
+
+    p = 0;
+    for (l = 1; l <= 16; l++) {
+        if (htbl->bits[l]) {
+            /* valoffset[l] = huffval[] index of 1st symbol of code length l,
+             * minus the minimum code of length l
+             */
+            dtbl->valoffset[l] = (int32_t)p - (int32_t)huffcode[p];
+            p += htbl->bits[l];
+            dtbl->maxcode[l] = huffcode[p - 1]; /* maximum code of length l */
+        } else {
+            dtbl->maxcode[l] = -1; /* -1 if no codes of this length */
+        }
+    }
+    dtbl->valoffset[17] = 0;
+    dtbl->maxcode[17] = 0xFFFFFL; /* ensures jpeg_huff_decode terminates */
+
+    /* Compute lookahead tables to speed up decoding.
+     * First we set all the table entries to 0, indicating "too long";
+     * then we iterate through the Huffman codes that are short enough and
+     * fill in all the entries that correspond to bit sequences starting
+     * with that code.
+     */
+
+    for (i = 0; i < (1 << HUFF_LOOKAHEAD); i++)
+        dtbl->lookup[i] = (HUFF_LOOKAHEAD + 1) << HUFF_LOOKAHEAD;
+
+    p = 0;
+    for (l = 1; l <= HUFF_LOOKAHEAD; l++) {
+        for (i = 1; i <= (int)htbl->bits[l]; i++, p++) {
+            /* l = current code's length, p = its index in huffcode[] & huffval[]. */
+            /* Generate left-justified code followed by all possible bit sequences */
+            lookbits = huffcode[p] << (HUFF_LOOKAHEAD - l);
+            for (ctr = 1 << (HUFF_LOOKAHEAD - l); ctr > 0; ctr--) {
+                dtbl->lookup[lookbits] = (l << HUFF_LOOKAHEAD) | htbl->huffval[p];
+                lookbits++;
+            }
+        }
+    }
+
+    /* Validate symbols as being reasonable.
+     * For AC tables, we make no check, but accept all byte values 0..255.
+     * For DC tables, we require the symbols to be in range 0..15 in lossy mode
+     * and 0..16 in lossless mode.  (Tighter bounds could be applied depending on
+     * the data depth and mode, but this is sufficient to ensure safe decoding.)
+     */
+    if (isDC) {
+        for (i = 0; i < numsymbols; i++) {
+            int sym = htbl->huffval[i];
+            if (sym < 0 || sym > (0 ? 16 : 15))
+                exit(2);
+        }
+    }
+}
+
+typedef struct { /* Bitreading working state within an MCU */
+    /* Current data source location */
+    /* We need a copy, rather than munging the original, in case of suspension */
+    const uint8_t *next_input_byte; /* => next byte to read from source */
+    size_t bytes_in_buffer;        /* # of bytes remaining in source buffer */
+    /* Bit input buffer --- note these values are kept in register variables,
+     * not in this struct, inside the inner loops.
+     */
+    bit_buf_type get_buffer; /* current bit-extraction buffer */
+    int bits_left;           /* # of unused bits in it */
+    /* Pointer needed by jpeg_fill_bit_buffer. */
+    struct jpeg_shared_t *shared; /* back link to decompress master record */
+} bitread_working_state;
+
+#define BITREAD_STATE_VARS            \
+    register bit_buf_type get_buffer; \
+    register int bits_left;           \
+    bitread_working_state br_state
+
+#define BITREAD_LOAD_STATE(cinfop, permstate)           \
+    br_state.shared = cinfop;                           \
+    br_state.next_input_byte = cinfop->next_input_byte; \
+    br_state.bytes_in_buffer = cinfop->bytes_in_buffer; \
+    get_buffer = permstate.get_buffer;                  \
+    bits_left = permstate.bits_left;
+
+#define BITREAD_SAVE_STATE(cinfop, permstate)           \
+    cinfop->next_input_byte = br_state.next_input_byte; \
+    cinfop->bytes_in_buffer = br_state.bytes_in_buffer; \
+    permstate.get_buffer = get_buffer;                  \
+    permstate.bits_left = bits_left
+
+#define CHECK_BIT_BUFFER(state, nbits, action)                                   \
+    {                                                                            \
+        if (bits_left < (nbits)) {                                               \
+            if (!jpeg_fill_bit_buffer(&(state), get_buffer, bits_left, nbits)) { \
+                action;                                                          \
+            }                                                                    \
+            get_buffer = (state).get_buffer;                                     \
+            bits_left = (state).bits_left;                                       \
+        }                                                                        \
+    }
+
+#define GET_BITS(nbits) \
+    (((int)(get_buffer >> (bits_left -= (nbits)))) & ((1 << (nbits)) - 1))
+
+#define PEEK_BITS(nbits) \
+    (((int)(get_buffer >> (bits_left - (nbits)))) & ((1 << (nbits)) - 1))
+
+#define DROP_BITS(nbits) \
+    (bits_left -= (nbits))
+
+#define HUFF_DECODE(result, state, htbl, failaction, slowlabel)                        \
+    {                                                                                  \
+        register int nb, look;                                                         \
+        if (bits_left < HUFF_LOOKAHEAD) {                                              \
+            if (!jpeg_fill_bit_buffer(&state, get_buffer, bits_left, 0)) {             \
+                failaction;                                                            \
+            }                                                                          \
+            get_buffer = state.get_buffer;                                             \
+            bits_left = state.bits_left;                                               \
+            if (bits_left < HUFF_LOOKAHEAD) {                                          \
+                nb = 1;                                                                \
+                goto slowlabel;                                                        \
+            }                                                                          \
+        }                                                                              \
+        look = PEEK_BITS(HUFF_LOOKAHEAD);                                              \
+        if ((nb = (htbl->lookup[look] >> HUFF_LOOKAHEAD)) <= HUFF_LOOKAHEAD) {         \
+            DROP_BITS(nb);                                                             \
+            result = htbl->lookup[look] & ((1 << HUFF_LOOKAHEAD) - 1);                 \
+        } else {                                                                       \
+        slowlabel:                                                                     \
+            if ((result =                                                              \
+                     jpeg_huff_decode(&state, get_buffer, bits_left, htbl, nb)) < 0) { \
+                failaction;                                                            \
+            }                                                                          \
+            get_buffer = state.get_buffer;                                             \
+            bits_left = state.bits_left;                                               \
+        }                                                                              \
+    }
+
+#define NEG_1 ((unsigned int)-1)
+#define HUFF_EXTEND(x, s) \
+    ((x) + ((((x) - (1 << ((s) - 1))) >> 31) & (((NEG_1) << (s)) + 1)))
+
+#define MIN_GET_BITS (BIT_BUF_SIZE - 7)
+
+static boolean jpeg_fill_bit_buffer(bitread_working_state *state,
+                     register bit_buf_type get_buffer, register int bits_left,
+                     int nbits)
+/* Load up the bit buffer to a depth of at least nbits */
+{
+    /* Copy heavily used state fields into locals (hopefully registers) */
+    register const uint8_t *next_input_byte = state->next_input_byte;
+    register size_t bytes_in_buffer = state->bytes_in_buffer;
+    struct jpeg_shared_t *shared = state->shared;
+
+    /* Attempt to load at least MIN_GET_BITS bits into get_buffer. */
+    /* (It is assumed that no request will be for more than that many bits.) */
+    /* We fail to do so only if we hit a marker or are forced to suspend. */
+
+    if (shared->unread_marker == 0) { /* cannot advance past a marker */
+        while (bits_left < MIN_GET_BITS) {
+            register int c;
+
+            /* Attempt to read a byte */
+            if (bytes_in_buffer == 0) {
+                err_log("input exhausted\n");
+                return FALSE;
+            }
+            bytes_in_buffer--;
+            c = *next_input_byte++;
+
+            /* If it's 0xFF, check and discard stuffed zero byte */
+            if (c == 0xFF) {
+                // err_log("escape\n");
+                /* Loop here to discard any padding FF's on terminating marker,
+                 * so that we can save a valid unread_marker value.  NOTE: we will
+                 * accept multiple FF's followed by a 0 as meaning a single FF data
+                 * byte.  This data pattern is not valid according to the standard.
+                 */
+                do {
+                    if (bytes_in_buffer == 0) {
+                        err_log("input exhausted\n");
+                        return FALSE;
+                    }
+                    bytes_in_buffer--;
+                    c = *next_input_byte++;
+                } while (c == 0xFF);
+
+                if (c == 0) {
+                    /* Found FF/00, which represents an FF data byte */
+                    c = 0xFF;
+                } else {
+                    /* Oops, it's actually a marker indicating end of compressed data.
+                     * Save the marker code for later use.
+                     * Fine point: it might appear that we should save the marker into
+                     * bitread working state, not straight into permanent state.  But
+                     * once we have hit a marker, we cannot need to suspend within the
+                     * current MCU, because we will read no more bytes from the data
+                     * source.  So it is OK to update permanent state right away.
+                     */
+                    shared->unread_marker = c;
+                    /* See if we need to insert some fake zero bits. */
+                    goto no_more_bytes;
+                }
+            }
+
+            /* OK, load c into get_buffer */
+            get_buffer = (get_buffer << 8) | c;
+            bits_left += 8;
+        } /* end while */
+    } else {
+    no_more_bytes:
+        /* We get here if we've read the marker that terminates the compressed
+         * data segment.  There should be enough bits in the buffer register
+         * to satisfy the request; if so, no problem.
+         */
+        if (nbits > bits_left) {
+            /* Uh-oh.  Report corrupted data to user and stuff zeroes into
+             * the data stream, so that we can produce some kind of image.
+             * We use a nonvolatile flag to ensure that only one warning message
+             * appears per data segment.
+             */
+            err_log("not enough data\n");
+            /* Fill the buffer with zero bits */
+            get_buffer <<= MIN_GET_BITS - bits_left;
+            bits_left = MIN_GET_BITS;
+        }
+    }
+
+    /* Unload the local registers */
+    state->next_input_byte = next_input_byte;
+    state->bytes_in_buffer = bytes_in_buffer;
+    state->get_buffer = get_buffer;
+    state->bits_left = bits_left;
+
+    return TRUE;
+}
+
+static int jpeg_huff_decode(bitread_working_state *state,
+                 register bit_buf_type get_buffer, register int bits_left,
+                 struct d_derived_tbl_t *htbl, int min_bits)
+{
+    register int l = min_bits;
+    register int32_t code;
+
+    /* HUFF_DECODE has determined that the code is at least min_bits */
+    /* bits long, so fetch that many bits in one swoop. */
+
+    CHECK_BIT_BUFFER(*state, l, return -1);
+    code = GET_BITS(l);
+
+    /* Collect the rest of the Huffman code one bit at a time. */
+    /* This is per Figure F.16. */
+
+    while (code > htbl->maxcode[l]) {
+        code <<= 1;
+        CHECK_BIT_BUFFER(*state, 1, return -1);
+        code |= GET_BITS(1);
+        l++;
+    }
+
+    /* Unload the local registers */
+    state->get_buffer = get_buffer;
+    state->bits_left = bits_left;
+
+    /* With garbage input we may reach the sentinel value l = 17. */
+
+    if (l > 16) {
+        err_log("huff decode error\n");
+        return 0; /* fake a zero as the safest result */
+    }
+
+    return htbl->tbl->huffval[(int)(code + htbl->valoffset[l])];
+}
+
+static const int jpeg_natural_order[DCTSIZE2 + 16] = {
+    0, 1, 8, 16, 9, 2, 3, 10,
+    17, 24, 32, 25, 18, 11, 4, 5,
+    12, 19, 26, 33, 40, 48, 41, 34,
+    27, 20, 13, 6, 7, 14, 21, 28,
+    35, 42, 49, 56, 57, 50, 43, 36,
+    29, 22, 15, 23, 30, 37, 44, 51,
+    58, 59, 52, 45, 38, 31, 39, 46,
+    53, 60, 61, 54, 47, 55, 62, 63,
+    63, 63, 63, 63, 63, 63, 63, 63, /* extra entries for safety in decoder */
+    63, 63, 63, 63, 63, 63, 63, 63};
+
+static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data)
+{
+    BITREAD_STATE_VARS;
+    int blkn;
+    int state[RP_NUM_JPEG_COMP];
+    /* Outer loop handles each block in the MCU */
+
+    /* Load up working state */
+    BITREAD_LOAD_STATE(shared, shared->bitstate);
+    memcpy(state, shared->last_dc_val, sizeof(state));
+
+    for (blkn = 0; blkn < shared->blocks_in_MCU; blkn++) {
+        JBLOCKROW block = MCU_data ? MCU_data[blkn] : NULL;
+        struct d_derived_tbl_t *dctbl = shared->dc_cur_tbls[blkn];
+        struct d_derived_tbl_t *actbl = shared->ac_cur_tbls[blkn];
+        register int s, k, r;
+
+        /* Decode a single block's worth of coefficients */
+
+        /* Section F.2.2.1: decode the DC coefficient difference */
+        HUFF_DECODE(s, br_state, dctbl, return FALSE, label1);
+        if (s) {
+            CHECK_BIT_BUFFER(br_state, s, return FALSE);
+            r = GET_BITS(s);
+            s = HUFF_EXTEND(r, s);
+        }
+
+        if (TRUE) {
+            /* Convert DC difference to actual value, update last_dc_val */
+            int ci = shared->MCU_membership[blkn];
+            /* Certain malformed JPEG images produce repeated DC coefficient
+             * differences of 2047 or -2047, which causes state.last_dc_val[ci] to
+             * grow until it overflows or underflows a 32-bit signed integer.  This
+             * behavior is, to the best of our understanding, innocuous, and it is
+             * unclear how to work around it without potentially affecting
+             * performance.  Thus, we (hopefully temporarily) suppress UBSan integer
+             * overflow errors for this function and decode_mcu_fast().
+             */
+            s += state[ci];
+            state[ci] = s;
+            if (block) {
+                /* Output the DC coefficient (assumes jpeg_natural_order[0] = 0) */
+                (*block)[0] = (JCOEF)s;
+            }
+        }
+
+        if (TRUE && block) {
+
+            /* Section F.2.2.2: decode the AC coefficients */
+            /* Since zeroes are skipped, output area must be cleared beforehand */
+            for (k = 1; k < DCTSIZE2; k++) {
+                HUFF_DECODE(s, br_state, actbl, return FALSE, label2);
+
+                r = s >> 4;
+                s &= 15;
+
+                if (s) {
+                    k += r;
+                    CHECK_BIT_BUFFER(br_state, s, return FALSE);
+                    r = GET_BITS(s);
+                    s = HUFF_EXTEND(r, s);
+                    /* Output coefficient in natural (dezigzagged) order.
+                     * Note: the extra entries in jpeg_natural_order[] will save us
+                     * if k >= DCTSIZE2, which could happen if the data is corrupted.
+                     */
+                    (*block)[jpeg_natural_order[k]] = (JCOEF)s;
+                } else {
+                    if (r != 15)
+                        break;
+                    k += 15;
+                    // err_log("many zeroes\n");
+                }
+            }
+
+        } else {
+
+            /* Section F.2.2.2: decode the AC coefficients */
+            /* In this path we just discard the values */
+            for (k = 1; k < DCTSIZE2; k++) {
+                HUFF_DECODE(s, br_state, actbl, return FALSE, label3);
+
+                r = s >> 4;
+                s &= 15;
+
+                if (s) {
+                    k += r;
+                    CHECK_BIT_BUFFER(br_state, s, return FALSE);
+                    DROP_BITS(s);
+                } else {
+                    if (r != 15)
+                        break;
+                    k += 15;
+                }
+            }
+        }
+    }
+
+    /* Completed MCU, so update state */
+    BITREAD_SAVE_STATE(shared, shared->bitstate);
+    memcpy(shared->last_dc_val, state, sizeof(state));
+    return TRUE;
+}
+
+#define DEQUANTIZE(coef, quantval) (((FAST_FLOAT)(coef)) * (quantval))
+
+static void jpeg_idct_float(
+    struct jpeg_comp_info_t *compptr,
+    JCOEFPTR coef_block,
+    JSAMPARRAY output_buf,
+    uint32_t output_col)
+{
+    FAST_FLOAT tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7;
+    FAST_FLOAT tmp10, tmp11, tmp12, tmp13;
+    FAST_FLOAT z5, z10, z11, z12, z13;
+    JCOEFPTR inptr;
+    FLOAT_MULT_TYPE *quantptr;
+    FAST_FLOAT *wsptr;
+    JSAMPROW outptr;
+    int ctr;
+    FAST_FLOAT workspace[DCTSIZE2]; /* buffers data between passes */
+#define _0_125 ((FLOAT_MULT_TYPE)0.125)
+
+    /* Pass 1: process columns from input, store into work array. */
+
+    inptr = coef_block;
+    quantptr = (FLOAT_MULT_TYPE *)compptr->dct_table;
+    wsptr = workspace;
+    for (ctr = DCTSIZE; ctr > 0; ctr--) {
+        /* Due to quantization, we will usually find that many of the input
+         * coefficients are zero, especially the AC terms.  We can exploit this
+         * by short-circuiting the IDCT calculation for any column in which all
+         * the AC terms are zero.  In that case each output is equal to the
+         * DC coefficient (with scale factor as needed).
+         * With typical images and quantization tables, half or more of the
+         * column DCT calculations can be simplified this way.
+         */
+
+        if (inptr[DCTSIZE * 1] == 0 && inptr[DCTSIZE * 2] == 0 &&
+            inptr[DCTSIZE * 3] == 0 && inptr[DCTSIZE * 4] == 0 &&
+            inptr[DCTSIZE * 5] == 0 && inptr[DCTSIZE * 6] == 0 &&
+            inptr[DCTSIZE * 7] == 0) {
+            /* AC terms all zero */
+            FAST_FLOAT dcval = DEQUANTIZE(inptr[DCTSIZE * 0],
+                                          quantptr[DCTSIZE * 0] * _0_125);
+
+            wsptr[DCTSIZE * 0] = dcval;
+            wsptr[DCTSIZE * 1] = dcval;
+            wsptr[DCTSIZE * 2] = dcval;
+            wsptr[DCTSIZE * 3] = dcval;
+            wsptr[DCTSIZE * 4] = dcval;
+            wsptr[DCTSIZE * 5] = dcval;
+            wsptr[DCTSIZE * 6] = dcval;
+            wsptr[DCTSIZE * 7] = dcval;
+
+            inptr++; /* advance pointers to next column */
+            quantptr++;
+            wsptr++;
+            continue;
+        }
+
+        /* Even part */
+
+        tmp0 = DEQUANTIZE(inptr[DCTSIZE * 0], quantptr[DCTSIZE * 0] * _0_125);
+        tmp1 = DEQUANTIZE(inptr[DCTSIZE * 2], quantptr[DCTSIZE * 2] * _0_125);
+        tmp2 = DEQUANTIZE(inptr[DCTSIZE * 4], quantptr[DCTSIZE * 4] * _0_125);
+        tmp3 = DEQUANTIZE(inptr[DCTSIZE * 6], quantptr[DCTSIZE * 6] * _0_125);
+
+        tmp10 = tmp0 + tmp2; /* phase 3 */
+        tmp11 = tmp0 - tmp2;
+
+        tmp13 = tmp1 + tmp3;                                       /* phases 5-3 */
+        tmp12 = (tmp1 - tmp3) * ((FAST_FLOAT)1.414213562) - tmp13; /* 2*c4 */
+
+        tmp0 = tmp10 + tmp13; /* phase 2 */
+        tmp3 = tmp10 - tmp13;
+        tmp1 = tmp11 + tmp12;
+        tmp2 = tmp11 - tmp12;
+
+        /* Odd part */
+
+        tmp4 = DEQUANTIZE(inptr[DCTSIZE * 1], quantptr[DCTSIZE * 1] * _0_125);
+        tmp5 = DEQUANTIZE(inptr[DCTSIZE * 3], quantptr[DCTSIZE * 3] * _0_125);
+        tmp6 = DEQUANTIZE(inptr[DCTSIZE * 5], quantptr[DCTSIZE * 5] * _0_125);
+        tmp7 = DEQUANTIZE(inptr[DCTSIZE * 7], quantptr[DCTSIZE * 7] * _0_125);
+
+        z13 = tmp6 + tmp5; /* phase 6 */
+        z10 = tmp6 - tmp5;
+        z11 = tmp4 + tmp7;
+        z12 = tmp4 - tmp7;
+
+        tmp7 = z11 + z13;                                /* phase 5 */
+        tmp11 = (z11 - z13) * ((FAST_FLOAT)1.414213562); /* 2*c4 */
+
+        z5 = (z10 + z12) * ((FAST_FLOAT)1.847759065); /* 2*c2 */
+        tmp10 = z5 - z12 * ((FAST_FLOAT)1.082392200); /* 2*(c2-c6) */
+        tmp12 = z5 - z10 * ((FAST_FLOAT)2.613125930); /* 2*(c2+c6) */
+
+        tmp6 = tmp12 - tmp7; /* phase 2 */
+        tmp5 = tmp11 - tmp6;
+        tmp4 = tmp10 - tmp5;
+
+        wsptr[DCTSIZE * 0] = tmp0 + tmp7;
+        wsptr[DCTSIZE * 7] = tmp0 - tmp7;
+        wsptr[DCTSIZE * 1] = tmp1 + tmp6;
+        wsptr[DCTSIZE * 6] = tmp1 - tmp6;
+        wsptr[DCTSIZE * 2] = tmp2 + tmp5;
+        wsptr[DCTSIZE * 5] = tmp2 - tmp5;
+        wsptr[DCTSIZE * 3] = tmp3 + tmp4;
+        wsptr[DCTSIZE * 4] = tmp3 - tmp4;
+
+        inptr++; /* advance pointers to next column */
+        quantptr++;
+        wsptr++;
+    }
+
+    /* Pass 2: process rows from work array, store into output array. */
+
+    wsptr = workspace;
+    for (ctr = 0; ctr < DCTSIZE; ctr++) {
+        outptr = output_buf[ctr] + output_col;
+        /* Rows of zeroes can be exploited in the same way as we did with columns.
+         * However, the column calculation has created many nonzero AC terms, so
+         * the simplification applies less often (typically 5% to 10% of the time).
+         * And testing floats for zero is relatively expensive, so we don't bother.
+         */
+
+        /* Even part */
+
+        /* Apply signed->unsigned and prepare float->int conversion */
+        z5 = wsptr[0] + ((FAST_FLOAT)127.5 + (FAST_FLOAT)0.5);
+        tmp10 = z5 + wsptr[4];
+        tmp11 = z5 - wsptr[4];
+
+        tmp13 = wsptr[2] + wsptr[6];
+        tmp12 = (wsptr[2] - wsptr[6]) * ((FAST_FLOAT)1.414213562) - tmp13;
+
+        tmp0 = tmp10 + tmp13;
+        tmp3 = tmp10 - tmp13;
+        tmp1 = tmp11 + tmp12;
+        tmp2 = tmp11 - tmp12;
+
+        /* Odd part */
+
+        z13 = wsptr[5] + wsptr[3];
+        z10 = wsptr[5] - wsptr[3];
+        z11 = wsptr[1] + wsptr[7];
+        z12 = wsptr[1] - wsptr[7];
+
+        tmp7 = z11 + z13;
+        tmp11 = (z11 - z13) * ((FAST_FLOAT)1.414213562);
+
+        z5 = (z10 + z12) * ((FAST_FLOAT)1.847759065); /* 2*c2 */
+        tmp10 = z5 - z12 * ((FAST_FLOAT)1.082392200); /* 2*(c2-c6) */
+        tmp12 = z5 - z10 * ((FAST_FLOAT)2.613125930); /* 2*(c2+c6) */
+
+        tmp6 = tmp12 - tmp7;
+        tmp5 = tmp11 - tmp6;
+        tmp4 = tmp10 - tmp5;
+
+        /* Final output stage: float->int conversion and range-limit */
+
+        outptr[0] = (int)(tmp0 + tmp7);
+        outptr[7] = (int)(tmp0 - tmp7);
+        outptr[1] = (int)(tmp1 + tmp6);
+        outptr[6] = (int)(tmp1 - tmp6);
+        outptr[2] = (int)(tmp2 + tmp5);
+        outptr[5] = (int)(tmp2 - tmp5);
+        outptr[3] = (int)(tmp3 + tmp4);
+        outptr[4] = (int)(tmp3 - tmp4);
+
+        wsptr += DCTSIZE; /* advance pointer to next row */
+    }
+}
+
+static int consume_data(struct jpeg_shared_t *shared)
+{
+    uint32_t MCU_col_num; /* index of current MCU within row */
+    int yoffset;
+
+    /* Loop to process one whole iMCU row */
+    for (yoffset = 0; yoffset < shared->rows_in_mcus;
+         yoffset++) {
+        for (MCU_col_num = 0; (int)MCU_col_num < SCREEN_WIDTH / shared->h_samp_factor / DCTSIZE;
+             MCU_col_num++) {
+            memset(shared->MCU_buffer_base, 0, sizeof(shared->MCU_buffer_base));
+            if (!decode_mcu(shared, shared->MCU_buffer)) {
+                err_log("mcu decode err at %d (%d) %d\n", (int)yoffset, (int)shared->rows_in_mcus, (int)MCU_col_num);
+                return -1;
+            } else {
+                for (int i = 0; i < shared->blocks_in_MCU; ++i) {
+                    JSAMPLE output_buf_base[DCTSIZE][DCTSIZE];
+                    JSAMPROW output_buf[DCTSIZE];
+                    for (int j = 0; j < DCTSIZE; ++j) {
+                        output_buf[j] = output_buf_base[j];
+                    }
+                    jpeg_idct_float(&shared->comp_infos[shared->MCU_membership[i]], shared->MCU_buffer[i][0], output_buf, 0);
+
+                    int b = yoffset * SCREEN_WIDTH * shared->v_samp_factor * DCTSIZE * GL_CHANNELS_N + MCU_col_num * shared->h_samp_factor * DCTSIZE * GL_CHANNELS_N;
+                    for (int k = 0; k < shared->v_samp_factor * shared->h_samp_factor; ++k) {
+                        if (k != i)
+                            continue;
+                        for (int j = 0; j < DCTSIZE; ++j) {
+                            for (int i = 0; i < DCTSIZE; ++i) {
+                                int a = b + (j + k / shared->h_samp_factor * DCTSIZE) * SCREEN_WIDTH * GL_CHANNELS_N + (i + k % shared->h_samp_factor * DCTSIZE)  * GL_CHANNELS_N;
+                                for (int l = 0; l < GL_CHANNELS_N; ++l) {
+                                    shared->out[a + l] = output_buf[j][i];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+static const float aanscalefactor[DCTSIZE] = {
+    1.0,
+    1.387039845,
+    1.306562965,
+    1.175875602,
+    1.0,
+    0.785694958,
+    0.541196100,
+    0.275899379,
+};
+
+static float std_luminance_quant_log2_tbl[DCTSIZE2];
+static float std_chrominance_quant_log2_tbl[DCTSIZE2];
+static float std_quant_log2_max;
+
+static const uint8_t std_luminance_quant_tbl[DCTSIZE2] = {
+    16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56,
+    14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113,
+    92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99,
+};
+
+static const uint8_t std_chrominance_quant_tbl[DCTSIZE2] = {
+    17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99, 24, 26, 56, 99, 99, 99, 99, 99,
+    47, 66, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+};
+
+static void init_quant_table(const uint8_t in[DCTSIZE2], float out[DCTSIZE2]) {
+    for (int j = 0; j < DCTSIZE; ++j) {
+        for (int i = 0; i < DCTSIZE; ++i) {
+            int k = j * DCTSIZE + i;
+            float num = (float)in[k] * aanscalefactor[j] * aanscalefactor[i] * 8.0f;
+
+            out[k] = log2f(num);
+            if (out[k] > std_quant_log2_max) {
+                std_quant_log2_max = out[k];
+            }
+        }
+    }
+}
+
+static void init_dct_table(const float in[DCTSIZE2], float out[DCTSIZE2], int quality) {
+    for (int i = 0; i < DCTSIZE2; ++i) {
+        out[i] = exp2f(in[i] - std_quant_log2_max + (float)quality);
+    }
+}
+
+static struct jpeg_shared_t jpeg_shared;
+int decode_jpeg_delta(uint8_t *out, const uint8_t *in, int in_size, int rows_in_mcus, int l_h_samp, int l_v_samp, int quality) {
+    // err_log("size %d, quality %d\n", in_size, quality);
+    struct jpeg_shared_t *shared = &jpeg_shared;
+    shared->out = out;
+    shared->h_samp_factor = l_h_samp;
+    shared->v_samp_factor = l_v_samp;
+    shared->rows_in_mcus = rows_in_mcus;
+
+    std_huff_tables(shared);
+    init_quant_table(std_luminance_quant_tbl, std_luminance_quant_log2_tbl);
+    init_quant_table(std_chrominance_quant_tbl, std_chrominance_quant_log2_tbl);
+    init_dct_table(std_luminance_quant_log2_tbl, shared->dct_table[0], quality);
+    init_dct_table(std_chrominance_quant_log2_tbl, shared->dct_table[1], quality);
+
+    memset(&shared->bitstate, 0, sizeof(shared->bitstate));
+
+    shared->blocks_in_MCU = l_h_samp * l_v_samp + 2;
+    for (int i = 0; i < shared->blocks_in_MCU; ++i) {
+        shared->MCU_membership[i] = i < l_h_samp * l_v_samp ? 0 : i - l_h_samp * l_v_samp + 1;
+    }
+
+    for (int c = 0; c < RP_NUM_JPEG_COMP; ++c) {
+        struct jpeg_comp_info_t *info = &shared->comp_infos[c];
+        int dctbl = info->dc_tbl_no = c == 0 ? 0 : 1;
+        int actbl = info->ac_tbl_no = c == 0 ? 0 : 1;
+
+        jpeg_make_d_derived_tbl(TRUE, &shared->dc_huff_tbl_ptrs[dctbl], &shared->dc_derived_tbls[dctbl]);
+        jpeg_make_d_derived_tbl(FALSE, &shared->ac_huff_tbl_ptrs[actbl], &shared->ac_derived_tbls[actbl]);
+        info->dct_table = shared->dct_table[c == 0 ? 0 : 1];
+
+        shared->last_dc_val[c] = 0;
+    }
+
+    for (int blkn = 0; blkn < shared->blocks_in_MCU; blkn++) {
+        int ci = shared->MCU_membership[blkn];
+        struct jpeg_comp_info_t *info = &shared->comp_infos[ci];
+        /* Precalculate which table to use for each block */
+        shared->dc_cur_tbls[blkn] = &shared->dc_derived_tbls[info->dc_tbl_no];
+        shared->ac_cur_tbls[blkn] = &shared->ac_derived_tbls[info->ac_tbl_no];
+
+        shared->MCU_buffer[blkn] = &shared->MCU_buffer_base[blkn];
+    }
+
+    shared->next_input_byte = in;
+    shared->bytes_in_buffer = in_size;
+    shared->unread_marker = 0;
+
+    if (consume_data(shared) < 0) {
+        return -1;
+    }
+    if (shared->bytes_in_buffer > sizeof(JCOEF))
+        err_log("extra data %d\n", (int)shared->bytes_in_buffer);
+
     return 0;
 }
