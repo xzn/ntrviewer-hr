@@ -417,8 +417,8 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
 
     if (info->delta_prog) {
         return handle_decode_delta_prog(out, recvs, info);
+        // info->jpeg_quality = 100;
     }
-    // info->jpeg_quality = 100;
 
     int ret;
     if ((ret = set_decode_quality_kcp(info->is_top, info->jpeg_quality, info->chroma_ss, info->v_adjusted)) < 0)

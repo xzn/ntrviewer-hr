@@ -3,6 +3,9 @@
 #define DCTSIZE JPEG_DCTSIZE
 #define DCTSIZE2 (DCTSIZE * DCTSIZE)
 
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+
 struct jhuff_tbl_t {
     uint8_t bits[17];
     uint8_t huffval[256];
@@ -40,6 +43,7 @@ struct bitread_perm_state_t {
 #define RP_NUM_QUANT_TBLS 2
 #define RP_NUM_HUFF_TBLS 2
 #define RP_NUM_JPEG_COMP 3
+#define RP_MAX_SAMP_FACTOR 2
 
 struct jpeg_comp_info_t {
     int dc_tbl_no;
@@ -61,7 +65,8 @@ typedef JBLOCK *JBLOCKROW;
 typedef JBLOCKROW *JBLOCKARRAY;
 typedef JBLOCKARRAY *JBLOCKIMAGE;
 
-typedef unsigned char JSAMPLE;
+// typedef unsigned char JSAMPLE;
+typedef float JSAMPLE;
 typedef JSAMPLE *JSAMPROW;
 typedef JSAMPROW *JSAMPARRAY;
 typedef JSAMPARRAY *JSAMPIMAGE;
@@ -634,6 +639,12 @@ static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data)
 
 #define DEQUANTIZE(coef, quantval) (((FAST_FLOAT)(coef)) * (quantval))
 
+static JSAMPLE range_limit(float in) {
+    // int out = roundf(in);
+    // return out > 255 ? 255 : out < 0 ? 0 : out;
+    return in;
+}
+
 static void jpeg_idct_float(
     struct jpeg_comp_info_t *compptr,
     JCOEFPTR coef_block,
@@ -790,23 +801,81 @@ static void jpeg_idct_float(
 
         /* Final output stage: float->int conversion and range-limit */
 
-        outptr[0] = (int)(tmp0 + tmp7);
-        outptr[7] = (int)(tmp0 - tmp7);
-        outptr[1] = (int)(tmp1 + tmp6);
-        outptr[6] = (int)(tmp1 - tmp6);
-        outptr[2] = (int)(tmp2 + tmp5);
-        outptr[5] = (int)(tmp2 - tmp5);
-        outptr[3] = (int)(tmp3 + tmp4);
-        outptr[4] = (int)(tmp3 - tmp4);
+        outptr[0] = range_limit(tmp0 + tmp7);
+        outptr[7] = range_limit(tmp0 - tmp7);
+        outptr[1] = range_limit(tmp1 + tmp6);
+        outptr[6] = range_limit(tmp1 - tmp6);
+        outptr[2] = range_limit(tmp2 + tmp5);
+        outptr[5] = range_limit(tmp2 - tmp5);
+        outptr[3] = range_limit(tmp3 + tmp4);
+        outptr[4] = range_limit(tmp3 - tmp4);
 
         wsptr += DCTSIZE; /* advance pointer to next row */
     }
+}
+
+static void upsample(JSAMPLE (*out)[DCTSIZE * RP_MAX_SAMP_FACTOR][DCTSIZE * RP_MAX_SAMP_FACTOR][RP_NUM_JPEG_COMP], int c, int h_samp, int v_samp, const JSAMPROW *in) {
+    if (h_samp == 1 && v_samp == 1) {
+        for (int j = 0; j < DCTSIZE; ++j) {
+            for (int i = 0; i < DCTSIZE; ++i) {
+                (*out)[j][i][c] = in[j][i];
+            }
+        }
+    } else if (h_samp == 2 && v_samp == 1) {
+        for (int j = 0; j < DCTSIZE; ++j) {
+            for (int i = 0; i < DCTSIZE * h_samp; ++i) {
+                JSAMPLE a = in[j][MAX((i - 1) / h_samp, 0)];
+                JSAMPLE b = in[j][MIN((i + 1) / h_samp, DCTSIZE - 1)];
+                (*out)[j][i][c] = i % h_samp ? a * 0.75f + b * 0.25f : a * 0.25f + b * 0.75f;
+            }
+        }
+    } else if (h_samp == 2 && v_samp == 2) {
+        for (int j = 0; j < DCTSIZE * v_samp; ++j) {
+            for (int i = 0; i < DCTSIZE * h_samp; ++i) {
+                JSAMPLE aa = in[MAX((j - 1) / v_samp, 0)][MAX((i - 1) / h_samp, 0)];
+                JSAMPLE ab = in[MAX((j - 1) / v_samp, 0)][MIN((i + 1) / h_samp, DCTSIZE - 1)];
+
+                JSAMPLE ba = in[MIN((j + 1) / v_samp, DCTSIZE - 1)][MAX((i - 1) / h_samp, 0)];
+                JSAMPLE bb = in[MIN((j + 1) / v_samp, DCTSIZE - 1)][MIN((i + 1) / h_samp, DCTSIZE - 1)];
+
+                JSAMPLE a = i % h_samp ? aa * 0.75f + ab * 0.25f : aa * 0.25f + ab * 0.75f;
+                JSAMPLE b = i % h_samp ? ba * 0.75f + bb * 0.25f : ba * 0.25f + bb * 0.75f;
+
+                (*out)[j][i][c] = j % v_samp ? a * 0.75f + b * 0.25f : a * 0.25f + b * 0.75f;
+            }
+        }
+    } else {
+        err_log("upsample err samp factor\n");
+    }
+}
+
+static uint8_t range_limit_i(JSAMPLE in) {
+    int out = roundf(in);
+    return out > 255 ? 255 : out < 0 ? 0 : out;
+}
+
+static void ycc_rgb_convert(
+    uint8_t out[GL_CHANNELS_N],
+    JSAMPLE in[RP_NUM_JPEG_COMP])
+{
+    JSAMPLE y = in[0];
+    JSAMPLE cb = in[1];
+    JSAMPLE cr = in[2];
+    /* Range-limiting is essential due to noise introduced by DCT losses. */
+    out[0] = range_limit_i(y + 1.40200f * (cr - 128.0f));
+    out[1] = range_limit_i(y - 0.34414f * (cb - 128.0f) - 0.71414f * (cr - 128.0f));
+    out[2] = range_limit_i(y + 1.77200f * (cb - 128.0f));
+    /* Set unused byte to _MAXJSAMPLE so it can be interpreted as an */
+    /* opaque alpha channel value */
+    out[3] = 255;
 }
 
 static int consume_data(struct jpeg_shared_t *shared)
 {
     uint32_t MCU_col_num; /* index of current MCU within row */
     int yoffset;
+
+    JSAMPLE working[DCTSIZE * RP_MAX_SAMP_FACTOR][DCTSIZE * RP_MAX_SAMP_FACTOR][RP_NUM_JPEG_COMP];
 
     /* Loop to process one whole iMCU row */
     for (yoffset = 0; yoffset < shared->rows_in_mcus;
@@ -825,19 +894,26 @@ static int consume_data(struct jpeg_shared_t *shared)
                         output_buf[j] = output_buf_base[j];
                     }
                     jpeg_idct_float(&shared->comp_infos[shared->MCU_membership[i]], shared->MCU_buffer[i][0], output_buf, 0);
+                    int c = shared->MCU_membership[i];
+                    if (c == 0) {
+                        int w_b = i % shared->h_samp_factor;
+                        int h_b = i / shared->h_samp_factor;
 
-                    int b = yoffset * SCREEN_WIDTH * shared->v_samp_factor * DCTSIZE * GL_CHANNELS_N + MCU_col_num * shared->h_samp_factor * DCTSIZE * GL_CHANNELS_N;
-                    for (int k = 0; k < shared->v_samp_factor * shared->h_samp_factor; ++k) {
-                        if (k != i)
-                            continue;
                         for (int j = 0; j < DCTSIZE; ++j) {
                             for (int i = 0; i < DCTSIZE; ++i) {
-                                int a = b + (j + k / shared->h_samp_factor * DCTSIZE) * SCREEN_WIDTH * GL_CHANNELS_N + (i + k % shared->h_samp_factor * DCTSIZE)  * GL_CHANNELS_N;
-                                for (int l = 0; l < GL_CHANNELS_N; ++l) {
-                                    shared->out[a + l] = output_buf[j][i];
-                                }
+                                working[j + h_b * DCTSIZE][i + w_b * DCTSIZE][c] = output_buf[j][i];
                             }
                         }
+                    } else {
+                        upsample(&working, c, shared->h_samp_factor, shared->v_samp_factor, output_buf);
+                    }
+                }
+
+                int b = yoffset * SCREEN_WIDTH * shared->v_samp_factor * DCTSIZE * GL_CHANNELS_N + MCU_col_num * shared->h_samp_factor * DCTSIZE * GL_CHANNELS_N;
+                for (int j = 0; j < DCTSIZE * shared->v_samp_factor; ++j) {
+                    for (int i = 0; i < DCTSIZE * shared->h_samp_factor; ++i) {
+                        int a = b + j * SCREEN_WIDTH * GL_CHANNELS_N + i * GL_CHANNELS_N;
+                        ycc_rgb_convert(&shared->out[a], working[j][i]);
                     }
                 }
             }
@@ -857,10 +933,6 @@ static const float aanscalefactor[DCTSIZE] = {
     0.275899379,
 };
 
-static float std_luminance_quant_log2_tbl[DCTSIZE2];
-static float std_chrominance_quant_log2_tbl[DCTSIZE2];
-static float std_quant_log2_max;
-
 static const uint8_t std_luminance_quant_tbl[DCTSIZE2] = {
     16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56,
     14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113,
@@ -873,23 +945,20 @@ static const uint8_t std_chrominance_quant_tbl[DCTSIZE2] = {
     99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
 };
 
-static void init_quant_table(const uint8_t in[DCTSIZE2], float out[DCTSIZE2]) {
+#define DELTA_Q_COUNT 32
+#define DELTA_Q_MAX 7.0f
+
+static void init_dct_table(const uint8_t in[DCTSIZE2], float out[DCTSIZE2], int quality) {
+    float q = DELTA_Q_MAX / (float)DELTA_Q_COUNT * (float)quality;
     for (int j = 0; j < DCTSIZE; ++j) {
         for (int i = 0; i < DCTSIZE; ++i) {
             int k = j * DCTSIZE + i;
-            float num = (float)in[k] * aanscalefactor[j] * aanscalefactor[i] * 8.0f;
 
-            out[k] = log2f(num);
-            if (out[k] > std_quant_log2_max) {
-                std_quant_log2_max = out[k];
-            }
+            float l = log2f((float)in[k]);
+            int v = (int)roundf(MAX(l - q, 0.0f));
+
+            out[k] = aanscalefactor[i] * aanscalefactor[j] * exp2f(v);
         }
-    }
-}
-
-static void init_dct_table(const float in[DCTSIZE2], float out[DCTSIZE2], int quality) {
-    for (int i = 0; i < DCTSIZE2; ++i) {
-        out[i] = exp2f(in[i] - std_quant_log2_max + (float)quality);
     }
 }
 
@@ -903,10 +972,8 @@ int decode_jpeg_delta(uint8_t *out, const uint8_t *in, int in_size, int rows_in_
     shared->rows_in_mcus = rows_in_mcus;
 
     std_huff_tables(shared);
-    init_quant_table(std_luminance_quant_tbl, std_luminance_quant_log2_tbl);
-    init_quant_table(std_chrominance_quant_tbl, std_chrominance_quant_log2_tbl);
-    init_dct_table(std_luminance_quant_log2_tbl, shared->dct_table[0], quality);
-    init_dct_table(std_chrominance_quant_log2_tbl, shared->dct_table[1], quality);
+    init_dct_table(std_luminance_quant_tbl, shared->dct_table[0], quality);
+    init_dct_table(std_chrominance_quant_tbl, shared->dct_table[1], quality);
 
     memset(&shared->bitstate, 0, sizeof(shared->bitstate));
 
