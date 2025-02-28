@@ -397,7 +397,7 @@ static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, stru
             out_t,
             jpeg_buffer_kcp, ptr - jpeg_buffer_kcp,
             rows_in_mcus,
-            max_h_samp_fact, max_v_samp_fact, info->jpeg_quality
+            max_h_samp_fact, max_v_samp_fact, info->jpeg_quality, info->is_top, t * info->v_adjusted
         )) < 0) {
             err_log("decode_jpeg_delta: %d\n", res);
             break;
@@ -1064,6 +1064,7 @@ static void receive_from_socket_loop(void) {
             continue;
         }
         kcp_init(kcp);
+        reset_jpeg_delta();
 
         remote_received = 0;
 

@@ -78,6 +78,8 @@ struct jpeg_shared_t {
     int h_samp_factor;
     int v_samp_factor;
     int rows_in_mcus;
+    boolean is_top;
+    int mcu_row;
 
     struct jhuff_tbl_t dc_huff_tbl_ptrs[RP_NUM_HUFF_TBLS];
     struct jhuff_tbl_t ac_huff_tbl_ptrs[RP_NUM_HUFF_TBLS];
@@ -100,6 +102,8 @@ struct jpeg_shared_t {
     JBLOCK MCU_buffer_base[D_MAX_BLOCKS_IN_MCU];
     JBLOCKROW MCU_buffer[D_MAX_BLOCKS_IN_MCU];
     FLOAT_MULT_TYPE dct_table[RP_NUM_QUANT_TBLS][DCTSIZE2];
+
+    int16_t prev[SCREEN_COUNT][SCREEN_WIDTH * SCREEN_HEIGHT0 * RP_NUM_JPEG_COMP];
 };
 
 static void add_huff_table(struct jhuff_tbl_t *htblptr, const uint8_t *bits, const uint8_t *val)
@@ -534,7 +538,7 @@ static const int jpeg_natural_order[DCTSIZE2 + 16] = {
     63, 63, 63, 63, 63, 63, 63, 63, /* extra entries for safety in decoder */
     63, 63, 63, 63, 63, 63, 63, 63};
 
-static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data)
+static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data, int16_t *prev)
 {
     BITREAD_STATE_VARS;
     int blkn;
@@ -545,7 +549,11 @@ static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data)
     BITREAD_LOAD_STATE(shared, shared->bitstate);
     memcpy(state, shared->last_dc_val, sizeof(state));
 
+    // const uint8_t MAX_COEF_BITS = 8 + 2;
+
     for (blkn = 0; blkn < shared->blocks_in_MCU; blkn++) {
+        int16_t *prev_block = prev + blkn * DCTSIZE2;
+
         JBLOCKROW block = MCU_data ? MCU_data[blkn] : NULL;
         struct d_derived_tbl_t *dctbl = shared->dc_cur_tbls[blkn];
         struct d_derived_tbl_t *actbl = shared->ac_cur_tbls[blkn];
@@ -576,6 +584,9 @@ static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data)
             state[ci] = s;
             if (block) {
                 /* Output the DC coefficient (assumes jpeg_natural_order[0] = 0) */
+                s += prev_block[0];
+                prev_block[0] = s;
+
                 (*block)[0] = (JCOEF)s;
             }
         }
@@ -591,6 +602,10 @@ static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data)
                 s &= 15;
 
                 if (s) {
+                    for (int l = k; l < k + r; ++l) {
+                        (*block)[jpeg_natural_order[l]] = prev_block[l];
+                    }
+
                     k += r;
                     CHECK_BIT_BUFFER(br_state, s, return FALSE);
                     r = GET_BITS(s);
@@ -599,8 +614,14 @@ static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data)
                      * Note: the extra entries in jpeg_natural_order[] will save us
                      * if k >= DCTSIZE2, which could happen if the data is corrupted.
                      */
+                    s += prev_block[k];
+                    prev_block[k] = s;
                     (*block)[jpeg_natural_order[k]] = (JCOEF)s;
                 } else {
+                    for (int l = k; l < (r == 15 ? k + r : DCTSIZE2); ++l) {
+                        (*block)[jpeg_natural_order[l]] = prev_block[l];
+                    }
+
                     if (r != 15)
                         break;
                     k += 15;
@@ -648,8 +669,7 @@ static JSAMPLE range_limit(float in) {
 static void jpeg_idct_float(
     struct jpeg_comp_info_t *compptr,
     JCOEFPTR coef_block,
-    JSAMPARRAY output_buf,
-    uint32_t output_col)
+    JSAMPARRAY output_buf)
 {
     FAST_FLOAT tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7;
     FAST_FLOAT tmp10, tmp11, tmp12, tmp13;
@@ -759,7 +779,7 @@ static void jpeg_idct_float(
 
     wsptr = workspace;
     for (ctr = 0; ctr < DCTSIZE; ctr++) {
-        outptr = output_buf[ctr] + output_col;
+        outptr = output_buf[ctr];
         /* Rows of zeroes can be exploited in the same way as we did with columns.
          * However, the column calculation has created many nonzero AC terms, so
          * the simplification applies less often (typically 5% to 10% of the time).
@@ -878,12 +898,17 @@ static int consume_data(struct jpeg_shared_t *shared)
     JSAMPLE working[DCTSIZE * RP_MAX_SAMP_FACTOR][DCTSIZE * RP_MAX_SAMP_FACTOR][RP_NUM_JPEG_COMP];
 
     /* Loop to process one whole iMCU row */
+    int mcu_cols = SCREEN_WIDTH / shared->h_samp_factor / DCTSIZE;
+    int16_t *prev = shared->prev[shared->is_top ? 0 : 1];
     for (yoffset = 0; yoffset < shared->rows_in_mcus;
          yoffset++) {
-        for (MCU_col_num = 0; (int)MCU_col_num < SCREEN_WIDTH / shared->h_samp_factor / DCTSIZE;
+        for (MCU_col_num = 0; (int)MCU_col_num < mcu_cols;
              MCU_col_num++) {
             memset(shared->MCU_buffer_base, 0, sizeof(shared->MCU_buffer_base));
-            if (!decode_mcu(shared, shared->MCU_buffer)) {
+
+            int16_t *prev_mcu = prev + (((yoffset + shared->mcu_row) * mcu_cols + MCU_col_num) * shared->blocks_in_MCU) * DCTSIZE2;
+
+            if (!decode_mcu(shared, shared->MCU_buffer, prev_mcu)) {
                 err_log("mcu decode err at %d (%d) %d\n", (int)yoffset, (int)shared->rows_in_mcus, (int)MCU_col_num);
                 return -1;
             } else {
@@ -893,7 +918,7 @@ static int consume_data(struct jpeg_shared_t *shared)
                     for (int j = 0; j < DCTSIZE; ++j) {
                         output_buf[j] = output_buf_base[j];
                     }
-                    jpeg_idct_float(&shared->comp_infos[shared->MCU_membership[i]], shared->MCU_buffer[i][0], output_buf, 0);
+                    jpeg_idct_float(&shared->comp_infos[shared->MCU_membership[i]], shared->MCU_buffer[i][0], output_buf);
                     int c = shared->MCU_membership[i];
                     if (c == 0) {
                         int w_b = i % shared->h_samp_factor;
@@ -963,13 +988,15 @@ static void init_dct_table(const uint8_t in[DCTSIZE2], float out[DCTSIZE2], int 
 }
 
 static struct jpeg_shared_t jpeg_shared;
-int decode_jpeg_delta(uint8_t *out, const uint8_t *in, int in_size, int rows_in_mcus, int l_h_samp, int l_v_samp, int quality) {
+int decode_jpeg_delta(uint8_t *out, const uint8_t *in, int in_size, int rows_in_mcus, int l_h_samp, int l_v_samp, int quality, boolean is_top, int mcu_row) {
     // err_log("size %d, quality %d\n", in_size, quality);
     struct jpeg_shared_t *shared = &jpeg_shared;
     shared->out = out;
     shared->h_samp_factor = l_h_samp;
     shared->v_samp_factor = l_v_samp;
     shared->rows_in_mcus = rows_in_mcus;
+    shared->is_top = is_top;
+    shared->mcu_row = mcu_row;
 
     std_huff_tables(shared);
     init_dct_table(std_luminance_quant_tbl, shared->dct_table[0], quality);
@@ -1015,4 +1042,9 @@ int decode_jpeg_delta(uint8_t *out, const uint8_t *in, int in_size, int rows_in_
         err_log("extra data %d\n", (int)shared->bytes_in_buffer);
 
     return 0;
+}
+
+void reset_jpeg_delta(void) {
+    struct jpeg_shared_t *shared = &jpeg_shared;
+    memset(shared->prev, 0, sizeof(shared->prev));
 }
