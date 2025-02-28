@@ -416,14 +416,15 @@ static boolean jpeg_fill_bit_buffer(bitread_working_state *state,
 
             /* Attempt to read a byte */
             if (bytes_in_buffer == 0) {
-                err_log("input exhausted\n");
-                return FALSE;
+                break;
+                // err_log("input exhausted\n");
+                // return FALSE;
             }
             bytes_in_buffer--;
             c = *next_input_byte++;
 
             /* If it's 0xFF, check and discard stuffed zero byte */
-            if (c == 0xFF) {
+            if (FALSE && c == 0xFF) {
                 // err_log("escape\n");
                 /* Loop here to discard any padding FF's on terminating marker,
                  * so that we can save a valid unread_marker value.  NOTE: we will
@@ -538,6 +539,15 @@ static const int jpeg_natural_order[DCTSIZE2 + 16] = {
     63, 63, 63, 63, 63, 63, 63, 63, /* extra entries for safety in decoder */
     63, 63, 63, 63, 63, 63, 63, 63};
 
+static int coef_fix(int s, int m) {
+    if (s >= (1 << m)) {
+        s -= (1 << (m + 1)) - 1;
+    } else if (s <= -(1 << m)) {
+        s += (1 << (m + 1)) - 1;
+    }
+    return s;
+}
+
 static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data, int16_t *prev)
 {
     BITREAD_STATE_VARS;
@@ -549,7 +559,7 @@ static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data, int
     BITREAD_LOAD_STATE(shared, shared->bitstate);
     memcpy(state, shared->last_dc_val, sizeof(state));
 
-    // const uint8_t MAX_COEF_BITS = 8 + 2;
+    const uint8_t MAX_COEF_BITS = 8 + 2;
 
     for (blkn = 0; blkn < shared->blocks_in_MCU; blkn++) {
         int16_t *prev_block = prev + blkn * DCTSIZE2;
@@ -581,10 +591,12 @@ static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data, int
              * overflow errors for this function and decode_mcu_fast().
              */
             s += state[ci];
+            s = coef_fix(s, MAX_COEF_BITS);
             state[ci] = s;
             if (block) {
                 /* Output the DC coefficient (assumes jpeg_natural_order[0] = 0) */
                 s += prev_block[0];
+                s = coef_fix(s, MAX_COEF_BITS);
                 prev_block[0] = s;
 
                 (*block)[0] = (JCOEF)s;
@@ -615,6 +627,7 @@ static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data, int
                      * if k >= DCTSIZE2, which could happen if the data is corrupted.
                      */
                     s += prev_block[k];
+                    s = coef_fix(s, MAX_COEF_BITS);
                     prev_block[k] = s;
                     (*block)[jpeg_natural_order[k]] = (JCOEF)s;
                 } else {
@@ -1038,7 +1051,7 @@ int decode_jpeg_delta(uint8_t *out, const uint8_t *in, int in_size, int rows_in_
     if (consume_data(shared) < 0) {
         return -1;
     }
-    if (shared->bytes_in_buffer > sizeof(JCOEF))
+    if (shared->bytes_in_buffer > 2)
         err_log("extra data %d\n", (int)shared->bytes_in_buffer);
 
     return 0;

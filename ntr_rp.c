@@ -365,37 +365,16 @@ static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, stru
     {
         struct kcp_recv_t *recv = &recvs[t];
         int rows_in_mcus = t == info->core_count - 1 ? info->v_last_adjusted : info->v_adjusted;
+        if (info->core_count == 1) {
+            rows_in_mcus = (info->is_top ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1) / JPEG_DCTSIZE / max_v_samp_fact;
+        }
         int height_per_mcu_row = SCREEN_WIDTH * GL_CHANNELS_N * JPEG_DCTSIZE * max_v_samp_fact;
         uint8_t *out_t = out + t * info->v_adjusted * height_per_mcu_row;
         int res;
 
-        unsigned char *ptr = jpeg_buffer_kcp;
-        for (int i = 0; i < recv->count; ++i)
-        {
-            if (i == recv->count - 1)
-            {
-                ptr = copy_with_escape(ptr, recv->buf[i], recv->term_size);
-            }
-            else
-            {
-                ptr = copy_with_escape(ptr, recv->buf[i], RP_PACKET_SIZE - sizeof(IUINT16) - sizeof(u16));
-            }
-        }
-        *ptr = 0xff;
-        ++ptr;
-        if (t == info->core_count - 1)
-        {
-            *ptr = 0xd9;
-        }
-        else
-        {
-            *ptr = 0xd0 + t;
-        }
-        ++ptr;
-
         if ((res = decode_jpeg_delta(
             out_t,
-            jpeg_buffer_kcp, ptr - jpeg_buffer_kcp,
+            &recv->buf[0][0], (recv->count - 1) * (RP_PACKET_SIZE - sizeof(IUINT16) - sizeof(u16)) + recv->term_size,
             rows_in_mcus,
             max_h_samp_fact, max_v_samp_fact, info->jpeg_quality, info->is_top, t * info->v_adjusted
         )) < 0) {
