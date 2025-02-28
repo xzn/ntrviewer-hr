@@ -622,7 +622,7 @@ static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data, int
              * overflow errors for this function and decode_mcu_fast().
              */
             s += state[ci];
-            s = coef_fix(s, MAX_COEF_BITS + 1);
+            s = coef_fix(s, MAX_COEF_BITS + 1 - info->dct_log2_tbl[0]);
             state[ci] = s;
             if (block) {
                 /* Output the DC coefficient (assumes jpeg_natural_order[0] = 0) */
