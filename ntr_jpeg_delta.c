@@ -1,5 +1,8 @@
 #include "ntr_jpeg_delta.h"
 
+#define DELTA_Q_COUNT 32
+#define DELTA_Q_MAX 7.0f
+
 #define DCTSIZE JPEG_DCTSIZE
 #define DCTSIZE2 (DCTSIZE * DCTSIZE)
 
@@ -49,6 +52,7 @@ struct jpeg_comp_info_t {
     int dc_tbl_no;
     int ac_tbl_no;
     FLOAT_MULT_TYPE *dct_table;
+    uint8_t *dct_log2_tbl;
 };
 
 #define HUFF_LOOKAHEAD 8
@@ -80,6 +84,7 @@ struct jpeg_shared_t {
     int rows_in_mcus;
     boolean is_top;
     int mcu_row;
+    int quality;
 
     struct jhuff_tbl_t dc_huff_tbl_ptrs[RP_NUM_HUFF_TBLS];
     struct jhuff_tbl_t ac_huff_tbl_ptrs[RP_NUM_HUFF_TBLS];
@@ -102,8 +107,32 @@ struct jpeg_shared_t {
     JBLOCK MCU_buffer_base[D_MAX_BLOCKS_IN_MCU];
     JBLOCKROW MCU_buffer[D_MAX_BLOCKS_IN_MCU];
     FLOAT_MULT_TYPE dct_table[RP_NUM_QUANT_TBLS][DCTSIZE2];
+    uint8_t dct_log2_tbl[RP_NUM_QUANT_TBLS][DCTSIZE2];
 
     int16_t prev[SCREEN_COUNT][SCREEN_WIDTH * SCREEN_HEIGHT0 * RP_NUM_JPEG_COMP];
+};
+
+static const float aanscalefactor[DCTSIZE] = {
+    1.0,
+    1.387039845,
+    1.306562965,
+    1.175875602,
+    1.0,
+    0.785694958,
+    0.541196100,
+    0.275899379,
+};
+
+static const uint8_t std_luminance_quant_tbl[DCTSIZE2] = {
+    16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56,
+    14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113,
+    92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99,
+};
+
+static const uint8_t std_chrominance_quant_tbl[DCTSIZE2] = {
+    17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99, 24, 26, 56, 99, 99, 99, 99, 99,
+    47, 66, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
 };
 
 static void add_huff_table(struct jhuff_tbl_t *htblptr, const uint8_t *bits, const uint8_t *val)
@@ -562,6 +591,8 @@ static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data, int
     const uint8_t MAX_COEF_BITS = 8 + 2;
 
     for (blkn = 0; blkn < shared->blocks_in_MCU; blkn++) {
+        struct jpeg_comp_info_t *info = &shared->comp_infos[shared->MCU_membership[blkn]];
+
         int16_t *prev_block = prev + blkn * DCTSIZE2;
 
         JBLOCKROW block = MCU_data ? MCU_data[blkn] : NULL;
@@ -595,6 +626,7 @@ static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data, int
             state[ci] = s;
             if (block) {
                 /* Output the DC coefficient (assumes jpeg_natural_order[0] = 0) */
+                s <<= info->dct_log2_tbl[0];
                 s += prev_block[0];
                 s = coef_fix(s, MAX_COEF_BITS);
                 prev_block[0] = s;
@@ -626,6 +658,7 @@ static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data, int
                      * Note: the extra entries in jpeg_natural_order[] will save us
                      * if k >= DCTSIZE2, which could happen if the data is corrupted.
                      */
+                    s <<= info->dct_log2_tbl[jpeg_natural_order[k]];
                     s += prev_block[k];
                     s = coef_fix(s, MAX_COEF_BITS);
                     prev_block[k] = s;
@@ -960,33 +993,7 @@ static int consume_data(struct jpeg_shared_t *shared)
     return 0;
 }
 
-static const float aanscalefactor[DCTSIZE] = {
-    1.0,
-    1.387039845,
-    1.306562965,
-    1.175875602,
-    1.0,
-    0.785694958,
-    0.541196100,
-    0.275899379,
-};
-
-static const uint8_t std_luminance_quant_tbl[DCTSIZE2] = {
-    16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56,
-    14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113,
-    92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99,
-};
-
-static const uint8_t std_chrominance_quant_tbl[DCTSIZE2] = {
-    17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99, 24, 26, 56, 99, 99, 99, 99, 99,
-    47, 66, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
-    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
-};
-
-#define DELTA_Q_COUNT 32
-#define DELTA_Q_MAX 7.0f
-
-static void init_dct_table(const uint8_t in[DCTSIZE2], float out[DCTSIZE2], int quality) {
+static void init_dct_table(const uint8_t in[DCTSIZE2], float out[DCTSIZE2], uint8_t log2_out[DCTSIZE2], int quality) {
     float q = DELTA_Q_MAX / (float)DELTA_Q_COUNT * (float)quality;
     for (int j = 0; j < DCTSIZE; ++j) {
         for (int i = 0; i < DCTSIZE; ++i) {
@@ -995,7 +1002,8 @@ static void init_dct_table(const uint8_t in[DCTSIZE2], float out[DCTSIZE2], int 
             float l = log2f((float)in[k]);
             int v = (int)roundf(MAX(l - q, 0.0f));
 
-            out[k] = aanscalefactor[i] * aanscalefactor[j] * exp2f(v);
+            out[k] = aanscalefactor[i] * aanscalefactor[j];
+            log2_out[k] = v;
         }
     }
 }
@@ -1010,10 +1018,11 @@ int decode_jpeg_delta(uint8_t *out, const uint8_t *in, int in_size, int rows_in_
     shared->rows_in_mcus = rows_in_mcus;
     shared->is_top = is_top;
     shared->mcu_row = mcu_row;
+    shared->quality = quality;
 
     std_huff_tables(shared);
-    init_dct_table(std_luminance_quant_tbl, shared->dct_table[0], quality);
-    init_dct_table(std_chrominance_quant_tbl, shared->dct_table[1], quality);
+    init_dct_table(std_luminance_quant_tbl, shared->dct_table[0], shared->dct_log2_tbl[0], quality);
+    init_dct_table(std_chrominance_quant_tbl, shared->dct_table[1], shared->dct_log2_tbl[1], quality);
 
     memset(&shared->bitstate, 0, sizeof(shared->bitstate));
 
@@ -1030,6 +1039,7 @@ int decode_jpeg_delta(uint8_t *out, const uint8_t *in, int in_size, int rows_in_
         jpeg_make_d_derived_tbl(TRUE, &shared->dc_huff_tbl_ptrs[dctbl], &shared->dc_derived_tbls[dctbl]);
         jpeg_make_d_derived_tbl(FALSE, &shared->ac_huff_tbl_ptrs[actbl], &shared->ac_derived_tbls[actbl]);
         info->dct_table = shared->dct_table[c == 0 ? 0 : 1];
+        info->dct_log2_tbl = shared->dct_log2_tbl[c == 0 ? 0 : 1];
 
         shared->last_dc_val[c] = 0;
     }
