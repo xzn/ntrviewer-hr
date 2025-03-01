@@ -523,6 +523,7 @@ static void handle_decode_frame_screen(struct rp_buffer_ctx_t *ctx, int top_bot,
 
 static thread_ret_t jpeg_decode_thread_func(void *e)
 {
+    reset_jpeg_delta();
     while (program_running && !kcp_restart) {
         struct jpeg_decode_info_t *ptr;
         while (1)
@@ -1043,7 +1044,6 @@ static void receive_from_socket_loop(void) {
             continue;
         }
         kcp_init(kcp);
-        reset_jpeg_delta();
 
         remote_received = 0;
 

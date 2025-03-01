@@ -37,7 +37,13 @@ UNUSED static void event_rel(HANDLE *event) {
     SetEvent(*event);
 }
 #else
-
+typedef unsigned char boolean;
+#ifndef FALSE
+#define FALSE 0
+#endif
+#ifndef TRUE
+#define TRUE 1
+#endif
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
