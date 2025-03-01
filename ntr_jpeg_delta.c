@@ -135,6 +135,7 @@ static const uint8_t std_chrominance_quant_tbl[DCTSIZE2] = {
     99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
 };
 
+__attribute__((unused))
 static void add_huff_table(struct jhuff_tbl_t *htblptr, const uint8_t *bits, const uint8_t *val)
 {
     int nsymbols, len;
@@ -158,22 +159,36 @@ static void add_huff_table(struct jhuff_tbl_t *htblptr, const uint8_t *bits, con
     memset(&htblptr->huffval[nsymbols], 0, (256 - nsymbols) * sizeof(uint8_t));
 }
 
-static void std_huff_tables(struct jpeg_shared_t *shared)
+static void jpeg_gen_optimal_table(struct jhuff_tbl_t *htbl, long freq[]);
+static void fill_ac_freq(long freq[257], const uint8_t base[], int base_len)
+{
+    int dq_len = 0x10;
+    int count = base_len + dq_len;
+    for (int i = 0; i < base_len; ++i) {
+        freq[base[i]] = count - i;
+    }
+    count -= base_len;
+    for (int i = 0; i < dq_len; ++i) {
+        freq[0x0b | (i << 4)] = count - i;
+    }
+};
+
+static void std_huff_tables (struct jpeg_shared_t *shared)
 /* Set up the standard Huffman tables (cf. JPEG standard section K.3) */
 /* IMPORTANT: these are only valid for 8-bit data precision! */
 {
-    static const UINT8 bits_dc_luminance[17] = {
-        /* 0-base */ 0, 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0};
-    static const UINT8 val_dc_luminance[] = {
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+    // static const UINT8 bits_dc_luminance[17] = {
+    //     /* 0-base */ 0, 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0};
+    // static const UINT8 val_dc_luminance[] = {
+    //     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 
-    static const UINT8 bits_dc_chrominance[17] = {
-        /* 0-base */ 0, 0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0};
-    static const UINT8 val_dc_chrominance[] = {
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+    // static const UINT8 bits_dc_chrominance[17] = {
+    //     /* 0-base */ 0, 0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0};
+    // static const UINT8 val_dc_chrominance[] = {
+    //     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 
-    static const UINT8 bits_ac_luminance[17] = {
-        /* 0-base */ 0, 0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 0x7d};
+    // static const UINT8 bits_ac_luminance[17] = {
+    //     /* 0-base */ 0, 0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 0x7d};
     static const UINT8 val_ac_luminance[] = {
         0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12,
         0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07,
@@ -197,8 +212,8 @@ static void std_huff_tables(struct jpeg_shared_t *shared)
         0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8,
         0xf9, 0xfa};
 
-    static const UINT8 bits_ac_chrominance[17] = {
-        /* 0-base */ 0, 0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 0x77};
+    // static const UINT8 bits_ac_chrominance[17] = {
+    //     /* 0-base */ 0, 0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 0x77};
     static const UINT8 val_ac_chrominance[] = {
         0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21,
         0x31, 0x06, 0x12, 0x41, 0x51, 0x07, 0x61, 0x71,
@@ -222,14 +237,47 @@ static void std_huff_tables(struct jpeg_shared_t *shared)
         0xea, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8,
         0xf9, 0xfa};
 
-    add_huff_table(&shared->dc_huff_tbl_ptrs[0], bits_dc_luminance,
-                   val_dc_luminance);
-    add_huff_table(&shared->ac_huff_tbl_ptrs[0], bits_ac_luminance,
-                   val_ac_luminance);
-    add_huff_table(&shared->dc_huff_tbl_ptrs[1], bits_dc_chrominance,
-                   val_dc_chrominance);
-    add_huff_table(&shared->ac_huff_tbl_ptrs[1], bits_ac_chrominance,
-                   val_ac_chrominance);
+    // add_huff_table(&shared->dc_huff_tbl_ptrs[0], bits_dc_luminance,
+    //                val_dc_luminance);
+    // add_huff_table(&shared->ac_huff_tbl_ptrs[0], bits_ac_luminance,
+    //                val_ac_luminance);
+    // add_huff_table(&shared->dc_huff_tbl_ptrs[1], bits_dc_chrominance,
+    //                val_dc_chrominance);
+    // add_huff_table(&shared->ac_huff_tbl_ptrs[1], bits_ac_chrominance,
+    //                val_ac_chrominance);
+
+    long freq[257];
+
+    {
+        memset(freq, 0, sizeof(freq));
+        long *dc_lum_freq = freq;
+        for (int i = 0; i <= 12; ++i) {
+            dc_lum_freq[i] = 12 + 1 - i;
+        }
+        jpeg_gen_optimal_table(&shared->dc_huff_tbl_ptrs[0], dc_lum_freq);
+    }
+    {
+        memset(freq, 0, sizeof(freq));
+        long *dc_chrom_freq = freq;
+        for (int i = 0; i <= 12; ++i) {
+            dc_chrom_freq[i] = 12 + 1 - i;
+        }
+        jpeg_gen_optimal_table(&shared->dc_huff_tbl_ptrs[1], dc_chrom_freq);
+    }
+    {
+        memset(freq, 0, sizeof(freq));
+        long *ac_lum_freq = freq;
+        fill_ac_freq(ac_lum_freq, val_ac_luminance, sizeof(val_ac_luminance) / sizeof(*val_ac_luminance));
+        jpeg_gen_optimal_table(&shared->ac_huff_tbl_ptrs[0], ac_lum_freq);
+    }
+
+    {
+        memset(freq, 0, sizeof(freq));
+        long *ac_chrom_freq = freq;
+        fill_ac_freq(ac_chrom_freq, val_ac_chrominance, sizeof(val_ac_chrominance) / sizeof(*val_ac_chrominance));
+
+        jpeg_gen_optimal_table(&shared->ac_huff_tbl_ptrs[1], ac_chrom_freq);
+    }
 }
 
 static void jpeg_make_d_derived_tbl(boolean isDC, struct jhuff_tbl_t *htbl, struct d_derived_tbl_t *dtbl)
@@ -332,7 +380,7 @@ static void jpeg_make_d_derived_tbl(boolean isDC, struct jhuff_tbl_t *htbl, stru
     if (isDC) {
         for (i = 0; i < numsymbols; i++) {
             int sym = htbl->huffval[i];
-            if (sym < 0 || sym > (0 ? 16 : 15))
+            if (sym < 0 || sym > (1 ? 16 : 15))
                 exit(2);
         }
     }
@@ -1005,6 +1053,165 @@ static void init_dct_table(const uint8_t in[DCTSIZE2], float out[DCTSIZE2], uint
             out[k] = aanscalefactor[i] * aanscalefactor[j];
             log2_out[k] = v;
         }
+    }
+}
+
+static void jpeg_gen_optimal_table(struct jhuff_tbl_t *htbl, long freq[])
+{
+#define MAX_CLEN 32            /* assumed maximum initial code length */
+    UINT8 bits[MAX_CLEN + 1];  /* bits[k] = # of symbols with code length k */
+    int bit_pos[MAX_CLEN + 1]; /* # of symbols with smaller code length */
+    int codesize[257];         /* codesize[k] = code length of symbol k */
+    int nz_index[257];         /* index of nonzero symbol in the original freq
+                                  array */
+    int others[257];           /* next symbol in current branch of tree */
+    int c1, c2;
+    int p, i, j;
+    int num_nz_symbols;
+    long v, v2;
+
+    /* This algorithm is explained in section K.2 of the JPEG standard */
+
+    memset(bits, 0, sizeof(bits));
+    memset(codesize, 0, sizeof(codesize));
+    for (i = 0; i < 257; i++)
+        others[i] = -1; /* init links to empty */
+
+    freq[256] = 1; /* make sure 256 has a nonzero count */
+    /* Including the pseudo-symbol 256 in the Huffman procedure guarantees
+     * that no real symbol is given code-value of all ones, because 256
+     * will be placed last in the largest codeword category.
+     */
+
+    /* Group nonzero frequencies together so we can more easily find the
+     * smallest.
+     */
+    num_nz_symbols = 0;
+    for (i = 0; i < 257; i++) {
+        if (freq[i]) {
+            nz_index[num_nz_symbols] = i;
+            freq[num_nz_symbols] = freq[i];
+            num_nz_symbols++;
+        }
+    }
+
+    /* Huffman's basic algorithm to assign optimal code lengths to symbols */
+
+    for (;;) {
+        /* Find the two smallest nonzero frequencies; set c1, c2 = their symbols */
+        /* In case of ties, take the larger symbol number.  Since we have grouped
+         * the nonzero symbols together, checking for zero symbols is not
+         * necessary.
+         */
+        c1 = -1;
+        c2 = -1;
+        v = 1000000000L;
+        v2 = 1000000000L;
+        for (i = 0; i < num_nz_symbols; i++) {
+            if (freq[i] <= v2) {
+                if (freq[i] <= v) {
+                    c2 = c1;
+                    v2 = v;
+                    v = freq[i];
+                    c1 = i;
+                } else {
+                    v2 = freq[i];
+                    c2 = i;
+                }
+            }
+        }
+
+        /* Done if we've merged everything into one frequency */
+        if (c2 < 0)
+            break;
+
+        /* Else merge the two counts/trees */
+        freq[c1] += freq[c2];
+        /* Set the frequency to a very high value instead of zero, so we don't have
+         * to check for zero values.
+         */
+        freq[c2] = 1000000001L;
+
+        /* Increment the codesize of everything in c1's tree branch */
+        codesize[c1]++;
+        while (others[c1] >= 0) {
+            c1 = others[c1];
+            codesize[c1]++;
+        }
+
+        others[c1] = c2; /* chain c2 onto c1's tree branch */
+
+        /* Increment the codesize of everything in c2's tree branch */
+        codesize[c2]++;
+        while (others[c2] >= 0) {
+            c2 = others[c2];
+            codesize[c2]++;
+        }
+    }
+
+    /* Now count the number of symbols of each code length */
+    for (i = 0; i < num_nz_symbols; i++) {
+        /* The JPEG standard seems to think that this can't happen, */
+        /* but I'm paranoid... */
+        if (codesize[i] > MAX_CLEN) {
+            err_log("codesize error\n");
+            exit(2);
+        }
+
+        bits[codesize[i]]++;
+    }
+
+    /* Count the number of symbols with a length smaller than i bits, so we can
+     * construct the symbol table more efficiently.  Note that this includes the
+     * pseudo-symbol 256, but since it is the last symbol, it will not affect the
+     * table.
+     */
+    p = 0;
+    for (i = 1; i <= MAX_CLEN; i++) {
+        bit_pos[i] = p;
+        p += bits[i];
+    }
+
+    /* JPEG doesn't allow symbols with code lengths over 16 bits, so if the pure
+     * Huffman procedure assigned any such lengths, we must adjust the coding.
+     * Here is what Rec. ITU-T T.81 | ISO/IEC 10918-1 says about how this next
+     * bit works: Since symbols are paired for the longest Huffman code, the
+     * symbols are removed from this length category two at a time.  The prefix
+     * for the pair (which is one bit shorter) is allocated to one of the pair;
+     * then, skipping the BITS entry for that prefix length, a code word from the
+     * next shortest nonzero BITS entry is converted into a prefix for two code
+     * words one bit longer.
+     */
+
+    for (i = MAX_CLEN; i > 16; i--) {
+        while (bits[i] > 0) {
+            j = i - 2; /* find length of new prefix to be used */
+            while (bits[j] == 0)
+                j--;
+
+            bits[i] -= 2;     /* remove two symbols */
+            bits[i - 1]++;    /* one goes in this length */
+            bits[j + 1] += 2; /* two new symbols in this length */
+            bits[j]--;        /* symbol of this length is now a prefix */
+        }
+    }
+
+    /* Remove the count for the pseudo-symbol 256 from the largest codelength */
+    while (bits[i] == 0) /* find largest codelength still in use */
+        i--;
+    bits[i]--;
+
+    /* Return final symbol counts (only for lengths 0..16) */
+    memcpy(htbl->bits, bits, sizeof(htbl->bits));
+
+    /* Return a list of the symbols sorted by code length */
+    /* It's not real clear to me why we don't need to consider the codelength
+     * changes made above, but Rec. ITU-T T.81 | ISO/IEC 10918-1 seems to think
+     * this works.
+     */
+    for (i = 0; i < num_nz_symbols - 1; i++) {
+        htbl->huffval[bit_pos[codesize[i]]] = (UINT8)nz_index[i];
+        bit_pos[codesize[i]]++;
     }
 }
 
