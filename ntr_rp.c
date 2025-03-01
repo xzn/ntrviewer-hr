@@ -998,7 +998,8 @@ static void receive_from_socket()
             if (err != WSAETIMEDOUT && err != WSAEWOULDBLOCK)
             {
                 // err_log("recvfrom failed: %d\n", err);
-                Sleep(SOCKET_RESET_INTERVAL_MS);
+                // Sleep(SOCKET_RESET_INTERVAL_MS);
+                ntr_rp_port_changed = 1; // HACK to restart recv
                 return;
             }
             else if (err == WSAEWOULDBLOCK)
