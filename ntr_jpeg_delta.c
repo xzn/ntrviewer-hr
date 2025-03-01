@@ -115,7 +115,6 @@ struct jpeg_shared_t {
     uint8_t prev_shifts[SCREEN_COUNT][RP_NUM_QUANT_TBLS][DCTSIZE2];
 
     int16_t prev[SCREEN_COUNT][SCREEN_WIDTH * SCREEN_HEIGHT0 * RP_NUM_JPEG_COMP];
-    int16_t prev_prev[SCREEN_COUNT][SCREEN_WIDTH * SCREEN_HEIGHT0 * RP_NUM_JPEG_COMP];
 };
 
 static const float aanscalefactor[DCTSIZE] = {
@@ -652,7 +651,6 @@ static void prev_shift(int16_t *prev, uint8_t shift, int dir) {
     }
 }
 
-static int16_t test_cache;
 static const uint8_t MAX_COEF_BITS = 8 + 2;
 static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data, int16_t *prev)
 {
@@ -686,157 +684,88 @@ static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data, int
             s = HUFF_EXTEND(r, s);
         }
 
-        if (TRUE) {
-            /* Convert DC difference to actual value, update last_dc_val */
-            int ci = shared->MCU_membership[blkn];
-            /* Certain malformed JPEG images produce repeated DC coefficient
-             * differences of 2047 or -2047, which causes state.last_dc_val[ci] to
-             * grow until it overflows or underflows a 32-bit signed integer.  This
-             * behavior is, to the best of our understanding, innocuous, and it is
-             * unclear how to work around it without potentially affecting
-             * performance.  Thus, we (hopefully temporarily) suppress UBSan integer
-             * overflow errors for this function and decode_mcu_fast().
-             */
-            s += state[ci];
-            // s = coef_fix(s, MAX_COEF_BITS + 1 - info->dct_log2_tbl[0]);
-            state[ci] = s;
-            if (block) {
-                /* Output the DC coefficient (assumes jpeg_natural_order[0] = 0) */
-                prev_shift(&prev_block[0], shared->prev_shifts[shared->is_top][info->quant_tbl_no][0], dir);
-                s += prev_block[0];
-                // s = coef_fix(s, MAX_COEF_BITS);
-                prev_block[0] = s;
-                s <<= info->dct_log2_tbl[0];
-                if (coef_check(s, MAX_COEF_BITS)) {
-                    err_log("prev_shifts %d dct_log2_tbl %d dir %d\n", (int)shared->prev_shifts[shared->is_top][info->quant_tbl_no][0], (int)info->dct_log2_tbl[0], dir);
-                }
-
-                (*block)[0] = (JCOEF)s;
+        /* Convert DC difference to actual value, update last_dc_val */
+        int ci = shared->MCU_membership[blkn];
+        /* Certain malformed JPEG images produce repeated DC coefficient
+            * differences of 2047 or -2047, which causes state.last_dc_val[ci] to
+            * grow until it overflows or underflows a 32-bit signed integer.  This
+            * behavior is, to the best of our understanding, innocuous, and it is
+            * unclear how to work around it without potentially affecting
+            * performance.  Thus, we (hopefully temporarily) suppress UBSan integer
+            * overflow errors for this function and decode_mcu_fast().
+            */
+        s += state[ci];
+        // s = coef_fix(s, MAX_COEF_BITS + 1 - info->dct_log2_tbl[0]);
+        state[ci] = s;
+        if (block) {
+            /* Output the DC coefficient (assumes jpeg_natural_order[0] = 0) */
+            prev_shift(&prev_block[0], shared->prev_shifts[shared->is_top][info->quant_tbl_no][0], dir);
+            s += prev_block[0];
+            // s = coef_fix(s, MAX_COEF_BITS);
+            prev_block[0] = s;
+            s <<= info->dct_log2_tbl[0];
+            if (coef_check(s, MAX_COEF_BITS)) {
+                err_log("prev_shifts %d dct_log2_tbl %d dir %d\n", (int)shared->prev_shifts[shared->is_top][info->quant_tbl_no][0], (int)info->dct_log2_tbl[0], dir);
             }
+
+            (*block)[0] = (JCOEF)s;
         }
 
-        if (TRUE && block) {
-#define AC_MAX_TEST DCTSIZE2
+        /* Section F.2.2.2: decode the AC coefficients */
+        /* Since zeroes are skipped, output area must be cleared beforehand */
+        for (k = 1; k < DCTSIZE2; k++) {
+            HUFF_DECODE(s, br_state, actbl, return FALSE, label2);
 
-            /* Section F.2.2.2: decode the AC coefficients */
-            /* Since zeroes are skipped, output area must be cleared beforehand */
-            for (k = 1; k < DCTSIZE2; k++) {
-                HUFF_DECODE(s, br_state, actbl, return FALSE, label2);
+            r = s >> 4;
+            s &= 15;
 
-                r = s >> 4;
-                s &= 15;
-
-                if (s) {
-                    for (int l = k; l < k + r; ++l) {
-                        if (l >= DCTSIZE2) {
-                            err_log("mcu err\n");
-                            return FALSE;
-                        }
-                        if (l >= AC_MAX_TEST)
-                            continue;
-                        if (coef_check(prev_block[l], MAX_COEF_BITS - shared->prev_dct_log2_tbl[shared->is_top][info->quant_tbl_no][jpeg_natural_order[l]])) {
-                            err_log("%d prev_shifts %d prev_dct_log2_tbl %d dir %d\n", l, (int)shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[l]], (int)shared->prev_dct_log2_tbl[shared->is_top][info->quant_tbl_no][jpeg_natural_order[l]], dir);
-                        }
-                        prev_shift(&prev_block[l], shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[l]], dir);
-                        if (coef_check(prev_block[l], MAX_COEF_BITS - info->dct_log2_tbl[jpeg_natural_order[l]])) {
-                            err_log("%d prev_shifts %d dct_log2_tbl %d dir %d\n", l, (int)shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[l]], (int)info->dct_log2_tbl[jpeg_natural_order[l]], dir);
-                        }
-                        if (blkn == 0 && l == 16) {
-                            test_cache = prev_block[l];
-                        }
-                        (*block)[jpeg_natural_order[l]] = prev_block[l] << info->dct_log2_tbl[jpeg_natural_order[l]];
-                        if (coef_check((*block)[jpeg_natural_order[l]], MAX_COEF_BITS)) {
-                            err_log("%d prev_shifts %d dct_log2_tbl %d dir %d\n", l, (int)shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[l]], (int)info->dct_log2_tbl[jpeg_natural_order[l]], dir);
-                        }
-                    }
-
-                    k += r;
-                    CHECK_BIT_BUFFER(br_state, s, return FALSE);
-                    r = GET_BITS(s);
-                    s = HUFF_EXTEND(r, s);
-                    /* Output coefficient in natural (dezigzagged) order.
-                     * Note: the extra entries in jpeg_natural_order[] will save us
-                     * if k >= DCTSIZE2, which could happen if the data is corrupted.
-                     */
-                    if (k >= DCTSIZE2) {
+            if (s) {
+                for (int l = k; l < k + r; ++l) {
+                    if (l >= DCTSIZE2) {
                         err_log("mcu err\n");
                         return FALSE;
                     }
-                    if (k >= AC_MAX_TEST)
-                        continue;
-                    if (coef_check(prev_block[k], MAX_COEF_BITS - shared->prev_dct_log2_tbl[shared->is_top][info->quant_tbl_no][jpeg_natural_order[k]])) {
-                        err_log("%d prev_shifts %d prev_dct_log2_tbl %d dir %d\n", k, (int)shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[k]], (int)shared->prev_dct_log2_tbl[shared->is_top][info->quant_tbl_no][jpeg_natural_order[k]], dir);
-                    }
-                    prev_shift(&prev_block[k], shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[k]], dir);
-                    if (coef_check(prev_block[k], MAX_COEF_BITS - info->dct_log2_tbl[jpeg_natural_order[k]])) {
-                        err_log("%d prev_shifts %d dct_log2_tbl %d dir %d\n", k, (int)shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[k]], (int)info->dct_log2_tbl[jpeg_natural_order[k]], dir);
-                    }
-                    s += prev_block[k];
-                    // s = coef_fix(s, MAX_COEF_BITS);
-                    if (blkn == 0 && k == 16) {
-                        test_cache = s;
-                    }
-                    prev_block[k] = s;
-                    if (coef_check(prev_block[k], MAX_COEF_BITS - info->dct_log2_tbl[jpeg_natural_order[k]])) {
-                        err_log("%d prev_shifts %d dct_log2_tbl %d dir %d\n", k, (int)shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[k]], (int)info->dct_log2_tbl[jpeg_natural_order[k]], dir);
-                    }
-                    s <<= info->dct_log2_tbl[jpeg_natural_order[k]];
-                    if (coef_check(s, MAX_COEF_BITS)) {
-                        err_log("%d prev_shifts %d dct_log2_tbl %d dir %d\n", k, (int)shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[k]], (int)info->dct_log2_tbl[jpeg_natural_order[k]], dir);
-                    }
-                    (*block)[jpeg_natural_order[k]] = (JCOEF)s;
-                } else {
-                    for (int l = k; l < (r == 15 ? k + r : DCTSIZE2); ++l) {
-                        if (l >= DCTSIZE2) {
-                            err_log("mcu err\n");
-                            return FALSE;
-                        }
-                        if (l >= AC_MAX_TEST)
-                            continue;
-                        if (coef_check(prev_block[l], MAX_COEF_BITS - shared->prev_dct_log2_tbl[shared->is_top][info->quant_tbl_no][jpeg_natural_order[l]])) {
-                            err_log("%d prev_shifts %d prev_dct_log2_tbl %d dir %d\n", l, (int)shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[l]], (int)shared->prev_dct_log2_tbl[shared->is_top][info->quant_tbl_no][jpeg_natural_order[l]], dir);
-                        }
-                        prev_shift(&prev_block[l], shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[l]], dir);
-                        if (coef_check(prev_block[l], MAX_COEF_BITS - info->dct_log2_tbl[jpeg_natural_order[l]])) {
-                            err_log("%d prev_shifts %d dct_log2_tbl %d dir %d\n", l, (int)shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[l]], (int)info->dct_log2_tbl[jpeg_natural_order[l]], dir);
-                        }
-                        if (blkn == 0 && l == 16) {
-                            test_cache = prev_block[l];
-                        }
-                        (*block)[jpeg_natural_order[l]] = prev_block[l] << info->dct_log2_tbl[jpeg_natural_order[l]];
-                        if (coef_check((*block)[jpeg_natural_order[l]], MAX_COEF_BITS)) {
-                            err_log("%d prev_shifts %d dct_log2_tbl %d dir %d\n", l, (int)shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[l]], (int)info->dct_log2_tbl[jpeg_natural_order[l]], dir);
-                        }
-                    }
-
-                    if (r != 15)
-                        break;
-                    k += 15;
-                    // err_log("many zeroes\n");
+                    prev_shift(&prev_block[l], shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[l]], dir);
+                    (*block)[jpeg_natural_order[l]] = prev_block[l] << info->dct_log2_tbl[jpeg_natural_order[l]];
                 }
-            }
 
-        } else {
-
-            /* Section F.2.2.2: decode the AC coefficients */
-            /* In this path we just discard the values */
-            for (k = 1; k < DCTSIZE2; k++) {
-                HUFF_DECODE(s, br_state, actbl, return FALSE, label3);
-
-                r = s >> 4;
-                s &= 15;
-
-                if (s) {
-                    k += r;
-                    CHECK_BIT_BUFFER(br_state, s, return FALSE);
-                    DROP_BITS(s);
-                } else {
-                    if (r != 15)
-                        break;
-                    k += 15;
+                k += r;
+                CHECK_BIT_BUFFER(br_state, s, return FALSE);
+                r = GET_BITS(s);
+                s = HUFF_EXTEND(r, s);
+                /* Output coefficient in natural (dezigzagged) order.
+                    * Note: the extra entries in jpeg_natural_order[] will save us
+                    * if k >= DCTSIZE2, which could happen if the data is corrupted.
+                    */
+                if (k >= DCTSIZE2) {
+                    err_log("mcu err\n");
+                    return FALSE;
                 }
+                prev_shift(&prev_block[k], shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[k]], dir);
+                s += prev_block[k];
+                // s = coef_fix(s, MAX_COEF_BITS);
+                prev_block[k] = s;
+                s <<= info->dct_log2_tbl[jpeg_natural_order[k]];
+                (*block)[jpeg_natural_order[k]] = (JCOEF)s;
+            } else {
+                for (int l = k; l < (r == 15 ? k + 16 : DCTSIZE2); ++l) {
+                    if (l >= DCTSIZE2) {
+                        err_log("mcu err\n");
+                        return FALSE;
+                    }
+                    prev_shift(&prev_block[l], shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[l]], dir);
+                    (*block)[jpeg_natural_order[l]] = prev_block[l] << info->dct_log2_tbl[jpeg_natural_order[l]];
+                }
+
+                if (r != 15) {
+                    // err_log("r %d\n", r);
+                    break;
+                }
+                k += 15;
+                // err_log("many zeroes\n");
             }
         }
+
     }
 
     /* Completed MCU, so update state */
@@ -1087,7 +1016,6 @@ static int consume_data(struct jpeg_shared_t *shared)
     /* Loop to process one whole iMCU row */
     int mcu_cols = SCREEN_WIDTH / shared->h_samp_factor / DCTSIZE;
     int16_t *prev = shared->prev[shared->is_top];
-    int16_t *prev_prev = shared->prev_prev[shared->is_top];
     for (yoffset = 0; yoffset < shared->rows_in_mcus;
          yoffset++) {
         for (MCU_col_num = 0; (int)MCU_col_num < mcu_cols;
@@ -1095,46 +1023,10 @@ static int consume_data(struct jpeg_shared_t *shared)
             memset(shared->MCU_buffer_base, 0, sizeof(shared->MCU_buffer_base));
 
             int16_t *prev_mcu = prev + (((yoffset + shared->mcu_row) * mcu_cols + MCU_col_num) * shared->blocks_in_MCU) * DCTSIZE2;
-            int16_t *prev_prev_mcu = prev_prev + (((yoffset + shared->mcu_row) * mcu_cols + MCU_col_num) * shared->blocks_in_MCU) * DCTSIZE2;
-
-            if (memcmp(prev_prev_mcu, prev_mcu, shared->blocks_in_MCU * DCTSIZE2 * sizeof(int16_t))) {
-                err_log("err\n");
-            }
-            for (int i = 0; i < shared->blocks_in_MCU; ++i) {
-                int16_t *prev_block = prev_mcu + i * DCTSIZE2;
-                struct jpeg_comp_info_t *info = &shared->comp_infos[shared->MCU_membership[i]];
-                for (int l = 0; l < DCTSIZE2; ++l) {
-                    if (coef_check(prev_block[l], MAX_COEF_BITS - shared->prev_dct_log2_tbl[shared->is_top][info->quant_tbl_no][jpeg_natural_order[l]])) {
-                        err_log("%d prev_shifts %d prev_dct_log2_tbl %d\n", l, (int)shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[l]], (int)shared->prev_dct_log2_tbl[shared->is_top][info->quant_tbl_no][jpeg_natural_order[l]]);
-                    }
-                }
-            }
-            test_cache = INT16_MAX;
             if (!decode_mcu(shared, shared->MCU_buffer, prev_mcu)) {
                 err_log("mcu decode err at %d (%d) %d\n", (int)yoffset, (int)shared->rows_in_mcus, (int)MCU_col_num);
                 return -1;
             } else {
-                for (int i = 0; i < shared->blocks_in_MCU; ++i) {
-                    int16_t *prev_block = prev_mcu + i * DCTSIZE2;
-                    struct jpeg_comp_info_t *info = &shared->comp_infos[shared->MCU_membership[i]];
-                    for (int l = 0; l < DCTSIZE2; ++l) {
-                        if (coef_check(prev_block[l], MAX_COEF_BITS - info->dct_log2_tbl[jpeg_natural_order[l]])) {
-                            err_log("%d %d prev_shifts %d dct_log2_tbl %d\n", i, l, (int)shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[l]], (int)info->dct_log2_tbl[jpeg_natural_order[l]]);
-
-                            if (i == 0 && l == 16) {
-                                if (test_cache < INT16_MAX && test_cache != prev_block[l]) {
-                                    err_log("test %d\n", test_cache);
-                                } else {
-                                    err_log("cache %d\n", test_cache);
-                                }
-                            } else {
-                                err_log("none\n");
-                            }
-                        }
-                    }
-                }
-                memcpy(prev_prev_mcu, prev_mcu, shared->blocks_in_MCU * DCTSIZE2 * sizeof(int16_t));
-
                 for (int i = 0; i < shared->blocks_in_MCU; ++i) {
                     JSAMPLE output_buf_base[DCTSIZE][DCTSIZE];
                     JSAMPROW output_buf[DCTSIZE];
@@ -1420,16 +1312,11 @@ int decode_jpeg_delta(uint8_t *out, const uint8_t *in, int in_size, int rows_in_
     shared->bytes_in_buffer = in_size;
     shared->unread_marker = 0;
 
-    if (memcmp(shared->prev_prev[is_top], shared->prev[is_top], sizeof(shared->prev[is_top]))) {
-        err_log("err\n");
-    }
     if (consume_data(shared) < 0) {
         return -1;
     }
     if (shared->bytes_in_buffer > 2)
         err_log("extra data %d\n", (int)shared->bytes_in_buffer);
-
-    memcpy(shared->prev_prev[is_top], shared->prev[is_top], sizeof(shared->prev[is_top]));
 
     return 0;
 }
