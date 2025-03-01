@@ -568,14 +568,14 @@ static const int jpeg_natural_order[DCTSIZE2 + 16] = {
     63, 63, 63, 63, 63, 63, 63, 63, /* extra entries for safety in decoder */
     63, 63, 63, 63, 63, 63, 63, 63};
 
-static int coef_fix(int s, int m) {
-    if (s >= (1 << m)) {
-        s -= (1 << (m + 1)) - 1;
-    } else if (s <= -(1 << m)) {
-        s += (1 << (m + 1)) - 1;
-    }
-    return s;
-}
+// static int coef_fix(int s, int m) {
+//     if (s >= (1 << m)) {
+//         s -= (1 << (m + 1)) - 1;
+//     } else if (s <= -(1 << m)) {
+//         s += (1 << (m + 1)) - 1;
+//     }
+//     return s;
+// }
 
 static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data, int16_t *prev)
 {
@@ -588,7 +588,7 @@ static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data, int
     BITREAD_LOAD_STATE(shared, shared->bitstate);
     memcpy(state, shared->last_dc_val, sizeof(state));
 
-    const uint8_t MAX_COEF_BITS = 8 + 2;
+    // const uint8_t MAX_COEF_BITS = 8 + 2;
 
     for (blkn = 0; blkn < shared->blocks_in_MCU; blkn++) {
         struct jpeg_comp_info_t *info = &shared->comp_infos[shared->MCU_membership[blkn]];
@@ -622,13 +622,13 @@ static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data, int
              * overflow errors for this function and decode_mcu_fast().
              */
             s += state[ci];
-            s = coef_fix(s, MAX_COEF_BITS + 1 - info->dct_log2_tbl[0]);
+            // s = coef_fix(s, MAX_COEF_BITS + 1 - info->dct_log2_tbl[0]);
             state[ci] = s;
             if (block) {
                 /* Output the DC coefficient (assumes jpeg_natural_order[0] = 0) */
                 s <<= info->dct_log2_tbl[0];
                 s += prev_block[0];
-                s = coef_fix(s, MAX_COEF_BITS);
+                // s = coef_fix(s, MAX_COEF_BITS);
                 prev_block[0] = s;
 
                 (*block)[0] = (JCOEF)s;
@@ -660,7 +660,7 @@ static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data, int
                      */
                     s <<= info->dct_log2_tbl[jpeg_natural_order[k]];
                     s += prev_block[k];
-                    s = coef_fix(s, MAX_COEF_BITS);
+                    // s = coef_fix(s, MAX_COEF_BITS);
                     prev_block[k] = s;
                     (*block)[jpeg_natural_order[k]] = (JCOEF)s;
                 } else {
