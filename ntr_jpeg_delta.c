@@ -632,7 +632,7 @@ static const int jpeg_natural_order[DCTSIZE2 + 16] = {
 
 __attribute__((unused))
 static boolean coef_check(int s, int m) {
-    if (s >= (1 << m) || s < -(1 << m)) {
+    if (s >= (1 << m) || s <= -(1 << m)) {
         err_log("s %d, m %d\n", s, m);
         return TRUE;
     }
@@ -695,19 +695,13 @@ static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data, int
             * overflow errors for this function and decode_mcu_fast().
             */
         s += state[ci];
-        // s = coef_fix(s, MAX_COEF_BITS + 1 - info->dct_log2_tbl[0]);
         state[ci] = s;
         if (block) {
             /* Output the DC coefficient (assumes jpeg_natural_order[0] = 0) */
             prev_shift(&prev_block[0], shared->prev_shifts[shared->is_top][info->quant_tbl_no][0], dir);
             s += prev_block[0];
-            // s = coef_fix(s, MAX_COEF_BITS);
             prev_block[0] = s;
             s <<= info->dct_log2_tbl[0];
-            if (coef_check(s, MAX_COEF_BITS)) {
-                err_log("prev_shifts %d dct_log2_tbl %d dir %d\n", (int)shared->prev_shifts[shared->is_top][info->quant_tbl_no][0], (int)info->dct_log2_tbl[0], dir);
-            }
-
             (*block)[0] = (JCOEF)s;
         }
 
@@ -743,7 +737,6 @@ static boolean decode_mcu(struct jpeg_shared_t *shared, JBLOCKROW *MCU_data, int
                 }
                 prev_shift(&prev_block[k], shared->prev_shifts[shared->is_top][info->quant_tbl_no][jpeg_natural_order[k]], dir);
                 s += prev_block[k];
-                // s = coef_fix(s, MAX_COEF_BITS);
                 prev_block[k] = s;
                 s <<= info->dct_log2_tbl[jpeg_natural_order[k]];
                 (*block)[jpeg_natural_order[k]] = (JCOEF)s;
