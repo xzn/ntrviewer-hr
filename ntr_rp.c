@@ -62,6 +62,8 @@ static uint8_t recv_last_packet_id[SCREEN_COUNT];
 #define RP_KCP_HDR_SIZE_NBITS (11)
 #define RP_KCP_HDR_RC_NBITS (5)
 
+#define RP_DQ_HDR_QUALITY_NBITS (5)
+
 static u8 kcp_recv_w[RP_KCP_WORK_COUNT];
 
 static struct kcp_recv_t {
@@ -793,6 +795,10 @@ static int handle_recv_kcp(uint8_t *buf, int size)
             if (core_count == 0) {
                 // ignore core_count == 0 for future extension
                 return 0;
+            }
+
+            if (delta_prog) {
+                jpeg_quality &= ((1 << RP_DQ_HDR_QUALITY_NBITS) - 1);
             }
 
             info->jpeg_quality = jpeg_quality;
