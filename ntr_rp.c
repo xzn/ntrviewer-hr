@@ -363,6 +363,7 @@ static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, stru
     int max_h_samp_fact = info->chroma_ss == 2 ? 1 : 2;
     int max_v_samp_fact = info->chroma_ss == 0 ? 2 : 1;
 
+    // int total_size = 0;
     for (int t = 0; t < info->core_count; ++t)
     {
         struct kcp_recv_t *recv = &recvs[t];
@@ -374,9 +375,11 @@ static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, stru
         uint8_t *out_t = out + t * info->v_adjusted * height_per_mcu_row;
         int res;
 
+        int size = (recv->count - 1) * (RP_PACKET_SIZE - sizeof(IUINT16) - sizeof(u16)) + recv->term_size;
+        // total_size += size;
         if ((res = decode_jpeg_delta(
             out_t,
-            &recv->buf[0][0], (recv->count - 1) * (RP_PACKET_SIZE - sizeof(IUINT16) - sizeof(u16)) + recv->term_size,
+            &recv->buf[0][0], size,
             rows_in_mcus,
             max_h_samp_fact, max_v_samp_fact, info->jpeg_quality, info->is_top, t * info->v_adjusted
         )) < 0) {
@@ -384,6 +387,7 @@ static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, stru
             break;
         }
     }
+    // err_log("size %d\n", total_size);
 
     memset(recvs, 0, sizeof(struct kcp_recv_t) * RP_CORE_COUNT_MAX);
     memset(info, 0, sizeof(struct kcp_recv_info_t));
