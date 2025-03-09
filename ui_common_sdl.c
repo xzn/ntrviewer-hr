@@ -46,6 +46,8 @@ int ui_common_sdl_init(void) {
     SDL_SetHint(SDL_HINT_WINDOWS_USE_D3D9EX, "1");
     SDL_SetHint(SDL_HINT_RENDER_DRIVER, "direct3d11");
     SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, "direct3d11");
+#else
+    SDL_SetHint(SDL_HINT_VIDEODRIVER, "wayland");
 #endif
 
     if (opt_flag_angle) {
