@@ -14,9 +14,7 @@ struct jhuff_tbl_t {
     uint8_t huffval[256];
 };
 
-#if !defined(_WIN32) && !defined(SIZEOF_SIZE_T)
-#error Cannot determine word size
-#endif
+#define SIZEOF_SIZE_T 8
 
 #if SIZEOF_SIZE_T == 8 || defined(_WIN64)
 
@@ -182,19 +180,19 @@ static void std_huff_tables (struct jpeg_shared_t *shared)
 /* Set up the standard Huffman tables (cf. JPEG standard section K.3) */
 /* IMPORTANT: these are only valid for 8-bit data precision! */
 {
-    // static const UINT8 bits_dc_luminance[17] = {
+    // static const uint8_t bits_dc_luminance[17] = {
     //     /* 0-base */ 0, 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0};
-    // static const UINT8 val_dc_luminance[] = {
+    // static const uint8_t val_dc_luminance[] = {
     //     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 
-    // static const UINT8 bits_dc_chrominance[17] = {
+    // static const uint8_t bits_dc_chrominance[17] = {
     //     /* 0-base */ 0, 0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0};
-    // static const UINT8 val_dc_chrominance[] = {
+    // static const uint8_t val_dc_chrominance[] = {
     //     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 
-    // static const UINT8 bits_ac_luminance[17] = {
+    // static const uint8_t bits_ac_luminance[17] = {
     //     /* 0-base */ 0, 0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 0x7d};
-    static const UINT8 val_ac_luminance[] = {
+    static const uint8_t val_ac_luminance[] = {
         0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12,
         0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07,
         0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xa1, 0x08,
@@ -217,9 +215,9 @@ static void std_huff_tables (struct jpeg_shared_t *shared)
         0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8,
         0xf9, 0xfa};
 
-    // static const UINT8 bits_ac_chrominance[17] = {
+    // static const uint8_t bits_ac_chrominance[17] = {
     //     /* 0-base */ 0, 0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 0x77};
-    static const UINT8 val_ac_chrominance[] = {
+    static const uint8_t val_ac_chrominance[] = {
         0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21,
         0x31, 0x06, 0x12, 0x41, 0x51, 0x07, 0x61, 0x71,
         0x13, 0x22, 0x32, 0x81, 0x08, 0x14, 0x42, 0x91,
@@ -1075,7 +1073,7 @@ static void init_dct_table(const uint8_t in[DCTSIZE2], float out[DCTSIZE2], uint
 static void jpeg_gen_optimal_table(struct jhuff_tbl_t *htbl, long freq[])
 {
 #define MAX_CLEN 32            /* assumed maximum initial code length */
-    UINT8 bits[MAX_CLEN + 1];  /* bits[k] = # of symbols with code length k */
+    uint8_t bits[MAX_CLEN + 1];  /* bits[k] = # of symbols with code length k */
     int bit_pos[MAX_CLEN + 1]; /* # of symbols with smaller code length */
     int codesize[257];         /* codesize[k] = code length of symbol k */
     int nz_index[257];         /* index of nonzero symbol in the original freq
@@ -1226,7 +1224,7 @@ static void jpeg_gen_optimal_table(struct jhuff_tbl_t *htbl, long freq[])
      * this works.
      */
     for (i = 0; i < num_nz_symbols - 1; i++) {
-        htbl->huffval[bit_pos[codesize[i]]] = (UINT8)nz_index[i];
+        htbl->huffval[bit_pos[codesize[i]]] = (uint8_t)nz_index[i];
         bit_pos[codesize[i]]++;
     }
 }
