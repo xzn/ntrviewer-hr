@@ -21,6 +21,7 @@ static ikcpcb *kcp;
 static int kcp_cid;
 static int kcp_cid_reset = (IUINT16)-1 & ((1 << CID_NBITS) - 1);
 atomic_bool kcp_active;
+atomic_bool kcp_dq;
 atomic_bool kcp_restart;
 
 static int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
@@ -92,6 +93,7 @@ static void kcp_init(ikcpcb *kcp) {
     ikcp_setmtu(kcp, RP_PACKET_SIZE);
 
     kcp_active = 0;
+    kcp_dq = 0;
     kcp_restart = 0;
 
     memset(kcp_recv, 0, sizeof(kcp_recv));
@@ -401,9 +403,10 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
     struct kcp_recv_info_t *info = &kcp_recv_info[w][queue_w];
 
     if (info->delta_prog) {
+        kcp_dq = 1;
         return handle_decode_delta_prog(out, recvs, info);
-        // info->jpeg_quality = 100;
     }
+    kcp_dq = 0;
 
     int ret;
     if ((ret = set_decode_quality_kcp(info->is_top, info->jpeg_quality, info->chroma_ss, info->v_adjusted)) < 0)
