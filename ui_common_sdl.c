@@ -15,6 +15,7 @@ enum ui_renderer_t ui_renderer;
 SDL_Window *ui_sdl_win[SCREEN_COUNT];
 struct nk_context *ui_nk_ctx;
 view_mode_t ui_view_mode;
+static int UNUSED ui_view_mode_assert[(sizeof(view_mode_t) == sizeof(int)) - 1];
 bool ui_fullscreen;
 
 #ifdef _WIN32

@@ -97,7 +97,6 @@ int ui_upscaling_filter_count;
 
 static const char *nk_property_name = "#";
 static enum NK_FOCUS {
-    NK_FOCUS_NONE,
     NK_FOCUS_VIEW_MODE,
     NK_FOCUS_UPSCALING_FILTER,
     NK_FOCUS_IP_OCTET_0,
@@ -201,33 +200,36 @@ static nk_bool check_next_property(struct nk_context *ctx, const char *name)
     return win->property.active && win->property.name == hash;
 }
 
-static void do_nav_next(enum NK_FOCUS nk_focus)
+static enum nk_nav_t do_nav_next(enum NK_FOCUS nk_focus)
 {
+    enum nk_nav_t ret = NK_NAV_NONE;
     if (nk_focus == nk_focus_current)
     {
-        switch (__atomic_load_n(&nk_nav_cmd, __ATOMIC_RELAXED))
+        switch ((ret = __atomic_load_n(&nk_nav_cmd, __ATOMIC_RELAXED)))
         {
         case NK_NAV_PREVIOUS:
-            if (nk_focus_current <= NK_FOCUS_MIN)
-                nk_focus_current = NK_FOCUS_MAX;
-            else
-                --nk_focus_current;
+            if (nk_nav_focus != NK_NAV_FOCUS_NONE) {
+                if (nk_focus_current <= NK_FOCUS_MIN)
+                    nk_focus_current = NK_FOCUS_MAX;
+                else
+                    --nk_focus_current;
 
-            if (!ui_upscaling_filters && nk_focus_current == NK_FOCUS_UPSCALING_FILTER)
-                --nk_focus_current;
-
+                if (!ui_upscaling_filters && nk_focus_current == NK_FOCUS_UPSCALING_FILTER)
+                    --nk_focus_current;
+            }
             nk_nav_focus = NK_NAV_FOCUS_NAV;
             break;
 
         case NK_NAV_NEXT:
-            if (nk_focus_current >= NK_FOCUS_MAX)
-                nk_focus_current = NK_FOCUS_MIN;
-            else
-                ++nk_focus_current;
+            if (nk_nav_focus != NK_NAV_FOCUS_NONE) {
+                if (nk_focus_current >= NK_FOCUS_MAX)
+                    nk_focus_current = NK_FOCUS_MIN;
+                else
+                    ++nk_focus_current;
 
-            if (!ui_upscaling_filters && nk_focus_current == NK_FOCUS_UPSCALING_FILTER)
-                ++nk_focus_current;
-
+                if (!ui_upscaling_filters && nk_focus_current == NK_FOCUS_UPSCALING_FILTER)
+                    ++nk_focus_current;
+            }
             nk_nav_focus = NK_NAV_FOCUS_NAV;
             break;
 
@@ -239,20 +241,25 @@ static void do_nav_next(enum NK_FOCUS nk_focus)
             break;
 
         case NK_NAV_CONFIRM:
-            if (nk_focus == NK_FOCUS_NONE)
-            {
-                nk_nav_focus = NK_NAV_FOCUS_NONE;
-            }
-            else
-            {
-                nk_nav_focus = nk_nav_focus == NK_NAV_FOCUS_NONE ? NK_NAV_FOCUS_NAV : NK_NAV_FOCUS_NONE;
-            }
+            nk_nav_focus = nk_nav_focus == NK_NAV_FOCUS_NONE ? NK_NAV_FOCUS_NAV : NK_NAV_FOCUS_NONE;
             break;
 
         default:
             break;
         }
         __atomic_store_n(&nk_nav_cmd, NK_NAV_NONE, __ATOMIC_RELAXED);
+    }
+    return ret;
+}
+
+static int *nk_nav_combo_selected;
+static int nk_nav_combo_selected_pending;
+static void set_nav_next(enum NK_NAV_FOCUS nav_focus, enum NK_FOCUS focus) {
+    nk_nav_focus = nav_focus;
+    nk_focus_current = focus;
+    if (nk_nav_combo_selected) {
+        *nk_nav_combo_selected = nk_nav_combo_selected_pending;
+        nk_nav_combo_selected = 0;
     }
 }
 
@@ -269,8 +276,7 @@ static void do_nav_property_next(struct nk_context *ctx, const char *name, enum 
         }
         else
         {
-            nk_focus_current = nk_focus;
-            nk_nav_focus = NK_NAV_FOCUS_NORMAL;
+            set_nav_next(NK_NAV_FOCUS_NORMAL, nk_focus);
         }
     }
     else if (nk_focus_current == nk_focus && nk_nav_focus != NK_NAV_FOCUS_NONE)
@@ -315,8 +321,7 @@ static void check_nav_property_prev(struct nk_context *ctx, const char *name, en
         nk_hash hash = nk_hash_from_name_prev(name, win, 1);
         if (win->property.name == hash)
         {
-            nk_focus_current = nk_focus;
-            nk_nav_focus = NK_NAV_FOCUS_NORMAL;
+            set_nav_next(NK_NAV_FOCUS_NORMAL, nk_focus);
         }
     }
     else if (nk_nav_focus != NK_NAV_FOCUS_NAV)
@@ -332,10 +337,19 @@ static void check_nav_property_prev(struct nk_context *ctx, const char *name, en
     }
 }
 
-static void do_nav_combobox_next(struct nk_context *ctx, enum NK_FOCUS nk_focus, int *selected, int count)
+static int nk_nav_combo_selected_previous;
+static bool nk_nav_combo_focus;
+static void do_nav_combobox_next(struct nk_context *ctx, enum NK_FOCUS nk_focus, int *selected, int *pending, int count)
 {
     if (nk_focus_current == nk_focus && nk_nav_focus != NK_NAV_FOCUS_NONE)
     {
+        if (!nk_nav_combo_selected) {
+            nk_nav_combo_selected_pending = nk_nav_combo_selected_previous = *selected;
+            nk_nav_combo_selected = pending;
+        }
+
+        *selected = nk_nav_combo_selected_pending;
+
         ctx->style.combo.border_color = ctx->style.text.color;
         if (nk_input_is_key_pressed(&ctx->input, NK_KEY_DOWN))
         {
@@ -353,19 +367,59 @@ static void do_nav_combobox_next(struct nk_context *ctx, enum NK_FOCUS nk_focus,
                 *selected = count - 1;
             }
         }
+
+        nk_nav_combo_selected_pending = *selected;
+        nk_nav_combo_focus = 1;
+    } else {
+        nk_nav_combo_focus = 0;
     }
 
-    do_nav_next(nk_focus);
+    enum nk_nav_t cmd = do_nav_next(nk_focus);
+
+    if (nk_nav_combo_selected) {
+        switch (cmd) {
+            case NK_NAV_CANCEL:
+                if (*selected != nk_nav_combo_selected_previous) {
+                    *selected = nk_nav_combo_selected_previous;
+                    nk_nav_focus = NK_NAV_FOCUS_NAV;
+                }
+                goto final;
+            case NK_NAV_CONFIRM:
+                if (*selected != nk_nav_combo_selected_previous) {
+                    nk_nav_focus = NK_NAV_FOCUS_NAV;
+                }
+                // fallthru
+            case NK_NAV_NEXT:
+            case NK_NAV_PREVIOUS:
+final:
+                nk_nav_combo_selected = 0;
+                // fallthru
+            case NK_NAV_NONE:
+                break;
+        }
+    }
 }
 
+static bool nk_nav_combo_applied;
 static void set_nav_combobox_prev(enum NK_FOCUS nk_focus)
 {
-    nk_nav_focus = NK_NAV_FOCUS_NAV;
-    nk_focus_current = nk_focus;
+    if (!nk_nav_combo_applied) {
+        set_nav_next(NK_NAV_FOCUS_NAV, nk_focus);
+    }
 }
 
-static void check_nav_combobox_prev(struct nk_context *ctx)
+static void check_nav_combobox_prev(struct nk_context *ctx, int *selected)
 {
+    nk_nav_combo_applied = 0;
+    if (nk_nav_combo_focus) {
+        if (nk_nav_combo_selected && *selected == nk_nav_combo_selected_pending) {
+            *selected = nk_nav_combo_selected_previous;
+        } else {
+            nk_nav_combo_selected = 0;
+            nk_nav_combo_applied = 1;
+        }
+        nk_nav_combo_focus = 0;
+    }
     ctx->style.combo.border_color = nk_style_current.combo.border_color;
 }
 
@@ -395,8 +449,7 @@ static bool do_nav_button_next(struct nk_context *ctx, enum NK_FOCUS nk_focus)
 
 static void set_nav_button_prev(enum NK_FOCUS nk_focus)
 {
-    nk_nav_focus = NK_NAV_FOCUS_NAV;
-    nk_focus_current = nk_focus;
+    set_nav_next(NK_NAV_FOCUS_NAV, nk_focus);
 }
 
 static void check_nav_button_prev(struct nk_context *ctx)
@@ -442,8 +495,7 @@ static void check_nav_checkbox_prev(struct nk_context *ctx, enum NK_FOCUS nk_foc
 
     if (nk_nav_checkbox_val_current != val)
     {
-        nk_nav_focus = NK_NAV_FOCUS_NAV;
-        nk_focus_current = nk_focus;
+        set_nav_next(NK_NAV_FOCUS_NAV, nk_focus);
     }
 }
 
@@ -492,8 +544,7 @@ static void check_nav_slider_prev(struct nk_context *ctx, enum NK_FOCUS nk_focus
 
     if (nk_nav_slider_val_current != val)
     {
-        nk_nav_focus = NK_NAV_FOCUS_NAV;
-        nk_focus_current = nk_focus;
+        set_nav_next(NK_NAV_FOCUS_NAV, nk_focus);
     }
 }
 
@@ -533,8 +584,6 @@ void ui_main_nk(void)
                  NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_TITLE) &&
         show_window)
     {
-        do_nav_next(NK_FOCUS_NONE);
-
         nk_layout_row_dynamic(ctx, 30, 2);
         nk_label(ctx, "View Mode", NK_TEXT_CENTERED);
         int selected = ui_view_mode;
@@ -544,9 +593,9 @@ void ui_main_nk(void)
             "Separate Windows",
             "Top Only",
             "Bottom Only"};
-        do_nav_combobox_next(ctx, NK_FOCUS_VIEW_MODE, &selected, sizeof(view_mode_options) / sizeof(*view_mode_options));
+        do_nav_combobox_next(ctx, NK_FOCUS_VIEW_MODE, &selected, (int *)&ui_view_mode, sizeof(view_mode_options) / sizeof(*view_mode_options));
         nk_combobox(ctx, view_mode_options, sizeof(view_mode_options) / sizeof(*view_mode_options), &selected, 30, combo_size);
-        check_nav_combobox_prev(ctx);
+        check_nav_combobox_prev(ctx, &selected);
         if (selected != (int)ui_view_mode)
         {
             set_nav_combobox_prev(NK_FOCUS_VIEW_MODE);
@@ -559,9 +608,9 @@ void ui_main_nk(void)
             nk_layout_row_dynamic(ctx, 30, 2);
             nk_label(ctx, "Upscaling Filter", NK_TEXT_CENTERED);
             selected = ui_upscaling_selected;
-            do_nav_combobox_next(ctx, NK_FOCUS_UPSCALING_FILTER, &selected, ui_upscaling_filter_count);
+            do_nav_combobox_next(ctx, NK_FOCUS_UPSCALING_FILTER, &selected, &ui_upscaling_selected, ui_upscaling_filter_count);
             nk_combobox(ctx, ui_upscaling_filter_options, ui_upscaling_filter_count, &selected, 30, combo_size);
-            check_nav_combobox_prev(ctx);
+            check_nav_combobox_prev(ctx, &selected);
             if (selected != ui_upscaling_selected) {
                 set_nav_combobox_prev(NK_FOCUS_UPSCALING_FILTER);
                 ui_upscaling_selected = selected;
@@ -597,13 +646,13 @@ void ui_main_nk(void)
         }
         check_nav_button_prev(ctx);
         selected = ntr_selected_ip;
-        do_nav_combobox_next(ctx, NK_FOCUS_IP_COMBO, &selected, ntr_auto_ip_count);
+        do_nav_combobox_next(ctx, NK_FOCUS_IP_COMBO, &selected, &ntr_selected_ip, ntr_auto_ip_count);
         const char *combo_items_null;
         if (ntr_auto_ip_list)
             nk_combobox(ctx, (const char **)ntr_auto_ip_list, ntr_auto_ip_count, &selected, 30, combo_size);
         else
             nk_combobox(ctx, &combo_items_null, 0, &selected, 30, combo_size);
-        check_nav_combobox_prev(ctx);
+        check_nav_combobox_prev(ctx, &selected);
         if (selected != ntr_selected_ip)
         {
             set_nav_combobox_prev(NK_FOCUS_IP_COMBO);
@@ -618,12 +667,12 @@ void ui_main_nk(void)
         nk_layout_row_dynamic(ctx, 30, 2);
         nk_label(ctx, "Viewer IP", NK_TEXT_CENTERED);
         selected = ntr_selected_adapter;
-        do_nav_combobox_next(ctx, NK_FOCUS_VIEWER_IP, &selected, ntr_adapter_count);
+        do_nav_combobox_next(ctx, NK_FOCUS_VIEWER_IP, &selected, &ntr_selected_adapter, ntr_adapter_count);
         if (ntr_adapter_list)
             nk_combobox(ctx, (const char **)ntr_adapter_list, ntr_adapter_count, &selected, 30, combo_size);
         else
             nk_combobox(ctx, &combo_items_null, 0, &selected, 30, combo_size);
-        check_nav_combobox_prev(ctx);
+        check_nav_combobox_prev(ctx, &selected);
         if (selected != ntr_selected_adapter)
         {
             set_nav_combobox_prev(NK_FOCUS_VIEWER_IP);
@@ -691,9 +740,9 @@ void ui_main_nk(void)
             "On",
             "On + Delta",
         };
-        do_nav_combobox_next(ctx, NK_FOCUS_RELIABLE_STREAM, &selected, sizeof(reliable_stream_options) / sizeof(*reliable_stream_options));
+        do_nav_combobox_next(ctx, NK_FOCUS_RELIABLE_STREAM, &selected, &ntr_rp_config.kcp_mode, sizeof(reliable_stream_options) / sizeof(*reliable_stream_options));
         nk_combobox(ctx, reliable_stream_options, sizeof(reliable_stream_options) / sizeof(*reliable_stream_options), &selected, 30, combo_size);
-        check_nav_combobox_prev(ctx);
+        check_nav_combobox_prev(ctx, &selected);
         if (selected != (int)ntr_rp_config.kcp_mode)
         {
             set_nav_combobox_prev(NK_FOCUS_RELIABLE_STREAM);

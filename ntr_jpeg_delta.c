@@ -140,7 +140,7 @@ static const uint8_t std_chrominance_quant_tbl[DCTSIZE2] = {
     99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
 };
 
-__attribute__((unused))
+UNUSED
 static void add_huff_table(struct jhuff_tbl_t *htblptr, const uint8_t *bits, const uint8_t *val)
 {
     int nsymbols, len;
@@ -630,7 +630,7 @@ static const int jpeg_natural_order[DCTSIZE2 + 16] = {
 //     return s;
 // }
 
-__attribute__((unused))
+UNUSED
 static boolean coef_check(int s, int m) {
     if (s >= (1 << m) || s <= -(1 << m)) {
         err_log("s %d, m %d\n", s, m);
