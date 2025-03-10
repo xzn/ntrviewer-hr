@@ -9,8 +9,6 @@
 #include "nuklear_sdl_gl3.h"
 #include "nuklear_sdl_gles2.h"
 #include "ui_main_nk.h"
-#include "fsr/fsr_main.h"
-#include "realcugan-ncnn-vulkan/lib.h"
 #include "placebo.h"
 #include <libplacebo/opengl.h>
 
@@ -255,34 +253,6 @@ static int ogl_res_init(void) {
 
         for (int i = 0; i < SCREEN_COUNT; ++i) {
             glGenTextures(1, &rp_buffer_ctx[i].gl_tex_id[j]);
-
-            glGenTextures(1, &rp_buffer_ctx[i].gl_tex_upscaled[j]);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, rp_buffer_ctx[i].gl_tex_upscaled[j]);
-            glTexImage2D(
-                GL_TEXTURE_2D, 0,
-                GL_INT_FORMAT, SCREEN_WIDTH * SCREEN_UPSCALE_FACTOR,
-                (i == SCREEN_TOP ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1) * SCREEN_UPSCALE_FACTOR, 0,
-                GL_FORMAT, GL_UNSIGNED_BYTE,
-                0);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glBindTexture(GL_TEXTURE_2D, 0);
-        }
-
-        for (int i = 0; i < SCREEN_COUNT; ++i) {
-            glGenFramebuffers(1, &rp_buffer_ctx[i].gl_fbo_upscaled[j]);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, rp_buffer_ctx[i].gl_fbo_upscaled[j]);
-            glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, rp_buffer_ctx[i].gl_tex_upscaled[j], 0);
-            GLenum draw_buffer = GL_COLOR_ATTACHMENT0;
-            glDrawBuffers(1, &draw_buffer);
-            if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-                err_log("fbo init error\n");
-                return -1;
-            }
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
         }
 
         if (is_renderer_csc()) {
@@ -412,48 +382,21 @@ static void ogl_res_destroy(void)
                 glDeleteTextures(1, &rp_buffer_ctx[i].gl_tex_id[j]);
                 rp_buffer_ctx[i].gl_tex_id[j] = 0;
             }
-            if (rp_buffer_ctx[i].gl_fbo_upscaled[j]) {
-                glDeleteFramebuffers(1, &rp_buffer_ctx[i].gl_fbo_upscaled[j]);
-                rp_buffer_ctx[i].gl_fbo_upscaled[j] = 0;
-            }
-            if (rp_buffer_ctx[i].gl_tex_upscaled[j]) {
-                glDeleteTextures(1, &rp_buffer_ctx[i].gl_tex_upscaled[j]);
-                rp_buffer_ctx[i].gl_tex_upscaled[j] = 0;
-            }
         }
     }
 }
 
 enum {
-    UPSCALING_DEFAULT_0_NONE = 0,
-    UPSCALING_DEFAULT_0_COUNT,
-
-    UPSCALING_DEFAULT_1_REAL_CUGAN = 0,
-    UPSCALING_DEFAULT_1_REAL_CUGAN_FSR,
-    UPSCALING_DEFAULT_1_COUNT,
-
-    UPSCALING_DEFAULT_COUNT = UPSCALING_DEFAULT_0_COUNT + UPSCALING_DEFAULT_1_COUNT,
+    UPSCALING_DEFAULT_NONE = 0,
+    UPSCALING_DEFAULT_COUNT,
 };
 
-static int upscaling_0_count;
-static int upscaling_1_count;
-static bool upscaling_fsr;
-
-#define UPSCALING_DEFAULT_0_UI_INDEX(mode) (mode)
-#define UPSCALING_0_UI_INDEX(mode) (UPSCALING_DEFAULT_0_COUNT + mode)
-#define UPSCALING_DEFAULT_1_UI_INDEX(mode) (UPSCALING_DEFAULT_0_COUNT + upscaling_0_count + mode)
-#define UPSCALING_1_UI_INDEX(mode) (UPSCALING_DEFAULT_0_COUNT + upscaling_0_count + UPSCALING_DEFAULT_1_COUNT + mode)
-
-#define UPSCALING_0_MODE(ui_index) (ui_index - UPSCALING_DEFAULT_0_COUNT)
-#define UPSCALING_1_MODE(ui_index) (ui_index - (UPSCALING_DEFAULT_0_COUNT + upscaling_0_count + UPSCALING_DEFAULT_1_COUNT))
-
-#define IS_UPSCALING_0(ui_index) (UPSCALING_0_MODE(ui_index) >= 0 && UPSCALING_0_MODE(ui_index) < upscaling_0_count)
-#define IS_UPSCALING_1(ui_index) (UPSCALING_1_MODE(ui_index) >= 0 && UPSCALING_1_MODE(ui_index) < upscaling_1_count)
+#define PLACEBO_UI_INDEX(mode) (UPSCALING_DEFAULT_COUNT + mode)
+#define PLACEBO_MODE(ui_index) (ui_index - UPSCALING_DEFAULT_COUNT)
+#define IS_PLACEBO(ui_index) (PLACEBO_MODE(ui_index) >= 0 && PLACEBO_MODE(ui_index) < placebo_count)
 
 static struct placebo_t *placebo;
 static int placebo_count;
-static struct placebo_t *placebo_real_cugan;
-static int placebo_real_cugan_count;
 static int placebo_mode[SCREEN_COUNT][SCREEN_COUNT];
 static struct placebo_render_t *placebo_render[SCREEN_COUNT][SCREEN_COUNT];
 static int placebo_render_mode[SCREEN_COUNT][SCREEN_COUNT];
@@ -467,29 +410,6 @@ static void ogl_upscaling_update(int ctx_top_bot) {
     rp_lock_wait(upscaling_update_lock);
 
     if (i == SCREEN_TOP) {
-        int upscaling_selected = ui_upscaling_selected;
-        if (
-            upscaling_selected == UPSCALING_DEFAULT_1_UI_INDEX(UPSCALING_DEFAULT_1_REAL_CUGAN) ||
-            upscaling_selected == UPSCALING_DEFAULT_1_UI_INDEX(UPSCALING_DEFAULT_1_REAL_CUGAN_FSR) ||
-            IS_UPSCALING_1(upscaling_selected)
-        ) {
-            if (!upscaling_filter_realcugan_created) {
-                int ret = realcugan_ogl_create();
-                if (ret < 0) {
-                    err_log("Real-CUGAN init failed\n");
-                    upscaling_filter_realcugan = 0;
-                    ui_upscaling_selected = UPSCALING_DEFAULT_0_UI_INDEX(UPSCALING_DEFAULT_0_NONE);
-                } else {
-                    upscaling_filter_realcugan = 1;
-                    upscaling_filter_realcugan_created = 1;
-                }
-            } else {
-                upscaling_filter_realcugan = 1;
-            }
-        } else {
-            upscaling_filter_realcugan = 0;
-        }
-        upscaling_fsr = upscaling_filter_realcugan && upscaling_selected == UPSCALING_DEFAULT_1_UI_INDEX(UPSCALING_DEFAULT_1_REAL_CUGAN_FSR);
     }
 
     rp_lock_rel(upscaling_update_lock);
@@ -514,14 +434,8 @@ static int ogl_upscaling_init(void) {
 
     placebo = placebo_load("placebo.json");
     if (placebo) {
-        upscaling_0_count = placebo_count = placebo_mode_count(placebo);
+        placebo_count = placebo_mode_count(placebo);
         ui_upscaling_filter_count += placebo_count;
-    }
-
-    placebo_real_cugan = placebo_load("placebo-real-cugan.json");
-    if (placebo_real_cugan) {
-        upscaling_1_count = placebo_real_cugan_count = placebo_mode_count(placebo_real_cugan);
-        ui_upscaling_filter_count += placebo_real_cugan_count;
     }
 
     ui_upscaling_filter_options = malloc(ui_upscaling_filter_count * sizeof(*ui_upscaling_filter_options));
@@ -529,16 +443,10 @@ static int ogl_upscaling_init(void) {
         return -1;
     }
 
-    ui_upscaling_filter_options[UPSCALING_DEFAULT_0_UI_INDEX(UPSCALING_DEFAULT_0_NONE)] = NK_UPSCALE_TYPE_TEXT_NONE NK_UPSCALE_TYPE_TEXT_NONE "None";
-    ui_upscaling_filter_options[UPSCALING_DEFAULT_1_UI_INDEX(UPSCALING_DEFAULT_1_REAL_CUGAN)] = NK_UPSCALE_TYPE_TEXT_REAL NK_UPSCALE_TYPE_TEXT_NONE "Real-CUGAN";
-    ui_upscaling_filter_options[UPSCALING_DEFAULT_1_UI_INDEX(UPSCALING_DEFAULT_1_REAL_CUGAN_FSR)] = NK_UPSCALE_TYPE_TEXT_REAL NK_UPSCALE_TYPE_TEXT_NONE "Real-CUGAN + FSR";
+    ui_upscaling_filter_options[UPSCALING_DEFAULT_NONE] = NK_UPSCALE_TYPE_TEXT_NONE NK_UPSCALE_TYPE_TEXT_NONE "None";
 
     for (int i = 0; i < placebo_count; ++i) {
-        ui_upscaling_filter_options[UPSCALING_0_UI_INDEX(i)] = placebo_mode_name(placebo, i, NK_UPSCALE_TYPE_TEXT_NONE NK_UPSCALE_TYPE_TEXT_PLACEBO);
-    }
-
-    for (int i = 0; i < placebo_real_cugan_count; ++i) {
-        ui_upscaling_filter_options[UPSCALING_1_UI_INDEX(i)] = placebo_mode_name(placebo_real_cugan, i, NK_UPSCALE_TYPE_TEXT_REAL NK_UPSCALE_TYPE_TEXT_PLACEBO);
+        ui_upscaling_filter_options[PLACEBO_UI_INDEX(i)] = placebo_mode_name(placebo, i, NK_UPSCALE_TYPE_TEXT_NONE NK_UPSCALE_TYPE_TEXT_PLACEBO);
     }
 
     ui_upscaling_selected = 0;
@@ -567,11 +475,6 @@ static void ogl_upscaling_close(void) {
         placebo = 0;
     }
     placebo_count = 0;
-    if (placebo_real_cugan) {
-        placebo_unload(placebo_real_cugan);
-        placebo_real_cugan = 0;
-    }
-    placebo_real_cugan_count = 0;
 
     if (ui_upscaling_filter_options) {
         free(ui_upscaling_filter_options);
@@ -842,27 +745,17 @@ void ui_renderer_ogl_main(int screen_top_bot, int ctx_top_bot, view_mode_t view_
     }
 }
 
-static int placebo_upscaling_update(bool upscaled, int selected, int ctx_top_bot, int screen_top_bot) {
+static int placebo_upscaling_update(int selected, int ctx_top_bot, int screen_top_bot) {
     int i = ctx_top_bot;
 
     int mode = -1;
     int render_mode = -1;
     bool reset_mode = 0;
     struct placebo_t *placebo_base = 0;
-    if (IS_UPSCALING_0(selected)) {
-        render_mode = UPSCALING_0_MODE(selected);
-        if (!upscaled) {
-            placebo_base = placebo;
-            mode = 1;
-        } else
-            reset_mode = 1;
-    } else if (IS_UPSCALING_1(selected)) {
-        render_mode = UPSCALING_1_MODE(selected);
-        if (upscaled) {
-            placebo_base = placebo_real_cugan;
-            mode = 1;
-        } else
-            reset_mode = 1;
+    if (IS_PLACEBO(selected)) {
+        render_mode = PLACEBO_MODE(selected);
+        placebo_base = placebo;
+        mode = 1;
     } else {
         reset_mode = 1;
     }
@@ -893,7 +786,7 @@ fail:
     return reset_mode;
 }
 
-void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, int index, view_mode_t view_mode, int win_shared)
+void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared)
 {
     double ctx_left_f;
     double ctx_top_f;
@@ -903,10 +796,9 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width,
     int ctx_height;
     int win_width_drawable;
     int win_height_drawable;
-    bool upscaled;
     draw_screen_get_dims(
         screen_top_bot, ctx_top_bot, win_shared, view_mode, width, height,
-        &ctx_left_f, &ctx_top_f, &ctx_right_f, &ctx_bot_f, &ctx_width, &ctx_height, &win_width_drawable, &win_height_drawable, &upscaled);
+        &ctx_left_f, &ctx_top_f, &ctx_right_f, &ctx_bot_f, &ctx_width, &ctx_height, &win_width_drawable, &win_height_drawable);
 
     int i = ctx_top_bot;
     if (win_shared) {
@@ -934,288 +826,102 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width,
             memcpy(vertices[i].tex_coord, vertices_tex_coord[i], sizeof(vertices[i].tex_coord));
         }
     }
-    int scale = upscaled ? SCREEN_UPSCALE_FACTOR : 1;
-    GLuint tex = upscaled ? ctx->gl_tex_upscaled[i] : ctx->gl_tex_id[i];
+    GLuint tex = ctx->gl_tex_id[i];
     GLuint gl_sem = 0;
     GLuint gl_sem_next = 0;
     GLuint tex_upscaled = 0;
     bool dim3 = false;
-    bool success = false;
 
     int upscaling_selected = ui_upscaling_selected;
     struct pl_opengl_wrap_params tex_pars = {};
     tex_pars.target = GL_TEXTURE_2D;
     tex_pars.iformat = GL_INT_FORMAT;
 
-    if (upscaled) {
-        if (!data) {
-            if (ctx->upscaling_selected_prev != upscaling_selected || !ctx->tex_upscaled_prev[i]) {
-                data = ctx->data_prev;
-            } else {
-                glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_2D, ctx->tex_upscaled_prev[i]);
-                tex = ctx->tex_upscaled_prev[i];
-            }
-        }
-
-        if (data) {
-            scale = SCREEN_UPSCALE_FACTOR;
-            tex_upscaled = realcugan_ogl_run(i, screen_top_bot, index, height, width, GL_CHANNELS_N, data, ctx->screen_upscaled, &gl_sem, &gl_sem_next, &dim3, &success);
-            if (!tex_upscaled) {
-                if (!success) {
-                    upscaled = 0;
-                    upscaling_filter_realcugan = 0;
-                    err_log("upscaling failed; filter disabled\n");
-                } else {
-                    glActiveTexture(GL_TEXTURE0);
-                    glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id[i]);
-                    glTexImage2D(
-                        GL_TEXTURE_2D, 0,
-                        GL_INT_FORMAT, height * scale,
-                        width * scale, 0,
-                        GL_FORMAT, GL_UNSIGNED_BYTE,
-                        ctx->screen_upscaled);
-
-                    tex = ctx->gl_tex_id[i];
-                }
-            } else {
-                glActiveTexture(GL_TEXTURE0);
-
-                if (dim3) {
-                    glBindTexture(GL_TEXTURE_3D, tex_upscaled);
-                    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, ctx->gl_fbo_upscaled[i]);
-                    glViewport(0, 0, height * scale, width * scale);
-                    glDisable(GL_CULL_FACE);
-                    glDisable(GL_DEPTH_TEST);
-
-                    glUseProgram(gl_fbo_program[i]);
-
-                    if (gl_use_vao) {
-                        glBindVertexArray(gl_vao_fbo[i]);
-                        glBindBuffer(GL_ARRAY_BUFFER, gl_vbo_fbo[i]);
-                        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_ebo_fbo[i]);
-                    } else {
-                        glEnableVertexAttribArray(gl_fbo_position_loc[i]);
-                        glEnableVertexAttribArray(gl_fbo_tex_coord_loc[i]);
-                        glVertexAttribPointer(gl_fbo_position_loc[i], 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vertices_pos), fbo_vertices_pos);
-                        glVertexAttribPointer(gl_fbo_tex_coord_loc[i], 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vertices_tex_coord), fbo_vertices_tex_coord);
-                    }
-
-                    glUniform1i(gl_fbo_sampler_loc[i], 0);
-
-                    if (gl_sem) {
-                        GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
-                        glWaitSemaphoreEXT(gl_sem, 0, NULL, 1, &tex_upscaled, &layout);
-                    }
-                    if (gl_use_vao) {
-                        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
-                    } else {
-                        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, fbo_indices);
-                    }
-                    if (gl_sem && gl_sem_next) {
-                        GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
-                        glSignalSemaphoreEXT(gl_sem_next, 0, NULL, 1, &tex_upscaled, &layout);
-                    }
-
-                    glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled[i]);
-                    tex = ctx->gl_tex_upscaled[i];
-                } else {
-                    glBindTexture(GL_TEXTURE_2D, tex_upscaled);
-                    tex = tex_upscaled;
-                }
-            }
-        }
-
-        ctx->tex_upscaled_prev[i] = tex;
-
-        tex_pars.texture = tex;
-        tex_pars.width = height * scale;
-        tex_pars.height = width * scale;
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id[i]);
+    if (data) {
+        glTexImage2D(
+            GL_TEXTURE_2D, 0,
+            GL_INT_FORMAT, height,
+            width, 0,
+            GL_FORMAT, GL_UNSIGNED_BYTE,
+            data);
     }
 
-    if (!upscaled) {
-        scale = 1;
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_id[i]);
-        if (!data) {
-            if (ctx->tex_upscaled_prev[i]) {
-                data = ctx->data_prev;
-            }
-        }
-        if (data) {
-            glTexImage2D(
-                GL_TEXTURE_2D, 0,
-                GL_INT_FORMAT, height,
-                width, 0,
-                GL_FORMAT, GL_UNSIGNED_BYTE,
-                data);
-        }
+    tex = ctx->gl_tex_id[i];
 
-        tex = ctx->gl_tex_id[i];
-
-        ctx->tex_upscaled_prev[i] = 0;
-
-        tex_pars.texture = tex;
-        tex_pars.width = height;
-        tex_pars.height = width;
-    }
-
-    nk_bool use_fsr = upscaling_fsr;
-#ifdef _WIN32
-    nk_bool can_use_fsr = !is_renderer_gles_angle();
-#else
-    nk_bool can_use_fsr = 1;
-#endif
-    if (is_renderer_gles()) {
-        can_use_fsr = can_use_fsr && use_fsr && ogl_version_major >= 3 && ogl_version_minor >= 1;
-    } else {
-        can_use_fsr = can_use_fsr && use_fsr && ogl_version_major >= 4 && ogl_version_minor >= 3;
-    }
-
-    if (use_fsr) {
-        if (!can_use_fsr) {
-            err_log("Compute shader not available (needed for FSR)\n");
-            upscaling_selected = ui_upscaling_selected = UPSCALING_DEFAULT_1_UI_INDEX(UPSCALING_DEFAULT_1_REAL_CUGAN);
-            use_fsr = 0;
-        }
-    }
+    tex_pars.texture = tex;
+    tex_pars.width = height;
+    tex_pars.height = width;
 
     bool need_tex_update = ctx->upscaling_selected_prev != upscaling_selected || ctx->win_width_prev != win_width_drawable || ctx->win_height_prev != win_height_drawable || ctx->view_mode_prev != view_mode;
 
-    if (use_fsr) {
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        if (data || !ctx->tex_fsr_prev[i] || need_tex_update) {
-            if (!dim3 && tex_upscaled && gl_sem) {
-                GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
-                glWaitSemaphoreEXT(gl_sem, 0, NULL, 1, &tex_upscaled, &layout);
-            }
-            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-            GLuint out_tex = fsr_main(i, screen_top_bot, tex, height * scale, width * scale, ctx_height, ctx_width, 0.25f);
-            ctx->tex_fsr_prev[i] = out_tex;
-            glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
-            if (!dim3 && tex_upscaled && gl_sem && gl_sem_next) {
-                GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
-                glSignalSemaphoreEXT(gl_sem_next, 0, NULL, 1, &tex_upscaled, &layout);
-            }
-
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, out_tex);
-        } else {
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, ctx->tex_fsr_prev[i]);
+    int reset_mode = placebo_upscaling_update(upscaling_selected, i, screen_top_bot);
+    if (placebo_render[i][screen_top_bot]) {
+        pl_tex in_tex = pl_opengl_wrap(pl_ogl_dev[i]->gpu, &tex_pars);
+        if (!in_tex) {
+            goto upscale_fail;
         }
-
-        if (is_renderer_csc())
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[i]);
-        else
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-        glViewport(0, 0, win_width_drawable, win_height_drawable);
-
-        glUseProgram(gl_program[i]);
-
-        if (gl_use_vao) {
-            glBindVertexArray(gl_vao[i][screen_top_bot]);
-            glBindBuffer(GL_ARRAY_BUFFER, gl_vbo[i][screen_top_bot]);
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_ebo[i]);
-            if (need_tex_update)
-                glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
-        } else {
-            glEnableVertexAttribArray(gl_position_loc[i]);
-            glEnableVertexAttribArray(gl_tex_coord_loc[i]);
-            glVertexAttribPointer(gl_position_loc[i], 3, GL_FLOAT, GL_FALSE, sizeof(*vertices_pos), vertices_pos);
-            glVertexAttribPointer(gl_tex_coord_loc[i], 2, GL_FLOAT, GL_FALSE, sizeof(*vertices_tex_coord), vertices_tex_coord);
+        pl_tex out_tex = placebo_render_run(placebo_render[i][screen_top_bot], in_tex, ctx_height, ctx_width);
+        if (!out_tex) {
+            goto upscale_fail;
         }
+        GLuint out_fbo;
+        GLint out_iformat;
+        GLuint out_target;
+        GLuint out_ogl_tex = pl_opengl_unwrap(pl_ogl_dev[i]->gpu, out_tex, &out_target, &out_iformat, &out_fbo);
 
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glGenerateMipmap(GL_TEXTURE_2D);
-
-        glUniform1i(gl_sampler_loc[i], 0);
-        if (gl_use_vao) {
-            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
-        } else {
-            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
-        }
-    } else {
-        int reset_mode = placebo_upscaling_update(upscaled, upscaling_selected, i, screen_top_bot);
-        if (placebo_render[i][screen_top_bot]) {
-            pl_tex in_tex = pl_opengl_wrap(pl_ogl_dev[i]->gpu, &tex_pars);
-            if (!in_tex) {
-                goto upscale_fail;
-            }
-            pl_tex out_tex = placebo_render_run(placebo_render[i][screen_top_bot], in_tex, ctx_height, ctx_width);
-            if (!out_tex) {
-                goto upscale_fail;
-            }
-            GLuint out_fbo;
-            GLint out_iformat;
-            GLuint out_target;
-            GLuint out_ogl_tex = pl_opengl_unwrap(pl_ogl_dev[i]->gpu, out_tex, &out_target, &out_iformat, &out_fbo);
-
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(out_target, out_ogl_tex);
-            glDisable(GL_BLEND);
-            glDisable(GL_SCISSOR_TEST);
-        } else if (!reset_mode) {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(out_target, out_ogl_tex);
+        glDisable(GL_BLEND);
+        glDisable(GL_SCISSOR_TEST);
+    } else if (!reset_mode) {
 upscale_fail:
-            err_log("placebo render failed\n");
-            if (IS_UPSCALING_0(upscaling_selected)) {
-                ui_upscaling_selected = UPSCALING_DEFAULT_0_UI_INDEX(UPSCALING_DEFAULT_0_NONE);
-            } else if (IS_UPSCALING_1(upscaling_selected)) {
-                ui_upscaling_selected = UPSCALING_DEFAULT_1_UI_INDEX(UPSCALING_DEFAULT_1_REAL_CUGAN);
-            }
-        }
+        err_log("placebo render failed\n");
+        ui_upscaling_selected = UPSCALING_DEFAULT_NONE;
+    }
 
-        if (is_renderer_csc())
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[i]);
-        else
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-        glViewport(0, 0, win_width_drawable, win_height_drawable);
+    if (is_renderer_csc())
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[i]);
+    else
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glViewport(0, 0, win_width_drawable, win_height_drawable);
 
-        glUseProgram(gl_program[i]);
+    glUseProgram(gl_program[i]);
 
-        if (gl_use_vao) {
-            glBindVertexArray(gl_vao[i][screen_top_bot]);
-            glBindBuffer(GL_ARRAY_BUFFER, gl_vbo[i][screen_top_bot]);
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_ebo[i]);
-            if (need_tex_update)
-                glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
-        } else {
-            glEnableVertexAttribArray(gl_position_loc[i]);
-            glEnableVertexAttribArray(gl_tex_coord_loc[i]);
-            glVertexAttribPointer(gl_position_loc[i], 3, GL_FLOAT, GL_FALSE, sizeof(*vertices_pos), vertices_pos);
-            glVertexAttribPointer(gl_tex_coord_loc[i], 2, GL_FLOAT, GL_FALSE, sizeof(*vertices_tex_coord), vertices_tex_coord);
-        }
+    if (gl_use_vao) {
+        glBindVertexArray(gl_vao[i][screen_top_bot]);
+        glBindBuffer(GL_ARRAY_BUFFER, gl_vbo[i][screen_top_bot]);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_ebo[i]);
+        if (need_tex_update)
+            glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
+    } else {
+        glEnableVertexAttribArray(gl_position_loc[i]);
+        glEnableVertexAttribArray(gl_tex_coord_loc[i]);
+        glVertexAttribPointer(gl_position_loc[i], 3, GL_FLOAT, GL_FALSE, sizeof(*vertices_pos), vertices_pos);
+        glVertexAttribPointer(gl_tex_coord_loc[i], 2, GL_FLOAT, GL_FALSE, sizeof(*vertices_tex_coord), vertices_tex_coord);
+    }
 
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenerateMipmap(GL_TEXTURE_2D);
 
-        glUniform1i(gl_sampler_loc[i], 0);
+    glUniform1i(gl_sampler_loc[i], 0);
 
-        if (!dim3 && tex_upscaled && gl_sem) {
-            GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
-            glWaitSemaphoreEXT(gl_sem, 0, NULL, 1, &tex_upscaled, &layout);
-        }
-        if (gl_use_vao) {
-            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
-        } else {
-            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
-        }
-        if (!dim3 && tex_upscaled && gl_sem && gl_sem_next) {
-            GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
-            glSignalSemaphoreEXT(gl_sem_next, 0, NULL, 1, &tex_upscaled, &layout);
-        }
-
-        ctx->tex_fsr_prev[i] = 0;
+    if (!dim3 && tex_upscaled && gl_sem) {
+        GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
+        glWaitSemaphoreEXT(gl_sem, 0, NULL, 1, &tex_upscaled, &layout);
+    }
+    if (gl_use_vao) {
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+    } else {
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+    }
+    if (!dim3 && tex_upscaled && gl_sem && gl_sem_next) {
+        GLenum layout = GL_LAYOUT_TRANSFER_DST_EXT;
+        glSignalSemaphoreEXT(gl_sem_next, 0, NULL, 1, &tex_upscaled, &layout);
     }
 
     ctx->win_width_prev = win_width_drawable;

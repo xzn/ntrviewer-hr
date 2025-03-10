@@ -18,17 +18,6 @@
                     "name": "Anime4K/Upscale/Anime4K_3DGraphics_AA_Upscale_x2_US"
                 }
             ]
-        },
-        {
-            "name": "Anime4K + CRT",
-            "effects": [
-                {
-                    "name": "Anime4K/Restore/Anime4K_Restore_CNN_Soft_VL"
-                },
-                {
-                    "name": "Retro/crt-lottes"
-                }
-            ]
         }
     ]
 }

@@ -30,13 +30,9 @@ CPPFLAGS += -DUSE_SDL_RENDERER_ONLY
 endif
 
 ifneq ($(LITE),1)
-GL_OBJ := libGLAD.o libNK_SDL_GL3.o libNK_SDL_GLES2.o ui_renderer_ogl.o fsr/fsr_main.o fsr/image_utils.o realcugan_lib.o realcugan.o placebo.o
+GL_OBJ := libGLAD.o libNK_SDL_GL3.o libNK_SDL_GLES2.o ui_renderer_ogl.o placebo.o
 ifeq ($(OS),Windows_NT)
-MAGP_SRC := $(wildcard magpie/*.cpp)
-MAGP_OBJ := $(MAGP_SRC:.cpp=.o)
-MUPR_SRC := $(wildcard muparser/*.cpp)
-MUPR_OBJ := $(MUPR_SRC:.cpp=.o)
-GL_OBJ += libGLAD_WGL.o libNK_D3D11.o ui_renderer_d3d11.o ui_compositor_csc.o $(MAGP_OBJ) $(MUPR_OBJ)
+GL_OBJ += libGLAD_WGL.o libNK_D3D11.o ui_renderer_d3d11.o ui_compositor_csc.o
 LDLIBS += -lshlwapi
 else
 LDLIBS += -lunwind -llzma
@@ -114,26 +110,11 @@ jpeg_turbo/jpeg16/%.o: jpeg_turbo/jpeg16/%.c
 %.o: %.asm
 	nasm $< -o $@ $(NASM) -D__x86_64__ -Ijpeg_turbo/simd/nasm -Ijpeg_turbo/simd
 
-fsr/%.o: fsr/%.cpp
-	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-unused-parameter -Wno-unused-function -Wno-ignored-qualifiers
-
 placebo.o: placebo.cpp
-	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Imagpie -Wno-missing-field-initializers
-
-muparser/%.o: muparser/%.cpp
-	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -DMUPARSER_STATIC -Wno-unused-parameter
-
-magpie/%.o: magpie/%.cpp
-	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -DMUPARSER_STATIC -DFMT_HEADER_ONLY -std=c++20 -Imuparser -Imagpie -Wno-missing-field-initializers -Wno-unknown-pragmas -Wno-sign-compare -Wno-class-memaccess -Wno-cast-function-type
+	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-missing-field-initializers
 
 ntrviewer.res.o: win_manifest.rc win_manifest.xml
 	windres --input $< --output $@ --output-format=coff
-
-realcugan_lib.o: realcugan-ncnn-vulkan/lib.cpp
-	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-missing-field-initializers
-
-realcugan.o: realcugan-ncnn-vulkan/realcugan.cpp
-	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-missing-field-initializers
 
 fecal/gf256.o: fecal/gf256.cpp
 	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-implicit-fallthrough -DGF256_TARGET_MOBILE
@@ -160,11 +141,11 @@ nuklear/stb_%.o: nuklear/stb_%.c
 	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS)
 
 %.o: %.c
-	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -D_GNU_SOURCE -Imagpie
+	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -D_GNU_SOURCE
 
 -include $(TARGET_DEP)
 
 clean:
 	-$(RM) $(TARGET)
-	-$(RM) *.o jpeg_turbo/jpeg8/*.o jpeg_turbo/jpeg12/*.o jpeg_turbo/jpeg16/*.o jpeg_turbo/*.o jpeg_turbo/simd/x86_64/*.o fsr/*.o fecal/*.o nuklear/*.o magpie/*.o muparser/*.o
-	-$(RM) *.d jpeg_turbo/jpeg8/*.d jpeg_turbo/jpeg12/*.d jpeg_turbo/jpeg16/*.d jpeg_turbo/*.d jpeg_turbo/simd/x86_64/*.d fsr/*.d fecal/*.d nuklear/*.d magpie/*.d muparser/*.d
+	-$(RM) *.o jpeg_turbo/jpeg8/*.o jpeg_turbo/jpeg12/*.o jpeg_turbo/jpeg16/*.o jpeg_turbo/*.o jpeg_turbo/simd/x86_64/*.o fecal/*.o nuklear/*.o
+	-$(RM) *.d jpeg_turbo/jpeg8/*.d jpeg_turbo/jpeg12/*.d jpeg_turbo/jpeg16/*.d jpeg_turbo/*.d jpeg_turbo/simd/x86_64/*.d fecal/*.d nuklear/*.d

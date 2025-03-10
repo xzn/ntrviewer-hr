@@ -8,8 +8,6 @@ static SDL_Window *sdl_win[SCREEN_COUNT];
 static struct nk_context *nk_ctx;
 
 #include "nuklear_d3d11.h"
-#include "realcugan-ncnn-vulkan/lib.h"
-#include "magpie/lib.h"
 
 #include <versionhelpers.h>
 
@@ -29,37 +27,11 @@ static ID3D11VertexShader *d3d_vs[SCREEN_COUNT];
 static ID3D11PixelShader *d3d_ps[SCREEN_COUNT];
 static ID3D11SamplerState *d3d_ss_point[SCREEN_COUNT];
 static ID3D11SamplerState *d3d_ss_linear[SCREEN_COUNT];
-static struct magpie_t *magpie;
-static int magpie_count;
-static struct magpie_t *magpie_real_cugan;
-static int magpie_real_cugan_count;
-static rp_lock_t magpie_update_lock;
-static struct magpie_render_t *magpie_render[SCREEN_COUNT][SCREEN_COUNT];
-static int magpie_render_mode[SCREEN_COUNT][SCREEN_COUNT];
 
 enum {
-    UPSCALING_DEFAULT_0_NONE = 0,
-    UPSCALING_DEFAULT_0_COUNT,
-
-    UPSCALING_DEFAULT_1_REAL_CUGAN = 0,
-    UPSCALING_DEFAULT_1_COUNT,
-
-    UPSCALING_DEFAULT_COUNT = UPSCALING_DEFAULT_0_COUNT + UPSCALING_DEFAULT_1_COUNT,
+    UPSCALING_DEFAULT_NONE = 0,
+    UPSCALING_DEFAULT_COUNT,
 };
-
-static int upscaling_0_count;
-static int upscaling_1_count;
-
-#define UPSCALING_DEFAULT_0_UI_INDEX(mode) (mode)
-#define UPSCALING_0_UI_INDEX(mode) (UPSCALING_DEFAULT_0_COUNT + mode)
-#define UPSCALING_DEFAULT_1_UI_INDEX(mode) (UPSCALING_DEFAULT_0_COUNT + upscaling_0_count + mode)
-#define UPSCALING_1_UI_INDEX(mode) (UPSCALING_DEFAULT_0_COUNT + upscaling_0_count + UPSCALING_DEFAULT_1_COUNT + mode)
-
-#define UPSCALING_0_MODE(ui_index) (ui_index - UPSCALING_DEFAULT_0_COUNT)
-#define UPSCALING_1_MODE(ui_index) (ui_index - (UPSCALING_DEFAULT_0_COUNT + upscaling_0_count + UPSCALING_DEFAULT_1_COUNT))
-
-#define IS_UPSCALING_0(ui_index) (UPSCALING_0_MODE(ui_index) >= 0 && UPSCALING_0_MODE(ui_index) < upscaling_0_count)
-#define IS_UPSCALING_1(ui_index) (UPSCALING_1_MODE(ui_index) >= 0 && UPSCALING_1_MODE(ui_index) < upscaling_1_count)
 
 static void d3d11_upscaling_update(int ctx_top_bot) {
     int i = ctx_top_bot;
@@ -67,27 +39,6 @@ static void d3d11_upscaling_update(int ctx_top_bot) {
     rp_lock_wait(upscaling_update_lock);
 
     if (i == SCREEN_TOP) {
-        int upscaling_selected = ui_upscaling_selected;
-        if (
-            upscaling_selected == UPSCALING_DEFAULT_1_UI_INDEX(UPSCALING_DEFAULT_1_REAL_CUGAN) ||
-            IS_UPSCALING_1(upscaling_selected)
-        ) {
-            if (!upscaling_filter_realcugan_created) {
-                int ret = realcugan_d3d11_create(d3d11device, d3d11device_context, dxgi_adapter);
-                if (ret < 0) {
-                    err_log("Real-CUGAN init failed\n");
-                    upscaling_filter_realcugan = 0;
-                    ui_upscaling_selected = UPSCALING_DEFAULT_0_UI_INDEX(UPSCALING_DEFAULT_0_NONE);
-                } else {
-                    upscaling_filter_realcugan = 1;
-                    upscaling_filter_realcugan_created = 1;
-                }
-            } else {
-                upscaling_filter_realcugan = 1;
-            }
-        } else {
-            upscaling_filter_realcugan = 0;
-        }
     }
 
     rp_lock_rel(upscaling_update_lock);
@@ -95,67 +46,26 @@ static void d3d11_upscaling_update(int ctx_top_bot) {
 
 static int d3d11_upscaling_init(void) {
     rp_lock_init(upscaling_update_lock);
-    rp_lock_init(magpie_update_lock);
 
     ui_upscaling_filter_count = UPSCALING_DEFAULT_COUNT;
-
-    magpie_startup();
-
-    magpie = magpie_load("magpie.json");
-    if (magpie) {
-        upscaling_0_count = magpie_count = magpie_mode_count(magpie);
-        ui_upscaling_filter_count += magpie_count;
-    }
-
-    magpie_real_cugan = magpie_load("magpie-real-cugan.json");
-    if (magpie_real_cugan) {
-        upscaling_1_count = magpie_real_cugan_count = magpie_mode_count(magpie_real_cugan);
-        ui_upscaling_filter_count += magpie_real_cugan_count;
-    }
-
     ui_upscaling_filter_options = malloc(ui_upscaling_filter_count * sizeof(*ui_upscaling_filter_options));
     if (!ui_upscaling_filter_options) {
         return -1;
     }
 
-    ui_upscaling_filter_options[UPSCALING_DEFAULT_0_UI_INDEX(UPSCALING_DEFAULT_0_NONE)] = NK_UPSCALE_TYPE_TEXT_NONE NK_UPSCALE_TYPE_TEXT_NONE "None";
-    ui_upscaling_filter_options[UPSCALING_DEFAULT_1_UI_INDEX(UPSCALING_DEFAULT_1_REAL_CUGAN)] = NK_UPSCALE_TYPE_TEXT_REAL NK_UPSCALE_TYPE_TEXT_NONE "Real-CUGAN";
-
-    for (int i = 0; i < magpie_count; ++i) {
-        ui_upscaling_filter_options[UPSCALING_0_UI_INDEX(i)] = magpie_mode_name(magpie, i, NK_UPSCALE_TYPE_TEXT_NONE NK_UPSCALE_TYPE_TEXT_MAGPIE);
-    }
-
-    for (int i = 0; i < magpie_real_cugan_count; ++i) {
-        ui_upscaling_filter_options[UPSCALING_1_UI_INDEX(i)] = magpie_mode_name(magpie_real_cugan, i, NK_UPSCALE_TYPE_TEXT_REAL NK_UPSCALE_TYPE_TEXT_MAGPIE);
-    }
-
+    ui_upscaling_filter_options[UPSCALING_DEFAULT_NONE] = NK_UPSCALE_TYPE_TEXT_NONE NK_UPSCALE_TYPE_TEXT_NONE "None";
     ui_upscaling_selected = 0;
 
     return 0;
 }
 
-static void magpie_cleanup_aux(void);
 static void d3d11_upscaling_close(void) {
-    if (magpie) {
-        magpie_unload(magpie);
-        magpie = 0;
-    }
-    magpie_count = 0;
-    if (magpie_real_cugan) {
-        magpie_unload(magpie_real_cugan);
-        magpie_real_cugan = 0;
-    }
-    magpie_real_cugan_count = 0;
-
-    magpie_cleanup_aux();
-
     if (ui_upscaling_filter_options) {
         free(ui_upscaling_filter_options);
         ui_upscaling_filter_options = 0;
     }
     ui_upscaling_filter_count = 0;
 
-    rp_lock_close(magpie_update_lock);
     rp_lock_close(upscaling_update_lock);
 }
 
@@ -558,130 +468,6 @@ static ID3D11RenderTargetView *sc_rtv[SCREEN_COUNT];
 
 static struct presentation_buffer_t *d3d_pres_buf[SCREEN_COUNT];
 
-static ID3D11Texture2D *magpie_in_tex[SCREEN_COUNT][SCREEN_COUNT];
-static SIZE magpie_in_size[SCREEN_COUNT][SCREEN_COUNT];
-static SIZE magpie_out_size[SCREEN_COUNT][SCREEN_COUNT];
-static ID3D11ShaderResourceView *magpie_out_srv[SCREEN_COUNT][SCREEN_COUNT];
-
-static void magpie_free_aux(int ctx_top_bot, int screen_top_bot) {
-    CHECK_AND_RELEASE(magpie_in_tex[ctx_top_bot][screen_top_bot]);
-    CHECK_AND_RELEASE(magpie_out_srv[ctx_top_bot][screen_top_bot]);
-}
-
-static void magpie_cleanup_aux(void) {
-    for (int j = 0; j < SCREEN_COUNT; ++j) {
-        for (int i = 0; i < SCREEN_COUNT; ++i) {
-            magpie_free_aux(j, i);
-            if (magpie_render[j][i]) {
-                magpie_render_close(magpie_render[j][i]);
-                magpie_render[j][i] = NULL;
-            }
-        }
-    }
-}
-
-static int magpie_upscaling_update(bool upscaled, int selected, int ctx_top_bot, int screen_top_bot, int in_width, int in_height, int out_width, int out_height) {
-    int i = ctx_top_bot;
-
-    int render_mode = -1;
-    bool reset_mode = 0;
-    struct magpie_t *magpie_base = 0;
-    if (IS_UPSCALING_0(selected)) {
-        render_mode = UPSCALING_0_MODE(selected);
-        if (!upscaled)
-            magpie_base = magpie;
-        else
-            reset_mode = 1;
-    } else if (IS_UPSCALING_1(selected)) {
-        render_mode = UPSCALING_1_MODE(selected);
-        in_width *= SCREEN_UPSCALE_FACTOR;
-        in_height *= SCREEN_UPSCALE_FACTOR;
-        if (upscaled)
-            magpie_base = magpie_real_cugan;
-        else
-            reset_mode = 1;
-    } else {
-        reset_mode = 1;
-    }
-
-    SIZE in_size = { .cx = in_width, .cy = in_height };
-    SIZE out_size = { .cx = out_width, .cy = out_height };
-
-    if (
-        magpie_render[i][screen_top_bot] && (
-            magpie_render_mode[i][screen_top_bot] != render_mode ||
-            memcmp(&magpie_out_size[i][screen_top_bot], &out_size, sizeof(SIZE)) != 0 ||
-            memcmp(&magpie_in_size[i][screen_top_bot], &in_size, sizeof(SIZE)) != 0 ||
-            reset_mode
-        )
-    ) {
-        magpie_render_close(magpie_render[i][screen_top_bot]);
-        magpie_render[i][screen_top_bot] = 0;
-
-        magpie_free_aux(i, screen_top_bot);
-    }
-    if (!reset_mode && !magpie_render[i][screen_top_bot] && render_mode >= 0 && magpie_base) {
-        rp_lock_wait(magpie_update_lock);
-
-        magpie_free_aux(i, screen_top_bot);
-
-        D3D11_TEXTURE2D_DESC tex_desc = {};
-        tex_desc.Width = in_width;
-        tex_desc.Height = in_height;
-        tex_desc.MipLevels = 1;
-        tex_desc.ArraySize = 1;
-        tex_desc.Format = D3D_FORMAT;
-        tex_desc.SampleDesc.Count = 1;
-        tex_desc.SampleDesc.Quality = 0;
-        tex_desc.Usage = D3D11_USAGE_DEFAULT;
-        tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        tex_desc.MiscFlags = 0;
-        tex_desc.CPUAccessFlags = 0;
-
-        HRESULT hr;
-        hr = ID3D11Device_CreateTexture2D(d3d11device[i], &tex_desc, NULL, &magpie_in_tex[i][screen_top_bot]);
-
-        if (!magpie_in_tex[i][screen_top_bot]) {
-            err_log("CreateTexture2D failed: %d\n", (int)hr);
-            goto fail;
-        }
-
-        magpie_render[i][screen_top_bot] = magpie_render_init(magpie_base, render_mode, d3d11device[i], d3d11device_context[i], magpie_in_tex[i][screen_top_bot], &out_size);
-        ID3D11Texture2D *tex = magpie_render[i][screen_top_bot] ? magpie_render_output(magpie_render[i][screen_top_bot]) : NULL;
-        if (!tex) {
-            err_log("magpie_render_init failed\n");
-
-            if (magpie_render[i][screen_top_bot]) {
-                magpie_render_close(magpie_render[i][screen_top_bot]);
-                magpie_render[i][screen_top_bot] = NULL;
-            }
-
-            magpie_free_aux(i, screen_top_bot);
-            goto fail;
-        }
-
-        hr = ID3D11Device_CreateShaderResourceView(d3d11device[i], (ID3D11Resource *)tex, NULL, &magpie_out_srv[i][screen_top_bot]);
-        if (hr) {
-            err_log("CreateShaderResourceView failed: %d\n", (int)hr);
-
-            magpie_render_close(magpie_render[i][screen_top_bot]);
-            magpie_render[i][screen_top_bot] = NULL;
-
-            magpie_free_aux(i, screen_top_bot);
-            goto fail;
-        }
-
-        magpie_render_mode[i][screen_top_bot] = render_mode;
-        magpie_out_size[i][screen_top_bot] = out_size;
-        magpie_in_size[i][screen_top_bot] = in_size;
-
-fail:
-        rp_lock_rel(magpie_update_lock);
-    }
-
-    return reset_mode;
-}
-
 void ui_renderer_d3d11_main(int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, bool win_shared, float bg[4]) {
     int i = ctx_top_bot;
     HRESULT hr;
@@ -771,32 +557,9 @@ static int ctx_height[SCREEN_COUNT];
 static int win_width_drawable[SCREEN_COUNT];
 static int win_height_drawable[SCREEN_COUNT];
 
-static void d3d11_draw_screen(bool upscaled, int upscaling_selected, int ctx_top_bot, int screen_top_bot, int p, struct d3d_vertex_t *vertices, ID3D11Resource *in_tex, ID3D11ShaderResourceView *in_srv)
+static void d3d11_draw_screen(int ctx_top_bot, int screen_top_bot, struct d3d_vertex_t *vertices, ID3D11ShaderResourceView *in_srv)
 {
     int i = ctx_top_bot;
-
-    if (in_tex) {
-        int width = (screen_top_bot == SCREEN_TOP ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1);
-        int height = SCREEN_WIDTH;
-        int reset_mode = magpie_upscaling_update(upscaled, upscaling_selected, i, screen_top_bot, height, width, ctx_height[screen_top_bot], ctx_width[screen_top_bot]);
-
-        if (magpie_render[i][screen_top_bot]) {
-            ID3D11DeviceContext_CopyResource(d3d11device_context[i], (ID3D11Resource *)magpie_in_tex[i][screen_top_bot], in_tex);
-            magpie_render_run(magpie_render[i][screen_top_bot]);
-            in_srv = magpie_out_srv[i][screen_top_bot];
-            ID3D11DeviceContext_ClearState(d3d11device_context[i]);
-
-            ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &d3d_rtv[p], NULL);
-            D3D11_VIEWPORT vp = { .Width = ui_ctx_width[p], .Height = ui_ctx_height[p] };
-            ID3D11DeviceContext_RSSetViewports(d3d11device_context[i], 1, &vp);
-        } else if (!reset_mode) {
-            if (IS_UPSCALING_0(upscaling_selected)) {
-                ui_upscaling_selected = UPSCALING_DEFAULT_0_UI_INDEX(UPSCALING_DEFAULT_0_NONE);
-            } else if (IS_UPSCALING_1(upscaling_selected)) {
-                ui_upscaling_selected = UPSCALING_DEFAULT_1_UI_INDEX(UPSCALING_DEFAULT_1_REAL_CUGAN);
-            }
-        }
-    }
 
     {
         HRESULT hr;
@@ -828,15 +591,14 @@ static void d3d11_draw_screen(bool upscaled, int upscaling_selected, int ctx_top
     ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[i], 0, 1, &ptr_null);
 }
 
-void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, int index, view_mode_t view_mode, int win_shared) {
+void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared) {
     double ctx_left_f;
     double ctx_top_f;
     double ctx_right_f;
     double ctx_bot_f;
-    bool upscaled;
     draw_screen_get_dims(
         screen_top_bot, ctx_top_bot, win_shared, view_mode, width, height,
-        &ctx_left_f, &ctx_top_f, &ctx_right_f, &ctx_bot_f, &ctx_width[screen_top_bot], &ctx_height[screen_top_bot], &win_width_drawable[screen_top_bot], &win_height_drawable[screen_top_bot], &upscaled);
+        &ctx_left_f, &ctx_top_f, &ctx_right_f, &ctx_bot_f, &ctx_width[screen_top_bot], &ctx_height[screen_top_bot], &win_width_drawable[screen_top_bot], &win_height_drawable[screen_top_bot]);
 
     struct d3d_vertex_t vertices[] = {
         {{ctx_left_f, ctx_bot_f}, {0.0f, 0.0f}},
@@ -853,111 +615,8 @@ void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int widt
     }
 
     int i = ctx_top_bot;
-    int p = win_shared ? screen_top_bot : i;
-    if (view_mode == VIEW_MODE_BOT) {
-        p = SCREEN_TOP;
-    }
 
     int upscaling_selected = ui_upscaling_selected;
-    int mutex_key = 0;
-
-    if (upscaled) {
-        if (!data) {
-            if (upscaling_selected != ctx->upscaling_selected_prev || (!ctx->d3d_srv_upscaled[i] && !ctx->d3d_srv_upscaled_prev[i])) {
-                data = ctx->data_prev;
-            }
-        }
-        if (data) {
-            bool dim3;
-            bool success;
-            ctx->d3d_mutex_upscaled[i] = NULL;
-            ctx->d3d_srv_upscaled[i] = NULL;
-            ctx->d3d_res_upscaled[i] = realcugan_d3d11_run(i, screen_top_bot, index, height, width, GL_CHANNELS_N, data, ctx->screen_upscaled, &ctx->d3d_mutex_upscaled[i], &ctx->d3d_srv_upscaled[i], &dim3, &success);
-            if (ctx->d3d_res_upscaled[i]) {
-                mutex_key = 1;
-                goto draw_upscaled;
-            } else {
-                if (success) {
-                    int scale = SCREEN_UPSCALE_FACTOR;
-                    width *= scale;
-                    height *= scale;
-                    if (!ctx->d3d_srv_upscaled_prev[i]) {
-                        CHECK_AND_RELEASE(ctx->d3d_tex_upscaled_prev[i]);
-
-                        D3D11_TEXTURE2D_DESC tex_desc = {};
-                        tex_desc.Width = height;
-                        tex_desc.Height = width;
-                        tex_desc.MipLevels = 1;
-                        tex_desc.ArraySize = 1;
-                        tex_desc.Format = D3D_FORMAT;
-                        tex_desc.SampleDesc.Count = 1;
-                        tex_desc.SampleDesc.Quality = 0;
-                        tex_desc.Usage = D3D11_USAGE_DYNAMIC;
-                        tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-                        tex_desc.MiscFlags = 0;
-                        tex_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-
-                        hr = ID3D11Device_CreateTexture2D(d3d11device[i], &tex_desc, NULL, &ctx->d3d_tex_upscaled_prev[i]);
-                        if (hr) {
-                            err_log("CreateTexture2D failed: %d\n", (int)hr);
-                            return;
-                        }
-
-                        hr = ID3D11Device_CreateShaderResourceView(d3d11device[i], (ID3D11Resource *)ctx->d3d_tex_upscaled_prev[i], NULL, &ctx->d3d_srv_upscaled_prev[i]);
-                        if (hr) {
-                            err_log("CreateShaderResourceView failed: %d\n", (int)hr);
-                            CHECK_AND_RELEASE(ctx->d3d_tex_upscaled_prev[i]);
-                            return;
-                        }
-                    }
-
-                    D3D11_MAPPED_SUBRESOURCE tex_mapped = {};
-                    hr = ID3D11DeviceContext_Map(d3d11device_context[i], (ID3D11Resource *)ctx->d3d_tex_upscaled_prev[i], 0, D3D11_MAP_WRITE_DISCARD, 0, &tex_mapped);
-                    if (hr) {
-                        err_log("Map failed: %d", (int)hr);
-                        return;
-                    }
-                    for (int i = 0; i < width; ++i) {
-                        memcpy(tex_mapped.pData + i * tex_mapped.RowPitch, ctx->screen_upscaled + i * height * 4, height * 4);
-                    }
-
-                    ID3D11DeviceContext_Unmap(d3d11device_context[i], (ID3D11Resource *)ctx->d3d_tex_upscaled_prev[i], 0);
-
-                    goto draw_upscaled_prev;
-                } else {
-                    upscaling_filter_realcugan = 0;
-                    err_log("upscaling failed; filter disabled\n");
-                }
-                return;
-            }
-        } else if (ctx->d3d_srv_upscaled[i]) {
-draw_upscaled:
-            hr = IDXGIKeyedMutex_AcquireSync(ctx->d3d_mutex_upscaled[i], mutex_key, D3D11_MUTEX_TIMEOUT);
-            if (hr) {
-                err_log("AcquireSync failed: %d\n", (int)hr);
-                return;
-            }
-
-            d3d11_draw_screen(upscaled, upscaling_selected, i, screen_top_bot, p, vertices, ctx->d3d_res_upscaled[i], ctx->d3d_srv_upscaled[i]);
-
-            hr = IDXGIKeyedMutex_ReleaseSync(ctx->d3d_mutex_upscaled[i], 0);
-            if (hr) {
-                err_log("ReleaseSync failed: %d\n", (int)hr);
-                return;
-            }
-
-            ctx->upscaling_selected_prev = upscaling_selected;
-            return;
-        } else if (ctx->d3d_srv_upscaled_prev[i]) {
-draw_upscaled_prev:
-            d3d11_draw_screen(upscaled, upscaling_selected, i, screen_top_bot, p, vertices, (ID3D11Resource *)ctx->d3d_tex_upscaled_prev[i], ctx->d3d_srv_upscaled_prev[i]);
-
-            ctx->upscaling_selected_prev = upscaling_selected;
-        } else {
-            err_log("no data\n");
-        }
-        return;
-    }
 
     if (data) {
         D3D11_MAPPED_SUBRESOURCE tex_mapped = {};
@@ -973,7 +632,7 @@ draw_upscaled_prev:
         ID3D11DeviceContext_Unmap(d3d11device_context[i], (ID3D11Resource *)ctx->d3d_tex[i], 0);
     }
 
-    d3d11_draw_screen(upscaled, upscaling_selected, i, screen_top_bot, p, vertices, (ID3D11Resource *)ctx->d3d_tex[i], ctx->d3d_srv[i]);
+    d3d11_draw_screen(i, screen_top_bot, vertices, ctx->d3d_srv[i]);
 
     ctx->upscaling_selected_prev = upscaling_selected;
 }

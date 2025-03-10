@@ -8,7 +8,7 @@
 #include <iostream>
 #include <algorithm>
 
-#include <rapidjson/document.h>
+#include "rapidjson/document.h"
 #define PLACEBO_LOG_DIR "placebo-logs"
 #define PLACEBO_SHADER_DIR "placebo-shaders"
 #include <filesystem>

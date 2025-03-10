@@ -7,8 +7,6 @@
 #include "main.h"
 #include "ikcp.h"
 
-#include "realcugan-ncnn-vulkan/lib.h"
-
 int is_renderer_ogl_dbg;
 
 enum ui_renderer_t ui_renderer;
@@ -280,14 +278,14 @@ void ui_windows_titles_update(void)
     }
 }
 
-static void draw_screen_dispatch(UNUSED struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, UNUSED int index, view_mode_t view_mode, UNUSED bool win_shared) {
+static void draw_screen_dispatch(UNUSED struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, UNUSED bool win_shared) {
     if (is_renderer_d3d11()) {
 #ifndef USE_SDL_RENDERER_ONLY
-        ui_renderer_d3d11_draw(ctx, data, width, height, screen_top_bot, ctx_top_bot, index, view_mode, win_shared);
+        ui_renderer_d3d11_draw(ctx, data, width, height, screen_top_bot, ctx_top_bot, view_mode, win_shared);
 #endif
     } else if (is_renderer_sdl_ogl()) {
 #ifndef USE_SDL_RENDERER_ONLY
-        ui_renderer_ogl_draw(ctx, data, width, height, screen_top_bot, ctx_top_bot, index, view_mode, win_shared);
+        ui_renderer_ogl_draw(ctx, data, width, height, screen_top_bot, ctx_top_bot, view_mode, win_shared);
 #endif
     } else if (is_renderer_sdl_renderer()) {
         ui_renderer_sdl_draw(data, width, height, screen_top_bot, ctx_top_bot, view_mode);
@@ -296,11 +294,6 @@ static void draw_screen_dispatch(UNUSED struct rp_buffer_ctx_t *ctx, uint8_t *da
 }
 
 int draw_screen(struct rp_buffer_ctx_t *ctx, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, bool win_shared) {
-#ifndef USE_SDL_RENDERER_ONLY
-    if (is_renderer_csc())
-        realcugan_next(ctx_top_bot, screen_top_bot, ctx->index_display_2);
-#endif
-
     rp_lock_wait(ctx->status_lock);
     enum frame_buffer_status_t status = ctx->status;
     if (ctx->status == FBS_UPDATED_2) {
@@ -327,12 +320,12 @@ int draw_screen(struct rp_buffer_ctx_t *ctx, int width, int height, int screen_t
     if (status >= FBS_UPDATED)
     {
         __atomic_add_fetch(&frame_rate_displayed_tracker[screen_top_bot], 1, __ATOMIC_RELAXED);
-        draw_screen_dispatch(ctx, data, width, height, screen_top_bot, ctx_top_bot, index_display, view_mode, win_shared);
+        draw_screen_dispatch(ctx, data, width, height, screen_top_bot, ctx_top_bot, view_mode, win_shared);
         return 1;
     }
     else
     {
-        draw_screen_dispatch(ctx, NULL, width, height, screen_top_bot, ctx_top_bot, index_display, view_mode, win_shared);
+        draw_screen_dispatch(ctx, NULL, width, height, screen_top_bot, ctx_top_bot, view_mode, win_shared);
         return -1;
     }
 }
@@ -394,8 +387,7 @@ void draw_screen_get_dims(
     int *out_ctx_width,
     int *out_ctx_height,
     int *out_win_width_drawable,
-    int *out_win_height_drawable,
-    bool *out_upscaled
+    int *out_win_height_drawable
 ) {
     double ctx_left_f;
     double ctx_top_f;
@@ -478,5 +470,4 @@ void draw_screen_get_dims(
     *out_ctx_height = ctx_height;
     *out_win_width_drawable = win_width_drawable;
     *out_win_height_drawable = win_height_drawable;
-    *out_upscaled = SCREEN_UPSCALE_FACTOR > 1 && upscaling_filter_realcugan && upscaling_filter_realcugan_created;
 }

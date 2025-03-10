@@ -109,8 +109,7 @@ void draw_screen_get_dims(
     int *out_ctx_width,
     int *out_ctx_height,
     int *out_win_width,
-    int *out_win_height,
-    bool *out_upscaled
+    int *out_win_height
 );
 
 #endif

@@ -41,12 +41,8 @@ struct rp_buffer_ctx_t {
     ID3D11ShaderResourceView *d3d_srv_upscaled_prev[SCREEN_COUNT];
 #endif
     GLuint gl_tex_id[SCREEN_COUNT];
-    GLuint gl_tex_upscaled[SCREEN_COUNT];
-    GLuint gl_fbo_upscaled[SCREEN_COUNT];
-    GLuint tex_upscaled_prev[SCREEN_COUNT], tex_fsr_prev[SCREEN_COUNT];
 
     uint8_t screen_decoded[FBI_COUNT][SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N];
-    uint8_t screen_upscaled[SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N * SCREEN_UPSCALE_FACTOR * SCREEN_UPSCALE_FACTOR];
 
     rp_lock_t status_lock;
     enum frame_buffer_status_t status;
@@ -65,6 +61,4 @@ struct rp_buffer_ctx_t {
 };
 extern struct rp_buffer_ctx_t rp_buffer_ctx[SCREEN_COUNT];
 extern event_t decode_updated_event;
-extern atomic_bool upscaling_filter_realcugan;
-extern atomic_bool upscaling_filter_realcugan_created;
 #endif
