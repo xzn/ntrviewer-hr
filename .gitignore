@@ -3,9 +3,9 @@
 *.exe
 *.dll
 *.zip
-include/ncnn
+include/lib*.h
 lib
-magpie-*
+ra-*
 placebo-*
 
 ntrviewer*

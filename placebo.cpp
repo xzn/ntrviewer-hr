@@ -1,3 +1,4 @@
+#include "const.h"
 #include "placebo.h"
 #include <string>
 #include <optional>
@@ -5,7 +6,6 @@
 #include <vector>
 #include <memory>
 #include <fstream>
-#include <iostream>
 #include <algorithm>
 
 #include "rapidjson/document.h"
@@ -157,7 +157,7 @@ struct placebo_t *placebo_load(const char *filename) {
     rapidjson::Document doc;
     doc.ParseInsitu<rapidjson::kParseCommentsFlag | rapidjson::kParseTrailingCommasFlag>(json.data());
     if (doc.HasParseError()) {
-        std::cerr << "placebo config file \"" << filename << "\" parse error\n";
+        err_log("placebo config file \"%s\" parse error\n", filename);
         return 0;
     }
 
@@ -206,6 +206,7 @@ struct placebo_render_t {
     std::vector<const pl_hook *> hooks;
     pl_tex out_tex;
     pl_gpu gpu; // non-owning
+    int out_width, out_height;
 };
 
 struct placebo_render_t *placebo_render_init(struct placebo_t *placebo, size_t index, pl_gpu gpu, pl_log log) {
@@ -290,39 +291,33 @@ void placebo_render_close(struct placebo_render_t *render) {
 }
 
 pl_tex placebo_render_run(struct placebo_render_t *render, pl_tex in_tex, int out_width, int out_height) {
-    pl_fmt out_fmt = pl_find_fmt(render->gpu, PL_FMT_UNORM, 4, 0, 0, pl_fmt_caps(PL_FMT_CAP_SAMPLEABLE | PL_FMT_CAP_RENDERABLE));
+    pl_fmt out_fmt = pl_find_fmt(render->gpu, PL_FMT_UNORM, 3, 0, 0, pl_fmt_caps(PL_FMT_CAP_SAMPLEABLE | PL_FMT_CAP_RENDERABLE));
     if (!out_fmt)
         return 0;
 
-    pl_tex_params out_tex_pars = {
-        .w = out_width,
-        .h = out_height,
-        .d = 0,
-        .format = out_fmt,
-        .sampleable = 1,
-        .renderable = 1,
-    };
+    if (!render->out_tex || render->out_width != out_width || render->out_height != out_height) {
+        pl_tex_params out_tex_pars = {
+            .w = out_width,
+            .h = out_height,
+            .d = 0,
+            .format = out_fmt,
+            .sampleable = 1,
+            .renderable = 1,
+        };
 
-    if (!pl_tex_recreate(render->gpu, &render->out_tex, &out_tex_pars))
-        return 0;
+        if (!pl_tex_recreate(render->gpu, &render->out_tex, &out_tex_pars))
+            return 0;
+    }
 
     pl_frame image = {
         .num_planes = 1,
         .planes = {{
             .texture = in_tex,
-            .components = 4,
-            .component_mapping = {0, 1, 2, 3},
+            .components = 3,
+            .component_mapping = {0, 1, 2, -1},
         }},
-        .repr = {
-            .sys = PL_COLOR_SYSTEM_RGB,
-            .levels = PL_COLOR_LEVELS_FULL,
-            .alpha = PL_ALPHA_NONE,
-            .bits = {
-                .sample_depth = 32,
-                .color_depth = 32,
-            },
-        },
-        .color = pl_color_space_srgb,
+        .repr = pl_color_repr_rgb,
+        .color = pl_color_space_monitor,
     };
 
     pl_frame target = image;

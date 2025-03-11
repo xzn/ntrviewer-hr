@@ -40,7 +40,8 @@ struct rp_buffer_ctx_t {
     ID3D11Texture2D *d3d_tex_upscaled_prev[SCREEN_COUNT];
     ID3D11ShaderResourceView *d3d_srv_upscaled_prev[SCREEN_COUNT];
 #endif
-    GLuint gl_tex_id[SCREEN_COUNT];
+    GLuint gl_tex[SCREEN_COUNT];
+    GLuint gl_tex_upscaled[SCREEN_COUNT];
 
     uint8_t screen_decoded[FBI_COUNT][SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N];
 

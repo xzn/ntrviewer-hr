@@ -11,10 +11,7 @@ CFLAGS += -Wall -Wextra -flarge-source-files -MMD
 EMBED_JPEG_TURBO := 1
 
 ifeq ($(OS),Windows_NT)
-LDLIBS := -Llib -static -lmingw32 -lSDL2main -lSDL2 -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8 -lws2_32 -liphlpapi
-ifneq ($(LITE),1)
-LDLIBS += -ld3dcompiler -ld3d11 -ldxgi -ldwmapi -lpathcch
-endif
+LDLIBS := -Llib -static -lmingw32 -lSDL2main -lSDL2 -lm
 TARGET := ntrviewer.exe
 NASM := -DWIN64 -fwin64
 else
@@ -24,18 +21,28 @@ NASM := -DELF -felf64
 endif
 
 ifneq ($(LITE),1)
-LDLIBS += -lplacebo -lncnn -fopenmp -lglslang -lMachineIndependent -lOSDependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -llcms2
+LDLIBS += -lplacebo -lrashader -fopenmp -lglslang -lMachineIndependent -lOSDependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -llcms2
 else
 CPPFLAGS += -DUSE_SDL_RENDERER_ONLY
 endif
 
 ifneq ($(LITE),1)
-GL_OBJ := libGLAD.o libNK_SDL_GL3.o libNK_SDL_GLES2.o ui_renderer_ogl.o placebo.o
+GL_OBJ := libGLAD.o libNK_SDL_GL3.o libNK_SDL_GLES2.o ui_renderer_ogl.o placebo.o rashader.o
 ifeq ($(OS),Windows_NT)
 GL_OBJ += libGLAD_WGL.o libNK_D3D11.o ui_renderer_d3d11.o ui_compositor_csc.o
 LDLIBS += -lshlwapi
 else
 LDLIBS += -lunwind -llzma
+endif
+endif
+
+ifeq ($(OS),Windows_NT)
+LDLIBS += -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8 -lws2_32 -liphlpapi
+ifneq ($(LITE),1)
+LDLIBS += -ld3dcompiler -ld3d11 -ldxgi -ldwmapi -lpathcch -lbcrypt -lruntimeobject -lntdll
+ifeq ($(DEBUG),1)
+LDLIBS += -lpropsys -luserenv -ldxcompiler
+endif
 endif
 endif
 

@@ -5,8 +5,7 @@ struct nk_name_color_rgb {
 
 static struct nk_name_color_rgb web_colors_name_color_rgb[] = {
     { "placebo", "7e56c2" },
-    { "magpie", "066abd" },
-    { "real", "b32b2a" },
+    { "rashader", "7c78c2" },
 
     { "aliceblue", "f0f8ff" },
     { "antiquewhite", "faebd7" },
