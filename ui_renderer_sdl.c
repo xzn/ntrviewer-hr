@@ -273,7 +273,7 @@ void ui_renderer_sdl_present(int ctx_top_bot) {
     int i = ctx_top_bot;
     if (i == SCREEN_TOP) {
         if (nk_gui_next) {
-            nk_sdl_renderer_render(NK_ANTI_ALIASING_ON);
+            nk_sdl_renderer_render(NK_ANTI_ALIASING_OFF);
             nk_gui_next = 0;
         }
     }

@@ -1083,7 +1083,7 @@ void ui_renderer_d3d11_present(int screen_top_bot, int ctx_top_bot, bool win_sha
                 ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &d3d_ui_rtv, NULL);
                 float clearColor[4] = {};
                 ID3D11DeviceContext_ClearRenderTargetView(d3d11device_context[i], d3d_ui_rtv, clearColor);
-                nk_d3d11_render(d3d11device_context[i], NK_ANTI_ALIASING_ON, ui_win_scale[i]);
+                nk_d3d11_render(d3d11device_context[i], NK_ANTI_ALIASING_OFF, ui_win_scale[i]);
                 nk_gui_next = 0;
 
                 ID3D11DeviceContext_IASetPrimitiveTopology(d3d11device_context[i], D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -1128,7 +1128,7 @@ fail:
 
             if (p == SCREEN_TOP) {
                 ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &d3d_rtv[i], NULL);
-                nk_d3d11_render(d3d11device_context[i], NK_ANTI_ALIASING_ON, ui_win_scale[i]);
+                nk_d3d11_render(d3d11device_context[i], NK_ANTI_ALIASING_OFF, ui_win_scale[i]);
                 nk_gui_next = 0;
             }
             hr = IDXGISwapChain_Present(dxgi_sc[i], 1, 0);

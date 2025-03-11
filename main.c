@@ -573,8 +573,8 @@ static void main_loop(void) {
                 case SDL_KEYDOWN:
                     switch (evt.key.keysym.sym) {
                         case SDLK_TAB: {
-                            const Uint8 *state = SDL_GetKeyboardState(0);
-                            __atomic_store_n(&nk_nav_cmd, state[SDL_SCANCODE_LSHIFT] || state[SDL_SCANCODE_RSHIFT] ? NK_NAV_PREVIOUS : NK_NAV_NEXT, __ATOMIC_RELAXED);
+                            int shift_down = SDL_GetModState() & (KMOD_LSHIFT | KMOD_RSHIFT);
+                            __atomic_store_n(&nk_nav_cmd, shift_down ? NK_NAV_PREVIOUS : NK_NAV_NEXT, __ATOMIC_RELAXED);
                             goto skip_evt;
                         }
 

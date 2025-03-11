@@ -239,6 +239,7 @@ nk_d3d11_handle_event(HWND wnd, UINT msg, WPARAM wparam, LPARAM lparam)
             return 1;
 
         case VK_RETURN:
+        case VK_SEPARATOR:
             nk_input_key(&d3d11.ctx, NK_KEY_ENTER, down);
             return 1;
 
@@ -335,6 +336,13 @@ nk_d3d11_handle_event(HWND wnd, UINT msg, WPARAM wparam, LPARAM lparam)
         case 'R':
             if (ctrl) {
                 nk_input_key(&d3d11.ctx, NK_KEY_TEXT_REDO, down);
+                return 1;
+            }
+            break;
+
+        case 'A':
+            if(ctrl) {
+                nk_input_key(&d3d11.ctx, NK_KEY_TEXT_SELECT_ALL, down);
                 return 1;
             }
             break;

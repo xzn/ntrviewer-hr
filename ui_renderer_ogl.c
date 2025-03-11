@@ -444,9 +444,10 @@ static int ogl_upscaling_init(void) {
         for (int i = 0; i < SCREEN_COUNT; ++i) {
             placebo_render_mode[j][i] = -1;
             rashader_render_mode[j][i] = -1;
-#ifndef _WIN32
-            rashader_delay_init[j][i] = true;
-#endif
+
+            // HACK workaround rashader not working on init (don't know what I'm doing wrong..)
+            if (!is_renderer_csc())
+                rashader_delay_init[j][i] = true;
         }
     }
     SDL_GL_MakeCurrent(NULL, NULL);
@@ -1195,9 +1196,9 @@ void ui_renderer_ogl_present(int screen_top_bot, int ctx_top_bot, bool win_share
 
                 glBindTexture(GL_TEXTURE_2D, ui_nk_tex);
                 if (is_renderer_gles()) {
-                    nk_sdl_gles2_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY, 1);
+                    nk_sdl_gles2_render(NK_ANTI_ALIASING_OFF, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY, 1);
                 } else {
-                    nk_sdl_gl3_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY, 1);
+                    nk_sdl_gl3_render(NK_ANTI_ALIASING_OFF, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY, 1);
                 }
                 nk_gui_next = 0;
 
@@ -1250,9 +1251,9 @@ fail:
 #endif
             if (p == SCREEN_TOP) {
                 if (is_renderer_gles()) {
-                    nk_sdl_gles2_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY, 0);
+                    nk_sdl_gles2_render(NK_ANTI_ALIASING_OFF, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY, 0);
                 } else {
-                    nk_sdl_gl3_render(NK_ANTI_ALIASING_ON, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY, 0);
+                    nk_sdl_gl3_render(NK_ANTI_ALIASING_OFF, MAX_VERTEX_MEMORY, MAX_ELEMENT_MEMORY, 0);
                 }
                 nk_gui_next = 0;
             }
