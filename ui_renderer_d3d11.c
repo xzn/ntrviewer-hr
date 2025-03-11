@@ -102,7 +102,7 @@ static int d3d11_upscaling_init(void) {
         return -1;
     }
 
-    ui_upscaling_filter_options[UPSCALING_DEFAULT_NONE] = NK_UPSCALE_TYPE_TEXT_NONE NK_UPSCALE_TYPE_TEXT_NONE "None";
+    ui_upscaling_filter_options[UPSCALING_DEFAULT_NONE] = NK_UPSCALE_TYPE_TEXT_NONE "None";
 
     for (int i = 0; i < placebo_count; ++i) {
         ui_upscaling_filter_options[PLACEBO_UI_INDEX(i)] = placebo_mode_name(placebo, i, NK_UPSCALE_TYPE_TEXT_PLACEBO);
