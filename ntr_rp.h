@@ -34,14 +34,17 @@ struct rp_buffer_ctx_t {
 #ifdef _WIN32
     ID3D11Texture2D *d3d_tex[SCREEN_COUNT];
     ID3D11ShaderResourceView *d3d_srv[SCREEN_COUNT];
-    IDXGIKeyedMutex *d3d_mutex_upscaled[SCREEN_COUNT]; // Non-owning
-    ID3D11Resource *d3d_res_upscaled[SCREEN_COUNT]; // Non-owning
-    ID3D11ShaderResourceView *d3d_srv_upscaled[SCREEN_COUNT]; // Non-owning
-    ID3D11Texture2D *d3d_tex_upscaled_prev[SCREEN_COUNT];
-    ID3D11ShaderResourceView *d3d_srv_upscaled_prev[SCREEN_COUNT];
+    ID3D11Texture2D *d3d_tex_staging[SCREEN_COUNT];
+    ID3D11Texture2D *d3d_tex_upscaled[SCREEN_COUNT];
+    ID3D11RenderTargetView *d3d_rtv_upscaled[SCREEN_COUNT];
+    ID3D11ShaderResourceView *d3d_srv_upscaled[SCREEN_COUNT];
+    ID3D11ShaderResourceView *d3d_srv_upscaled_prev[SCREEN_COUNT]; // weak-ref
 #endif
     GLuint gl_tex[SCREEN_COUNT];
     GLuint gl_tex_upscaled[SCREEN_COUNT];
+    GLuint gl_tex_upscaled_prev[SCREEN_COUNT]; // weak-ref
+    int width_upscaled;
+    int height_upscaled;
 
     uint8_t screen_decoded[FBI_COUNT][SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N];
 
@@ -54,6 +57,7 @@ struct rp_buffer_ctx_t {
     int index_decode;
 
     uint8_t *data_prev;
+    int width_prev, height_prev;
     int win_width_prev, win_height_prev;
     int upscaling_selected_prev;
     view_mode_t view_mode_prev;

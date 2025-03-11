@@ -422,17 +422,6 @@ static int rashader_count;
 static struct rashader_render_t *rashader_render[SCREEN_COUNT][SCREEN_COUNT];
 static int rashader_render_mode[SCREEN_COUNT][SCREEN_COUNT];
 
-static void ogl_upscaling_update(int ctx_top_bot) {
-    int i = ctx_top_bot;
-
-    rp_lock_wait(upscaling_update_lock);
-
-    if (i == SCREEN_TOP) {
-    }
-
-    rp_lock_rel(upscaling_update_lock);
-}
-
 static int ogl_upscaling_init(void) {
     bool use_placebo = true;
     bool use_rashader = is_renderer_ogl();
@@ -755,8 +744,6 @@ void ui_renderer_ogl_main(int screen_top_bot, int ctx_top_bot, view_mode_t view_
         }
     }
 
-    ogl_upscaling_update(i);
-
 #ifdef _WIN32
     if (is_renderer_csc()) {
         sc_fail[p] = 0;
@@ -836,7 +823,7 @@ fail:
     return reset_mode;
 }
 
-static void *ogl_filter_chain_create(libra_shader_preset_t *preset) {
+static void *ogl_filter_chain_create(libra_shader_preset_t *preset, void *) {
     bool ogl460 = ogl_version_major > 4 || (ogl_version_major == 4 && ogl_version_minor >= 6);
     struct filter_chain_gl_opt_t opt = {
         .version = libra_instance_api_version(),
@@ -881,7 +868,7 @@ static int rashader_upscaling_update(int selected, int ctx_top_bot, int screen_t
         rashader_render_close(rashader_render[i][screen_top_bot], ogl_filter_chain_free);
         rashader_render[i][screen_top_bot] = 0;
 
-        GLint i_max; 
+        GLint i_max;
         glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &i_max);
         for (int i = 0; i < i_max; ++i) {
             glActiveTexture(GL_TEXTURE0 + i);
@@ -906,7 +893,7 @@ static int rashader_upscaling_update(int selected, int ctx_top_bot, int screen_t
             goto fail;
         }
 
-        rashader_render[i][screen_top_bot] = rashader_render_init(rashader, render_mode, &ctx, ogl_filter_chain_create);
+        rashader_render[i][screen_top_bot] = rashader_render_init(rashader, render_mode, &ctx, ogl_filter_chain_create, NULL);
         if (!rashader_render[i][screen_top_bot]) {
             err_log("rashader_render_init failed\n");
             goto fail;
@@ -961,103 +948,158 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width,
             memcpy(vertices[i].tex_coord, vertices_tex_coord[i], sizeof(vertices[i].tex_coord));
         }
     }
-    GLuint tex = ctx->gl_tex[i];
 
     int upscaling_selected = ui_upscaling_selected;
-    struct pl_opengl_wrap_params tex_pars = {};
-    tex_pars.target = GL_TEXTURE_2D;
-    tex_pars.iformat = GL_INT_FORMAT;
+    bool upscaled = upscaling_selected != UPSCALING_DEFAULT_NONE;
 
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, ctx->gl_tex[i]);
+    bool need_tex_update = ctx->upscaling_selected_prev != upscaling_selected ||
+        ctx->width_prev != ctx_width || ctx->height_prev != ctx_height ||
+        ctx->win_width_prev != win_width_drawable || ctx->win_height_prev != win_height_drawable ||
+        ctx->view_mode_prev != view_mode;
+
+    if (!data) {
+        if (upscaled) {
+            if (need_tex_update || !ctx->gl_tex_upscaled_prev[i]) {
+                data = ctx->data_prev;
+            } else {
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled_prev[i]);
+            }
+        } else {
+            ctx->gl_tex_upscaled_prev[i] = 0;
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, ctx->gl_tex[i]);
+        }
+    }
+
     if (data) {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, ctx->gl_tex[i]);
         glTexImage2D(
             GL_TEXTURE_2D, 0,
             GL_INT_FORMAT, height,
             width, 0,
             GL_FORMAT, GL_UNSIGNED_BYTE,
             data);
-    }
 
-    tex = ctx->gl_tex[i];
-
-    tex_pars.texture = tex;
-    tex_pars.width = height;
-    tex_pars.height = width;
-
-    bool need_tex_update = ctx->upscaling_selected_prev != upscaling_selected || ctx->win_width_prev != win_width_drawable || ctx->win_height_prev != win_height_drawable || ctx->view_mode_prev != view_mode;
-
-    if (!IS_PLACEBO(upscaling_selected)) {
-        placebo_upscaling_update(-1, i, screen_top_bot);
-    }
-
-    if (!IS_RASHADER(upscaling_selected)) {
-        rashader_upscaling_update(-1, i, screen_top_bot);
-    }
-
-    if (IS_PLACEBO(upscaling_selected)) {
-        int reset_mode = placebo_upscaling_update(PLACEBO_MODE(upscaling_selected), i, screen_top_bot);
-        if (placebo_render[i][screen_top_bot]) {
-            pl_tex in_tex = pl_opengl_wrap(pl_ogl_dev[i]->gpu, &tex_pars);
-            if (!in_tex) {
-                goto placebo_fail;
-            }
-            pl_tex out_tex = placebo_render_run(placebo_render[i][screen_top_bot], in_tex, ctx_height, ctx_width);
-            if (!out_tex) {
-                goto placebo_fail;
-            }
-            GLuint out_fbo;
-            GLint out_iformat;
-            GLuint out_target;
-            GLuint out_ogl_tex = pl_opengl_unwrap(pl_ogl_dev[i]->gpu, out_tex, &out_target, &out_iformat, &out_fbo);
-
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(out_target, out_ogl_tex);
-        } else if (!reset_mode) {
-    placebo_fail:
-            err_log("placebo render failed\n");
-            ui_upscaling_selected = UPSCALING_DEFAULT_NONE;
+        if (!IS_PLACEBO(upscaling_selected)) {
+            placebo_upscaling_update(-1, i, screen_top_bot);
         }
-    }
 
-    if (IS_RASHADER(upscaling_selected)) {
-        int reset_mode = rashader_upscaling_update(RASHADER_MODE(upscaling_selected), i, screen_top_bot);
-        if (rashader_render[i][screen_top_bot]) {
-            libra_gl_filter_chain_t *chain = rashader_render_chain(rashader_render[i][screen_top_bot]);
-            struct libra_image_gl_t image = {
-                .handle = tex,
-                .format = GL_INT_FORMAT,
-                .width = height,
-                .height = width,
-            };
-
-            struct libra_image_gl_t out = {
-                .handle = ctx->gl_tex_upscaled[i],
-                .format = GL_INT_FORMAT,
-                .width = ctx_height,
-                .height = ctx_width,
-            };
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, out.handle);
-            glTexImage2D(
-                GL_TEXTURE_2D, 0,
-                GL_INT_FORMAT, out.width,
-                out.height, 0,
-                GL_FORMAT, GL_UNSIGNED_BYTE,
-                NULL);
-            libra_error_t err = libra_gl_filter_chain_frame(chain, 1, image, out, NULL, NULL, NULL);
-            if (err) {
-                libra_error_print(err);
-                libra_error_free(&err);
-                goto rashader_fail;
-            }
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, out.handle);
-        } else if (!reset_mode) {
-    rashader_fail:
-            err_log("rashader render failed\n");
-            ui_upscaling_selected = UPSCALING_DEFAULT_NONE;
+        if (!IS_RASHADER(upscaling_selected)) {
+            rashader_upscaling_update(-1, i, screen_top_bot);
         }
+
+        pl_tex in_tex = NULL;
+        pl_tex out_tex = NULL;
+        if (IS_PLACEBO(upscaling_selected)) {
+            int reset_mode = placebo_upscaling_update(PLACEBO_MODE(upscaling_selected), i, screen_top_bot);
+            if (placebo_render[i][screen_top_bot]) {
+                struct pl_opengl_wrap_params in_tex_pars = {};
+                in_tex_pars.target = GL_TEXTURE_2D;
+                in_tex_pars.iformat = GL_INT_FORMAT;
+
+                in_tex_pars.texture = ctx->gl_tex[i];
+                in_tex_pars.width = height;
+                in_tex_pars.height = width;
+
+                in_tex = pl_opengl_wrap(pl_ogl_dev[i]->gpu, &in_tex_pars);
+                if (!in_tex) {
+                    goto placebo_fail;
+                }
+
+                struct pl_opengl_wrap_params out_tex_pars = {};
+                out_tex_pars.target = GL_TEXTURE_2D;
+                out_tex_pars.iformat = GL_INT_FORMAT;
+
+                out_tex_pars.texture = ctx->gl_tex_upscaled[i];
+                out_tex_pars.width = ctx_height;
+                out_tex_pars.height = ctx_width;
+
+                if (ctx->width_upscaled != out_tex_pars.width || ctx->height_upscaled != out_tex_pars.height) {
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, out_tex_pars.texture);
+                    glTexImage2D(
+                        GL_TEXTURE_2D, 0, GL_INT_FORMAT,
+                        out_tex_pars.width, out_tex_pars.height, 0,
+                        GL_FORMAT, GL_UNSIGNED_BYTE,
+                        NULL);
+                    ctx->width_upscaled = out_tex_pars.width;
+                    ctx->height_upscaled = out_tex_pars.height;
+                }
+
+                out_tex = pl_opengl_wrap(pl_ogl_dev[i]->gpu, &out_tex_pars);
+                if (!out_tex) {
+                    goto placebo_fail;
+                }
+
+                bool ret = placebo_render_run(placebo_render[i][screen_top_bot], in_tex, out_tex, 0, 0) != NULL;
+                if (!ret) {
+                    goto placebo_fail;
+                }
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, out_tex_pars.texture);
+                ctx->gl_tex_upscaled_prev[i] = out_tex_pars.texture;
+            } else if (!reset_mode) {
+placebo_fail:
+                err_log("placebo render failed\n");
+                ui_upscaling_selected = UPSCALING_DEFAULT_NONE;
+            }
+        }
+
+        if (in_tex)
+            pl_tex_destroy(pl_ogl_dev[i]->gpu, &in_tex);
+        if (out_tex)
+            pl_tex_destroy(pl_ogl_dev[i]->gpu, &out_tex);
+
+        if (IS_RASHADER(upscaling_selected)) {
+            int reset_mode = rashader_upscaling_update(RASHADER_MODE(upscaling_selected), i, screen_top_bot);
+            if (rashader_render[i][screen_top_bot]) {
+                libra_gl_filter_chain_t *chain = rashader_render_chain(rashader_render[i][screen_top_bot]);
+                struct libra_image_gl_t image = {
+                    .handle = ctx->gl_tex[i],
+                    .format = GL_INT_FORMAT,
+                    .width = height,
+                    .height = width,
+                };
+
+                struct libra_image_gl_t out = {
+                    .handle = ctx->gl_tex_upscaled[i],
+                    .format = GL_INT_FORMAT,
+                    .width = ctx_height,
+                    .height = ctx_width,
+                };
+
+                if (ctx->width_upscaled != (int)out.width || ctx->height_upscaled != (int)out.height) {
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, out.handle);
+                    glTexImage2D(
+                        GL_TEXTURE_2D, 0, GL_INT_FORMAT,
+                        out.width, out.height, 0,
+                        GL_FORMAT, GL_UNSIGNED_BYTE,
+                        NULL);
+                    ctx->width_upscaled = out.width;
+                    ctx->height_upscaled = out.height;
+                }
+
+                libra_error_t err = libra_gl_filter_chain_frame(chain, 1, image, out, NULL, NULL, NULL);
+                if (err) {
+                    libra_error_print(err);
+                    libra_error_free(&err);
+                    goto rashader_fail;
+                }
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, out.handle);
+                ctx->gl_tex_upscaled_prev[i] = out.handle;
+            } else if (!reset_mode) {
+rashader_fail:
+                err_log("rashader render failed\n");
+                ui_upscaling_selected = UPSCALING_DEFAULT_NONE;
+            }
+        }
+
+        if (ui_upscaling_selected == UPSCALING_DEFAULT_NONE)
+            ctx->gl_tex_upscaled_prev[i] = 0;
     }
 
     if (is_renderer_csc())
@@ -1095,6 +1137,8 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width,
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
     }
 
+    ctx->width_prev = ctx_width;
+    ctx->height_prev = ctx_height;
     ctx->win_width_prev = win_width_drawable;
     ctx->win_height_prev = win_height_drawable;
     ctx->view_mode_prev = view_mode;

@@ -21,7 +21,7 @@ NASM := -DELF -felf64
 endif
 
 ifneq ($(LITE),1)
-LDLIBS += -lplacebo -lrashader -fopenmp -lglslang -lMachineIndependent -lOSDependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -llcms2
+LDLIBS += -lplacebo -lrashader -lshaderc_combined -fopenmp -lglslang -lMachineIndependent -lOSDependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -llcms2
 else
 CPPFLAGS += -DUSE_SDL_RENDERER_ONLY
 endif

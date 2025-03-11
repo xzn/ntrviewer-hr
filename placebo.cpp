@@ -290,45 +290,70 @@ void placebo_render_close(struct placebo_render_t *render) {
     }
 }
 
-pl_tex placebo_render_run(struct placebo_render_t *render, pl_tex in_tex, int out_width, int out_height) {
-    pl_fmt out_fmt = pl_find_fmt(render->gpu, PL_FMT_UNORM, 3, 0, 0, pl_fmt_caps(PL_FMT_CAP_SAMPLEABLE | PL_FMT_CAP_RENDERABLE));
-    if (!out_fmt)
-        return 0;
+pl_tex placebo_render_run(struct placebo_render_t *render, pl_tex in_tex, pl_tex out_tex, int out_width, int out_height) {
+    if (!out_tex) {
+        pl_fmt out_fmt = pl_find_fmt(render->gpu, PL_FMT_UNORM, 3, 0, 0, pl_fmt_caps(PL_FMT_CAP_SAMPLEABLE | PL_FMT_CAP_RENDERABLE));
+        if (!out_fmt)
+            return 0;
 
-    if (!render->out_tex || render->out_width != out_width || render->out_height != out_height) {
-        pl_tex_params out_tex_pars = {
-            .w = out_width,
-            .h = out_height,
-            .d = 0,
-            .format = out_fmt,
-            .sampleable = 1,
-            .renderable = 1,
+        if (!render->out_tex || render->out_width != out_width || render->out_height != out_height) {
+            pl_tex_params out_tex_pars = {
+                .w = out_width,
+                .h = out_height,
+                .d = 0,
+                .format = out_fmt,
+                .sampleable = 1,
+                .renderable = 1,
+            };
+
+            if (!pl_tex_recreate(render->gpu, &render->out_tex, &out_tex_pars))
+                return 0;
+        }
+
+        pl_frame image = {
+            .num_planes = 1,
+            .planes = {{
+                .texture = in_tex,
+                .components = 3,
+                .component_mapping = {0, 1, 2, -1},
+            }},
+            .repr = pl_color_repr_rgb,
+            .color = pl_color_space_monitor,
         };
 
-        if (!pl_tex_recreate(render->gpu, &render->out_tex, &out_tex_pars))
+        pl_frame target = image;
+        target.planes[0].texture = render->out_tex;
+
+        if (!pl_render_image(render->render, &image, &target, &render->render_params))
             return 0;
+
+        pl_render_errors err = pl_renderer_get_errors(render->render);
+        if (err.errors != PL_RENDER_ERR_NONE)
+            return 0;
+
+        return render->out_tex;
+    } else {
+        pl_frame image = {
+            .num_planes = 1,
+            .planes = {{
+                .texture = in_tex,
+                .components = 3,
+                .component_mapping = {0, 1, 2, -1},
+            }},
+            .repr = pl_color_repr_rgb,
+            .color = pl_color_space_monitor,
+        };
+
+        pl_frame target = image;
+        target.planes[0].texture = out_tex;
+
+        if (!pl_render_image(render->render, &image, &target, &render->render_params))
+            return 0;
+
+        pl_render_errors err = pl_renderer_get_errors(render->render);
+        if (err.errors != PL_RENDER_ERR_NONE)
+            return 0;
+
+        return out_tex;
     }
-
-    pl_frame image = {
-        .num_planes = 1,
-        .planes = {{
-            .texture = in_tex,
-            .components = 3,
-            .component_mapping = {0, 1, 2, -1},
-        }},
-        .repr = pl_color_repr_rgb,
-        .color = pl_color_space_monitor,
-    };
-
-    pl_frame target = image;
-    target.planes[0].texture = render->out_tex;
-
-    if (!pl_render_image(render->render, &image, &target, &render->render_params))
-        return 0;
-
-    pl_render_errors err = pl_renderer_get_errors(render->render);
-    if (err.errors != PL_RENDER_ERR_NONE)
-        return 0;
-
-    return render->out_tex;
 }

@@ -20,7 +20,6 @@ extern bool renderer_single_thread;
 extern bool renderer_evt_sync;
 extern bool nk_gui_next;
 extern bool nk_input_current;
-extern rp_lock_t upscaling_update_lock;
 
 extern int opt_flag_d3d, opt_flag_ogl, opt_flag_gles, opt_flag_angle, opt_flag_no_csc, opt_flag_sdl_hw, opt_flag_sdl_sw;
 

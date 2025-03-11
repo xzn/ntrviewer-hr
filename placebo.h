@@ -24,7 +24,7 @@ struct placebo_render_t;
 struct placebo_render_t *placebo_render_init(struct placebo_t *placebo, size_t index, pl_gpu gpu, pl_log log);
 void placebo_render_close(struct placebo_render_t *render);
 
-pl_tex placebo_render_run(struct placebo_render_t *render, pl_tex in_tex, int out_width, int out_height);
+pl_tex placebo_render_run(struct placebo_render_t *render, pl_tex in_tex, pl_tex out_tex, int out_width, int out_height);
 
 #ifdef __cplusplus
 }

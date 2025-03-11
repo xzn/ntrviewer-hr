@@ -3,6 +3,9 @@
 #include "ui_renderer_d3d11.h"
 #include "ui_main_nk.h"
 #include "main.h"
+#include "placebo.h"
+#include "rashader.h"
+#include <libplacebo/d3d11.h>
 
 static SDL_Window *sdl_win[SCREEN_COUNT];
 static struct nk_context *nk_ctx;
@@ -33,40 +36,125 @@ enum {
     UPSCALING_DEFAULT_COUNT,
 };
 
-static void d3d11_upscaling_update(int ctx_top_bot) {
-    int i = ctx_top_bot;
+#define PLACEBO_UI_INDEX(mode) (UPSCALING_DEFAULT_COUNT + mode)
+#define PLACEBO_MODE(ui_index) (ui_index - PLACEBO_UI_INDEX(0))
+#define IS_PLACEBO(ui_index) (PLACEBO_MODE(ui_index) >= 0 && PLACEBO_MODE(ui_index) < placebo_count)
 
-    rp_lock_wait(upscaling_update_lock);
+static struct placebo_t *placebo;
+static int placebo_count;
+static struct placebo_render_t *placebo_render[SCREEN_COUNT][SCREEN_COUNT];
+static int placebo_render_mode[SCREEN_COUNT][SCREEN_COUNT];
 
-    if (i == SCREEN_TOP) {
-    }
+static pl_d3d11 pl_d3d11_dev[SCREEN_COUNT];
+static pl_log pl_log_dev;
 
-    rp_lock_rel(upscaling_update_lock);
-}
+#define RASHADER_UI_INDEX(mode) (UPSCALING_DEFAULT_COUNT + placebo_count + mode)
+#define RASHADER_MODE(ui_index) (ui_index - RASHADER_UI_INDEX(0))
+#define IS_RASHADER(ui_index) (RASHADER_MODE(ui_index) >= 0 && RASHADER_MODE(ui_index) < rashader_count)
+
+static struct rashader_t *rashader;
+static int rashader_count;
+static struct rashader_render_t *rashader_render[SCREEN_COUNT][SCREEN_COUNT];
+static int rashader_render_mode[SCREEN_COUNT][SCREEN_COUNT];
 
 static int d3d11_upscaling_init(void) {
-    rp_lock_init(upscaling_update_lock);
+    bool use_placebo = true;
+    bool use_rashader = true;
 
     ui_upscaling_filter_count = UPSCALING_DEFAULT_COUNT;
+
+    pl_log_dev = placebo_log_create();
+    for (int j = 0; j < SCREEN_COUNT; ++j) {
+        pl_d3d11_dev[j] = pl_d3d11_create(pl_log_dev, pl_d3d11_params(
+            .device = d3d11device[j],
+        ));
+        if (!pl_d3d11_dev[j]) {
+            use_placebo = false;
+        }
+
+        for (int i = 0; i < SCREEN_COUNT; ++i) {
+            placebo_render_mode[j][i] = -1;
+        }
+
+        for (int i = 0; i < SCREEN_COUNT; ++i) {
+            rashader_render_mode[j][i] = -1;
+        }
+    }
+
+    if (use_placebo) {
+        placebo = placebo_load("placebo.json");
+        if (placebo) {
+            placebo_count = placebo_mode_count(placebo);
+            ui_upscaling_filter_count += placebo_count;
+        }
+    }
+
+    if (use_rashader) {
+        rashader = rashader_load("rashader.json");
+        if (rashader) {
+            rashader_count = rashader_mode_count(rashader);
+            ui_upscaling_filter_count += rashader_count;
+        }
+    }
+
     ui_upscaling_filter_options = malloc(ui_upscaling_filter_count * sizeof(*ui_upscaling_filter_options));
     if (!ui_upscaling_filter_options) {
         return -1;
     }
 
     ui_upscaling_filter_options[UPSCALING_DEFAULT_NONE] = NK_UPSCALE_TYPE_TEXT_NONE NK_UPSCALE_TYPE_TEXT_NONE "None";
+
+    for (int i = 0; i < placebo_count; ++i) {
+        ui_upscaling_filter_options[PLACEBO_UI_INDEX(i)] = placebo_mode_name(placebo, i, NK_UPSCALE_TYPE_TEXT_PLACEBO);
+    }
+
+    for (int i = 0; i < rashader_count; ++i) {
+        ui_upscaling_filter_options[RASHADER_UI_INDEX(i)] = rashader_mode_name(rashader, i, NK_UPSCALE_TYPE_TEXT_RASHADER);
+    }
+
     ui_upscaling_selected = 0;
 
     return 0;
 }
 
+static void d3d11_filter_chain_free(void *fc);
 static void d3d11_upscaling_close(void) {
+    for (int j = 0; j < SCREEN_COUNT; ++j) {
+        for (int i = 0; i < SCREEN_COUNT; ++i) {
+            if (placebo_render[j][i]) {
+                placebo_render_close(placebo_render[j][i]);
+                placebo_render[j][i] = 0;
+            }
+        }
+
+        for (int i = 0; i < SCREEN_COUNT; ++i) {
+            if (rashader_render[j][i]) {
+                rashader_render_close(rashader_render[j][i], d3d11_filter_chain_free);
+                rashader_render[j][i] = 0;
+            }
+        }
+
+        pl_d3d11_destroy(&pl_d3d11_dev[j]);
+    }
+    placebo_log_destroy(&pl_log_dev);
+
+    if (placebo) {
+        placebo_unload(placebo);
+        placebo = 0;
+    }
+    placebo_count = 0;
+
+    if (rashader) {
+        rashader_unload(rashader);
+        rashader = 0;
+    }
+    rashader_count = 0;
+
     if (ui_upscaling_filter_options) {
         free(ui_upscaling_filter_options);
         ui_upscaling_filter_options = 0;
     }
     ui_upscaling_filter_count = 0;
-
-    rp_lock_close(upscaling_update_lock);
 }
 
 static const char *d3d_vs_src =
@@ -302,6 +390,14 @@ static int d3d11_init(void) {
                 err_log("CreateShaderResourceView failed: %d\n", (int)hr);
                 return -1;
             }
+
+            tex_desc.Usage = D3D11_USAGE_DEFAULT;
+            tex_desc.CPUAccessFlags = 0;
+            hr = ID3D11Device_CreateTexture2D(d3d11device[j], &tex_desc, NULL, &rp_buffer_ctx[i].d3d_tex_staging[j]);
+            if (hr) {
+                err_log("CreateTexture2D failed: %d\n", (int)hr);
+                return -1;
+            }
         }
     }
 
@@ -317,6 +413,10 @@ static void d3d11_close(void)
 
     for (int j = 0; j < SCREEN_COUNT; ++j) {
         for (int i = 0; i < SCREEN_COUNT; ++i) {
+            CHECK_AND_RELEASE(rp_buffer_ctx[j].d3d_rtv_upscaled[i]);
+            CHECK_AND_RELEASE(rp_buffer_ctx[j].d3d_srv_upscaled[i]);
+            CHECK_AND_RELEASE(rp_buffer_ctx[j].d3d_tex_upscaled[i]);
+            CHECK_AND_RELEASE(rp_buffer_ctx[j].d3d_tex_staging[i]);
             CHECK_AND_RELEASE(rp_buffer_ctx[j].d3d_srv[i]);
             CHECK_AND_RELEASE(rp_buffer_ctx[j].d3d_tex[i]);
             CHECK_AND_RELEASE(d3d_child_vb[j][i]);
@@ -472,8 +572,6 @@ void ui_renderer_d3d11_main(int screen_top_bot, int ctx_top_bot, view_mode_t vie
     int i = ctx_top_bot;
     HRESULT hr;
 
-    d3d11_upscaling_update(i);
-
     int p = win_shared ? screen_top_bot : i;
     sc_fail[p] = 0;
 
@@ -491,7 +589,6 @@ void ui_renderer_d3d11_main(int screen_top_bot, int ctx_top_bot, view_mode_t vie
         }
         d3d_pres_buf[p] = &bufs[index_sc];
         d3d_rtv[p] = d3d_pres_buf[p]->rtv;
-        ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &d3d_rtv[p], NULL);
     } else {
         if (i == SCREEN_TOP)
             rp_lock_wait(comp_lock);
@@ -531,11 +628,8 @@ void ui_renderer_d3d11_main(int screen_top_bot, int ctx_top_bot, view_mode_t vie
         }
 
         d3d_rtv[i] = sc_rtv[i];
-        ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &d3d_rtv[i], NULL);
     }
 
-    D3D11_VIEWPORT vp = { .Width = ui_ctx_width[p], .Height = ui_ctx_height[p] };
-    ID3D11DeviceContext_RSSetViewports(d3d11device_context[i], 1, &vp);
     if (!win_shared) {
         ID3D11DeviceContext_ClearRenderTargetView(d3d11device_context[i], d3d_rtv[p], bg);
     }
@@ -552,6 +646,115 @@ void ui_renderer_d3d11_main(int screen_top_bot, int ctx_top_bot, view_mode_t vie
     }
 }
 
+static int placebo_upscaling_update(int selected, int ctx_top_bot, int screen_top_bot) {
+    int i = ctx_top_bot;
+
+    int render_mode = -1;
+    bool reset_mode = 0;
+    if (selected >= 0) {
+        render_mode = selected;
+    } else {
+        reset_mode = 1;
+    }
+
+    if (
+        placebo_render[i][screen_top_bot] && (
+            placebo_render_mode[i][screen_top_bot] != render_mode ||
+            reset_mode
+        )
+    ) {
+        placebo_render_close(placebo_render[i][screen_top_bot]);
+        placebo_render[i][screen_top_bot] = 0;
+    }
+
+    if (!reset_mode && !placebo_render[i][screen_top_bot] && render_mode >= 0 && placebo) {
+        placebo_render[i][screen_top_bot] = placebo_render_init(placebo, render_mode, pl_d3d11_dev[i]->gpu, pl_log_dev);
+        if (!placebo_render[i][screen_top_bot]) {
+            err_log("placebo_render_init failed\n");
+            goto fail;
+        }
+
+        placebo_render_mode[i][screen_top_bot] = render_mode;
+    }
+
+fail:
+    return reset_mode;
+}
+
+static void *d3d11_filter_chain_create(libra_shader_preset_t *preset, void *dev) {
+    struct filter_chain_d3d11_opt_t opt = {
+        .version = libra_instance_api_version(),
+    };
+    libra_d3d11_filter_chain_t out;
+    libra_error_t err = libra_d3d11_filter_chain_create(preset, dev, &opt, &out);
+    if (err) {
+        libra_error_print(err);
+        libra_error_free(&err);
+        return NULL;
+    }
+    return out;
+}
+
+static void d3d11_filter_chain_free(void *fc) {
+    libra_error_t err = libra_d3d11_filter_chain_free((libra_d3d11_filter_chain_t *)fc);
+    if (err) {
+        libra_error_print(err);
+        libra_error_free(&err);
+    }
+}
+
+static int rashader_upscaling_update(int selected, int ctx_top_bot, int screen_top_bot) {
+    int i = ctx_top_bot;
+
+    int render_mode = -1;
+    bool reset_mode = 0;
+    if (selected >= 0) {
+        render_mode = selected;
+    } else {
+        reset_mode = 1;
+    }
+
+    if (
+        rashader_render[i][screen_top_bot] && (
+            rashader_render_mode[i][screen_top_bot] != render_mode ||
+            reset_mode
+        )
+    ) {
+        rashader_render_close(rashader_render[i][screen_top_bot], d3d11_filter_chain_free);
+        rashader_render[i][screen_top_bot] = 0;
+    }
+
+    static libra_preset_ctx_t ctx = 0;
+    if (!reset_mode && !rashader_render[i][screen_top_bot] && render_mode >= 0) {
+        libra_error_t err = libra_preset_ctx_create(&ctx);
+        if (err) {
+            libra_error_print(err);
+            libra_error_free(&err);
+            ctx = 0;
+            goto fail;
+        }
+        err = libra_preset_ctx_set_runtime(&ctx, LIBRA_PRESET_CTX_RUNTIME_D3D11);
+        if (err) {
+            libra_error_print(err);
+            libra_error_free(&err);
+            goto fail;
+        }
+
+        rashader_render[i][screen_top_bot] = rashader_render_init(rashader, render_mode, &ctx, d3d11_filter_chain_create, d3d11device[i]);
+        if (!rashader_render[i][screen_top_bot]) {
+            err_log("rashader_render_init failed\n");
+            goto fail;
+        }
+
+        rashader_render_mode[i][screen_top_bot] = render_mode;
+    }
+
+fail:
+    if (ctx)
+        libra_preset_ctx_free(&ctx);
+    return reset_mode;
+}
+
 static int ctx_width[SCREEN_COUNT];
 static int ctx_height[SCREEN_COUNT];
 static int win_width_drawable[SCREEN_COUNT];
@@ -561,7 +764,7 @@ static void d3d11_draw_screen(int ctx_top_bot, int screen_top_bot, struct d3d_ve
 {
     int i = ctx_top_bot;
 
-    {
+    if (vertices) {
         HRESULT hr;
         D3D11_MAPPED_SUBRESOURCE tex_mapped = {};
         hr = ID3D11DeviceContext_Map(d3d11device_context[i], (ID3D11Resource *)d3d_child_vb[i][screen_top_bot], 0, D3D11_MAP_WRITE_DISCARD, 0, &tex_mapped);
@@ -591,6 +794,57 @@ static void d3d11_draw_screen(int ctx_top_bot, int screen_top_bot, struct d3d_ve
     ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[i], 0, 1, &ptr_null);
 }
 
+static bool d3d11_recreate_upscaled_resource(struct rp_buffer_ctx_t *ctx, int ctx_top_bot, int ctx_width, int ctx_height) {
+    int i = ctx_top_bot;
+
+    HRESULT hr;
+
+    if (ctx->width_upscaled != ctx_height || ctx->height_upscaled != ctx_width || !ctx->d3d_srv_upscaled_prev[i]) {
+        CHECK_AND_RELEASE(ctx->d3d_rtv_upscaled[i]);
+        CHECK_AND_RELEASE(ctx->d3d_srv_upscaled[i]);
+        CHECK_AND_RELEASE(ctx->d3d_tex_upscaled[i]);
+
+        D3D11_TEXTURE2D_DESC tex_desc = {};
+        tex_desc.Width = ctx_height;
+        tex_desc.Height = ctx_width;
+        tex_desc.MipLevels = 1;
+        tex_desc.ArraySize = 1;
+        tex_desc.Format = D3D_FORMAT;
+        tex_desc.SampleDesc.Count = 1;
+        tex_desc.SampleDesc.Quality = 0;
+        tex_desc.Usage = D3D11_USAGE_DEFAULT;
+        tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        tex_desc.MiscFlags = 0;
+        tex_desc.CPUAccessFlags = 0;
+
+        hr = ID3D11Device_CreateTexture2D(d3d11device[i], &tex_desc, NULL, &ctx->d3d_tex_upscaled[i]);
+        if (hr) {
+            err_log("CreateTexture2D failed: %d\n", (int)hr);
+            goto fail;
+        }
+
+        hr = ID3D11Device_CreateShaderResourceView(d3d11device[i], (ID3D11Resource *)ctx->d3d_tex_upscaled[i], NULL, &ctx->d3d_srv_upscaled[i]);
+        if (hr) {
+            err_log("CreateShaderResourceView failed: %d\n", (int)hr);
+            goto fail;
+        }
+
+        hr = ID3D11Device_CreateRenderTargetView(d3d11device[i], (ID3D11Resource *)ctx->d3d_tex_upscaled[i], NULL, &ctx->d3d_rtv_upscaled[i]);
+        if (hr) {
+            err_log("CreateRenderTargetView failed: %d\n", (int)hr);
+            goto fail;
+        }
+
+        ctx->width_upscaled = ctx_height;
+        ctx->height_upscaled = ctx_width;
+    }
+
+    return true;
+
+fail:
+    return false;
+}
+
 void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared) {
     double ctx_left_f;
     double ctx_top_f;
@@ -607,20 +861,38 @@ void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int widt
         {{ctx_right_f, ctx_top_f}, {1.0f, 1.0f}},
     };
 
-    HRESULT hr;
-
     if (width != (screen_top_bot == SCREEN_TOP ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1) || height != SCREEN_WIDTH) {
         err_log("Invalid size\n");
         return;
     }
 
     int i = ctx_top_bot;
+    int p = win_shared ? screen_top_bot : i;
 
     int upscaling_selected = ui_upscaling_selected;
+    bool upscaled = upscaling_selected != UPSCALING_DEFAULT_NONE;
+
+    bool need_tex_update = ctx->upscaling_selected_prev != upscaling_selected ||
+        ctx->width_prev != ctx_width[screen_top_bot] || ctx->height_prev != ctx_height[screen_top_bot] ||
+        ctx->win_width_prev != win_width_drawable[screen_top_bot] || ctx->win_height_prev != win_height_drawable[screen_top_bot] ||
+        ctx->view_mode_prev != view_mode;
+
+    ID3D11ShaderResourceView *srv = ctx->d3d_srv[i];
+    if (!data) {
+        if (upscaled) {
+            if (need_tex_update || !ctx->d3d_srv_upscaled_prev[i]) {
+                data = ctx->data_prev;
+            } else {
+                srv = ctx->d3d_srv_upscaled_prev[i];
+            }
+        } else {
+            ctx->d3d_srv_upscaled_prev[i] = 0;
+        }
+    }
 
     if (data) {
         D3D11_MAPPED_SUBRESOURCE tex_mapped = {};
-        hr = ID3D11DeviceContext_Map(d3d11device_context[i], (ID3D11Resource *)ctx->d3d_tex[i], 0, D3D11_MAP_WRITE_DISCARD, 0, &tex_mapped);
+        HRESULT hr = ID3D11DeviceContext_Map(d3d11device_context[i], (ID3D11Resource *)ctx->d3d_tex[i], 0, D3D11_MAP_WRITE_DISCARD, 0, &tex_mapped);
         if (hr) {
             err_log("Map failed: %d", (int)hr);
             return;
@@ -630,10 +902,106 @@ void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int widt
         }
 
         ID3D11DeviceContext_Unmap(d3d11device_context[i], (ID3D11Resource *)ctx->d3d_tex[i], 0);
+
+        if (!IS_PLACEBO(upscaling_selected)) {
+            placebo_upscaling_update(-1, i, screen_top_bot);
+        }
+
+        if (!IS_RASHADER(upscaling_selected)) {
+            rashader_upscaling_update(-1, i, screen_top_bot);
+        }
+
+        pl_tex in_tex = NULL;
+        pl_tex out_tex = NULL;
+        if (IS_PLACEBO(upscaling_selected)) {
+            int reset_mode = placebo_upscaling_update(PLACEBO_MODE(upscaling_selected), i, screen_top_bot);
+            if (placebo_render[i][screen_top_bot]) {
+                ID3D11DeviceContext_CopyResource(d3d11device_context[i], (ID3D11Resource *)ctx->d3d_tex_staging[i], (ID3D11Resource *)ctx->d3d_tex[i]);
+
+                struct pl_d3d11_wrap_params in_tex_pars = { .tex = (ID3D11Resource *)ctx->d3d_tex_staging[i] };
+                in_tex = pl_d3d11_wrap(pl_d3d11_dev[i]->gpu, &in_tex_pars);
+                if (!in_tex) {
+                    goto placebo_fail;
+                }
+
+                if (!d3d11_recreate_upscaled_resource(ctx, i, ctx_width[screen_top_bot], ctx_height[screen_top_bot])) {
+                    goto placebo_fail;
+                }
+
+                struct pl_d3d11_wrap_params out_tex_pars = { .tex = (ID3D11Resource *)ctx->d3d_tex_upscaled[i] };
+                out_tex = pl_d3d11_wrap(pl_d3d11_dev[i]->gpu, &out_tex_pars);
+                if (!out_tex) {
+                    goto placebo_fail;
+                }
+                bool ret = placebo_render_run(placebo_render[i][screen_top_bot], in_tex, out_tex, 0, 0) != NULL;
+                if (!ret) {
+                    goto placebo_fail;
+                }
+                srv = ctx->d3d_srv_upscaled_prev[i] = ctx->d3d_srv_upscaled[i];
+            } else if (!reset_mode) {
+placebo_fail:
+                err_log("placebo render failed\n");
+
+                CHECK_AND_RELEASE(ctx->d3d_rtv_upscaled[i]);
+                CHECK_AND_RELEASE(ctx->d3d_srv_upscaled[i]);
+                CHECK_AND_RELEASE(ctx->d3d_tex_upscaled[i]);
+
+                ui_upscaling_selected = UPSCALING_DEFAULT_NONE;
+            }
+        }
+        if (in_tex)
+            pl_tex_destroy(pl_d3d11_dev[i]->gpu, &in_tex);
+        if (out_tex)
+            pl_tex_destroy(pl_d3d11_dev[i]->gpu, &out_tex);
+
+        if (IS_RASHADER(upscaling_selected)) {
+            int reset_mode = rashader_upscaling_update(RASHADER_MODE(upscaling_selected), i, screen_top_bot);
+            if (rashader_render[i][screen_top_bot]) {
+                libra_d3d11_filter_chain_t *chain = rashader_render_chain(rashader_render[i][screen_top_bot]);
+
+                if (!d3d11_recreate_upscaled_resource(ctx, i, ctx_width[screen_top_bot], ctx_height[screen_top_bot])) {
+                    goto rashader_fail;
+                }
+
+                libra_error_t err = libra_d3d11_filter_chain_frame(chain, d3d11device_context[i], 1, ctx->d3d_srv[i], ctx->d3d_rtv_upscaled[i], NULL, NULL, NULL);
+                if (err) {
+                    libra_error_print(err);
+                    libra_error_free(&err);
+                    goto rashader_fail;
+                }
+                srv = ctx->d3d_srv_upscaled_prev[i] = ctx->d3d_srv_upscaled[i];
+            } else if (!reset_mode) {
+rashader_fail:
+                err_log("rashader render failed\n");
+
+                CHECK_AND_RELEASE(ctx->d3d_rtv_upscaled[i]);
+                CHECK_AND_RELEASE(ctx->d3d_srv_upscaled[i]);
+                CHECK_AND_RELEASE(ctx->d3d_tex_upscaled[i]);
+
+                ui_upscaling_selected = UPSCALING_DEFAULT_NONE;
+            }
+        }
+
+        if (ui_upscaling_selected == UPSCALING_DEFAULT_NONE)
+            ctx->d3d_srv_upscaled_prev[i] = 0;
     }
 
-    d3d11_draw_screen(i, screen_top_bot, vertices, ctx->d3d_srv[i]);
+    if (is_renderer_csc()) {
+        ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &d3d_rtv[p], NULL);
+    } else {
+        ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &d3d_rtv[i], NULL);
+    }
 
+    D3D11_VIEWPORT vp = { .Width = ui_ctx_width[p], .Height = ui_ctx_height[p] };
+    ID3D11DeviceContext_RSSetViewports(d3d11device_context[i], 1, &vp);
+
+    d3d11_draw_screen(i, screen_top_bot, need_tex_update ? vertices : NULL, srv);
+
+    ctx->width_prev = ctx_width[screen_top_bot];
+    ctx->height_prev = ctx_height[screen_top_bot];
+    ctx->win_width_prev = win_width_drawable[screen_top_bot];
+    ctx->win_height_prev = win_height_drawable[screen_top_bot];
+    ctx->view_mode_prev = view_mode;
     ctx->upscaling_selected_prev = upscaling_selected;
 }
 
