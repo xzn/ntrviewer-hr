@@ -792,7 +792,22 @@ static void main_windows(void) {
 
     nk_backend_font_init();
 
+#ifdef _WIN32
+#ifndef USE_SDL_RENDERER_ONLY
+    if (is_renderer_csc() && is_renderer_d3d11() && ui_compositing) {
+        if (d3d11_ui_init()) {
+            d3d11_ui_close();
+            ui_compositing = 0;
+        }
+    }
+#endif
+#endif
     main_ntr();
+#ifdef _WIN32
+#ifndef USE_SDL_RENDERER_ONLY
+    d3d11_ui_close();
+#endif
+#endif
 
     event_close(&update_bottom_screen_evt);
 

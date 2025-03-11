@@ -401,9 +401,6 @@ static int d3d11_init(void) {
         }
     }
 
-    if (d3d11_ui_init())
-        return -1;
-
     return 0;
 }
 
@@ -1130,6 +1127,7 @@ fail:
             HRESULT hr;
 
             if (p == SCREEN_TOP) {
+                ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &d3d_rtv[i], NULL);
                 nk_d3d11_render(d3d11device_context[i], NK_ANTI_ALIASING_ON, ui_win_scale[i]);
                 nk_gui_next = 0;
             }
