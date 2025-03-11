@@ -112,7 +112,7 @@ static int d3d11_upscaling_init(void) {
         ui_upscaling_filter_options[RASHADER_UI_INDEX(i)] = rashader_mode_name(rashader, i, NK_UPSCALE_TYPE_TEXT_RASHADER);
     }
 
-    ui_upscaling_selected = 0;
+    ui_upscaling_selected = UPSCALING_DEFAULT_NONE;
 
     return 0;
 }

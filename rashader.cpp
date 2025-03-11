@@ -5,7 +5,6 @@
 #include <vector>
 #include <memory>
 #include <fstream>
-#include <algorithm>
 
 #include "rapidjson/document.h"
 #define RASHADER_SHADER_DIR "slang-shaders"

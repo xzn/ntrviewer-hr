@@ -422,6 +422,8 @@ static int rashader_count;
 static struct rashader_render_t *rashader_render[SCREEN_COUNT][SCREEN_COUNT];
 static int rashader_render_mode[SCREEN_COUNT][SCREEN_COUNT];
 
+static bool rashader_delay_init[SCREEN_COUNT][SCREEN_COUNT];
+
 static int ogl_upscaling_init(void) {
     bool use_placebo = true;
     bool use_rashader = is_renderer_ogl();
@@ -441,10 +443,10 @@ static int ogl_upscaling_init(void) {
 
         for (int i = 0; i < SCREEN_COUNT; ++i) {
             placebo_render_mode[j][i] = -1;
-        }
-
-        for (int i = 0; i < SCREEN_COUNT; ++i) {
             rashader_render_mode[j][i] = -1;
+#ifndef _WIN32
+            rashader_delay_init[j][i] = true;
+#endif
         }
     }
     SDL_GL_MakeCurrent(NULL, NULL);
@@ -480,7 +482,7 @@ static int ogl_upscaling_init(void) {
         ui_upscaling_filter_options[RASHADER_UI_INDEX(i)] = rashader_mode_name(rashader, i, NK_UPSCALE_TYPE_TEXT_RASHADER);
     }
 
-    ui_upscaling_selected = 0;
+    ui_upscaling_selected = UPSCALING_DEFAULT_NONE;
 
     return 0;
 }
@@ -879,6 +881,12 @@ static int rashader_upscaling_update(int selected, int ctx_top_bot, int screen_t
 
     static libra_preset_ctx_t ctx = 0;
     if (!reset_mode && !rashader_render[i][screen_top_bot] && render_mode >= 0) {
+        if (rashader_delay_init[i][screen_top_bot]) {
+            rashader_delay_init[i][screen_top_bot] = false;
+            reset_mode = true;
+            goto fail;
+        }
+
         libra_error_t err = libra_preset_ctx_create(&ctx);
         if (err) {
             libra_error_print(err);
@@ -1098,8 +1106,11 @@ rashader_fail:
             }
         }
 
-        if (ui_upscaling_selected == UPSCALING_DEFAULT_NONE)
+        if (ui_upscaling_selected == UPSCALING_DEFAULT_NONE) {
             ctx->gl_tex_upscaled_prev[i] = 0;
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, ctx->gl_tex[i]);
+        }
     }
 
     if (is_renderer_csc())

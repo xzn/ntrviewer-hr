@@ -1,0 +1,12 @@
+{
+    "modes": [
+        {
+            "name": "Sharp",
+            "preset": "pixel-art-scaling/sharp-shimmerless"
+        },
+        {
+            "name": "SMAA + FSR",
+            "preset": "edge-smoothing/fsr/smaa+fsr"
+        }
+    ]
+}
