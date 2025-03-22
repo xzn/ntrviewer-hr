@@ -554,6 +554,7 @@ void ui_set_hide_nk_windows(bool hide) {
     if (hide) {
         window_closed = -1;
     }
+    sdl_update_bottom_screen_cursor();
 }
 
 void ui_main_nk(void)
@@ -574,7 +575,6 @@ void ui_main_nk(void)
                 ui_set_hide_nk_windows(!ui_hide_nk_windows);
                 if (ui_hide_nk_windows)
                     focus_window = 1;
-                sdl_update_bottom_screen_cursor();
             }
         }
     }
@@ -590,11 +590,6 @@ void ui_main_nk(void)
     }
 
     enum nk_show_states show_window = !ui_hide_nk_windows;
-
-    if (show_window) {
-        sdl_update_bottom_screen_cursor();
-    }
-
     char msg_buf[UI_MSG_BUF_LEN_MAX];
 
     if (window_closed && show_window) {

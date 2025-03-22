@@ -916,7 +916,7 @@ static int sdl_get_bottom_screen_mouse_coord(view_mode_t vm, Uint32 wid, Sint32 
     }
 
     if (wid != ui_sdl_win_id[i]) {
-        return -1;
+        return 1;
     }
 
     for (int i = 0; i < SCREEN_COUNT; ++i) {
