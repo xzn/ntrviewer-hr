@@ -117,9 +117,9 @@ static GLushort fbo_indices[] =
     {0, 1, 2, 1, 2, 3};
 
 static GLfloat vertices_pos[4][3] = {
-    { -1.0f, 1.0f, 0.0f },  // Position 0
-    { -1.0f, -1.0f, 0.0f }, // Position 1
     { 1.0f, -1.0f, 0.0f },  // Position 2
+    { -1.0f, -1.0f, 0.0f }, // Position 1
+    { -1.0f, 1.0f, 0.0f },  // Position 0
     { 1.0f, 1.0f, 0.0f },   // Position 3
 };
 
@@ -1352,6 +1352,12 @@ void ui_renderer_ogl_gen_cursor(stbi_t *image, const unsigned char *base, int wi
         GL_FORMAT, GL_UNSIGNED_BYTE,
         base2);
 
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenerateMipmap(GL_TEXTURE_2D);
+
     int upscaling_selected = ui_upscaling_selected;
 
     if (
@@ -1513,18 +1519,18 @@ no_upscale:
             glVertexAttribPointer(gl_tex_coord_loc[i], 2, GL_FLOAT, GL_FALSE, sizeof(*vertices_tex_coord), vertices_tex_coord);
         }
 
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glUniform1i(gl_sampler_loc[i], 0);
-        glDisable(GL_CULL_FACE);
-        glDisable(GL_DEPTH_TEST);
-        glDisable(GL_BLEND);
-        glDisable(GL_SCISSOR_TEST);
-
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, tex);
 
         glViewport(0, 0, target_width, target_height);
         glUseProgram(gl_program[i]);
+
+        glUniform1i(gl_sampler_loc[i], 0);
+
+        glDisable(GL_CULL_FACE);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_BLEND);
+        glDisable(GL_SCISSOR_TEST);
 
         if (gl_use_vao) {
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
