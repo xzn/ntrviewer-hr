@@ -420,7 +420,7 @@ static int sdl_get_bottom_screen_mouse_coord(view_mode_t vm, Uint32 wid, Sint32 
 }
 
 static bool sdl_bottom_screen_grabbing;
-static enum CLARITY_ICON_SIZE sdl_bottom_screen_cursor_size = CLARITY_ICON_SIZE_MEDIUM;
+int sdl_bottom_screen_cursor_size = CLARITY_ICON_SIZE_MEDIUM;
 
 static void sdl_set_bottom_screen_cursor(bool reset) {
     if (reset) {
@@ -516,10 +516,164 @@ bool sdl_process_bottom_screen_event(SDL_Event *evt) {
     return false;
 }
 
+static SDL_GameController *sdl_game_controller;
+static int game_controller_selected;
+static void close_game_controller(void) {
+    if (sdl_game_controller) {
+        SDL_GameControllerClose(sdl_game_controller);
+        sdl_game_controller = 0;
+    }
+    game_controller_selected = 0;
+}
+
+#include <math.h>
+
 static input_redirection_frame_t input_redirection_frame_send;
 Uint32 SDLCALL input_redirection_timer_cb(Uint32 interval, void *) {
     if (!program_running)
         return 0;
+
+    if (
+        ui_controller_selected != game_controller_selected &&
+        ui_controller_selected >= 1 &&
+        ui_controller_selected < ui_num_controllers - 1
+    ) {
+        close_game_controller();
+
+        sdl_game_controller = SDL_GameControllerOpen(ui_controller_selected - 1); // Skip empty entry
+        if (sdl_game_controller) {
+            game_controller_selected = ui_controller_selected;
+        }
+    }
+
+    input_redirection_frame.hidPad = input_redirection_frame_default.hidPad;
+    input_redirection_frame.circlePadState = input_redirection_frame_default.circlePadState;
+    input_redirection_frame.cppState = input_redirection_frame_default.cppState;
+    input_redirection_frame.interfaceButtons = input_redirection_frame_default.interfaceButtons;
+
+    bool swap_face = ui_controller_swap_face_buttons;
+
+    if (sdl_game_controller) {
+        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_GUIDE)) {
+            input_redirection_frame.interfaceButtons |= 1;
+        }
+        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_MISC1)) {
+            input_redirection_frame.interfaceButtons |= 2;
+        }
+        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_A)) {
+            input_redirection_frame.hidPad &= swap_face ? ~(1 << 1) : ~(1 << 0);
+        }
+        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_B)) {
+            input_redirection_frame.hidPad &= swap_face ? ~(1 << 0) : ~(1 << 1);
+        }
+        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_X)) {
+            input_redirection_frame.hidPad &= swap_face ? ~(1 << 11) : ~(1 << 10);
+        }
+        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_Y)) {
+            input_redirection_frame.hidPad &= swap_face ? ~(1 << 10) : ~(1 << 11);
+        }
+        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_BACK)) {
+            input_redirection_frame.hidPad &= ~(1 << 2);
+        }
+        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_START)) {
+            input_redirection_frame.hidPad &= ~(1 << 3);
+        }
+        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) {
+            input_redirection_frame.hidPad &= ~(1 << 4);
+        }
+        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_DPAD_LEFT)) {
+            input_redirection_frame.hidPad &= ~(1 << 5);
+        }
+        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_DPAD_UP)) {
+            input_redirection_frame.hidPad &= ~(1 << 6);
+        }
+        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_DPAD_DOWN)) {
+            input_redirection_frame.hidPad &= ~(1 << 7);
+        }
+        if (
+            SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_RIGHTSTICK) &&
+            SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_LEFTSTICK) &&
+            SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) &&
+            SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_LEFTSHOULDER)
+        ) {
+            input_redirection_frame.interfaceButtons |= 4;
+        } else {
+            if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) {
+                input_redirection_frame.hidPad &= ~(1 << 8);
+            }
+            if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_LEFTSHOULDER)) {
+                input_redirection_frame.hidPad &= ~(1 << 9);
+            }
+        }
+
+        const int DEAD_ZONE = (1 << 15) / 10;
+
+        Sint16 left_x = SDL_GameControllerGetAxis(sdl_game_controller, SDL_CONTROLLER_AXIS_LEFTX);
+        Sint16 left_y = SDL_GameControllerGetAxis(sdl_game_controller, SDL_CONTROLLER_AXIS_LEFTY);
+        left_x = abs(left_x) >= DEAD_ZONE ? left_x : 0;
+        left_y = abs(left_y) >= DEAD_ZONE ? left_y : 0;
+
+        const int axis_range = (1 << 15) - 1;
+
+        if (left_x < -axis_range)
+            left_x = -axis_range;
+        if (left_y < -axis_range)
+            left_y = -axis_range;
+
+        const int CPAD_BOUND = 0x5d0;
+
+        if (left_x != 0 || left_y != 0) {
+            left_x = (int32_t)left_x * CPAD_BOUND / axis_range + 0x800;
+            left_y = (int32_t)-left_y * CPAD_BOUND / axis_range + 0x800;
+            if (left_x > 0xfff) {
+                left_x = 0xfff;
+            } else if (left_x < 1) {
+                left_x = 1;
+            }
+            if (left_y > 0xfff) {
+                left_y = 0xfff;
+            } else if (left_y < 1) {
+                left_y = 1;
+            }
+            input_redirection_frame.circlePadState = (left_y << 12) | left_x;
+        }
+
+        Sint16 right_x = SDL_GameControllerGetAxis(sdl_game_controller, SDL_CONTROLLER_AXIS_RIGHTX);
+        Sint16 right_y = SDL_GameControllerGetAxis(sdl_game_controller, SDL_CONTROLLER_AXIS_RIGHTY);
+        right_x = abs(right_x) >= DEAD_ZONE ? right_x : 0;
+        right_y = abs(right_y) >= DEAD_ZONE ? right_y : 0;
+
+        if (right_x < -axis_range)
+            right_x = -axis_range;
+        if (right_y < -axis_range)
+            right_y = -axis_range;
+
+        const int TRIGGER_ZONE = (1 << 4);
+
+        Sint16 trigger_l = SDL_GameControllerGetAxis(sdl_game_controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT);
+        Sint16 trigger_r = SDL_GameControllerGetAxis(sdl_game_controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
+        trigger_l = trigger_l >= TRIGGER_ZONE ? 1 : 0;
+        trigger_r = trigger_r >= TRIGGER_ZONE ? 1 : 0;
+
+        const int CPP_BOUND = 0x7f;
+        // rotate the c-stick position 45 degrees according to TuxSH
+        if (right_x != 0 || right_y != 0 || trigger_l || trigger_r) {
+            int32_t x = (int32_t)round(M_SQRT1_2 * ((int32_t)right_x - right_y) * CPP_BOUND) / axis_range + 0x80;
+            int32_t y = (int32_t)round(M_SQRT1_2 * ((int32_t)-right_y - right_x) * CPP_BOUND) / axis_range + 0x80;
+            if (x > 0xff) {
+                x = 0xff;
+            } else if (x < 1) {
+                x = 1;
+            }
+            if (y > 0xff) {
+                y = 0xff;
+            } else if (y < 1) {
+                y = 1;
+            }
+
+            input_redirection_frame.cppState = (y << 24) | (x << 16) | (((trigger_r << 1) | (trigger_l << 2)) << 8) | 0x81;
+        }
+    }
 
     input_redirection_frame_t frame = {
         .hidPad = input_redirection_frame.hidPad,
@@ -539,7 +693,7 @@ int ui_num_controllers;
 int ui_controller_selected;
 const char **ui_controllers_names;
 int *ui_controllers_ids;
-nk_bool ui_controller_swap_face_buttons;
+nk_bool ui_controller_swap_face_buttons = 1;
 
 void ui_update_game_controllers(void) {
     ui_num_controllers = 0;
@@ -558,7 +712,7 @@ void ui_update_game_controllers(void) {
     ui_controllers_ids = malloc(sizeof(int) * ui_n);
 
     int nn = 0;
-    ui_controllers_names[nn] = "";
+    ui_controllers_names[nn] = ""; // Empty none entry (input redirection disabled)
     ui_controllers_ids[nn] = -1;
     ++nn;
     for (int i = 0; i < n; ++i) {
@@ -575,5 +729,6 @@ void ui_update_game_controllers(void) {
     ui_controllers_ids[nn] = -1;
     ui_num_controllers = ++nn;
 
-    ui_controller_selected = 0;
+    ui_controller_selected = nn > 1 + 0 + 1;
+    close_game_controller();
 }

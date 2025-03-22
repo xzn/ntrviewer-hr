@@ -6,6 +6,7 @@
 extern const input_redirection_frame_t input_redirection_frame_default;
 extern input_redirection_frame_t input_redirection_frame;
 extern rp_lock_t sdl_cursors_lock;
+extern int sdl_bottom_screen_cursor_size;
 
 void sdl_update_bottom_screen_cursor(void);
 void generate_cursors_images(void);

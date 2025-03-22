@@ -118,6 +118,7 @@ static enum NK_FOCUS {
     NK_FOCUS_CONNECT,
     NK_FOCUS_INPUT_REDIRECTION,
     NK_FOCUS_INPUT_SWAP_FACE,
+    NK_FOCUS_INPUT_CURSOR_SIZE,
     NK_FOCUS_COUNT,
     NK_FOCUS_MIN = 0,
     NK_FOCUS_MAX = NK_FOCUS_COUNT - 1,
@@ -601,7 +602,7 @@ void ui_main_nk(void)
         nk_window_show(ctx, remote_play_wnd, 1);
         window_closed = 0;
     }
-    if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 600, 565),
+    if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 600, 585),
                  NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_TITLE | NK_WINDOW_CLOSABLE) &&
         show_window)
     {
@@ -757,7 +758,6 @@ void ui_main_nk(void)
         nk_layout_row_dynamic(ctx, 30, 2);
         nk_label(ctx, "Reliable Stream", NK_TEXT_CENTERED);
         selected = ntr_rp_config.kcp_mode;
-        combo_size = (struct nk_vec2){combo_width, 100};
         const char *reliable_stream_options[] = {
             "Off",
             "On",
@@ -797,7 +797,6 @@ void ui_main_nk(void)
         nk_layout_row_dynamic(ctx, 30, 2);
         nk_label(ctx, "Input Redirection", NK_TEXT_CENTERED);
         selected = ui_controller_selected;
-        combo_size = (struct nk_vec2){combo_width, 200};
         do_nav_combobox_next(ctx, NK_FOCUS_INPUT_REDIRECTION, &selected, &ui_controller_selected, ui_num_controllers);
         nk_combobox(ctx, ui_controllers_names, ui_num_controllers, &selected, 30, combo_size);
         check_nav_combobox_prev(ctx, &selected);
@@ -817,8 +816,40 @@ void ui_main_nk(void)
         nk_checkbox_label(ctx, "", &ui_controller_swap_face_buttons);
         check_nav_checkbox_prev(ctx, NK_FOCUS_INPUT_SWAP_FACE, ui_controller_swap_face_buttons);
 
+        nk_layout_row_dynamic(ctx, 30, 2);
+        nk_label(ctx, "Bottom Screen Cursor", NK_TEXT_CENTERED);
+        selected = sdl_bottom_screen_cursor_size;
+        const char *cursor_size_options[] = {
+            "Small",
+            "Medium",
+            "Large",
+            "Extra Large",
+        };
+        do_nav_combobox_next(ctx, NK_FOCUS_INPUT_CURSOR_SIZE, &selected, &sdl_bottom_screen_cursor_size, ui_num_controllers);
+        nk_combobox(ctx, cursor_size_options, sizeof(cursor_size_options) / sizeof(*cursor_size_options), &selected, 30, combo_size);
+        check_nav_combobox_prev(ctx, &selected);
+        if (selected != sdl_bottom_screen_cursor_size)
+        {
+            set_nav_combobox_prev(NK_FOCUS_INPUT_CURSOR_SIZE);
+            sdl_bottom_screen_cursor_size = selected;
+        }
+
         nk_layout_row_dynamic(ctx, 30, 1);
         nk_label(ctx, "Press \"F\" to toggle fullscreen.", NK_TEXT_CENTERED);
+        nk_layout_row_dynamic(ctx, 30, 1);
+        nk_label(ctx, "Input redirection can be enabled in Luma3DS/Rosalina's menu.", NK_TEXT_CENTERED);
+        nk_layout_row_dynamic(ctx, 30, 1);
+        nk_label(ctx, "(Default key combo: L+Down+Select)", NK_TEXT_CENTERED);
+        nk_layout_row_dynamic(ctx, 60, 1);
+        nk_label_wrap(ctx,
+            "To enable remote play with games that disables Wi-Fi during gameplay, "
+            "such as games in the Pokemon series, "
+            "enable either the debugger or the input redirection feature in Luma3DS/Rosalina's menu."
+        );
+        nk_layout_row_dynamic(ctx, 30, 1);
+        nk_label(ctx, "Additional options available in the NTR-HR menu.", NK_TEXT_CENTERED);
+        nk_layout_row_dynamic(ctx, 30, 1);
+        nk_label(ctx, "(Default key combo: X+Y)", NK_TEXT_CENTERED);
 
         rp_lock_rel(ui_nk_lock);
     }
