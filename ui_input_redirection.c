@@ -487,7 +487,10 @@ bool sdl_process_bottom_screen_event(SDL_Event *evt) {
         break;
 
         case SDL_MOUSEBUTTONUP: {
-            if (evt->button.button != SDL_BUTTON_LEFT) {
+            if (
+                evt->button.button != SDL_BUTTON_LEFT ||
+                (!sdl_bottom_screen_grabbing && evt->button.windowID == ui_sdl_win_id[SCREEN_BOT])
+            ) {
                 ui_set_hide_nk_windows(!ui_hide_nk_windows);
                 sdl_update_bottom_screen_cursor();
                 break;

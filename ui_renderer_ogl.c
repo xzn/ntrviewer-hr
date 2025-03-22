@@ -1569,6 +1569,8 @@ no_upscale:
     image->channels = channels;
 
 fail:
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glDeleteTextures(1, &tex);
     free(image_base2);
 fail_image_base2:
     free(base2);
@@ -1577,6 +1579,4 @@ fail_base2:
         free(image->image);
         image->image = 0;
     }
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glDeleteTextures(1, &tex);
 }
