@@ -3,6 +3,7 @@
 #include "ntr_common.h"
 #include "ntr_hb.h"
 #include "ntr_rp.h"
+#include "ui_input_redirection.h"
 
 enum nk_nav_t nk_nav_cmd;
 
@@ -596,7 +597,7 @@ void ui_main_nk(void)
         nk_window_show(ctx, remote_play_wnd, 1);
         window_closed = 0;
     }
-    if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 450, 505),
+    if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 450, 565),
                  NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_TITLE | NK_WINDOW_CLOSABLE) &&
         show_window)
     {
@@ -718,9 +719,6 @@ void ui_main_nk(void)
             kcp_restart = 1;
         }
 
-        nk_layout_row_dynamic(ctx, 30, 1);
-        nk_label(ctx, "Press \"F\" to toggle fullscreen.", NK_TEXT_CENTERED);
-
         nk_layout_row_dynamic(ctx, 30, 2);
         nk_label(ctx, "Prioritize Top Screen", NK_TEXT_CENTERED);
         do_nav_checkbox_next(ctx, NK_FOCUS_PRIORITY_SCREEN, &ntr_rp_config.top_screen_priority);
@@ -786,6 +784,9 @@ void ui_main_nk(void)
             kcp_restart = 1;
         }
         check_nav_button_prev(ctx);
+
+        nk_layout_row_dynamic(ctx, 30, 1);
+        nk_label(ctx, "Press \"F\" to toggle fullscreen.", NK_TEXT_CENTERED);
     }
     nk_end(ctx);
     if (!window_closed) {

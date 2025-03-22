@@ -4,6 +4,7 @@
 #include "ui_renderer_sdl.h"
 #include "ui_renderer_d3d11.h"
 #include "ui_renderer_ogl.h"
+#include "ui_input_redirection.h"
 #include "main.h"
 #include "ikcp.h"
 
