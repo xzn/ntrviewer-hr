@@ -1148,3 +1148,5 @@ fail:
         sc_fail[p] = 0;
     }
 }
+
+void ui_renderer_d3d11_gen_cursor(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale) {}

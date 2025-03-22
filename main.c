@@ -299,6 +299,7 @@ static LRESULT CALLBACK main_window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 rp_lock_rel(comp_lock);
 #endif
             }
+            generate_cursors_images();
             break;
         }
 
@@ -393,133 +394,36 @@ static bool decode_cond_wait(event_t *event)
     return true;
 }
 
-static void thread_loop(int i) {
-    // TODO csc
-    int ctx_top_bot = i;
-    int screen_top_bot = i;
-    bool win_shared = 0;
+enum CLARITY_ICON {
+    CLARITY_ICON_CROSSHAIRS,
+    CLARITY_ICON_ARROW,
+    CLARITY_ICON_HAND,
+    CLARITY_ICON_HAND_CLICK,
+    CLARITY_ICON_HAND_OPEN,
+    CLARITY_ICON_HAND_GRAB,
+    CLARITY_ICON_COUNT,
+};
 
-    int screen_count= SCREEN_COUNT;
-    view_mode_t view_mode = __atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED);
-    if (view_mode != VIEW_MODE_SEPARATE) {
-        screen_count = 1;
-        if (is_renderer_csc()) {
-            win_shared = view_mode == VIEW_MODE_TOP_BOT;
-            if (win_shared) {
-                screen_count = SCREEN_COUNT;
-                ctx_top_bot = SCREEN_TOP;
-            }
-        }
-    }
+enum CLARITY_ICON_SIZE {
+    CLARITY_ICON_SIZE_SMALL,
+    CLARITY_ICON_SIZE_MEDIUM,
+    CLARITY_ICON_SIZE_LARGE,
+    CLARITY_ICON_SIZE_XLARGE,
+    CLARITY_ICON_SIZE_COUNT,
+};
 
-    if (i >= screen_count) {
-        if (!renderer_single_thread)
-            event_wait(&update_bottom_screen_evt, NWM_THREAD_WAIT_NS);
-        return;
-    }
+#define STBI_ONLY_PNG
+#include "stb_image.h"
 
-    if (renderer_single_thread) {
-        if (i == SCREEN_TOP && !decode_cond_wait(&decode_updated_event))
-            return;
-    } else {
-        int buf_top_bot = view_mode == VIEW_MODE_BOT ? SCREEN_BOT : screen_top_bot;
-        if (!decode_cond_wait(&rp_buffer_ctx[buf_top_bot].decode_updated_event))
-            return;
-    }
-
-    float bg[4];
-    nk_color_fv(bg, nk_window_bgcolor);
-
-    if (!renderer_single_thread && renderer_evt_sync)
-        if (!cond_mutex_flag_lock(&renderer_begin_evt))
-            return;
-
-    if (is_renderer_d3d11()) {
-#ifndef USE_SDL_RENDERER_ONLY
-        ui_renderer_d3d11_main(screen_top_bot, ctx_top_bot, view_mode, win_shared, bg);
-#endif
-    } else if (is_renderer_sdl_ogl()) {
-#ifndef USE_SDL_RENDERER_ONLY
-        ui_renderer_ogl_main(screen_top_bot, ctx_top_bot, view_mode, win_shared, bg);
-#endif
-    } else if (is_renderer_sdl_renderer()) {
-        ui_renderer_sdl_main(ctx_top_bot, view_mode, bg);
-    }
-
-    if (i == SCREEN_TOP) {
-        if (!nk_gui_next) {
-            if (nk_input_current) {
-                nk_input_end(ui_nk_ctx);
-                nk_input_current = 0;
-            } else {
-                nk_input_begin(ui_nk_ctx);
-                nk_input_end(ui_nk_ctx);
-            }
-
-            ui_main_nk();
-            nk_gui_next = 1;
-        }
-
-        if (
-            fabsf(ui_font_scale - ui_win_scale[ctx_top_bot]) >= ui_font_scale_epsilon)
-        {
-            ui_font_scale = ui_win_scale[ctx_top_bot];
-
-            /* Load Fonts: if none of these are loaded a default font will be used  */
-            /* Load Cursor: if you uncomment cursor loading please hide the cursor */
-            struct nk_font_atlas *atlas;
-            struct nk_font_config config = nk_font_config(0);
-            struct nk_font *font;
-
-            /* set up the font atlas and add desired font; note that font sizes are
-             * multiplied by font_scale to produce better results at higher DPIs */
-            nk_font_stash_begin(&atlas);
-            font = nk_font_atlas_add_default(atlas, 13 * ui_font_scale, &config);
-            nk_font_stash_end();
-
-            /* this hack makes the font appear to be scaled down to the desired
-             * size and is only necessary when font_scale > 1 */
-
-            if (font) {
-                font->handle.height = font->handle.height / ui_font_scale;
-                // nk_style_load_all_cursors(ui_nk_ctx, atlas->cursors);
-                nk_style_set_font(ui_nk_ctx, &font->handle);
-            }
-        }
-    }
-
-    if (is_renderer_d3d11()) {
-#ifndef USE_SDL_RENDERER_ONLY
-        ui_renderer_d3d11_present(screen_top_bot, ctx_top_bot, win_shared);
-#endif
-    } else if (is_renderer_sdl_ogl()) {
-#ifndef USE_SDL_RENDERER_ONLY
-        ui_renderer_ogl_present(screen_top_bot, ctx_top_bot, win_shared);
-#endif
-    } else if (is_renderer_sdl_renderer()) {
-        ui_renderer_sdl_present(ctx_top_bot);
-    }
-
-    if (!renderer_single_thread && renderer_evt_sync)
-        cond_mutex_flag_signal(&renderer_end_evt);
-}
-
-static thread_ret_t window_thread_func(void *arg) {
-    RO_INIT();
-
-    int i = (int)(uintptr_t)arg;
-#ifndef USE_SDL_RENDERER_ONLY
-    if (is_renderer_sdl_ogl())
-        SDL_GL_MakeCurrent(ogl_win[i], gl_context[i]);
-#endif
-    while (program_running)
-        thread_loop(i);
-    // TODO csc
-
-    RO_UNINIT();
-
-    return (thread_ret_t)(uintptr_t)NULL;
-}
+SDL_PixelFormat *sdl_cursor_pixel_format;
+typedef struct {
+    SDL_Cursor *cursor;
+    SDL_Surface *surface;
+} sdl_cursor_t;
+static sdl_cursor_t sdl_cursors_curr[CLARITY_ICON_SIZE_COUNT][CLARITY_ICON_COUNT];
+static sdl_cursor_t sdl_cursors_next[CLARITY_ICON_SIZE_COUNT][CLARITY_ICON_COUNT];
+static bool sdl_cursors_updated;
+static rp_lock_t sdl_cursors_lock;
 
 #include "clarity/18px/crosshairs-outline.h"
 #include "clarity/18px/cursor-arrow-outline.h"
@@ -548,24 +452,6 @@ static thread_ret_t window_thread_func(void *arg) {
 #include "clarity/36px/cursor-hand-click-outline.h"
 #include "clarity/36px/cursor-hand-open-outline.h"
 #include "clarity/36px/cursor-hand-grab-outline.h"
-
-enum CLARITY_ICON {
-    CLARITY_ICON_CROSSHAIRS,
-    CLARITY_ICON_ARROW,
-    CLARITY_ICON_HAND,
-    CLARITY_ICON_HAND_CLICK,
-    CLARITY_ICON_HAND_OPEN,
-    CLARITY_ICON_HAND_GRAB,
-    CLARITY_ICON_COUNT,
-};
-
-enum CLARITY_ICON_SIZE {
-    CLARITY_ICON_SIZE_SMALL,
-    CLARITY_ICON_SIZE_MEDIUM,
-    CLARITY_ICON_SIZE_LARGE,
-    CLARITY_ICON_SIZE_XLARGE,
-    CLARITY_ICON_SIZE_COUNT,
-};
 
 const unsigned char *clarity_icon_get_data(enum CLARITY_ICON icon, enum CLARITY_ICON_SIZE size) {
     switch (size) {
@@ -773,45 +659,33 @@ unsigned int clarity_icon_get_data_len(enum CLARITY_ICON icon, enum CLARITY_ICON
     };
 }
 
-#define STBI_ONLY_PNG
-#include "stb_image.h"
+static int sdl_get_bottom_screen_ctx(view_mode_t vm) {
+    return (vm == VIEW_MODE_TOP_BOT || vm == VIEW_MODE_BOT) ? SCREEN_TOP : vm == VIEW_MODE_SEPARATE ? SCREEN_BOT : -1;
+}
 
-static SDL_PixelFormat *sdl_cursor_pixel_format;
-static SDL_Cursor *sdl_cursor_clarity;
-static SDL_Surface *sdl_cursor_surface;
-static stbi_uc *sdl_cursor_image;
-
-SDL_Cursor *get_clarity_sdl_cursor(enum CLARITY_ICON icon, enum CLARITY_ICON_SIZE size) {
+static void generate_clarity_sdl_cursor(sdl_cursor_t *cursor, stbi_t *image, enum CLARITY_ICON icon) {
     if (!sdl_cursor_pixel_format) {
         sdl_cursor_pixel_format = SDL_AllocFormat(SDL_FORMAT);
         if (!sdl_cursor_pixel_format)
-            return NULL;
+            return;
     }
 
-    if (sdl_cursor_clarity) {
-        SDL_FreeCursor(sdl_cursor_clarity);
-        sdl_cursor_clarity = NULL;
+    if (cursor->cursor) {
+        SDL_FreeCursor(cursor->cursor);
+        cursor->cursor = NULL;
     }
 
-    if (sdl_cursor_surface) {
-        SDL_FreeSurface(sdl_cursor_surface);
-        sdl_cursor_surface = NULL;
+    if (cursor->surface) {
+        SDL_FreeSurface(cursor->surface);
+        cursor->surface = NULL;
     }
 
-    if (sdl_cursor_image) {
-        stbi_image_free(sdl_cursor_image);
-        sdl_cursor_image = NULL;
+    if (!image->image) {
+        return;
     }
-
-    int width, height, channels;
-    sdl_cursor_image = stbi_load_from_memory(clarity_icon_get_data(icon, size), clarity_icon_get_data_len(icon, size), &width, &height, &channels, 4);
-    if (!sdl_cursor_image) {
-        return NULL;
-    }
-
-    sdl_cursor_surface = SDL_CreateRGBSurfaceWithFormatFrom(sdl_cursor_image, width, height, 1, width * channels, SDL_FORMAT);
-    if (!sdl_cursor_surface) {
-        return NULL;
+    cursor->surface = SDL_CreateRGBSurfaceWithFormatFrom(image->image, image->width, image->height, 1, image->width * image->channels, SDL_FORMAT);
+    if (!cursor->surface) {
+        return;
     }
 
     int hot_x = 15;
@@ -821,15 +695,218 @@ SDL_Cursor *get_clarity_sdl_cursor(enum CLARITY_ICON icon, enum CLARITY_ICON_SIZ
     } else if (icon == CLARITY_ICON_CROSSHAIRS) {
         hot_x = hot_y = 17;
     }
-    hot_x = hot_x * width / 36;
-    hot_y = hot_y * height / 36;
-    sdl_cursor_clarity = SDL_CreateColorCursor(sdl_cursor_surface, hot_x, hot_y);
-    return sdl_cursor_clarity;
+    hot_x = hot_x * image->width / 36;
+    hot_y = hot_y * image->height / 36;
+    cursor->cursor = SDL_CreateColorCursor(cursor->surface, hot_x, hot_y);
+}
+
+static float cursor_scale_prev;
+static void do_generate_cursors_images(view_mode_t vm) {
+    int i = sdl_get_bottom_screen_ctx(vm);
+    if (i < 0) {
+        return;
+    }
+
+    int ctx_left;
+    int ctx_top;
+    int ctx_width;
+    int ctx_height;
+
+    draw_screen_get_dims_lite(SCREEN_BOT, i, vm, SCREEN_HEIGHT1, SCREEN_WIDTH, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
+    float scale_x = (float)ctx_width / SCREEN_HEIGHT1;
+    float scale_y = (float)ctx_height / SCREEN_WIDTH;
+    float scale = (scale_x + scale_y) / 2;
+    if (scale == cursor_scale_prev) {
+        return;
+    }
+
+    rp_lock_wait(sdl_cursors_lock);
+    for (int icon = 0; icon < CLARITY_ICON_COUNT; ++icon) {
+        for (int size = 0; size < CLARITY_ICON_SIZE_COUNT; ++size) {
+            int width, height, channels;
+            stbi_uc *image = stbi_load_from_memory(clarity_icon_get_data(icon, size), clarity_icon_get_data_len(icon, size), &width, &height, &channels, GL_CHANNELS_N);
+            if (image) {
+                stbi_t im = {};
+                generate_cursor_image(&im, image, width, height, GL_CHANNELS_N, scale);
+                if (im.image) {
+                    generate_clarity_sdl_cursor(&sdl_cursors_next[size][icon], &im, icon);
+                    free(im.image);
+                }
+                stbi_image_free(image);
+            }
+        }
+    }
+    cursor_scale_prev = scale;
+    sdl_cursors_updated = 1;
+    rp_lock_rel(sdl_cursors_lock);
+}
+
+static bool need_generate_cursors_images;
+static void thread_loop(int i) {
+    // TODO csc
+    int ctx_top_bot = i;
+    int screen_top_bot = i;
+    bool win_shared = 0;
+
+    int screen_count= SCREEN_COUNT;
+    view_mode_t view_mode = __atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED);
+    if (view_mode != VIEW_MODE_SEPARATE) {
+        screen_count = 1;
+        if (is_renderer_csc()) {
+            win_shared = view_mode == VIEW_MODE_TOP_BOT;
+            if (win_shared) {
+                screen_count = SCREEN_COUNT;
+                ctx_top_bot = SCREEN_TOP;
+            }
+        }
+    }
+
+    if (ctx_top_bot == SCREEN_TOP && need_generate_cursors_images) {
+        do_generate_cursors_images(view_mode);
+        need_generate_cursors_images = 0;
+    }
+
+    if (i >= screen_count) {
+        if (!renderer_single_thread)
+            event_wait(&update_bottom_screen_evt, NWM_THREAD_WAIT_NS);
+        return;
+    }
+
+    if (renderer_single_thread) {
+        if (i == SCREEN_TOP && !decode_cond_wait(&decode_updated_event))
+            return;
+    } else {
+        int buf_top_bot = view_mode == VIEW_MODE_BOT ? SCREEN_BOT : screen_top_bot;
+        if (!decode_cond_wait(&rp_buffer_ctx[buf_top_bot].decode_updated_event))
+            return;
+    }
+
+    float bg[GL_CHANNELS_N];
+    nk_color_fv(bg, nk_window_bgcolor);
+
+    if (!renderer_single_thread && renderer_evt_sync)
+        if (!cond_mutex_flag_lock(&renderer_begin_evt))
+            return;
+
+    if (is_renderer_d3d11()) {
+#ifndef USE_SDL_RENDERER_ONLY
+        ui_renderer_d3d11_main(screen_top_bot, ctx_top_bot, view_mode, win_shared, bg);
+#endif
+    } else if (is_renderer_sdl_ogl()) {
+#ifndef USE_SDL_RENDERER_ONLY
+        ui_renderer_ogl_main(screen_top_bot, ctx_top_bot, view_mode, win_shared, bg);
+#endif
+    } else if (is_renderer_sdl_renderer()) {
+        ui_renderer_sdl_main(ctx_top_bot, view_mode, bg);
+    }
+
+    if (i == SCREEN_TOP) {
+        if (!nk_gui_next) {
+            if (nk_input_current) {
+                nk_input_end(ui_nk_ctx);
+                nk_input_current = 0;
+            } else {
+                nk_input_begin(ui_nk_ctx);
+                nk_input_end(ui_nk_ctx);
+            }
+
+            ui_main_nk();
+            nk_gui_next = 1;
+        }
+
+        if (
+            fabsf(ui_font_scale - ui_win_scale[ctx_top_bot]) >= ui_font_scale_epsilon)
+        {
+            ui_font_scale = ui_win_scale[ctx_top_bot];
+
+            /* Load Fonts: if none of these are loaded a default font will be used  */
+            /* Load Cursor: if you uncomment cursor loading please hide the cursor */
+            struct nk_font_atlas *atlas;
+            struct nk_font_config config = nk_font_config(0);
+            struct nk_font *font;
+
+            /* set up the font atlas and add desired font; note that font sizes are
+             * multiplied by font_scale to produce better results at higher DPIs */
+            nk_font_stash_begin(&atlas);
+            font = nk_font_atlas_add_default(atlas, 13 * ui_font_scale, &config);
+            nk_font_stash_end();
+
+            /* this hack makes the font appear to be scaled down to the desired
+             * size and is only necessary when font_scale > 1 */
+
+            if (font) {
+                font->handle.height = font->handle.height / ui_font_scale;
+                // nk_style_load_all_cursors(ui_nk_ctx, atlas->cursors);
+                nk_style_set_font(ui_nk_ctx, &font->handle);
+            }
+        }
+    }
+
+    if (is_renderer_d3d11()) {
+#ifndef USE_SDL_RENDERER_ONLY
+        ui_renderer_d3d11_present(screen_top_bot, ctx_top_bot, win_shared);
+#endif
+    } else if (is_renderer_sdl_ogl()) {
+#ifndef USE_SDL_RENDERER_ONLY
+        ui_renderer_ogl_present(screen_top_bot, ctx_top_bot, win_shared);
+#endif
+    } else if (is_renderer_sdl_renderer()) {
+        ui_renderer_sdl_present(ctx_top_bot);
+    }
+
+    if (!renderer_single_thread && renderer_evt_sync)
+        cond_mutex_flag_signal(&renderer_end_evt);
+}
+
+static thread_ret_t window_thread_func(void *arg) {
+    RO_INIT();
+
+    int i = (int)(uintptr_t)arg;
+#ifndef USE_SDL_RENDERER_ONLY
+    if (is_renderer_sdl_ogl())
+        SDL_GL_MakeCurrent(ogl_win[i], gl_context[i]);
+#endif
+    while (program_running)
+        thread_loop(i);
+    // TODO csc
+
+    RO_UNINIT();
+
+    return (thread_ret_t)(uintptr_t)NULL;
+}
+
+static void set_clarity_sdl_cursor(enum CLARITY_ICON icon, enum CLARITY_ICON_SIZE size) {
+    rp_lock_wait(sdl_cursors_lock);
+    if (sdl_cursors_updated) {
+        for (int icon = 0; icon < CLARITY_ICON_COUNT; ++icon) {
+            for (int size = 0; size < CLARITY_ICON_SIZE_COUNT; ++size) {
+                sdl_cursor_t *cursor = &sdl_cursors_curr[size][icon];
+                if (cursor->cursor) {
+                    SDL_FreeCursor(cursor->cursor);
+                    cursor->cursor = NULL;
+                }
+
+                if (cursor->surface) {
+                    SDL_FreeSurface(cursor->surface);
+                    cursor->surface = NULL;
+                }
+            }
+        }
+        memcpy(sdl_cursors_curr, sdl_cursors_next, sizeof(sdl_cursors_curr));
+        memset(sdl_cursors_next, 0, sizeof(sdl_cursors_next));
+        sdl_cursors_updated = 0;
+    }
+    SDL_SetCursor(sdl_cursors_curr[size][icon].cursor);
+    rp_lock_rel(sdl_cursors_lock);
+}
+
+void generate_cursors_images() {
+    need_generate_cursors_images = 1;
 }
 
 #define TOUCH_SCREEN_COORD_RANGE (0xfff)
 static int sdl_get_bottom_screen_mouse_coord(view_mode_t vm, Uint32 wid, Sint32 x, Sint32 y, SDL_Point *point) {
-    int i = (vm == VIEW_MODE_TOP_BOT || vm == VIEW_MODE_BOT) ? SCREEN_TOP : vm == VIEW_MODE_SEPARATE ? SCREEN_BOT : -1;
+    int i = sdl_get_bottom_screen_ctx(vm);
     if (i < 0) {
         return 1;
     }
@@ -874,7 +951,7 @@ static void sdl_set_bottom_screen_cursor(bool reset) {
     if (reset) {
         SDL_SetCursor(SDL_GetDefaultCursor());
     } else {
-        SDL_SetCursor(get_clarity_sdl_cursor(CLARITY_ICON_HAND_OPEN, sdl_bottom_screen_cursor_size));
+        set_clarity_sdl_cursor(CLARITY_ICON_HAND, sdl_bottom_screen_cursor_size);
     }
 }
 
@@ -882,12 +959,20 @@ void sdl_update_bottom_screen_cursor(void) {
     int x, y;
     UNUSED Uint32 state = SDL_GetMouseState(&x, &y);
     SDL_Point point;
-    int reset = sdl_get_bottom_screen_mouse_coord(ui_view_mode, ui_sdl_win_id[SCREEN_TOP], x, y, &point);
+    int reset = sdl_get_bottom_screen_mouse_coord(__atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED), ui_sdl_win_id[SCREEN_TOP], x, y, &point);
     if (reset >= 0)
         sdl_set_bottom_screen_cursor(reset);
 }
 
-static input_redirection_frame_t input_redirection_frame;
+static const input_redirection_frame_t input_redirection_frame_default = {
+    .hidPad = 0xfff,
+    .touchScreenState = 0x2000000,
+    .circlePadState = 0x7ff7ff,
+    .cppState = 0x80800081,
+    .interfaceButtons = 0,
+};
+
+static input_redirection_frame_t input_redirection_frame = input_redirection_frame_default;
 static void sdl_set_touch_screen_coord(SDL_Point *point) {
     uint32_t x = MIN(MAX(0, point->x), TOUCH_SCREEN_COORD_RANGE * SCREEN_HEIGHT1) / SCREEN_HEIGHT1;
     uint32_t y = MIN(MAX(0, point->y), TOUCH_SCREEN_COORD_RANGE * SCREEN_WIDTH) / SCREEN_WIDTH;
@@ -895,7 +980,7 @@ static void sdl_set_touch_screen_coord(SDL_Point *point) {
 }
 
 static bool sdl_process_bottom_screen_event(SDL_Event *evt) {
-    view_mode_t vm = ui_view_mode;
+    view_mode_t vm = __atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED);
     switch (evt->type) {
         case SDL_MOUSEMOTION: {
             SDL_Point point;
@@ -905,7 +990,7 @@ static bool sdl_process_bottom_screen_event(SDL_Event *evt) {
                 if (!reset)
                     sdl_set_touch_screen_coord(&point);
 
-                SDL_SetCursor(get_clarity_sdl_cursor(CLARITY_ICON_HAND_GRAB, sdl_bottom_screen_cursor_size));
+                set_clarity_sdl_cursor(CLARITY_ICON_HAND_GRAB, sdl_bottom_screen_cursor_size);
                 return true;
             } else {
                 if (reset >= 0)
@@ -924,7 +1009,7 @@ static bool sdl_process_bottom_screen_event(SDL_Event *evt) {
                 sdl_bottom_screen_grabbing = true;
                 sdl_set_touch_screen_coord(&point);
 
-                SDL_SetCursor(get_clarity_sdl_cursor(CLARITY_ICON_HAND_CLICK, sdl_bottom_screen_cursor_size));
+                set_clarity_sdl_cursor(CLARITY_ICON_HAND_CLICK, sdl_bottom_screen_cursor_size);
                 return true;
             }
         }
@@ -1174,6 +1259,7 @@ static void main_ntr(void) {
         }
     }
 
+    rp_lock_init(sdl_cursors_lock);
     if (!SDL_AddTimer(1000 / 60, input_redirection_timer_cb, 0)) {
         err_log("input redirection timer add failed: %s\n", SDL_GetError());
         program_running = false;
@@ -1183,7 +1269,11 @@ static void main_ntr(void) {
     while (program_running)
         main_loop();
 
+    input_redirection_frame = input_redirection_frame_default;
+    input_redirection_send_frame(&input_redirection_frame);
+
 join_timer:
+    rp_lock_close(sdl_cursors_lock);
 
     if (!renderer_single_thread) {
         thread_join(window_bot_thread);

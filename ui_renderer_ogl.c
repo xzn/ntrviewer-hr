@@ -1270,3 +1270,5 @@ fail:
     }
 #endif
 }
+
+void ui_renderer_ogl_gen_cursor(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale) {}

@@ -25,7 +25,6 @@ extern int is_renderer_ogl_dbg;
 extern enum ui_renderer_t ui_renderer;
 extern SDL_Window *ui_sdl_win[SCREEN_COUNT];
 extern struct nk_context *ui_nk_ctx;
-
 typedef enum {
     VIEW_MODE_TOP_BOT,
     VIEW_MODE_SEPARATE,
@@ -119,5 +118,11 @@ void draw_screen_get_dims(
     int *out_win_width,
     int *out_win_height
 );
+
+typedef struct {
+    unsigned char *image;
+    int width, height, channels;
+} stbi_t;
+void generate_cursor_image(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale);
 
 #endif

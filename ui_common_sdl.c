@@ -142,6 +142,8 @@ void ui_window_size_update(int window_top_bot) {
         ui_nk_height = ui_win_height[i];
         ui_nk_scale = ui_win_scale[i];
     }
+
+    generate_cursors_images();
 }
 
 #define FRAME_STAT_EVERY_X_US 1000000
@@ -522,4 +524,19 @@ void draw_screen_get_dims(
     *out_ctx_height = ctx_height;
     *out_win_width_drawable = win_width_drawable;
     *out_win_height_drawable = win_height_drawable;
+}
+
+void generate_cursor_image(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale) {
+    if (is_renderer_d3d11()) {
+#ifndef USE_SDL_RENDERER_ONLY
+        ui_renderer_d3d11_gen_cursor(image, base, width, height, channels, scale);
+#endif
+    } else if (is_renderer_sdl_ogl()) {
+#ifndef USE_SDL_RENDERER_ONLY
+        ui_renderer_ogl_gen_cursor(image, base, width, height, channels, scale);
+#endif
+    } else if (is_renderer_sdl_renderer()) {
+        ui_renderer_sdl_gen_cursor(image, base, width, height, channels, scale);
+    }
+    // TODO
 }

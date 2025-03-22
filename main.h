@@ -26,6 +26,7 @@ extern int opt_flag_d3d, opt_flag_ogl, opt_flag_gles, opt_flag_angle, opt_flag_n
 #include "nuklear/nuklear.h"
 extern struct nk_color nk_window_bgcolor;
 void sdl_update_bottom_screen_cursor(void);
+void generate_cursors_images(void);
 
 void itimeofday(int64_t *sec, int64_t *usec);
 

@@ -192,7 +192,7 @@ void ui_renderer_sdl_destroy(void) {
 }
 
 #include "ntr_rp.h"
-void ui_renderer_sdl_main(int ctx_top_bot, view_mode_t view_mode, float bg[4]) {
+void ui_renderer_sdl_main(int ctx_top_bot, view_mode_t view_mode, float bg[GL_CHANNELS_N]) {
     int i = ctx_top_bot;
     SDL_RenderSetScale(sdl_renderer[i], ui_win_scale[i], ui_win_scale[i]);
     SDL_SetRenderDrawColor(sdl_renderer[i], bg[0] * 255, bg[1] * 255, bg[2] * 255, bg[3] * 255);
@@ -221,7 +221,7 @@ void ui_renderer_sdl_draw(uint8_t *data, int width, int height, int screen_top_b
         }
 
         uint8_t *dst = pixels;
-        const int bpp = 4;
+        const int bpp = GL_CHANNELS_N;
         for (int x = 0; x < width; ++x) {
             memcpy(dst + x * pitch, data + x * height * bpp, height * bpp);
         }
@@ -250,4 +250,60 @@ void ui_renderer_sdl_present(int ctx_top_bot) {
         }
     }
     SDL_RenderPresent(sdl_renderer[i]);
+}
+
+#include <math.h>
+
+void ui_renderer_sdl_gen_cursor(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale) {
+    if (channels != GL_CHANNELS_N) {
+        return;
+    }
+
+    int i = SCREEN_TOP;
+    SDL_Texture *tex = SDL_CreateTexture(sdl_renderer[i], SDL_FORMAT, SDL_TEXTUREACCESS_STATIC, width, height);
+    if (!tex) {
+        return;
+    }
+    if (SDL_UpdateTexture(tex, NULL, base, width * channels) < 0) {
+        err_log("SDL_UpdateTexture failed: %s", SDL_GetError());
+        goto final_tex;
+    }
+
+    int target_width = roundf(width * scale);
+    int target_height = roundf(height * scale);
+    SDL_Texture *target = SDL_CreateTexture(sdl_renderer[i], SDL_FORMAT, SDL_TEXTUREACCESS_TARGET, target_width, target_height);
+    if (!target) {
+        goto final_tex;
+    }
+
+    if (SDL_SetRenderTarget(sdl_renderer[i], target) < 0) {
+        err_log("SDL_SetRenderTarget failed: %s", SDL_GetError());
+        goto final_target;
+    }
+
+    if (SDL_RenderCopy(sdl_renderer[i], tex, NULL, NULL) < 0) {
+        err_log("SDL_RenderCopy failed: %s", SDL_GetError());
+        goto final_target;
+    }
+
+    image->image = malloc(target_width * target_height * channels);
+    if (!image->image) {
+        goto final_target;
+    }
+
+    if (SDL_RenderReadPixels(sdl_renderer[i], NULL, SDL_FORMAT, image->image, target_width * channels) < 0) {
+        err_log("SDL_RenderReadPixels failed: %s", SDL_GetError());
+        free(image->image);
+        image->image = NULL;
+    }
+    image->width = target_width;
+    image->height = target_height;
+    image->channels = channels;
+
+final_target:
+    SDL_SetRenderTarget(sdl_renderer[i], NULL);
+    SDL_DestroyTexture(target);
+
+final_tex:
+    SDL_DestroyTexture(tex);
 }

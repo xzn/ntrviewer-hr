@@ -11,5 +11,6 @@ void ui_renderer_ogl_destroy(void);
 void ui_renderer_ogl_main(int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, bool win_shared, float bg[4]);
 void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared);
 void ui_renderer_ogl_present(int screen_top_bot, int ctx_top_bot, bool win_shared);
+void ui_renderer_ogl_gen_cursor(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale);
 
 #endif

@@ -620,7 +620,7 @@ void ui_main_nk(void)
         if (selected != (int)ui_view_mode)
         {
             set_nav_combobox_prev(NK_FOCUS_VIEW_MODE);
-            __atomic_store_n(&ui_view_mode, selected, __ATOMIC_RELAXED);
+            ui_view_mode = selected;
             ui_fullscreen = 0;
         }
 
