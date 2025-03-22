@@ -28,6 +28,7 @@ static ID3D11InputLayout *d3d_il[SCREEN_COUNT];
 static ID3D11BlendState *d3d_ui_bs[SCREEN_COUNT];
 static ID3D11VertexShader *d3d_vs[SCREEN_COUNT];
 static ID3D11PixelShader *d3d_ps[SCREEN_COUNT];
+static ID3D11PixelShader *d3d_ui_ps;
 static ID3D11SamplerState *d3d_ss_point[SCREEN_COUNT];
 static ID3D11SamplerState *d3d_ss_linear[SCREEN_COUNT];
 
@@ -175,33 +176,31 @@ static const char *d3d_vs_src =
     " output.uv = input.uv;\n"
     " return output;\n"
     "}\n";
-#if 0
-#define d3d_ps_src_0 \
+#define d3d_ui_ps_src_0 \
     " if (any(color != float4(0.0, 0.0, 0.0, 0.0)))\n" \
     "  color = float4(color.rgb * (15.0 / 16.0), 15.0 / 16.0);\n"
-#else
-#define d3d_ps_src_0
-#endif
-static const char *d3d_ps_src =
-    "SamplerState my_samp: register(s0);\n"
-    "Texture2D my_tex: register(t0);\n"
-    "struct PSInput\n"
-    "{\n"
-    " float4 position: SV_Position;\n"
-    " float2 uv: TEXCOORD;\n"
-    "};\n"
-    "struct PSOutput\n"
-    "{\n"
-    " float4 color: SV_Target0;\n"
-    "};\n"
-    "PSOutput Main(PSInput input)\n"
-    "{\n"
-    " PSOutput output = (PSOutput)0;\n"
-    " float4 color = my_tex.Sample(my_samp, input.uv);\n"
-    d3d_ps_src_0
-    " output.color = color;\n"
-    " return output;\n"
-    "}\n";
+#define d3d_ps_src_use_0(src_0) \
+    "SamplerState my_samp: register(s0);\n" \
+    "Texture2D my_tex: register(t0);\n" \
+    "struct PSInput\n" \
+    "{\n" \
+    " float4 position: SV_Position;\n" \
+    " float2 uv: TEXCOORD;\n" \
+    "};\n" \
+    "struct PSOutput\n" \
+    "{\n" \
+    " float4 color: SV_Target0;\n" \
+    "};\n" \
+    "PSOutput Main(PSInput input)\n" \
+    "{\n" \
+    " PSOutput output = (PSOutput)0;\n" \
+    " float4 color = my_tex.Sample(my_samp, input.uv);\n" \
+    src_0 \
+    " output.color = color;\n" \
+    " return output;\n" \
+    "}\n"
+static const char *d3d_ps_src = d3d_ps_src_use_0("");
+static const char *d3d_ui_ps_src = d3d_ps_src_use_0(d3d_ui_ps_src_0);
 
 static ID3DBlob *compile_shader(const char *src, const char *target)
 {
@@ -272,6 +271,12 @@ static int d3d11_init(void) {
         d3d_ps[j] = load_ps(d3d11device[j], d3d_ps_src);
         if (!d3d_ps[j]) {
             return -1;
+        }
+        if (j == SCREEN_TOP) {
+            d3d_ui_ps = load_ps(d3d11device[j], d3d_ui_ps_src);
+            if (!d3d_ui_ps) {
+                return -1;
+            }
         }
 
         D3D11_INPUT_ELEMENT_DESC input_desc[] =
@@ -433,6 +438,9 @@ static void d3d11_close(void)
         CHECK_AND_RELEASE(d3d_il[j]);
         CHECK_AND_RELEASE(d3d_vs[j]);
         CHECK_AND_RELEASE(d3d_ps[j]);
+        if (j == SCREEN_TOP) {
+            CHECK_AND_RELEASE(d3d_ui_ps);
+        }
     }
 }
 
@@ -571,7 +579,7 @@ static ID3D11RenderTargetView *sc_rtv[SCREEN_COUNT];
 
 static struct presentation_buffer_t *d3d_pres_buf[SCREEN_COUNT];
 
-void ui_renderer_d3d11_main(int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, bool win_shared, float bg[4]) {
+void ui_renderer_d3d11_main(int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, bool win_shared, float bg[GL_CHANNELS_N]) {
     int i = ctx_top_bot;
     HRESULT hr;
 
@@ -848,6 +856,7 @@ fail:
     return false;
 }
 
+static bool tex_vertices_dirty;
 void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared) {
     double ctx_left_f;
     double ctx_top_f;
@@ -901,7 +910,7 @@ void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int widt
             return;
         }
         for (int i = 0; i < width; ++i) {
-            memcpy(tex_mapped.pData + i * tex_mapped.RowPitch, data + i * height * 4, height * 4);
+            memcpy(tex_mapped.pData + i * tex_mapped.RowPitch, data + i * height * GL_CHANNELS_N, height * GL_CHANNELS_N);
         }
 
         ID3D11DeviceContext_Unmap(d3d11device_context[i], (ID3D11Resource *)ctx->d3d_tex[i], 0);
@@ -998,7 +1007,8 @@ rashader_fail:
     D3D11_VIEWPORT vp = { .Width = ui_ctx_width[p], .Height = ui_ctx_height[p] };
     ID3D11DeviceContext_RSSetViewports(d3d11device_context[i], 1, &vp);
 
-    d3d11_draw_screen(i, screen_top_bot, need_tex_update ? vertices : NULL, srv);
+    d3d11_draw_screen(i, screen_top_bot, need_tex_update || tex_vertices_dirty ? vertices : NULL, srv);
+    tex_vertices_dirty = false;
 
     ctx->width_prev = ctx_width[screen_top_bot];
     ctx->height_prev = ctx_height[screen_top_bot];
@@ -1087,7 +1097,7 @@ void ui_renderer_d3d11_present(int screen_top_bot, int ctx_top_bot, bool win_sha
                 }
                 struct presentation_buffer_t *buf = &bufs[index_sc];
                 ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &d3d_ui_rtv, NULL);
-                float clearColor[4] = {};
+                float clearColor[GL_CHANNELS_N] = {};
                 ID3D11DeviceContext_ClearRenderTargetView(d3d11device_context[i], d3d_ui_rtv, clearColor);
                 nk_d3d11_render(d3d11device_context[i], NK_ANTI_ALIASING_OFF, ui_win_scale[i]);
                 nk_gui_next = 0;
@@ -1101,7 +1111,7 @@ void ui_renderer_d3d11_present(int screen_top_bot, int ctx_top_bot, bool win_sha
                 ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &buf->rtv, NULL);
                 ID3D11DeviceContext_OMSetBlendState(d3d11device_context[i], d3d_ui_bs[i], NULL, 0xffffffff);
                 ID3D11DeviceContext_VSSetShader(d3d11device_context[i], d3d_vs[i], NULL, 0);
-                ID3D11DeviceContext_PSSetShader(d3d11device_context[i], d3d_ps[i], NULL, 0);
+                ID3D11DeviceContext_PSSetShader(d3d11device_context[i], d3d_ui_ps, NULL, 0);
                 ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[i], 0, 1, &d3d_ui_srv);
                 ID3D11DeviceContext_PSSetSamplers(d3d11device_context[i], 0, 1, &d3d_ss_point[i]);
 
@@ -1155,4 +1165,198 @@ fail:
     }
 }
 
-void ui_renderer_d3d11_gen_cursor(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale) {}
+void ui_renderer_d3d11_gen_cursor(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale) {
+    if (channels != GL_CHANNELS_N) {
+        return;
+    }
+    bool fail = true;
+
+    int i = SCREEN_TOP;
+    int screen_top_bot = i;
+
+    int target_width = roundf(width * scale);
+    int target_height = roundf(height * scale);
+
+    image->image = malloc(target_width * target_height * channels);
+    if (!image->image) {
+        return;
+    }
+
+    unsigned char *base2 = NULL;
+    unsigned char *image_base2 = NULL;
+
+    base2 = malloc(width * height * GL_CHANNELS_N);
+    if (!base2) {
+        goto fail;
+    }
+
+    image_base2 = malloc(target_width * target_height * GL_CHANNELS_N);
+    if (!image_base2) {
+        goto fail;
+    }
+
+    for (int x = 0; x < width; ++x) {
+        for (int y = 0; y < height; ++y) {
+            int base2_i = (y * width + x) * GL_CHANNELS_N;
+            int base_i = (y * width + x) * channels;
+            base2[base2_i + 2] = base2[base2_i] = ((int)base[base_i] + (int)base[base_i + 1] + (int)base[base_i + 2]) / 3;
+            base2[base2_i + 1] = base[base_i + 3];
+            base2[base2_i + 3] = UCHAR_MAX;
+        }
+    }
+
+    D3D11_TEXTURE2D_DESC tex_desc = {};
+    tex_desc.Width = target_width;
+    tex_desc.Height = target_height;
+    tex_desc.MipLevels = 1;
+    tex_desc.ArraySize = 1;
+    tex_desc.Format = D3D_FORMAT;
+    tex_desc.SampleDesc.Count = 1;
+    tex_desc.SampleDesc.Quality = 0;
+    tex_desc.Usage = D3D11_USAGE_DEFAULT;
+    tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+    tex_desc.MiscFlags = 0;
+    tex_desc.CPUAccessFlags = 0;
+    HRESULT hr;
+
+    ID3D11Texture2D *tex = NULL;
+    ID3D11RenderTargetView *rtv = NULL;
+    ID3D11Texture2D *staging = NULL;
+    ID3D11Texture2D *in_tex = NULL;
+    ID3D11ShaderResourceView *srv = NULL;
+
+
+    hr = ID3D11Device_CreateTexture2D(d3d11device[i], &tex_desc, NULL, &tex);
+    if (hr) {
+        err_log("CreateTexture2D failed: %d\n", (int)hr);
+        goto fail;
+    }
+
+    hr = ID3D11Device_CreateRenderTargetView(d3d11device[i], (ID3D11Resource *)tex, NULL, &rtv);
+    if (hr) {
+        err_log("CreateRenderTargetView failed: %d\n", (int)hr);
+        goto fail;
+    }
+
+    tex_desc.Usage = D3D11_USAGE_STAGING;
+    tex_desc.BindFlags = 0;
+    tex_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+
+    hr = ID3D11Device_CreateTexture2D(d3d11device[i], &tex_desc, NULL, &staging);
+    if (hr) {
+        err_log("CreateTexture2D failed: %d\n", (int)hr);
+        goto fail;
+    }
+
+    tex_desc.Width = width;
+    tex_desc.Height = height;
+    tex_desc.Usage = D3D11_USAGE_DYNAMIC;
+    tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    tex_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+    hr = ID3D11Device_CreateTexture2D(d3d11device[i], &tex_desc, NULL, &in_tex);
+    if (hr) {
+        err_log("CreateTexture2D failed: %d\n", (int)hr);
+        goto fail;
+    }
+
+    hr = ID3D11Device_CreateShaderResourceView(d3d11device[i], (ID3D11Resource *)in_tex, NULL, &srv);
+    if (hr) {
+        err_log("CreateShaderResourceView failed: %d\n", (int)hr);
+        goto fail;
+    }
+
+    D3D11_MAPPED_SUBRESOURCE tex_mapped = {};
+    hr = ID3D11DeviceContext_Map(d3d11device_context[i], (ID3D11Resource *)in_tex, 0, D3D11_MAP_WRITE_DISCARD, 0, &tex_mapped);
+    if (hr) {
+        err_log("Map failed: %d", (int)hr);
+        goto fail;
+    }
+    for (int i = 0; i < height; ++i) {
+        memcpy(tex_mapped.pData + i * tex_mapped.RowPitch, base2 + i * width * GL_CHANNELS_N, width * GL_CHANNELS_N);
+    }
+    ID3D11DeviceContext_Unmap(d3d11device_context[i], (ID3D11Resource *)in_tex, 0);
+
+    int upscaling_selected = ui_upscaling_selected;
+
+    if (
+        IS_PLACEBO(upscaling_selected) &&
+        (
+            placebo_upscaling_update(PLACEBO_MODE(upscaling_selected), i, screen_top_bot) == 0 ||
+            placebo_upscaling_update(PLACEBO_MODE(upscaling_selected), i, screen_top_bot) == 0
+        ) &&
+        placebo_render[i][screen_top_bot]
+    ) {
+        goto no_upscale;
+    } else if (
+        IS_RASHADER(upscaling_selected) &&
+        (
+            rashader_upscaling_update(RASHADER_MODE(upscaling_selected), i, screen_top_bot) == 0 ||
+            rashader_upscaling_update(RASHADER_MODE(upscaling_selected), i, screen_top_bot) == 0
+        ) &&
+        rashader_render[i][screen_top_bot]
+    ) {
+        goto no_upscale;
+    } else {
+no_upscale:
+        ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &rtv, NULL);
+        D3D11_VIEWPORT vp = { .Width = target_width, .Height = target_height };
+        ID3D11DeviceContext_RSSetViewports(d3d11device_context[i], 1, &vp);
+
+        struct d3d_vertex_t vertices[] = {
+            {{-1.0f, 1.0f}, {0.0f, 0.0f}},
+            {{-1.0f, -1.0f}, {0.0f, 1.0f}},
+            {{1.0f, 1.0f}, {1.0f, 0.0f}},
+            {{1.0f, -1.0f}, {1.0f, 1.0f}},
+        };
+        d3d11_draw_screen(i, screen_top_bot, vertices, srv);
+        tex_vertices_dirty = true;
+    }
+    ID3D11DeviceContext_CopyResource(d3d11device_context[i], (ID3D11Resource *)staging, (ID3D11Resource *)tex);
+    tex_mapped = (D3D11_MAPPED_SUBRESOURCE){};
+    hr = ID3D11DeviceContext_Map(d3d11device_context[i], (ID3D11Resource *)staging, 0, D3D11_MAP_READ, 0, &tex_mapped);
+    if (hr) {
+        err_log("Map failed: %d", (int)hr);
+        goto fail;
+    }
+    for (int i = 0; i < target_height; ++i) {
+        memcpy(image_base2 + i * target_width * GL_CHANNELS_N, tex_mapped.pData + i * tex_mapped.RowPitch, target_width * GL_CHANNELS_N);
+    }
+    ID3D11DeviceContext_Unmap(d3d11device_context[i], (ID3D11Resource *)staging, 0);
+
+    fail = false;
+    for (int x = 0; x < target_width; ++x) {
+        for (int y = 0; y < target_height; ++y) {
+            int image_i = (y * target_width + x) * channels;
+            int image2_i = (y * target_width + x) * GL_CHANNELS_N;
+            image->image[image_i + 2] = image->image[image_i + 1] = image->image[image_i] =
+                ((int)image_base2[image2_i] + (int)image_base2[image2_i + 2]) / 2;
+            image->image[image_i + 3] = image_base2[image2_i + 1];
+        }
+    }
+
+    image->width = target_width;
+    image->height = target_height;
+    image->channels = channels;
+
+
+fail:
+    CHECK_AND_RELEASE(srv);
+    CHECK_AND_RELEASE(in_tex);
+    CHECK_AND_RELEASE(staging);
+    CHECK_AND_RELEASE(rtv);
+    CHECK_AND_RELEASE(tex);
+
+    if (image_base2) {
+        free(image_base2);
+    }
+
+    if (base2) {
+        free(base2);
+    }
+
+    if (fail) {
+        free(image->image);
+        image->image = 0;
+    }
+}
