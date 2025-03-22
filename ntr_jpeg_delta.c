@@ -6,9 +6,6 @@
 #define DCTSIZE JPEG_DCTSIZE
 #define DCTSIZE2 (DCTSIZE * DCTSIZE)
 
-#define MAX(a, b) ((a) > (b) ? (a) : (b))
-#define MIN(a, b) ((a) < (b) ? (a) : (b))
-
 struct jhuff_tbl_t {
     uint8_t bits[17];
     uint8_t huffval[256];

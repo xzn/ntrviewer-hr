@@ -3,6 +3,14 @@
 
 #include "const.h"
 thread_ret_t udp_recv_thread_func(void *);
+typedef struct {
+    uint32_t hidPad;
+    uint32_t touchScreenState;
+    uint32_t circlePadState;
+    uint32_t cppState;
+    uint32_t interfaceButtons;
+} input_redirection_frame_t;
+void input_redirection_send_frame(input_redirection_frame_t *frame);
 
 void rp_buffer_init(void);
 void rp_buffer_destroy(void);

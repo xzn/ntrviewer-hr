@@ -827,6 +827,7 @@ SDL_Cursor *get_clarity_sdl_cursor(enum CLARITY_ICON icon, enum CLARITY_ICON_SIZ
     return sdl_cursor_clarity;
 }
 
+#define TOUCH_SCREEN_COORD_RANGE (0xfff)
 static int sdl_get_bottom_screen_mouse_coord(view_mode_t vm, Uint32 wid, Sint32 x, Sint32 y, SDL_Point *point) {
     int i = (vm == VIEW_MODE_TOP_BOT || vm == VIEW_MODE_BOT) ? SCREEN_TOP : vm == VIEW_MODE_SEPARATE ? SCREEN_BOT : -1;
     if (i < 0) {
@@ -860,8 +861,8 @@ static int sdl_get_bottom_screen_mouse_coord(view_mode_t vm, Uint32 wid, Sint32 
     }
 
     *point = (SDL_Point){
-        .x = (x - ctx_left) * SCREEN_HEIGHT1 / ctx_width,
-        .y = (y - ctx_top) * SCREEN_WIDTH / ctx_height,
+        .x = TOUCH_SCREEN_COORD_RANGE * (x - ctx_left) * SCREEN_HEIGHT1 / ctx_width,
+        .y = TOUCH_SCREEN_COORD_RANGE * (y - ctx_top) * SCREEN_WIDTH / ctx_height,
     };
     return 0;
 }
@@ -886,16 +887,27 @@ void sdl_update_bottom_screen_cursor(void) {
         sdl_set_bottom_screen_cursor(reset);
 }
 
+static input_redirection_frame_t input_redirection_frame;
+static void sdl_set_touch_screen_coord(SDL_Point *point) {
+    uint32_t x = MIN(MAX(0, point->x), TOUCH_SCREEN_COORD_RANGE * SCREEN_HEIGHT1) / SCREEN_HEIGHT1;
+    uint32_t y = MIN(MAX(0, point->y), TOUCH_SCREEN_COORD_RANGE * SCREEN_WIDTH) / SCREEN_WIDTH;
+    input_redirection_frame.touchScreenState = (1 << 24) | (y << 12) | x;
+}
+
 static bool sdl_process_bottom_screen_event(SDL_Event *evt) {
     view_mode_t vm = ui_view_mode;
     switch (evt->type) {
         case SDL_MOUSEMOTION: {
+            SDL_Point point;
+            int reset = sdl_get_bottom_screen_mouse_coord(vm, evt->motion.windowID, evt->motion.x, evt->motion.y, &point);
+
             if (sdl_bottom_screen_grabbing) {
+                if (!reset)
+                    sdl_set_touch_screen_coord(&point);
+
                 SDL_SetCursor(get_clarity_sdl_cursor(CLARITY_ICON_HAND_GRAB, sdl_bottom_screen_cursor_size));
                 return true;
             } else {
-                SDL_Point point;
-                int reset = sdl_get_bottom_screen_mouse_coord(vm, evt->motion.windowID, evt->motion.x, evt->motion.y, &point);
                 if (reset >= 0)
                     sdl_set_bottom_screen_cursor(reset);
             }
@@ -910,6 +922,8 @@ static bool sdl_process_bottom_screen_event(SDL_Event *evt) {
             int reset = sdl_get_bottom_screen_mouse_coord(vm, evt->button.windowID, evt->button.x, evt->button.y, &point);
             if (!reset) {
                 sdl_bottom_screen_grabbing = true;
+                sdl_set_touch_screen_coord(&point);
+
                 SDL_SetCursor(get_clarity_sdl_cursor(CLARITY_ICON_HAND_CLICK, sdl_bottom_screen_cursor_size));
                 return true;
             }
@@ -924,6 +938,8 @@ static bool sdl_process_bottom_screen_event(SDL_Event *evt) {
             }
             if (sdl_bottom_screen_grabbing) {
                 sdl_bottom_screen_grabbing = false;
+                input_redirection_frame.touchScreenState = 0x2000000;
+
                 SDL_Point point;
                 int reset = sdl_get_bottom_screen_mouse_coord(vm, evt->button.windowID, evt->button.x, evt->button.y, &point);
                 if (reset >= 0) {
@@ -1076,6 +1092,22 @@ skip_evt:
     }
 }
 
+static input_redirection_frame_t input_redirection_frame_send;
+static Uint32 SDLCALL input_redirection_timer_cb(Uint32 interval, void *) {
+    input_redirection_frame_t frame = {
+        .hidPad = __atomic_load_n(&input_redirection_frame.hidPad, __ATOMIC_RELAXED),
+        .touchScreenState = __atomic_load_n(&input_redirection_frame.touchScreenState, __ATOMIC_RELAXED),
+        .circlePadState = __atomic_load_n(&input_redirection_frame.circlePadState, __ATOMIC_RELAXED),
+        .cppState = __atomic_load_n(&input_redirection_frame.cppState, __ATOMIC_RELAXED),
+        .interfaceButtons = __atomic_load_n(&input_redirection_frame.interfaceButtons, __ATOMIC_RELAXED),
+    };
+    if (memcmp(&input_redirection_frame_send, &frame, sizeof(input_redirection_frame_t)) != 0) {
+        input_redirection_frame_send = frame;
+        input_redirection_send_frame(&frame);
+    }
+    return interval;
+}
+
 static void main_ntr(void) {
 #ifdef _WIN32
     socket_startup();
@@ -1142,8 +1174,16 @@ static void main_ntr(void) {
         }
     }
 
+    if (!SDL_AddTimer(1000 / 60, input_redirection_timer_cb, 0)) {
+        err_log("input redirection timer add failed: %s\n", SDL_GetError());
+        program_running = false;
+        goto join_timer;
+    }
+
     while (program_running)
         main_loop();
+
+join_timer:
 
     if (!renderer_single_thread) {
         thread_join(window_bot_thread);

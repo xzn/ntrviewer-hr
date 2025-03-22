@@ -62,7 +62,12 @@ static SOCKET tcp_connect(int port)
         (int)ntr_ip_octet[1],
         (int)ntr_ip_octet[2],
         (int)ntr_ip_octet[3]);
-    servaddr.sin_addr.s_addr = inet_addr(ip_addr_buf);
+    uint32_t addr =
+        (ntr_ip_octet[0] << 24) |
+        (ntr_ip_octet[1] << 16) |
+        (ntr_ip_octet[2] << 8) |
+        ntr_ip_octet[3];
+    servaddr.sin_addr.s_addr = htonl(addr);
     servaddr.sin_port = htons(port);
 
     err_log("connecting to %s:%d ...\n", ip_addr_buf, port);

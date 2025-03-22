@@ -7,7 +7,7 @@
 
 #include "ikcp.h"
 
-static SOCKET s;
+static SOCKET s = INVALID_SOCKET;
 static struct sockaddr_in remote_addr;
 static bool remote_received;
 
@@ -1026,18 +1026,17 @@ static void receive_from_socket()
             continue;
         }
 
-#ifdef _WIN32
         if (ntr_ip_octet[0] == 0 &&
             ntr_ip_octet[1] == 0 &&
             ntr_ip_octet[2] == 0 &&
             ntr_ip_octet[3] == 0)
         {
-            ntr_ip_octet[0] = remote_addr.sin_addr.S_un.S_un_b.s_b1;
-            ntr_ip_octet[1] = remote_addr.sin_addr.S_un.S_un_b.s_b2;
-            ntr_ip_octet[2] = remote_addr.sin_addr.S_un.S_un_b.s_b3;
-            ntr_ip_octet[3] = remote_addr.sin_addr.S_un.S_un_b.s_b4;
+            uint32_t addr = ntohl(remote_addr.sin_addr.s_addr);
+            ntr_ip_octet[0] = (addr >> 24) & 0xff;
+            ntr_ip_octet[1] = (addr >> 16) & 0xff;
+            ntr_ip_octet[2] = (addr >> 8) & 0xff;
+            ntr_ip_octet[3] = addr & 0xff;
         }
-#endif
 
         remote_received = 1;
 
@@ -1156,7 +1155,7 @@ static void receive_from_socket_loop(void) {
 thread_ret_t udp_recv_thread_func(void *) {
     while (program_running)
     {
-        s = 0;
+        s = INVALID_SOCKET;
         int ret;
         if (!socket_valid(s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)))
         {
@@ -1224,4 +1223,29 @@ socket_final:
         closesocket(s);
     }
     return 0;
+}
+
+#define INPUT_REDIRECTION_PORT (4950)
+static SOCKET ir_socket = INVALID_SOCKET;
+void input_redirection_send_frame(input_redirection_frame_t *frame) {
+    if (!socket_valid(ir_socket)) {
+        ir_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        if (!socket_valid(ir_socket)) {
+            return;
+        }
+    }
+
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(INPUT_REDIRECTION_PORT);
+    uint32_t ip_addr =
+        (ntr_ip_octet[0] << 24) |
+        (ntr_ip_octet[1] << 16) |
+        (ntr_ip_octet[2] << 8) |
+        ntr_ip_octet[3];
+    addr.sin_addr.s_addr = htonl(ip_addr);
+    if (sendto(ir_socket, (const char *)frame, sizeof(input_redirection_frame_t), 0, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        err_log("sendto error: %d\n", socket_errno());
+        closesocket(ir_socket);
+    }
 }
