@@ -14,6 +14,7 @@ extern enum nk_nav_t nk_nav_cmd;
 #include <stdbool.h>
 
 extern atomic_bool ui_hide_nk_windows;
+void ui_set_hide_nk_windows(bool hide);
 extern bool ui_upscaling_filters;
 
 extern int ui_upscaling_selected;

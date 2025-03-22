@@ -235,7 +235,7 @@ static enum nk_nav_t do_nav_next(enum NK_FOCUS nk_focus)
 
         case NK_NAV_CANCEL:
             if (nk_nav_focus == NK_NAV_FOCUS_NONE)
-                ui_hide_nk_windows = 1;
+                ui_set_hide_nk_windows(1);
             else
                 nk_nav_focus = NK_NAV_FOCUS_NONE;
             break;
@@ -548,6 +548,14 @@ static void check_nav_slider_prev(struct nk_context *ctx, enum NK_FOCUS nk_focus
     }
 }
 
+static int window_closed;
+void ui_set_hide_nk_windows(bool hide) {
+    ui_hide_nk_windows = hide;
+    if (hide) {
+        window_closed = -1;
+    }
+}
+
 void ui_main_nk(void)
 {
     struct nk_context *ctx = ui_nk_ctx;
@@ -560,10 +568,14 @@ void ui_main_nk(void)
         if (nk_window_is_hovered(ctx) && nk_window_is_active(ctx, background_wnd) &&
             nk_input_has_mouse_click(&ctx->input, NK_BUTTON_LEFT))
         {
-            ui_hide_nk_windows = !ui_hide_nk_windows;
-            if (!ui_hide_nk_windows)
-                focus_window = 1;
-            sdl_update_bottom_screen_cursor();
+            if (window_closed > 0) {
+                window_closed = -1;
+            } else {
+                ui_set_hide_nk_windows(!ui_hide_nk_windows);
+                if (ui_hide_nk_windows)
+                    focus_window = 1;
+                sdl_update_bottom_screen_cursor();
+            }
         }
     }
     nk_end(ctx);
@@ -572,7 +584,7 @@ void ui_main_nk(void)
     int nav_command = __atomic_load_n(&nk_nav_cmd, __ATOMIC_RELAXED);
     if (ui_hide_nk_windows && (nav_command == NK_NAV_CANCEL || nav_command == NK_NAV_CONFIRM))
     {
-        ui_hide_nk_windows = 0;
+        ui_set_hide_nk_windows(0);
         __atomic_store_n(&nk_nav_cmd, NK_NAV_NONE, __ATOMIC_RELAXED);
         focus_window = 1;
     }
@@ -585,8 +597,12 @@ void ui_main_nk(void)
 
     char msg_buf[UI_MSG_BUF_LEN_MAX];
 
+    if (window_closed && show_window) {
+        nk_window_show(ctx, remote_play_wnd, 1);
+        window_closed = 0;
+    }
     if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 450, 505),
-                 NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_TITLE) &&
+                 NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_TITLE | NK_WINDOW_CLOSABLE) &&
         show_window)
     {
         nk_layout_row_dynamic(ctx, 30, 2);
@@ -777,6 +793,14 @@ void ui_main_nk(void)
         check_nav_button_prev(ctx);
     }
     nk_end(ctx);
+    if (!window_closed) {
+        window_closed = nk_window_is_hidden(ctx, remote_play_wnd);
+        if (window_closed) {
+            ui_hide_nk_windows = 1;
+            show_window = 0;
+            sdl_update_bottom_screen_cursor();
+        }
+    }
     nk_window_show(ctx, remote_play_wnd, show_window);
 
     if (focus_window)

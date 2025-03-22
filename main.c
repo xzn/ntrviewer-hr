@@ -918,7 +918,7 @@ static bool sdl_process_bottom_screen_event(SDL_Event *evt) {
 
         case SDL_MOUSEBUTTONUP: {
             if (evt->button.button != SDL_BUTTON_LEFT) {
-                ui_hide_nk_windows = !ui_hide_nk_windows;
+                ui_set_hide_nk_windows(!ui_hide_nk_windows);
                 sdl_update_bottom_screen_cursor();
                 break;
             }
