@@ -175,6 +175,13 @@ static const char *d3d_vs_src =
     " output.uv = input.uv;\n"
     " return output;\n"
     "}\n";
+#if 0
+#define d3d_ps_src_0 \
+    " if (any(color != float4(0.0, 0.0, 0.0, 0.0)))\n" \
+    "  color = float4(color.rgb * (15.0 / 16.0), 15.0 / 16.0);\n"
+#else
+#define d3d_ps_src_0
+#endif
 static const char *d3d_ps_src =
     "SamplerState my_samp: register(s0);\n"
     "Texture2D my_tex: register(t0);\n"
@@ -191,8 +198,7 @@ static const char *d3d_ps_src =
     "{\n"
     " PSOutput output = (PSOutput)0;\n"
     " float4 color = my_tex.Sample(my_samp, input.uv);\n"
-    " if (any(color != float4(0.0, 0.0, 0.0, 0.0)))\n"
-    "  color = float4(color.rgb * (15.0 / 16.0), 15.0 / 16.0);\n"
+    d3d_ps_src_0
     " output.color = color;\n"
     " return output;\n"
     "}\n";

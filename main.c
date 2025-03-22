@@ -323,7 +323,49 @@ static LRESULT CALLBACK main_window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             x = x / ui_win_scale[i];
             y = y / ui_win_scale[i];
             handled_lparam = MAKELPARAM(x, y);
-            need_handle_input = i == SCREEN_TOP;
+
+            SDL_Event event = {};
+            switch (msg) {
+                case WM_MOUSEMOVE:
+                    event.type = SDL_MOUSEMOTION;
+                    event.motion.windowID = ui_sdl_win_id[i];
+                    event.motion.x = x;
+                    event.motion.y = y;
+                    break;
+
+                case WM_LBUTTONDOWN:
+                    event.button.button = SDL_BUTTON_LEFT;
+                    goto mouse_down;
+                case WM_RBUTTONDOWN:
+                    event.button.button = SDL_BUTTON_RIGHT;
+                    goto mouse_down;
+                case WM_MBUTTONDOWN:
+                    event.button.button = SDL_BUTTON_MIDDLE;
+mouse_down:
+                    event.type = SDL_MOUSEBUTTONDOWN;
+                    goto mouse_button;
+
+                case WM_LBUTTONUP:
+                    event.button.button = SDL_BUTTON_LEFT;
+                    goto mouse_up;
+                case WM_RBUTTONUP:
+                    event.button.button = SDL_BUTTON_RIGHT;
+                    goto mouse_up;
+                case WM_MBUTTONUP:
+                    event.button.button = SDL_BUTTON_MIDDLE;
+mouse_up:
+                    event.type = SDL_MOUSEBUTTONUP;
+
+mouse_button:
+                    event.button.windowID = ui_sdl_win_id[i];
+                    event.button.x = x;
+                    event.button.y = y;
+                    break;
+
+                default:
+                    break;
+            }
+            need_handle_input = !sdl_process_bottom_screen_event(&event) && i == SCREEN_TOP;
             break;
         }
 
@@ -560,13 +602,19 @@ static void main_loop(void) {
         } else {
             switch (evt.type) {
                 case SDL_MOUSEMOTION:
-                    if (sdl_process_bottom_screen_event(&evt) || evt.motion.windowID != ui_sdl_win_id[SCREEN_TOP]) {
+                    if (
+                        (!is_renderer_d3d11() && sdl_process_bottom_screen_event(&evt)) ||
+                        evt.motion.windowID != ui_sdl_win_id[SCREEN_TOP]
+                    ) {
                         goto skip_evt;
                     }
                     break;
                 case SDL_MOUSEBUTTONDOWN:
                 case SDL_MOUSEBUTTONUP:
-                    if (sdl_process_bottom_screen_event(&evt) || evt.button.windowID != ui_sdl_win_id[SCREEN_TOP]) {
+                    if (
+                        (!is_renderer_d3d11() && sdl_process_bottom_screen_event(&evt)) ||
+                        evt.button.windowID != ui_sdl_win_id[SCREEN_TOP]
+                    ) {
                         goto skip_evt;
                     }
                     break;
