@@ -46,10 +46,13 @@ endif
 endif
 endif
 
-GL_OBJ += libNK_SDL_renderer.o ui_common_sdl.o ui_renderer_sdl.o ui_main_nk.o ntr_common.o ntr_hb.o ntr_rp.o ntr_jpeg_delta.o
+GL_OBJ += libSTB_image.o libNK_SDL_renderer.o ui_common_sdl.o ui_renderer_sdl.o ui_main_nk.o ntr_common.o ntr_hb.o ntr_rp.o ntr_jpeg_delta.o
 ifeq ($(OS),Windows_NT)
 GL_OBJ += ntrviewer.res.o
 endif
+
+CLA_SRC := $(wildcard clarity/18px/*.png) $(wildcard clarity/24px/*.png) $(wildcard clarity/27px/*.png) $(wildcard clarity/36px/*.png)
+CLA_INC := $(CLA_SRC:.png=.h)
 
 # LDFLAGS := -s
 
@@ -147,8 +150,17 @@ nuklear/nuklear_font.o: nuklear/nuklear_font.c
 nuklear/stb_%.o: nuklear/stb_%.c
 	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS)
 
+libSTB_%.o: libSTB_%.c
+	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-unused-function
+
+main.o: main.c $(CLA_INC)
+	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -D_GNU_SOURCE
+
 %.o: %.c
 	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -D_GNU_SOURCE
+
+clarity/%.h: clarity/%.png
+	xxd -i $< > $@
 
 -include $(TARGET_DEP)
 

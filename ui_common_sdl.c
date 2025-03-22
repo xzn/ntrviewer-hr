@@ -54,7 +54,7 @@ int ui_common_sdl_init(void) {
         SDL_SetHint(SDL_HINT_OPENGL_ES_DRIVER, "0");
     }
 
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS)) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER)) {
         err_log("SDL_Init: %s\n", SDL_GetError());
         return -1;
     }
@@ -73,6 +73,8 @@ void ui_common_sdl_destroy(void) {
 }
 
 void ui_view_mode_update(view_mode_t view_mode) {
+    SDL_SetCursor(SDL_GetDefaultCursor());
+
     if (view_mode == VIEW_MODE_SEPARATE)
         SDL_ShowWindow(ui_sdl_win[SCREEN_BOT]);
 
@@ -376,6 +378,56 @@ void sdl_reset_wminfo(void) {
         ui_hwnd[i] = NULL;
     }
 #endif
+}
+
+void draw_screen_get_dims_lite(
+    int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int width, int height,
+    int *out_ctx_left,
+    int *out_ctx_top,
+    int *out_ctx_width,
+    int *out_ctx_height
+) {
+    int ctx_left;
+    int ctx_top;
+    int ctx_width;
+    int ctx_height;
+
+    int i = ctx_top_bot;
+
+    if (view_mode == VIEW_MODE_TOP_BOT) {
+        ctx_height = (double)ui_win_height[i] / 2;
+        if ((double)ui_win_width[i] / width * height > ctx_height) {
+            ctx_width = (double)ctx_height / height * width;
+            ctx_left = (double)(ui_win_width[i] - ctx_width) / 2;
+            ctx_top = 0;
+        } else {
+            ctx_height = (double)ui_win_width[i] / width * height;
+            ctx_left = 0;
+            ctx_width = ui_win_width[i];
+            ctx_top = (double)ui_win_height[i] / 2 - ctx_height;
+        }
+
+        if (screen_top_bot != SCREEN_TOP) {
+            ctx_top = (double)ui_win_height[i] / 2;
+        }
+    } else {
+        ctx_height = (double)ui_win_height[i];
+        if ((double)ui_win_width[i] / width * height > ctx_height) {
+            ctx_width = (double)ctx_height / height * width;
+            ctx_left = (double)(ui_win_width[i] - ctx_width) / 2;
+            ctx_top = 0;
+        } else {
+            ctx_height = (double)ui_win_width[i] / width * height;
+            ctx_left = 0;
+            ctx_width = ui_win_width[i];
+            ctx_top = ((double)ui_win_height[i] - ctx_height) / 2;
+        }
+    }
+
+    *out_ctx_left = ctx_left;
+    *out_ctx_top = ctx_top;
+    *out_ctx_width = ctx_width;
+    *out_ctx_height = ctx_height;
 }
 
 void draw_screen_get_dims(

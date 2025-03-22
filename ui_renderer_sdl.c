@@ -234,35 +234,7 @@ void ui_renderer_sdl_draw(uint8_t *data, int width, int height, int screen_top_b
     int ctx_width;
     int ctx_height;
 
-    if (view_mode == VIEW_MODE_TOP_BOT) {
-        ctx_height = (double)ui_win_height[i] / 2;
-        if ((double)ui_win_width[i] / width * height > ctx_height) {
-            ctx_width = (double)ctx_height / height * width;
-            ctx_left = (double)(ui_win_width[i] - ctx_width) / 2;
-            ctx_top = 0;
-        } else {
-            ctx_height = (double)ui_win_width[i] / width * height;
-            ctx_left = 0;
-            ctx_width = ui_win_width[i];
-            ctx_top = (double)ui_win_height[i] / 2 - ctx_height;
-        }
-
-        if (screen_top_bot != SCREEN_TOP) {
-            ctx_top = (double)ui_win_height[i] / 2;
-        }
-    } else {
-        ctx_height = (double)ui_win_height[i];
-        if ((double)ui_win_width[i] / width * height > ctx_height) {
-            ctx_width = (double)ctx_height / height * width;
-            ctx_left = (double)(ui_win_width[i] - ctx_width) / 2;
-            ctx_top = 0;
-        } else {
-            ctx_height = (double)ui_win_width[i] / width * height;
-            ctx_left = 0;
-            ctx_width = ui_win_width[i];
-            ctx_top = ((double)ui_win_height[i] - ctx_height) / 2;
-        }
-    }
+    draw_screen_get_dims_lite(screen_top_bot, i, view_mode, width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
 
     SDL_Rect rect = { ctx_left, ctx_top + ctx_height, ctx_height, ctx_width };
     SDL_Point center = { 0, 0 };

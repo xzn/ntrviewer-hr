@@ -515,6 +515,8 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 					err_log("original fid %d, fty %d\n", (int)fid, (int)fty);
 					return ret * 0x10 - 8;
 				}
+				// if (counts.recovery_count > 0)
+				// 	err_log("recovered fty %d\n", (int)fty);
 			}
 		}
 		return 0;
@@ -595,6 +597,7 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 					ret = ret * 0x10 - 1;
 					goto fail_decoder;
 				}
+				// err_log("fec recovered fty %d\n", (int)fty);
 			}
 		}
 

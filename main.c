@@ -521,6 +521,425 @@ static thread_ret_t window_thread_func(void *arg) {
     return (thread_ret_t)(uintptr_t)NULL;
 }
 
+#include "clarity/18px/crosshairs-outline.h"
+#include "clarity/18px/cursor-arrow-outline.h"
+#include "clarity/18px/cursor-hand-outline.h"
+#include "clarity/18px/cursor-hand-click-outline.h"
+#include "clarity/18px/cursor-hand-open-outline.h"
+#include "clarity/18px/cursor-hand-grab-outline.h"
+
+#include "clarity/24px/crosshairs-outline.h"
+#include "clarity/24px/cursor-arrow-outline.h"
+#include "clarity/24px/cursor-hand-outline.h"
+#include "clarity/24px/cursor-hand-click-outline.h"
+#include "clarity/24px/cursor-hand-open-outline.h"
+#include "clarity/24px/cursor-hand-grab-outline.h"
+
+#include "clarity/27px/crosshairs-outline.h"
+#include "clarity/27px/cursor-arrow-outline.h"
+#include "clarity/27px/cursor-hand-outline.h"
+#include "clarity/27px/cursor-hand-click-outline.h"
+#include "clarity/27px/cursor-hand-open-outline.h"
+#include "clarity/27px/cursor-hand-grab-outline.h"
+
+#include "clarity/36px/crosshairs-outline.h"
+#include "clarity/36px/cursor-arrow-outline.h"
+#include "clarity/36px/cursor-hand-outline.h"
+#include "clarity/36px/cursor-hand-click-outline.h"
+#include "clarity/36px/cursor-hand-open-outline.h"
+#include "clarity/36px/cursor-hand-grab-outline.h"
+
+enum CLARITY_ICON {
+    CLARITY_ICON_CROSSHAIRS,
+    CLARITY_ICON_ARROW,
+    CLARITY_ICON_HAND,
+    CLARITY_ICON_HAND_CLICK,
+    CLARITY_ICON_HAND_OPEN,
+    CLARITY_ICON_HAND_GRAB,
+    CLARITY_ICON_COUNT,
+};
+
+enum CLARITY_ICON_SIZE {
+    CLARITY_ICON_SIZE_SMALL,
+    CLARITY_ICON_SIZE_MEDIUM,
+    CLARITY_ICON_SIZE_LARGE,
+    CLARITY_ICON_SIZE_XLARGE,
+    CLARITY_ICON_SIZE_COUNT,
+};
+
+const unsigned char *clarity_icon_get_data(enum CLARITY_ICON icon, enum CLARITY_ICON_SIZE size) {
+    switch (size) {
+        case CLARITY_ICON_SIZE_SMALL:
+            switch (icon) {
+                case CLARITY_ICON_CROSSHAIRS:
+                    return clarity_18px_crosshairs_outline_png;
+
+                case CLARITY_ICON_ARROW:
+                    return clarity_18px_cursor_arrow_outline_png;
+
+                case CLARITY_ICON_HAND:
+                    return clarity_18px_cursor_hand_outline_png;
+
+                case CLARITY_ICON_HAND_CLICK:
+                    return clarity_18px_cursor_hand_click_outline_png;
+
+                case CLARITY_ICON_HAND_OPEN:
+                    return clarity_18px_cursor_hand_open_outline_png;
+
+                case CLARITY_ICON_HAND_GRAB:
+                    return clarity_18px_cursor_hand_grab_outline_png;
+
+                default:
+                    return NULL;
+            };
+
+        case CLARITY_ICON_SIZE_MEDIUM:
+            switch (icon) {
+                case CLARITY_ICON_CROSSHAIRS:
+                    return clarity_24px_crosshairs_outline_png;
+
+                case CLARITY_ICON_ARROW:
+                    return clarity_24px_cursor_arrow_outline_png;
+
+                case CLARITY_ICON_HAND:
+                    return clarity_24px_cursor_hand_outline_png;
+
+                case CLARITY_ICON_HAND_CLICK:
+                    return clarity_24px_cursor_hand_click_outline_png;
+
+                case CLARITY_ICON_HAND_OPEN:
+                    return clarity_24px_cursor_hand_open_outline_png;
+
+                case CLARITY_ICON_HAND_GRAB:
+                    return clarity_24px_cursor_hand_grab_outline_png;
+
+                default:
+                    return NULL;
+            };
+
+        case CLARITY_ICON_SIZE_LARGE:
+            switch (icon) {
+                case CLARITY_ICON_CROSSHAIRS:
+                    return clarity_27px_crosshairs_outline_png;
+
+                case CLARITY_ICON_ARROW:
+                    return clarity_27px_cursor_arrow_outline_png;
+
+                case CLARITY_ICON_HAND:
+                    return clarity_27px_cursor_hand_outline_png;
+
+                case CLARITY_ICON_HAND_CLICK:
+                    return clarity_27px_cursor_hand_click_outline_png;
+
+                case CLARITY_ICON_HAND_OPEN:
+                    return clarity_27px_cursor_hand_open_outline_png;
+
+                case CLARITY_ICON_HAND_GRAB:
+                    return clarity_27px_cursor_hand_grab_outline_png;
+
+                default:
+                    return NULL;
+            };
+
+        case CLARITY_ICON_SIZE_XLARGE:
+            switch (icon) {
+                case CLARITY_ICON_CROSSHAIRS:
+                    return clarity_36px_crosshairs_outline_png;
+
+                case CLARITY_ICON_ARROW:
+                    return clarity_36px_cursor_arrow_outline_png;
+
+                case CLARITY_ICON_HAND:
+                    return clarity_36px_cursor_hand_outline_png;
+
+                case CLARITY_ICON_HAND_CLICK:
+                    return clarity_36px_cursor_hand_click_outline_png;
+
+                case CLARITY_ICON_HAND_OPEN:
+                    return clarity_36px_cursor_hand_open_outline_png;
+
+                case CLARITY_ICON_HAND_GRAB:
+                    return clarity_36px_cursor_hand_grab_outline_png;
+
+                default:
+                    return 0;
+            };
+
+        default:
+            return NULL;
+    };
+}
+
+unsigned int clarity_icon_get_data_len(enum CLARITY_ICON icon, enum CLARITY_ICON_SIZE size) {
+    switch (size) {
+        case CLARITY_ICON_SIZE_SMALL:
+            switch (icon) {
+                case CLARITY_ICON_CROSSHAIRS:
+                    return clarity_18px_crosshairs_outline_png_len;
+
+                case CLARITY_ICON_ARROW:
+                    return clarity_18px_cursor_arrow_outline_png_len;
+
+                case CLARITY_ICON_HAND:
+                    return clarity_18px_cursor_hand_outline_png_len;
+
+                case CLARITY_ICON_HAND_CLICK:
+                    return clarity_18px_cursor_hand_click_outline_png_len;
+
+                case CLARITY_ICON_HAND_OPEN:
+                    return clarity_18px_cursor_hand_open_outline_png_len;
+
+                case CLARITY_ICON_HAND_GRAB:
+                    return clarity_18px_cursor_hand_grab_outline_png_len;
+
+                default:
+                    return 0;
+            };
+
+        case CLARITY_ICON_SIZE_MEDIUM:
+            switch (icon) {
+                case CLARITY_ICON_CROSSHAIRS:
+                    return clarity_24px_crosshairs_outline_png_len;
+
+                case CLARITY_ICON_ARROW:
+                    return clarity_24px_cursor_arrow_outline_png_len;
+
+                case CLARITY_ICON_HAND:
+                    return clarity_24px_cursor_hand_outline_png_len;
+
+                case CLARITY_ICON_HAND_CLICK:
+                    return clarity_24px_cursor_hand_click_outline_png_len;
+
+                case CLARITY_ICON_HAND_OPEN:
+                    return clarity_24px_cursor_hand_open_outline_png_len;
+
+                case CLARITY_ICON_HAND_GRAB:
+                    return clarity_24px_cursor_hand_grab_outline_png_len;
+
+                default:
+                    return 0;
+            };
+
+        case CLARITY_ICON_SIZE_LARGE:
+            switch (icon) {
+                case CLARITY_ICON_CROSSHAIRS:
+                    return clarity_27px_crosshairs_outline_png_len;
+
+                case CLARITY_ICON_ARROW:
+                    return clarity_27px_cursor_arrow_outline_png_len;
+
+                case CLARITY_ICON_HAND:
+                    return clarity_27px_cursor_hand_outline_png_len;
+
+                case CLARITY_ICON_HAND_CLICK:
+                    return clarity_27px_cursor_hand_click_outline_png_len;
+
+                case CLARITY_ICON_HAND_OPEN:
+                    return clarity_27px_cursor_hand_open_outline_png_len;
+
+                case CLARITY_ICON_HAND_GRAB:
+                    return clarity_27px_cursor_hand_grab_outline_png_len;
+
+                default:
+                    return 0;
+            };
+
+        case CLARITY_ICON_SIZE_XLARGE:
+            switch (icon) {
+                case CLARITY_ICON_CROSSHAIRS:
+                    return clarity_36px_crosshairs_outline_png_len;
+
+                case CLARITY_ICON_ARROW:
+                    return clarity_36px_cursor_arrow_outline_png_len;
+
+                case CLARITY_ICON_HAND:
+                    return clarity_36px_cursor_hand_outline_png_len;
+
+                case CLARITY_ICON_HAND_CLICK:
+                    return clarity_36px_cursor_hand_click_outline_png_len;
+
+                case CLARITY_ICON_HAND_OPEN:
+                    return clarity_36px_cursor_hand_open_outline_png_len;
+
+                case CLARITY_ICON_HAND_GRAB:
+                    return clarity_36px_cursor_hand_grab_outline_png_len;
+
+                default:
+                    return 0;
+            };
+
+        default:
+            return 0;
+    };
+}
+
+#define STBI_ONLY_PNG
+#include "stb_image.h"
+
+static SDL_PixelFormat *sdl_cursor_pixel_format;
+static SDL_Cursor *sdl_cursor_clarity;
+static SDL_Surface *sdl_cursor_surface;
+static stbi_uc *sdl_cursor_image;
+
+SDL_Cursor *get_clarity_sdl_cursor(enum CLARITY_ICON icon, enum CLARITY_ICON_SIZE size) {
+    if (!sdl_cursor_pixel_format) {
+        sdl_cursor_pixel_format = SDL_AllocFormat(SDL_FORMAT);
+        if (!sdl_cursor_pixel_format)
+            return NULL;
+    }
+
+    if (sdl_cursor_clarity) {
+        SDL_FreeCursor(sdl_cursor_clarity);
+        sdl_cursor_clarity = NULL;
+    }
+
+    if (sdl_cursor_surface) {
+        SDL_FreeSurface(sdl_cursor_surface);
+        sdl_cursor_surface = NULL;
+    }
+
+    if (sdl_cursor_image) {
+        stbi_image_free(sdl_cursor_image);
+        sdl_cursor_image = NULL;
+    }
+
+    int width, height, channels;
+    sdl_cursor_image = stbi_load_from_memory(clarity_icon_get_data(icon, size), clarity_icon_get_data_len(icon, size), &width, &height, &channels, 4);
+    if (!sdl_cursor_image) {
+        return NULL;
+    }
+
+    sdl_cursor_surface = SDL_CreateRGBSurfaceWithFormatFrom(sdl_cursor_image, width, height, 1, width * channels, SDL_FORMAT);
+    if (!sdl_cursor_surface) {
+        return NULL;
+    }
+
+    int hot_x = 15;
+    int hot_y = 7;
+    if (icon == CLARITY_ICON_ARROW) {
+        hot_x = hot_y = 5;
+    } else if (icon == CLARITY_ICON_CROSSHAIRS) {
+        hot_x = hot_y = 17;
+    }
+    hot_x = hot_x * width / 36;
+    hot_y = hot_y * height / 36;
+    sdl_cursor_clarity = SDL_CreateColorCursor(sdl_cursor_surface, hot_x, hot_y);
+    return sdl_cursor_clarity;
+}
+
+static int sdl_get_bottom_screen_mouse_coord(view_mode_t vm, Uint32 wid, Sint32 x, Sint32 y, SDL_Point *point) {
+    int i = (vm == VIEW_MODE_TOP_BOT || vm == VIEW_MODE_BOT) ? SCREEN_TOP : vm == VIEW_MODE_SEPARATE ? SCREEN_BOT : -1;
+    if (i < 0) {
+        return 1;
+    }
+
+    if (i == SCREEN_TOP && !ui_hide_nk_windows) {
+        return 1;
+    }
+
+    if (wid != ui_sdl_win_id[i]) {
+        return -1;
+    }
+
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+        if (wid == ui_sdl_win_id[i]) {
+            if (x < 0 || y < 0 || x >= ui_win_width[i] || y >= ui_win_height[i]) {
+                return -1;
+            }
+        }
+    }
+
+    int ctx_left;
+    int ctx_top;
+    int ctx_width;
+    int ctx_height;
+
+    draw_screen_get_dims_lite(SCREEN_BOT, i, vm, SCREEN_HEIGHT1, SCREEN_WIDTH, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
+    if (x < ctx_left || x >= ctx_left + ctx_width || y < ctx_top || y >= ctx_top + ctx_height) {
+        return 1;
+    }
+
+    *point = (SDL_Point){
+        .x = (x - ctx_left) * SCREEN_HEIGHT1 / ctx_width,
+        .y = (y - ctx_top) * SCREEN_WIDTH / ctx_height,
+    };
+    return 0;
+}
+
+static bool sdl_bottom_screen_grabbing;
+static enum CLARITY_ICON_SIZE sdl_bottom_screen_cursor_size = CLARITY_ICON_SIZE_MEDIUM;
+
+static void sdl_set_bottom_screen_cursor(bool reset) {
+    if (reset) {
+        SDL_SetCursor(SDL_GetDefaultCursor());
+    } else {
+        SDL_SetCursor(get_clarity_sdl_cursor(CLARITY_ICON_HAND_OPEN, sdl_bottom_screen_cursor_size));
+    }
+}
+
+void sdl_update_bottom_screen_cursor(void) {
+    int x, y;
+    UNUSED Uint32 state = SDL_GetMouseState(&x, &y);
+    SDL_Point point;
+    int reset = sdl_get_bottom_screen_mouse_coord(ui_view_mode, ui_sdl_win_id[SCREEN_TOP], x, y, &point);
+    if (reset >= 0)
+        sdl_set_bottom_screen_cursor(reset);
+}
+
+static bool sdl_process_bottom_screen_event(SDL_Event *evt) {
+    view_mode_t vm = ui_view_mode;
+    switch (evt->type) {
+        case SDL_MOUSEMOTION: {
+            if (sdl_bottom_screen_grabbing) {
+                SDL_SetCursor(get_clarity_sdl_cursor(CLARITY_ICON_HAND_GRAB, sdl_bottom_screen_cursor_size));
+                return true;
+            } else {
+                SDL_Point point;
+                int reset = sdl_get_bottom_screen_mouse_coord(vm, evt->motion.windowID, evt->motion.x, evt->motion.y, &point);
+                if (reset >= 0)
+                    sdl_set_bottom_screen_cursor(reset);
+            }
+        }
+        break;
+
+        case SDL_MOUSEBUTTONDOWN: {
+            if (evt->button.button != SDL_BUTTON_LEFT) {
+                break;
+            }
+            SDL_Point point;
+            int reset = sdl_get_bottom_screen_mouse_coord(vm, evt->button.windowID, evt->button.x, evt->button.y, &point);
+            if (!reset) {
+                sdl_bottom_screen_grabbing = true;
+                SDL_SetCursor(get_clarity_sdl_cursor(CLARITY_ICON_HAND_CLICK, sdl_bottom_screen_cursor_size));
+                return true;
+            }
+        }
+        break;
+
+        case SDL_MOUSEBUTTONUP: {
+            if (evt->button.button != SDL_BUTTON_LEFT) {
+                ui_hide_nk_windows = !ui_hide_nk_windows;
+                sdl_update_bottom_screen_cursor();
+                break;
+            }
+            if (sdl_bottom_screen_grabbing) {
+                sdl_bottom_screen_grabbing = false;
+                SDL_Point point;
+                int reset = sdl_get_bottom_screen_mouse_coord(vm, evt->button.windowID, evt->button.x, evt->button.y, &point);
+                if (reset >= 0) {
+                    sdl_set_bottom_screen_cursor(reset);
+                    return true;
+                }
+            }
+        }
+        break;
+
+        default:
+            break;
+    }
+    return false;
+}
+
 static void main_loop(void) {
     // TODO csc
 
@@ -555,13 +974,13 @@ static void main_loop(void) {
         } else {
             switch (evt.type) {
                 case SDL_MOUSEMOTION:
-                    if (evt.motion.windowID != ui_sdl_win_id[SCREEN_TOP]) {
+                    if (sdl_process_bottom_screen_event(&evt) || evt.motion.windowID != ui_sdl_win_id[SCREEN_TOP]) {
                         goto skip_evt;
                     }
                     break;
                 case SDL_MOUSEBUTTONDOWN:
                 case SDL_MOUSEBUTTONUP:
-                    if (evt.button.windowID != ui_sdl_win_id[SCREEN_TOP]) {
+                    if (sdl_process_bottom_screen_event(&evt) || evt.button.windowID != ui_sdl_win_id[SCREEN_TOP]) {
                         goto skip_evt;
                     }
                     break;
@@ -571,6 +990,9 @@ static void main_loop(void) {
                     }
                     break;
                 case SDL_KEYDOWN:
+                    if (evt.key.windowID != ui_sdl_win_id[SCREEN_TOP]) {
+                        goto skip_evt;
+                    }
                     switch (evt.key.keysym.sym) {
                         case SDLK_TAB: {
                             int shift_down = SDL_GetModState() & (KMOD_LSHIFT | KMOD_RSHIFT);
@@ -587,7 +1009,7 @@ static void main_loop(void) {
                         case SDLK_ESCAPE:
                             __atomic_store_n(&nk_nav_cmd, NK_NAV_CANCEL, __ATOMIC_RELAXED);
                             goto skip_evt;
-                        }
+                    }
                     break;
             }
 
