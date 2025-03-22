@@ -533,13 +533,14 @@ Uint32 SDLCALL input_redirection_timer_cb(Uint32 interval, void *) {
     if (!program_running)
         return 0;
 
+    bool selected = ui_controller_selected >= 1 && ui_controller_selected < ui_num_controllers - 1;
     if (
-        ui_controller_selected != game_controller_selected &&
-        ui_controller_selected >= 1 &&
-        ui_controller_selected < ui_num_controllers - 1
+        ui_controller_selected != game_controller_selected || !selected
     ) {
         close_game_controller();
+    }
 
+    if (!sdl_game_controller && selected) {
         sdl_game_controller = SDL_GameControllerOpen(ui_controller_selected - 1); // Skip empty entry
         if (sdl_game_controller) {
             game_controller_selected = ui_controller_selected;
@@ -554,6 +555,8 @@ Uint32 SDLCALL input_redirection_timer_cb(Uint32 interval, void *) {
     bool swap_face = ui_controller_swap_face_buttons;
 
     if (sdl_game_controller) {
+        SDL_ClearError();
+
         if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_GUIDE)) {
             input_redirection_frame.interfaceButtons |= 1;
         }
@@ -673,6 +676,11 @@ Uint32 SDLCALL input_redirection_timer_cb(Uint32 interval, void *) {
 
             input_redirection_frame.cppState = (y << 24) | (x << 16) | (((trigger_r << 1) | (trigger_l << 2)) << 8) | 0x81;
         }
+
+        // if (*SDL_GetError()) {
+        //     close_game_controller();
+        //     ui_controller_selected = 0;
+        // }
     }
 
     input_redirection_frame_t frame = {
