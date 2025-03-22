@@ -535,13 +535,13 @@ Uint32 SDLCALL input_redirection_timer_cb(Uint32 interval, void *) {
     return interval;
 }
 
-rp_lock_t sdl_controllers_lock;
 int ui_num_controllers;
+int ui_controller_selected;
 const char **ui_controllers_names;
 int *ui_controllers_ids;
-void ui_update_game_controllers(void) {
-    rp_lock_wait(sdl_controllers_lock);
+nk_bool ui_controller_swap_face_buttons;
 
+void ui_update_game_controllers(void) {
     ui_num_controllers = 0;
     if (ui_controllers_names) {
         free(ui_controllers_names);
@@ -553,10 +553,14 @@ void ui_update_game_controllers(void) {
     }
 
     int n = SDL_NumJoysticks();
-    ui_controllers_names = malloc(sizeof(const char *) * n);
-    ui_controllers_ids = malloc(sizeof(int) * n);
+    int ui_n = 1 + n + 1;
+    ui_controllers_names = malloc(sizeof(const char *) * ui_n);
+    ui_controllers_ids = malloc(sizeof(int) * ui_n);
 
     int nn = 0;
+    ui_controllers_names[nn] = "";
+    ui_controllers_ids[nn] = -1;
+    ++nn;
     for (int i = 0; i < n; ++i) {
         if (SDL_IsGameController(i)) {
             ui_controllers_names[nn] = SDL_GameControllerNameForIndex(i);
@@ -567,7 +571,9 @@ void ui_update_game_controllers(void) {
             ++nn;
         }
     }
-    ui_num_controllers = nn;
+    ui_controllers_names[nn] = "Refresh List";
+    ui_controllers_ids[nn] = -1;
+    ui_num_controllers = ++nn;
 
-    rp_lock_rel(sdl_controllers_lock);
+    ui_controller_selected = 0;
 }

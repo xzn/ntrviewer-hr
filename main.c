@@ -631,8 +631,6 @@ skip_evt:
         }
     }
 
-    ui_update_game_controllers();
-
     view_mode_t view_mode = __atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED);
     if (ui_view_mode_prev != view_mode) {
         ui_view_mode_update(view_mode);
@@ -682,6 +680,7 @@ static void main_ntr(void) {
     ntr_detect_3ds_ip();
     ntr_get_adapter_list();
     ntr_try_auto_select_adapter();
+    ui_update_game_controllers();
 
     program_running = true;
     int ret;
@@ -719,7 +718,7 @@ static void main_ntr(void) {
     }
 
     rp_lock_init(sdl_cursors_lock);
-    rp_lock_init(sdl_controllers_lock);
+    rp_lock_init(ui_nk_lock);
     thread_t window_top_thread = 0;
     thread_t window_bot_thread = 0;
 
@@ -759,7 +758,7 @@ join_win_bot:
         thread_join(window_top_thread);
 join_win_top:
     }
-    rp_lock_close(sdl_controllers_lock);
+    rp_lock_close(ui_nk_lock);
     rp_lock_close(sdl_cursors_lock);
 
 #ifndef _WIN32

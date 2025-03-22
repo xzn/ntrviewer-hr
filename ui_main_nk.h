@@ -1,6 +1,9 @@
 #ifndef UI_MAIN_NK_H
 #define UI_MAIN_NK_H
 
+#include "const.h"
+#include "rp_syn.h"
+
 enum nk_nav_t {
     NK_NAV_NONE,
     NK_NAV_NEXT,
@@ -9,9 +12,9 @@ enum nk_nav_t {
     NK_NAV_CANCEL,
 };
 extern enum nk_nav_t nk_nav_cmd;
+extern rp_lock_t ui_nk_lock;
 
 #include <stdatomic.h>
-#include <stdbool.h>
 
 extern atomic_bool ui_hide_nk_windows;
 void ui_set_hide_nk_windows(bool hide);

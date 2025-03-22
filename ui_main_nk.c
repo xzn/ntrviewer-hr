@@ -6,6 +6,7 @@
 #include "ui_input_redirection.h"
 
 enum nk_nav_t nk_nav_cmd;
+rp_lock_t ui_nk_lock;
 
 #include "style.h"
 #include "web_colors.h"
@@ -115,8 +116,11 @@ static enum NK_FOCUS {
     NK_FOCUS_RELIABLE_STREAM,
     NK_FOCUS_DEFAULT,
     NK_FOCUS_CONNECT,
-    NK_FOCUS_MIN = NK_FOCUS_VIEW_MODE,
-    NK_FOCUS_MAX = NK_FOCUS_CONNECT,
+    NK_FOCUS_INPUT_REDIRECTION,
+    NK_FOCUS_INPUT_SWAP_FACE,
+    NK_FOCUS_COUNT,
+    NK_FOCUS_MIN = 0,
+    NK_FOCUS_MAX = NK_FOCUS_COUNT - 1,
 } nk_focus_current;
 
 static enum NK_NAV_FOCUS {
@@ -597,14 +601,19 @@ void ui_main_nk(void)
         nk_window_show(ctx, remote_play_wnd, 1);
         window_closed = 0;
     }
-    if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 450, 565),
+    if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 600, 565),
                  NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_TITLE | NK_WINDOW_CLOSABLE) &&
         show_window)
     {
+        rp_lock_wait(ui_nk_lock);
+
+        int combo_width = nk_window_get_width(ctx) / 2.0f - 15.0f;
+        combo_width = MAX(combo_width, 285);
+
         nk_layout_row_dynamic(ctx, 30, 2);
         nk_label(ctx, "View Mode", NK_TEXT_CENTERED);
         int selected = ui_view_mode;
-        struct nk_vec2 combo_size = {225, 200};
+        struct nk_vec2 combo_size = {combo_width, 200};
         const char *view_mode_options[] = {
             "Top and Bottom",
             "Separate Windows",
@@ -748,7 +757,7 @@ void ui_main_nk(void)
         nk_layout_row_dynamic(ctx, 30, 2);
         nk_label(ctx, "Reliable Stream", NK_TEXT_CENTERED);
         selected = ntr_rp_config.kcp_mode;
-        combo_size = (struct nk_vec2){225, 100};
+        combo_size = (struct nk_vec2){combo_width, 100};
         const char *reliable_stream_options[] = {
             "Off",
             "On",
@@ -785,8 +794,33 @@ void ui_main_nk(void)
         }
         check_nav_button_prev(ctx);
 
+        nk_layout_row_dynamic(ctx, 30, 2);
+        nk_label(ctx, "Input Redirection", NK_TEXT_CENTERED);
+        selected = ui_controller_selected;
+        combo_size = (struct nk_vec2){combo_width, 200};
+        do_nav_combobox_next(ctx, NK_FOCUS_INPUT_REDIRECTION, &selected, &ui_controller_selected, ui_num_controllers);
+        nk_combobox(ctx, ui_controllers_names, ui_num_controllers, &selected, 30, combo_size);
+        check_nav_combobox_prev(ctx, &selected);
+        if (selected != ui_controller_selected)
+        {
+            set_nav_combobox_prev(NK_FOCUS_INPUT_REDIRECTION);
+            if (selected == ui_num_controllers - 1) { // Refresh List
+                ui_update_game_controllers();
+            } else {
+                ui_controller_selected = selected;
+            }
+        }
+
+        nk_layout_row_dynamic(ctx, 30, 2);
+        nk_label(ctx, "Swap A/B X/Y", NK_TEXT_CENTERED);
+        do_nav_checkbox_next(ctx, NK_FOCUS_INPUT_SWAP_FACE, &ui_controller_swap_face_buttons);
+        nk_checkbox_label(ctx, "", &ui_controller_swap_face_buttons);
+        check_nav_checkbox_prev(ctx, NK_FOCUS_INPUT_SWAP_FACE, ui_controller_swap_face_buttons);
+
         nk_layout_row_dynamic(ctx, 30, 1);
         nk_label(ctx, "Press \"F\" to toggle fullscreen.", NK_TEXT_CENTERED);
+
+        rp_lock_rel(ui_nk_lock);
     }
     nk_end(ctx);
     if (!window_closed) {
@@ -802,7 +836,7 @@ void ui_main_nk(void)
     if (focus_window)
         nk_window_set_focus(ctx, remote_play_wnd);
 
-    if (nk_begin(ctx, debug_msg_wnd, nk_rect(475, 10, 150, 250),
+    if (nk_begin(ctx, debug_msg_wnd, nk_rect(625, 10, 150, 250),
                  NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE) &&
         show_window)
     {
