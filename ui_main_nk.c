@@ -641,6 +641,7 @@ void ui_main_nk(void)
             if (selected != ui_upscaling_selected) {
                 set_nav_combobox_prev(NK_FOCUS_UPSCALING_FILTER);
                 ui_upscaling_selected = selected;
+                cursor_scale_prev = 0.0f;
             }
             nk_draw_pop_color_inline(ctx);
         }

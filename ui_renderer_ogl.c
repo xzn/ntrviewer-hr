@@ -48,16 +48,22 @@ static GLuint gl_fbo_sc[SCREEN_COUNT];
     " v_texCoord = a_texCoord;\n" \
     "}\n"
 
-#define fs_str \
+#define fs_ui_str_0 \
+    " if (color != vec4(0.0))\n" \
+    "  color = vec4(color.rgb * (15.0 / 16.0), 15.0 / 16.0);\n"
+
+#define fs_str_use_0(str_0) \
     "varying vec2 v_texCoord;\n" \
     "uniform sampler2D s_texture;\n" \
     "void main()\n" \
     "{\n" \
     " vec4 color = texture2D(s_texture, v_texCoord);\n" \
-    " if (color != vec4(0.0))\n" \
-    "  color = vec4(color.rgb * (15.0 / 16.0), 15.0 / 16.0);\n" \
+    str_0 \
     " gl_FragColor = color;\n" \
     "}\n"
+
+#define fs_str fs_str_use_0("")
+#define fs_ui_str fs_str_use_0(fs_ui_str_0)
 
 #define GLES_GLSL_FBO_VERSION "#version 300 es\n" "precision highp float;\n" "precision highp sampler3D;\n"
 #define OGL_GLSL_FBO_VERSION "#version 130\n"
@@ -110,11 +116,11 @@ static GLfloat fbo_vertices_tex_coord[4][2] = {
 static GLushort fbo_indices[] =
     {0, 1, 2, 1, 2, 3};
 
-UNUSED static GLfloat vertices_pos[4][3] = {
-  { -0.5f, 0.5f, 0.0f },  // Position 0
-  { -0.5f, -0.5f, 0.0f }, // Position 1
-  { 0.5f, -0.5f, 0.0f },  // Position 2
-  { 0.5f, 0.5f, 0.0f },   // Position 3
+static GLfloat vertices_pos[4][3] = {
+    { -1.0f, 1.0f, 0.0f },  // Position 0
+    { -1.0f, -1.0f, 0.0f }, // Position 1
+    { 1.0f, -1.0f, 0.0f },  // Position 2
+    { 1.0f, 1.0f, 0.0f },   // Position 3
 };
 
 static GLfloat vertices_tex_coord[4][2] = {
@@ -231,6 +237,7 @@ static GLuint Load_program(const char *vs_src, const char *fs_src)
 }
 
 GLuint gl_program[SCREEN_COUNT];
+GLuint gl_ui_program;
 GLint gl_position_loc[SCREEN_COUNT];
 GLint gl_tex_coord_loc[SCREEN_COUNT];
 GLint gl_sampler_loc[SCREEN_COUNT];
@@ -264,6 +271,13 @@ static int ogl_res_init(void) {
             glGenFramebuffers(1, &gl_fbo_sc[j]);
         }
 
+        if (j == SCREEN_TOP) {
+            if (is_renderer_gles()) {
+                gl_ui_program = Load_program(GLES_GLSL_VERSION vs_str, GLES_GLSL_VERSION fs_ui_str);
+            } else {
+                gl_ui_program = Load_program(OGL_GLSL_VERSION vs_str, OGL_GLSL_VERSION fs_ui_str);
+            }
+        }
         if (is_renderer_gles()) {
             gl_program[j] = Load_program(GLES_GLSL_VERSION vs_str, GLES_GLSL_VERSION fs_str);
         } else {
@@ -373,6 +387,12 @@ static void ogl_res_destroy(void)
         if (gl_program[j]) {
             glDeleteProgram(gl_program[j]);
             gl_program[j] = 0;
+        }
+        if (j == SCREEN_TOP) {
+            if (gl_ui_program) {
+                glDeleteProgram(gl_ui_program);
+                gl_ui_program = 0;
+            }
         }
 
         if (is_renderer_csc()) {
@@ -917,6 +937,7 @@ fail:
     return reset_mode;
 }
 
+static bool tex_vertices_dirty;
 void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared)
 {
     double ctx_left_f;
@@ -986,8 +1007,7 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width,
         glBindTexture(GL_TEXTURE_2D, ctx->gl_tex[i]);
         glTexImage2D(
             GL_TEXTURE_2D, 0,
-            GL_INT_FORMAT, height,
-            width, 0,
+            GL_INT_FORMAT, height, width, 0,
             GL_FORMAT, GL_UNSIGNED_BYTE,
             data);
 
@@ -1126,8 +1146,10 @@ rashader_fail:
         glBindVertexArray(gl_vao[i][screen_top_bot]);
         glBindBuffer(GL_ARRAY_BUFFER, gl_vbo[i][screen_top_bot]);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_ebo[i]);
-        if (need_tex_update)
+        if (need_tex_update || tex_vertices_dirty) {
             glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
+            tex_vertices_dirty = false;
+        }
     } else {
         glEnableVertexAttribArray(gl_position_loc[i]);
         glEnableVertexAttribArray(gl_tex_coord_loc[i]);
@@ -1206,7 +1228,7 @@ void ui_renderer_ogl_present(int screen_top_bot, int ctx_top_bot, bool win_share
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, ui_nk_tex);
                 glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, ui_tex);
-                glUseProgram(gl_program[i]);
+                glUseProgram(gl_ui_program);
                 if (gl_use_vao) {
                     glBindVertexArray(gl_vao_fbo[i]);
                     glBindBuffer(GL_ARRAY_BUFFER, gl_vbo_fbo[i]);
@@ -1271,4 +1293,284 @@ fail:
 #endif
 }
 
-void ui_renderer_ogl_gen_cursor(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale) {}
+static void gl_read_tex(unsigned char *buf, GLuint tex, int width, int height) {
+    GLuint fbo;
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+
+    glReadPixels(0, 0, width, height, GL_FORMAT, GL_UNSIGNED_BYTE, buf);
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glDeleteFramebuffers(1, &fbo);
+}
+
+void ui_renderer_ogl_gen_cursor(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale) {
+    if (channels != GL_CHANNELS_N) {
+        return;
+    }
+    bool fail = true;
+
+    int i = SCREEN_TOP;
+    int screen_top_bot = i;
+
+    int target_width = roundf(width * scale);
+    int target_height = roundf(height * scale);
+
+    image->image = malloc(target_width * target_height * channels);
+    if (!image->image) {
+        return;
+    }
+
+    unsigned char *base2 = malloc(width * height * GL_CHANNELS_N);
+    if (!base2) {
+        goto fail_base2;
+    }
+
+    unsigned char *image_base2 = malloc(target_width * target_height * GL_CHANNELS_N);
+    if (!image_base2) {
+        goto fail_image_base2;
+    }
+
+    for (int x = 0; x < width; ++x) {
+        for (int y = 0; y < height; ++y) {
+            int base2_i = (y * width + x) * GL_CHANNELS_N;
+            int base_i = (y * width + x) * channels;
+            base2[base2_i + 2] = base2[base2_i] = ((int)base[base_i] + (int)base[base_i + 1] + (int)base[base_i + 2]) / 3;
+            base2[base2_i + 1] = base[base_i + 3];
+            base2[base2_i + 3] = UCHAR_MAX;
+        }
+    }
+
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(
+        GL_TEXTURE_2D, 0,
+        GL_INT_FORMAT, width, height, 0,
+        GL_FORMAT, GL_UNSIGNED_BYTE,
+        base2);
+
+    int upscaling_selected = ui_upscaling_selected;
+
+    if (
+        IS_PLACEBO(upscaling_selected) &&
+        (
+            placebo_upscaling_update(PLACEBO_MODE(upscaling_selected), i, screen_top_bot) == 0 ||
+            placebo_upscaling_update(PLACEBO_MODE(upscaling_selected), i, screen_top_bot) == 0
+        ) &&
+        placebo_render[i][screen_top_bot]
+    ) {
+        pl_tex in_tex = NULL;
+        pl_tex out_tex = NULL;
+        int fail = true;
+
+        GLuint gl_out_tex = 0;
+        glGenTextures(1, &gl_out_tex);
+
+        struct pl_opengl_wrap_params in_tex_pars = {};
+        in_tex_pars.target = GL_TEXTURE_2D;
+        in_tex_pars.iformat = GL_INT_FORMAT;
+
+        in_tex_pars.texture = tex;
+        in_tex_pars.width = width;
+        in_tex_pars.height = height;
+
+        in_tex = pl_opengl_wrap(pl_ogl_dev[i]->gpu, &in_tex_pars);
+        if (!in_tex) {
+            goto placebo_fail;
+        }
+
+        struct pl_opengl_wrap_params out_tex_pars = {};
+        out_tex_pars.target = GL_TEXTURE_2D;
+        out_tex_pars.iformat = GL_INT_FORMAT;
+
+        out_tex_pars.texture = gl_out_tex;
+        out_tex_pars.width = target_width;
+        out_tex_pars.height = target_height;
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, out_tex_pars.texture);
+        glTexImage2D(
+            GL_TEXTURE_2D, 0, GL_INT_FORMAT,
+            out_tex_pars.width, out_tex_pars.height, 0,
+            GL_FORMAT, GL_UNSIGNED_BYTE,
+            NULL);
+
+        out_tex = pl_opengl_wrap(pl_ogl_dev[i]->gpu, &out_tex_pars);
+        if (!out_tex) {
+            goto placebo_fail;
+        }
+
+        bool ret = placebo_render_run(placebo_render[i][screen_top_bot], in_tex, out_tex, 0, 0) != NULL;
+        if (!ret) {
+            goto placebo_fail;
+        }
+
+        fail = false;
+        gl_read_tex(image_base2, gl_out_tex, target_width, target_height);
+
+placebo_fail:
+        if (in_tex)
+            pl_tex_destroy(pl_ogl_dev[i]->gpu, &in_tex);
+        if (out_tex)
+            pl_tex_destroy(pl_ogl_dev[i]->gpu, &out_tex);
+
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glDeleteTextures(1, &gl_out_tex);
+
+        if (fail) {
+            goto no_upscale;
+        }
+    } else if (
+        IS_RASHADER(upscaling_selected) &&
+        (
+            rashader_upscaling_update(RASHADER_MODE(upscaling_selected), i, screen_top_bot) == 0 ||
+            rashader_upscaling_update(RASHADER_MODE(upscaling_selected), i, screen_top_bot) == 0
+        ) &&
+        rashader_render[i][screen_top_bot]
+    ) {
+        GLuint gl_out_tex = 0;
+        glGenTextures(1, &gl_out_tex);
+        int fail = true;
+
+        libra_gl_filter_chain_t *chain = rashader_render_chain(rashader_render[i][screen_top_bot]);
+        struct libra_image_gl_t in = {
+            .handle = tex,
+            .format = GL_INT_FORMAT,
+            .width = width,
+            .height = height,
+        };
+
+        struct libra_image_gl_t out = {
+            .handle = gl_out_tex,
+            .format = GL_INT_FORMAT,
+            .width = target_width,
+            .height = target_height,
+        };
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, out.handle);
+        glTexImage2D(
+            GL_TEXTURE_2D, 0, GL_INT_FORMAT,
+            out.width, out.height, 0,
+            GL_FORMAT, GL_UNSIGNED_BYTE,
+            NULL);
+
+        libra_error_t err = libra_gl_filter_chain_frame(chain, 1, in, out, NULL, NULL, NULL);
+        if (err) {
+            libra_error_print(err);
+            libra_error_free(&err);
+            goto rashader_fail;
+        }
+
+        fail = false;
+        gl_read_tex(image_base2, gl_out_tex, target_width, target_height);
+
+rashader_fail:
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glDeleteTextures(1, &gl_out_tex);
+
+        if (fail) {
+            goto no_upscale;
+        }
+    } else {
+no_upscale:
+        int fail = true;
+        GLuint fbo = 0;
+        GLuint gl_out_tex = 0;
+        glGenTextures(1, &gl_out_tex);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, gl_out_tex);
+        glTexImage2D(
+            GL_TEXTURE_2D, 0, GL_INT_FORMAT,
+            target_width, target_height, 0,
+            GL_FORMAT, GL_UNSIGNED_BYTE,
+            NULL);
+
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl_out_tex, 0);
+
+        struct vao_vertice_t vertices[4] = {};
+        if (gl_use_vao) {
+            for (int i = 0; i < 4; ++i) {
+                memcpy(vertices[i].pos, vertices_pos[i], sizeof(vertices[i].pos));
+                memcpy(vertices[i].tex_coord, vertices_tex_coord[i], sizeof(vertices[i].tex_coord));
+            }
+        }
+
+        if (gl_use_vao) {
+            glBindVertexArray(gl_vao[i][screen_top_bot]);
+            glBindBuffer(GL_ARRAY_BUFFER, gl_vbo[i][screen_top_bot]);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_ebo[i]);
+            glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
+        } else {
+            glEnableVertexAttribArray(gl_position_loc[i]);
+            glEnableVertexAttribArray(gl_tex_coord_loc[i]);
+            glVertexAttribPointer(gl_position_loc[i], 3, GL_FLOAT, GL_FALSE, sizeof(*vertices_pos), vertices_pos);
+            glVertexAttribPointer(gl_tex_coord_loc[i], 2, GL_FLOAT, GL_FALSE, sizeof(*vertices_tex_coord), vertices_tex_coord);
+        }
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glUniform1i(gl_sampler_loc[i], 0);
+        glDisable(GL_CULL_FACE);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_BLEND);
+        glDisable(GL_SCISSOR_TEST);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, tex);
+
+        glViewport(0, 0, target_width, target_height);
+        glUseProgram(gl_program[i]);
+
+        if (gl_use_vao) {
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+        } else {
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+        }
+
+        tex_vertices_dirty = true;
+
+        fail = false;
+
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+
+        gl_read_tex(image_base2, gl_out_tex, target_width, target_height);
+
+        glDeleteFramebuffers(1, &fbo);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glDeleteTextures(1, &gl_out_tex);
+        if (fail)
+            goto fail;
+    }
+    fail = false;
+    for (int x = 0; x < target_width; ++x) {
+        for (int y = 0; y < target_height; ++y) {
+            int image_i = (y * target_width + x) * channels;
+            int image2_i = (y * target_width + x) * GL_CHANNELS_N;
+            image->image[image_i + 2] = image->image[image_i + 1] = image->image[image_i] =
+                ((int)image_base2[image2_i] + (int)image_base2[image2_i + 2]) / 2;
+            image->image[image_i + 3] = image_base2[image2_i + 1];
+        }
+    }
+
+    image->width = target_width;
+    image->height = target_height;
+    image->channels = channels;
+
+fail:
+    free(image_base2);
+fail_image_base2:
+    free(base2);
+fail_base2:
+    if (fail) {
+        free(image->image);
+        image->image = 0;
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glDeleteTextures(1, &tex);
+}

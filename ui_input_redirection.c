@@ -308,8 +308,8 @@ static void generate_clarity_sdl_cursor(sdl_cursor_t *cursor, stbi_t *image, enu
     cursor->cursor = SDL_CreateColorCursor(cursor->surface, hot_x, hot_y);
 }
 
-static float cursor_scale_prev;
-void do_generate_cursors_images(view_mode_t vm) {
+float cursor_scale_prev;
+void generate_cursors_images(view_mode_t vm) {
     int i = sdl_get_bottom_screen_ctx(vm);
     if (i < 0) {
         return;
@@ -324,6 +324,7 @@ void do_generate_cursors_images(view_mode_t vm) {
     float scale_x = (float)ctx_width / SCREEN_HEIGHT1;
     float scale_y = (float)ctx_height / SCREEN_WIDTH;
     float scale = (scale_x + scale_y) / 2;
+    scale = MAX(scale, 1.0);
     if (scale == cursor_scale_prev) {
         return;
     }
@@ -349,7 +350,6 @@ void do_generate_cursors_images(view_mode_t vm) {
     rp_lock_rel(sdl_cursors_lock);
 }
 
-bool need_generate_cursors_images;
 static void set_clarity_sdl_cursor(enum CLARITY_ICON icon, enum CLARITY_ICON_SIZE size) {
     rp_lock_wait(sdl_cursors_lock);
     if (sdl_cursors_updated) {
@@ -373,10 +373,6 @@ static void set_clarity_sdl_cursor(enum CLARITY_ICON icon, enum CLARITY_ICON_SIZ
     }
     SDL_SetCursor(sdl_cursors_curr[size][icon].cursor);
     rp_lock_rel(sdl_cursors_lock);
-}
-
-void generate_cursors_images() {
-    need_generate_cursors_images = 1;
 }
 
 #define TOUCH_SCREEN_COORD_RANGE (0xfff)

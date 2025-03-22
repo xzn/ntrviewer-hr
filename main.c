@@ -300,7 +300,6 @@ static LRESULT CALLBACK main_window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 rp_lock_rel(comp_lock);
 #endif
             }
-            generate_cursors_images();
             break;
         }
 
@@ -414,9 +413,8 @@ static void thread_loop(int i) {
         }
     }
 
-    if (ctx_top_bot == SCREEN_TOP && need_generate_cursors_images) {
-        do_generate_cursors_images(view_mode);
-        need_generate_cursors_images = 0;
+    if (i == SCREEN_TOP) {
+        generate_cursors_images(view_mode);
     }
 
     if (i >= screen_count) {

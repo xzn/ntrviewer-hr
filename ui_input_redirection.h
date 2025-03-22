@@ -9,10 +9,9 @@ extern rp_lock_t sdl_cursors_lock;
 extern int sdl_bottom_screen_cursor_size;
 
 void sdl_update_bottom_screen_cursor(void);
-void generate_cursors_images(void);
 
-extern bool need_generate_cursors_images;
-void do_generate_cursors_images(view_mode_t vm);
+extern float cursor_scale_prev;
+void generate_cursors_images(view_mode_t vm);
 bool sdl_process_bottom_screen_event(SDL_Event *evt);
 Uint32 SDLCALL input_redirection_timer_cb(Uint32 interval, void *);
 

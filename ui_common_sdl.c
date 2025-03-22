@@ -143,8 +143,6 @@ void ui_window_size_update(int window_top_bot) {
         ui_nk_height = ui_win_height[i];
         ui_nk_scale = ui_win_scale[i];
     }
-
-    generate_cursors_images();
 }
 
 #define FRAME_STAT_EVERY_X_US 1000000
