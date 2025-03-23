@@ -375,6 +375,8 @@ static void set_clarity_sdl_cursor(enum CLARITY_ICON icon, enum CLARITY_ICON_SIZ
     rp_lock_rel(sdl_cursors_lock);
 }
 
+static bool sdl_bottom_screen_grabbing;
+
 #define TOUCH_SCREEN_COORD_RANGE (0xfff)
 static int sdl_get_bottom_screen_mouse_coord(view_mode_t vm, Uint32 wid, Sint32 x, Sint32 y, SDL_Point *point) {
     int i = sdl_get_bottom_screen_ctx(vm);
@@ -393,7 +395,13 @@ static int sdl_get_bottom_screen_mouse_coord(view_mode_t vm, Uint32 wid, Sint32 
     for (int i = 0; i < SCREEN_COUNT; ++i) {
         if (wid == ui_sdl_win_id[i]) {
             if (x < 0 || y < 0 || x >= ui_win_width[i] || y >= ui_win_height[i]) {
-                return -1;
+                if (sdl_bottom_screen_grabbing) {
+                    x = MIN(MAX(x, 0), ui_win_width[i] - 1);
+                    y = MIN(MAX(y, 0), ui_win_height[i] - 1);
+                    break;
+                } else {
+                    return -1;
+                }
             }
         }
     }
@@ -405,17 +413,21 @@ static int sdl_get_bottom_screen_mouse_coord(view_mode_t vm, Uint32 wid, Sint32 
 
     draw_screen_get_dims_lite(SCREEN_BOT, i, vm, SCREEN_HEIGHT1, SCREEN_WIDTH, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
     if (x < ctx_left || x >= ctx_left + ctx_width || y < ctx_top || y >= ctx_top + ctx_height) {
-        return 1;
+        if (sdl_bottom_screen_grabbing) {
+            x = MIN(MAX(x, ctx_left), ctx_left + ctx_width - 1);
+            y = MIN(MAX(y, ctx_top), ctx_top + ctx_height - 1);
+        } else {
+            return 1;
+        }
     }
 
     *point = (SDL_Point){
-        .x = TOUCH_SCREEN_COORD_RANGE * (x - ctx_left) * SCREEN_HEIGHT1 / ctx_width,
-        .y = TOUCH_SCREEN_COORD_RANGE * (y - ctx_top) * SCREEN_WIDTH / ctx_height,
+        .x = TOUCH_SCREEN_COORD_RANGE * (x - ctx_left) * SCREEN_HEIGHT1 / ctx_width + SCREEN_HEIGHT1 / 2,
+        .y = TOUCH_SCREEN_COORD_RANGE * (y - ctx_top) * SCREEN_WIDTH / ctx_height + SCREEN_WIDTH / 2,
     };
     return 0;
 }
 
-static bool sdl_bottom_screen_grabbing;
 int sdl_bottom_screen_cursor_size = CLARITY_ICON_SIZE_MEDIUM;
 
 static void sdl_set_bottom_screen_cursor(bool reset) {
@@ -426,11 +438,23 @@ static void sdl_set_bottom_screen_cursor(bool reset) {
     }
 }
 
-void sdl_update_bottom_screen_cursor(void) {
+void update_bottom_screen_cursor(void) {
+    if (sdl_bottom_screen_grabbing)
+        return;
+
     int x, y;
     UNUSED Uint32 state = SDL_GetMouseState(&x, &y);
     SDL_Point point;
-    int reset = sdl_get_bottom_screen_mouse_coord(__atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED), ui_sdl_win_id[SCREEN_TOP], x, y, &point);
+    int i;
+    for (i = 0; i < SCREEN_COUNT; ++i) {
+        if (SDL_GetWindowFlags(ui_sdl_win[i]) & SDL_WINDOW_MOUSE_FOCUS) {
+            break;
+        }
+    }
+    if (i == SCREEN_COUNT && !sdl_bottom_screen_grabbing) {
+        sdl_set_bottom_screen_cursor(true);
+    }
+    int reset = sdl_get_bottom_screen_mouse_coord(__atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED), ui_sdl_win_id[i], x, y, &point);
     if (reset >= 0)
         sdl_set_bottom_screen_cursor(reset);
 }
@@ -464,8 +488,7 @@ bool sdl_process_bottom_screen_event(SDL_Event *evt) {
                 set_clarity_sdl_cursor(CLARITY_ICON_HAND_GRAB, sdl_bottom_screen_cursor_size);
                 return true;
             } else {
-                if (reset >= 0)
-                    sdl_set_bottom_screen_cursor(reset);
+                update_bottom_screen_cursor();
             }
         }
         break;
@@ -492,19 +515,11 @@ bool sdl_process_bottom_screen_event(SDL_Event *evt) {
                 (!sdl_bottom_screen_grabbing && evt->button.windowID == ui_sdl_win_id[SCREEN_BOT])
             ) {
                 ui_set_hide_nk_windows(!ui_hide_nk_windows);
-                sdl_update_bottom_screen_cursor();
                 break;
             }
             if (sdl_bottom_screen_grabbing) {
                 sdl_bottom_screen_grabbing = false;
                 input_redirection_frame.touchScreenState = 0x2000000;
-
-                SDL_Point point;
-                int reset = sdl_get_bottom_screen_mouse_coord(vm, evt->button.windowID, evt->button.x, evt->button.y, &point);
-                if (reset >= 0) {
-                    sdl_set_bottom_screen_cursor(reset);
-                    return true;
-                }
             }
         }
         break;

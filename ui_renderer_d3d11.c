@@ -780,7 +780,7 @@ static void d3d11_draw_screen(int ctx_top_bot, int screen_top_bot, struct d3d_ve
         D3D11_MAPPED_SUBRESOURCE tex_mapped = {};
         hr = ID3D11DeviceContext_Map(d3d11device_context[i], (ID3D11Resource *)d3d_child_vb[i][screen_top_bot], 0, D3D11_MAP_WRITE_DISCARD, 0, &tex_mapped);
         if (hr) {
-            err_log("Map failed: %d", (int)hr);
+            err_log("Map failed: %d\n", (int)hr);
             return;
         }
         memcpy(tex_mapped.pData, vertices, sizeof(struct d3d_vertex_t) * 4);
@@ -856,7 +856,6 @@ fail:
     return false;
 }
 
-static bool tex_vertices_dirty;
 void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared) {
     double ctx_left_f;
     double ctx_top_f;
@@ -1007,8 +1006,7 @@ rashader_fail:
     D3D11_VIEWPORT vp = { .Width = ui_ctx_width[p], .Height = ui_ctx_height[p] };
     ID3D11DeviceContext_RSSetViewports(d3d11device_context[i], 1, &vp);
 
-    d3d11_draw_screen(i, screen_top_bot, need_tex_update || tex_vertices_dirty ? vertices : NULL, srv);
-    tex_vertices_dirty = false;
+    d3d11_draw_screen(i, screen_top_bot, vertices, srv);
 
     ctx->width_prev = ctx_width[screen_top_bot];
     ctx->height_prev = ctx_height[screen_top_bot];
@@ -1182,6 +1180,8 @@ void ui_renderer_d3d11_gen_cursor(stbi_t *image, const unsigned char *base, int 
         return;
     }
 
+    rp_lock_wait(comp_lock);
+
     unsigned char *base2 = NULL;
     unsigned char *image_base2 = NULL;
 
@@ -1224,7 +1224,7 @@ void ui_renderer_d3d11_gen_cursor(stbi_t *image, const unsigned char *base, int 
     ID3D11Texture2D *staging = NULL;
     ID3D11Texture2D *in_tex = NULL;
     ID3D11ShaderResourceView *srv = NULL;
-
+    ID3D11Texture2D *in_staging = NULL;
 
     hr = ID3D11Device_CreateTexture2D(d3d11device[i], &tex_desc, NULL, &tex);
     if (hr) {
@@ -1266,6 +1266,15 @@ void ui_renderer_d3d11_gen_cursor(stbi_t *image, const unsigned char *base, int 
         goto fail;
     }
 
+    tex_desc.Usage = D3D11_USAGE_DEFAULT;
+    tex_desc.CPUAccessFlags = 0;
+
+    hr = ID3D11Device_CreateTexture2D(d3d11device[i], &tex_desc, NULL, &in_staging);
+    if (hr) {
+        err_log("CreateTexture2D failed: %d\n", (int)hr);
+        goto fail;
+    }
+
     D3D11_MAPPED_SUBRESOURCE tex_mapped = {};
     hr = ID3D11DeviceContext_Map(d3d11device_context[i], (ID3D11Resource *)in_tex, 0, D3D11_MAP_WRITE_DISCARD, 0, &tex_mapped);
     if (hr) {
@@ -1287,7 +1296,36 @@ void ui_renderer_d3d11_gen_cursor(stbi_t *image, const unsigned char *base, int 
         ) &&
         placebo_render[i][screen_top_bot]
     ) {
-        goto no_upscale;
+        int fail = true;
+        pl_tex pl_in_tex = NULL;
+        pl_tex pl_out_tex = NULL;
+        ID3D11DeviceContext_CopyResource(d3d11device_context[i], (ID3D11Resource *)in_staging, (ID3D11Resource *)in_tex);
+
+        struct pl_d3d11_wrap_params in_tex_pars = { .tex = (ID3D11Resource *)in_staging };
+        pl_in_tex = pl_d3d11_wrap(pl_d3d11_dev[i]->gpu, &in_tex_pars);
+        if (!pl_in_tex) {
+            goto placebo_fail;
+        }
+
+        struct pl_d3d11_wrap_params out_tex_pars = { .tex = (ID3D11Resource *)tex };
+        pl_out_tex = pl_d3d11_wrap(pl_d3d11_dev[i]->gpu, &out_tex_pars);
+        if (!pl_out_tex) {
+            goto placebo_fail;
+        }
+        bool ret = placebo_render_run(placebo_render[i][screen_top_bot], pl_in_tex, pl_out_tex, 0, 0) != NULL;
+        if (!ret) {
+            goto placebo_fail;
+        }
+
+        fail = false;
+placebo_fail:
+        if (pl_in_tex)
+            pl_tex_destroy(pl_d3d11_dev[i]->gpu, &pl_in_tex);
+        if (pl_out_tex)
+            pl_tex_destroy(pl_d3d11_dev[i]->gpu, &pl_out_tex);
+
+        if (fail)
+            goto no_upscale;
     } else if (
         IS_RASHADER(upscaling_selected) &&
         (
@@ -1310,13 +1348,12 @@ no_upscale:
             {{1.0f, -1.0f}, {1.0f, 1.0f}},
         };
         d3d11_draw_screen(i, screen_top_bot, vertices, srv);
-        tex_vertices_dirty = true;
     }
     ID3D11DeviceContext_CopyResource(d3d11device_context[i], (ID3D11Resource *)staging, (ID3D11Resource *)tex);
     tex_mapped = (D3D11_MAPPED_SUBRESOURCE){};
     hr = ID3D11DeviceContext_Map(d3d11device_context[i], (ID3D11Resource *)staging, 0, D3D11_MAP_READ, 0, &tex_mapped);
     if (hr) {
-        err_log("Map failed: %d", (int)hr);
+        err_log("Map failed: %d\n", (int)hr);
         goto fail;
     }
     for (int i = 0; i < target_height; ++i) {
@@ -1341,6 +1378,7 @@ no_upscale:
 
 
 fail:
+    CHECK_AND_RELEASE(in_staging);
     CHECK_AND_RELEASE(srv);
     CHECK_AND_RELEASE(in_tex);
     CHECK_AND_RELEASE(staging);
@@ -1359,4 +1397,6 @@ fail:
         free(image->image);
         image->image = 0;
     }
+
+    rp_lock_rel(comp_lock);
 }

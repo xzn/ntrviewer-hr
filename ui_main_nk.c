@@ -560,7 +560,6 @@ void ui_set_hide_nk_windows(bool hide) {
     if (hide) {
         window_closed = -1;
     }
-    sdl_update_bottom_screen_cursor();
 }
 
 void ui_main_nk(void)
@@ -860,7 +859,6 @@ void ui_main_nk(void)
         if (window_closed) {
             ui_hide_nk_windows = 1;
             show_window = 0;
-            sdl_update_bottom_screen_cursor();
         }
     }
     nk_window_show(ctx, remote_play_wnd, show_window);

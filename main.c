@@ -365,7 +365,7 @@ mouse_button:
                 default:
                     break;
             }
-            need_handle_input = !sdl_process_bottom_screen_event(&event) && i == SCREEN_TOP;
+            need_handle_input = !(is_renderer_d3d11() && sdl_process_bottom_screen_event(&event)) && i == SCREEN_TOP;
             break;
         }
 
@@ -676,6 +676,8 @@ static void main_loop(void) {
 skip_evt:
         }
     }
+
+    update_bottom_screen_cursor();
 
     view_mode_t view_mode = __atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED);
     if (ui_view_mode_prev != view_mode) {

@@ -937,7 +937,6 @@ fail:
     return reset_mode;
 }
 
-static bool tex_vertices_dirty;
 void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared)
 {
     double ctx_left_f;
@@ -1146,10 +1145,7 @@ rashader_fail:
         glBindVertexArray(gl_vao[i][screen_top_bot]);
         glBindBuffer(GL_ARRAY_BUFFER, gl_vbo[i][screen_top_bot]);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_ebo[i]);
-        if (need_tex_update || tex_vertices_dirty) {
-            glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
-            tex_vertices_dirty = false;
-        }
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
     } else {
         glEnableVertexAttribArray(gl_position_loc[i]);
         glEnableVertexAttribArray(gl_tex_coord_loc[i]);
@@ -1537,8 +1533,6 @@ no_upscale:
         } else {
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
         }
-
-        tex_vertices_dirty = true;
 
         fail = false;
 
