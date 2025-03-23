@@ -1334,6 +1334,20 @@ placebo_fail:
         ) &&
         rashader_render[i][screen_top_bot]
     ) {
+        fail = true;
+        libra_d3d11_filter_chain_t *chain = rashader_render_chain(rashader_render[i][screen_top_bot]);
+
+        libra_error_t err = libra_d3d11_filter_chain_frame(chain, d3d11device_context[i], 1, srv, rtv, NULL, NULL, NULL);
+        if (err) {
+            libra_error_print(err);
+            libra_error_free(&err);
+            goto rashader_fail;
+        }
+
+        fail = false;
+
+rashader_fail:
+        if (fail)
         goto no_upscale;
     } else {
 no_upscale:
