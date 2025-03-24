@@ -1348,7 +1348,7 @@ placebo_fail:
 
 rashader_fail:
         if (fail)
-        goto no_upscale;
+            goto no_upscale;
     } else {
 no_upscale:
         ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &rtv, NULL);
