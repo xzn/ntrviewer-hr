@@ -43,6 +43,9 @@ typedef interface IPresentationManager IPresentationManager;
 typedef interface IPresentationBuffer IPresentationBuffer;
 typedef interface IPresentationSurface IPresentationSurface;
 typedef interface IPresentStatistics IPresentStatistics;
+typedef interface IPresentStatusPresentStatistics IPresentStatusPresentStatistics;
+typedef interface ICompositionFramePresentStatistics ICompositionFramePresentStatistics;
+typedef interface IIndependentFlipFramePresentStatistics IIndependentFlipFramePresentStatistics;
 typedef interface IDCompositionAffineTransform2DEffect IDCompositionAffineTransform2DEffect;
 typedef interface IDCompositionAnimation IDCompositionAnimation;
 typedef interface IDCompositionArithmeticCompositeEffect IDCompositionArithmeticCompositeEffect;
@@ -481,6 +484,185 @@ DECLARE_INTERFACE(IPresentationBuffer)
 
 #define IPresentationBuffer_IsAvailable(This, isAvailable) \
     ((This)->lpVtbl->IsAvailable(This, isAvailable))
+
+#endif
+
+#define IPRESENTSTATISTICS_METHODS \
+    STDMETHOD_(UINT64, GetPresentId)(THIS); \
+    STDMETHOD_(PresentStatisticsKind, GetKind)(THIS);
+
+#undef INTERFACE
+#define INTERFACE IPresentStatistics
+DECLARE_INTERFACE(IPresentStatistics)
+{
+    IUNKNOWN_METHODS
+    IPRESENTSTATISTICS_METHODS
+};
+
+#ifdef COBJMACROS
+
+#define IPresentStatistics_QueryInterface(This, riid, ppvObject) \
+    ((This)->lpVtbl->QueryInterface(This, riid, ppvObject))
+
+#define IPresentStatistics_AddRef(This) \
+    ((This)->lpVtbl->AddRef(This))
+
+#define IPresentStatistics_Release(This) \
+    ((This)->lpVtbl->Release(This))
+
+#define IPresentStatistics_GetPresentId(This) \
+    ((This)->lpVtbl->GetPresentId(This))
+
+#define IPresentStatistics_GetKind(This) \
+    ((This)->lpVtbl->GetKind(This))
+
+#endif
+
+typedef UINT64 CompositionFrameId;
+typedef enum PresentStatus {
+    PresentStatus_Queued = 0,
+    PresentStatus_Skipped = 1,
+    PresentStatus_Canceled = 2
+} PresentStatus;
+
+#undef INTERFACE
+#define INTERFACE IPresentStatusPresentStatistics
+DECLARE_INTERFACE(IPresentStatusPresentStatistics)
+{
+    IUNKNOWN_METHODS
+    IPRESENTSTATISTICS_METHODS
+
+    STDMETHOD_(CompositionFrameId, GetCompositionFrameId)(THIS);
+    STDMETHOD_(PresentStatus, GetPresentStatus)(THIS);
+};
+
+#ifdef COBJMACROS
+
+#define IPresentStatusPresentStatistics_QueryInterface(This, riid, ppvObject) \
+    ((This)->lpVtbl->QueryInterface(This, riid, ppvObject))
+
+#define IPresentStatusPresentStatistics_AddRef(This) \
+    ((This)->lpVtbl->AddRef(This))
+
+#define IPresentStatusPresentStatistics_Release(This) \
+    ((This)->lpVtbl->Release(This))
+
+#define IPresentStatusPresentStatistics_GetPresentId(This) \
+    ((This)->lpVtbl->GetPresentId(This))
+
+#define IPresentStatusPresentStatistics_GetKind(This) \
+    ((This)->lpVtbl->GetKind(This))
+
+#define IPresentStatusPresentStatistics_GetCompositionFrameId(This) \
+    ((This)->lpVtbl->GetCompositionFrameId(This))
+
+#define IPresentStatusPresentStatistics_GetPresentStatus(This) \
+    ((This)->lpVtbl->GetPresentStatus(This))
+
+#endif
+
+typedef enum CompositionFrameInstanceKind {
+    CompositionFrameInstanceKind_ComposedOnScreen = 0,
+    CompositionFrameInstanceKind_ScanoutOnScreen = 1,
+    CompositionFrameInstanceKind_ComposedToIntermediate = 2
+} CompositionFrameInstanceKind;
+
+typedef struct CompositionFrameDisplayInstance {
+    LUID displayAdapterLUID;
+    UINT displayVidPnSourceId;
+    UINT displayUniqueId;
+    LUID renderAdapterLUID;
+    CompositionFrameInstanceKind instanceKind;
+    PresentationTransform finalTransform;
+    boolean requiredCrossAdapterCopy;
+    DXGI_COLOR_SPACE_TYPE colorSpace;
+} CompositionFrameDisplayInstance;
+
+#undef INTERFACE
+#define INTERFACE ICompositionFramePresentStatistics
+DECLARE_INTERFACE(ICompositionFramePresentStatistics)
+{
+    IUNKNOWN_METHODS
+    IPRESENTSTATISTICS_METHODS
+
+    STDMETHOD_(UINT_PTR, GetContentTag)(THIS);
+    STDMETHOD_(CompositionFrameId, GetCompositionFrameId)(THIS);
+    STDMETHOD(GetDisplayInstanceArray)(THIS_ UINT *displayInstanceArrayCount, const CompositionFrameDisplayInstance **displayInstanceArray);
+};
+
+#ifdef COBJMACROS
+
+#define ICompositionFramePresentStatistics_QueryInterface(This, riid, ppvObject) \
+    ((This)->lpVtbl->QueryInterface(This, riid, ppvObject))
+
+#define ICompositionFramePresentStatistics_AddRef(This) \
+    ((This)->lpVtbl->AddRef(This))
+
+#define ICompositionFramePresentStatistics_Release(This) \
+    ((This)->lpVtbl->Release(This))
+
+#define ICompositionFramePresentStatistics_GetPresentId(This) \
+    ((This)->lpVtbl->GetPresentId(This))
+
+#define ICompositionFramePresentStatistics_GetKind(This) \
+    ((This)->lpVtbl->GetKind(This))
+
+#define ICompositionFramePresentStatistics_GetContentTag(This) \
+    ((This)->lpVtbl->GetContentTag(This))
+
+#define ICompositionFramePresentStatistics_GetCompositionFrameId(This) \
+    ((This)->lpVtbl->GetCompositionFrameId(This))
+
+#define ICompositionFramePresentStatistics_GetDisplayInstanceArray(This, displayInstanceArrayCount, displayInstanceArray) \
+    ((This)->lpVtbl->GetDisplayInstanceArray(This, displayInstanceArrayCount, displayInstanceArray))
+
+#endif
+
+#undef INTERFACE
+#define INTERFACE IIndependentFlipFramePresentStatistics
+DECLARE_INTERFACE(IIndependentFlipFramePresentStatistics)
+{
+    IUNKNOWN_METHODS
+    IPRESENTSTATISTICS_METHODS
+
+    STDMETHOD_(LUID, GetOutputAdapterLUID)(THIS);
+    STDMETHOD_(UINT, GetOutputVidPnSourceId)(THIS);
+    STDMETHOD_(UINT_PTR, GetContentTag)(THIS);
+    STDMETHOD(GetDisplayedTime)(THIS_ SystemInterruptTime *displayedTime);
+    STDMETHOD(GetPresentDuration)(THIS_ SystemInterruptTime *presentDuration);
+};
+
+#ifdef COBJMACROS
+
+#define IIndependentFlipFramePresentStatistics_QueryInterface(This, riid, ppvObject) \
+    ((This)->lpVtbl->QueryInterface(This, riid, ppvObject))
+
+#define IIndependentFlipFramePresentStatistics_AddRef(This) \
+    ((This)->lpVtbl->AddRef(This))
+
+#define IIndependentFlipFramePresentStatistics_Release(This) \
+    ((This)->lpVtbl->Release(This))
+
+#define IIndependentFlipFramePresentStatistics_GetPresentId(This) \
+    ((This)->lpVtbl->GetPresentId(This))
+
+#define IIndependentFlipFramePresentStatistics_GetKind(This) \
+    ((This)->lpVtbl->GetKind(This))
+
+#define IIndependentFlipFramePresentStatistics_GetOutputAdapterLUID(This) \
+    ((This)->lpVtbl->GetOutputAdapterLUID(This))
+
+#define IIndependentFlipFramePresentStatistics_GetOutputVidPnSourceId(This) \
+    ((This)->lpVtbl->GetOutputVidPnSourceId(This))
+
+#define IIndependentFlipFramePresentStatistics_GetContentTag(This) \
+    ((This)->lpVtbl->GetContentTag(This))
+
+#define IIndependentFlipFramePresentStatistics_GetDisplayedTime(This, displayedTime) \
+    ((This)->lpVtbl->GetDisplayedTime(This, displayedTime))
+
+#define IIndependentFlipFramePresentStatistics_GetPresentDuration(This, presentDuration) \
+    ((This)->lpVtbl->GetPresentDuration(This, presentDuration))
 
 #endif
 

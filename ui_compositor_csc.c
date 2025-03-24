@@ -93,7 +93,7 @@ UNUSED static const IID IID_IDCompositionDevice = { 0xc37ea93a, 0xe7aa, 0x450d, 
 UNUSED static const IID IID_IDCompositionDevice3 = { 0x0987cb06, 0xf916, 0x48bf, { 0x8d, 0x35, 0xce, 0x76, 0x41, 0x78, 0x1b, 0xd9 } };
 UNUSED static const IID IID_IDCompositionDesktopDevice = { 0x5f4633fe, 0x1e08, 0x4cb8, { 0x8c, 0x75, 0xce, 0x24, 0x33, 0x3f, 0x56, 0x02 } };
 
-#define PRESENT_STAT (0)
+#define PRESENT_STATS (1)
 
 int dxgi_init(void)
 {
@@ -579,7 +579,7 @@ int composition_swapchain_device_init(void)
             }
         }
 
-        if (PRESENT_STAT) {
+        if (PRESENT_STATS) {
             hr = IPresentationManager_EnablePresentStatisticsKind(
                 presentation_manager[i], PresentStatisticsKind_CompositionFrame,
                 true);
@@ -627,7 +627,7 @@ int composition_swapchain_device_init(void)
 
         if (i == SCREEN_TOP) {
             for (int j = 0; j < SCREEN_COUNT; ++j) {
-                if (PRESENT_STAT) {
+                if (PRESENT_STATS) {
                     hr = IPresentationManager_EnablePresentStatisticsKind(
                         pres_man_child[j],
                         PresentStatisticsKind_CompositionFrame, true);
@@ -1138,11 +1138,121 @@ fail:
     return -1;
 }
 
+#define PRINT_PRESENT_STATS (0)
+
 static void pres_man_proc_stat(int ctx_top_bot, int win_shared)
 {
-    // TODO
-    (void)ctx_top_bot;
-    (void)win_shared;
+    HRESULT hr;
+
+    IPresentStatistics *pres_stat;
+    hr = IPresentationManager_GetNextPresentStatistics(
+        win_shared ? pres_man_child[ctx_top_bot] : presentation_manager[ctx_top_bot],
+        &pres_stat);
+    if (hr) {
+        err_log("GetNextPresentStatistics failed: %d\n", (int)hr);
+        return;
+    }
+
+    PresentStatisticsKind pres_kind = IPresentStatistics_GetKind(pres_stat);
+    UINT64 pres_id = IPresentStatistics_GetPresentId(pres_stat);
+    if (PRINT_PRESENT_STATS)
+        err_log("Present stat %d %llu %d\n", ctx_top_bot, (unsigned long long)pres_id, (int)pres_kind);
+
+    switch (pres_kind) {
+        case PresentStatisticsKind_PresentStatus: break; {
+            IPresentStatusPresentStatistics *pres_stat_stat;
+            hr = IPresentStatistics_QueryInterface(pres_stat, &IID_IPresentStatusPresentStatistics, (void **)&pres_stat_stat);
+            if (hr) {
+                err_log("QueryInterface IPresentStatusPresentStatistics failed: %d\n", (int)hr);
+                goto done;
+            }
+
+            CompositionFrameId comp_frame_id = IPresentStatusPresentStatistics_GetCompositionFrameId(pres_stat_stat);
+            PresentStatus pres_status = IPresentStatusPresentStatistics_GetPresentStatus(pres_stat_stat);
+
+            if (PRINT_PRESENT_STATS)
+                err_log("Present status stat %llu %d\n", (unsigned long long)comp_frame_id, (int)pres_status);
+
+            IPresentStatusPresentStatistics_Release(pres_stat_stat);
+            break;
+        }
+
+        case PresentStatisticsKind_CompositionFrame: break; {
+            ICompositionFramePresentStatistics *comp_stat;
+            hr = IPresentStatistics_QueryInterface(pres_stat, &IID_ICompositionFramePresentStatistics, (void **)&comp_stat);
+            if (hr) {
+                err_log("QueryInterface ICompositionFramePresentStatistics failed: %d\n", (int)hr);
+                goto done;
+            }
+
+            CompositionFrameId comp_frame_id = ICompositionFramePresentStatistics_GetCompositionFrameId(comp_stat);
+
+            UINT disp_inst_count;
+            const CompositionFrameDisplayInstance *disp_insts;
+            ICompositionFramePresentStatistics_GetDisplayInstanceArray(comp_stat, &disp_inst_count, &disp_insts);
+
+            if (PRINT_PRESENT_STATS)
+                err_log("Comp stat %llu %d\n", (unsigned long long)comp_frame_id, (int)disp_inst_count);
+
+            COMPOSITION_FRAME_STATS comp_frame_stats;
+            UINT target_count;
+            hr = DCompositionGetStatistics(comp_frame_id, &comp_frame_stats, 0, NULL, &target_count);
+            if (hr) {
+                err_log("DCompositionGetStatistics failed: %d\n", (int)hr);
+                goto comp_frame_done;
+            } else {
+                COMPOSITION_TARGET_ID comp_target_ids[target_count];
+                hr = DCompositionGetStatistics(comp_frame_id, &comp_frame_stats, target_count, comp_target_ids, &target_count);
+                if (hr) {
+                    err_log("DCompositionGetStatistics failed: %d\n", (int)hr);
+                    goto comp_frame_done;
+                }
+
+                for (int i = 0; i < (int)target_count; ++i) {
+                    COMPOSITION_TARGET_STATS comp_target_stats;
+                    hr = DCompositionGetTargetStatistics(comp_frame_id, &comp_target_ids[i], &comp_target_stats);
+                    if (hr) {
+                        err_log("DCompositionGetTargetStatistics failed: %d\n", (int)hr);
+                        goto comp_frame_done;
+                    }
+
+                    if (PRINT_PRESENT_STATS)
+                        if (comp_target_stats.presentTime)
+                            err_log("Comp target stat %llu %llu\n", (unsigned long long)comp_target_stats.presentTime, (unsigned long long)comp_target_stats.vblankDuration);
+                }
+            }
+
+comp_frame_done:
+            ICompositionFramePresentStatistics_Release(comp_stat);
+            break;
+        }
+
+        case PresentStatisticsKind_IndependentFlipFrame: {
+            IIndependentFlipFramePresentStatistics *iflip_stat;
+            hr = IPresentStatistics_QueryInterface(pres_stat, &IID_IIndependentFlipFramePresentStatistics, (void **)&iflip_stat);
+            if (hr) {
+                err_log("QueryInterface IIndependentFlipFramePresentStatistics failed: %d\n", (int)hr);
+                goto done;
+            }
+
+            SystemInterruptTime disp_time;
+            IIndependentFlipFramePresentStatistics_GetDisplayedTime(iflip_stat, &disp_time);
+
+            SystemInterruptTime pres_dura;
+            IIndependentFlipFramePresentStatistics_GetPresentDuration(iflip_stat, &pres_dura);
+
+            if (PRINT_PRESENT_STATS)
+                err_log("I flip frame stat %llu %llu\n", (unsigned long long)disp_time.value, (unsigned long long)pres_dura.value);
+
+            IIndependentFlipFramePresentStatistics_Release(iflip_stat);
+            break;
+        }
+
+        default:
+    }
+
+done:
+    IPresentStatistics_Release(pres_stat);
 }
 
 int presentation_buffer_get(struct presentation_buffer_t *bufs, int ctx_top_bot, int win_shared, int count_max, int width, int height, int *index)
