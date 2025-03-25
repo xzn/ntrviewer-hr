@@ -1139,6 +1139,9 @@ fail:
 }
 
 #define PRINT_PRESENT_STATS (0)
+#define PRINT_PRESENT_TIMINGS (0)
+
+static ULONGLONG prev_pres_time[SCREEN_COUNT];
 
 static void pres_man_proc_stat(int ctx_top_bot, int win_shared)
 {
@@ -1159,7 +1162,7 @@ static void pres_man_proc_stat(int ctx_top_bot, int win_shared)
         err_log("Present stat %d %llu %d\n", ctx_top_bot, (unsigned long long)pres_id, (int)pres_kind);
 
     switch (pres_kind) {
-        case PresentStatisticsKind_PresentStatus: break; {
+        case PresentStatisticsKind_PresentStatus: {
             IPresentStatusPresentStatistics *pres_stat_stat;
             hr = IPresentStatistics_QueryInterface(pres_stat, &IID_IPresentStatusPresentStatistics, (void **)&pres_stat_stat);
             if (hr) {
@@ -1177,7 +1180,7 @@ static void pres_man_proc_stat(int ctx_top_bot, int win_shared)
             break;
         }
 
-        case PresentStatisticsKind_CompositionFrame: break; {
+        case PresentStatisticsKind_CompositionFrame: {
             ICompositionFramePresentStatistics *comp_stat;
             hr = IPresentStatistics_QueryInterface(pres_stat, &IID_ICompositionFramePresentStatistics, (void **)&comp_stat);
             if (hr) {
@@ -1216,6 +1219,13 @@ static void pres_man_proc_stat(int ctx_top_bot, int win_shared)
                         goto comp_frame_done;
                     }
 
+                    if (PRINT_PRESENT_TIMINGS)
+                        if (i == 0) {
+                            ULONGLONG *prev_time = &prev_pres_time[ctx_top_bot];
+                            err_log("screen %d time %d\n", ctx_top_bot, (int)(comp_target_stats.presentTime - *prev_time));
+                            *prev_time = comp_target_stats.presentTime;
+                        }
+
                     if (PRINT_PRESENT_STATS)
                         if (comp_target_stats.presentTime)
                             err_log("Comp target stat %llu %llu\n", (unsigned long long)comp_target_stats.presentTime, (unsigned long long)comp_target_stats.vblankDuration);
@@ -1240,6 +1250,12 @@ comp_frame_done:
 
             SystemInterruptTime pres_dura;
             IIndependentFlipFramePresentStatistics_GetPresentDuration(iflip_stat, &pres_dura);
+
+            if (PRINT_PRESENT_TIMINGS) {
+                ULONGLONG *prev_time = &prev_pres_time[ctx_top_bot];
+                err_log("screen %d time %d\n", ctx_top_bot, (int)(disp_time.value - *prev_time));
+                *prev_time = disp_time.value;
+            }
 
             if (PRINT_PRESENT_STATS)
                 err_log("I flip frame stat %llu %llu\n", (unsigned long long)disp_time.value, (unsigned long long)pres_dura.value);
@@ -1333,6 +1349,47 @@ int presentation_buffer_get(struct presentation_buffer_t *bufs, int ctx_top_bot,
     return 0;
 }
 
+static struct pres_timing_t {
+    ULONGLONG prev_frame_timing;
+    ULONGLONG prev_frame_times;
+    ULONGLONG prev_pres_timing;
+    ULONGLONG prev_pres_diff;
+} pres_timing[SCREEN_COUNT];
+
+#define PRES_TIME_COUNT (4)
+#define PRES_TIME_F_MAX (8)
+#define PRES_TIME_TARGET_DELAY_F (2)
+#define PRES_TIME_MAX_DELAY (10000000 / 15)
+
+static ULONGLONG get_next_pres_timing(int screen_top_bot) {
+    struct pres_timing_t *pres = &pres_timing[screen_top_bot];
+    ULONGLONG timing;
+    QueryInterruptTime(&timing);
+
+    ULONGLONG frame_time = timing - pres->prev_frame_timing;
+    pres->prev_frame_timing = timing;
+    if (frame_time / PRES_TIME_F_MAX > pres->prev_frame_times || pres->prev_frame_times / PRES_TIME_F_MAX > frame_time) {
+        pres->prev_frame_times = MIN(frame_time, PRES_TIME_TARGET_DELAY_F * PRES_TIME_MAX_DELAY);
+forward:
+        pres->prev_pres_diff = MIN(pres->prev_frame_times / PRES_TIME_TARGET_DELAY_F, PRES_TIME_MAX_DELAY);
+        pres->prev_pres_timing = timing + pres->prev_pres_diff;
+        return timing;
+    } else {
+        pres->prev_frame_times = (pres->prev_frame_times * (PRES_TIME_COUNT - 1) + frame_time) / PRES_TIME_COUNT;
+        ULONGLONG pres_timing = pres->prev_pres_timing + pres->prev_frame_times;
+        LONGLONG diff = (LONGLONG)pres_timing - (LONGLONG)timing;
+        if (diff < 0) {
+            goto forward;
+        } else {
+            pres->prev_pres_diff = MIN((pres->prev_pres_diff * (PRES_TIME_COUNT - 1) + (ULONGLONG)diff) / PRES_TIME_COUNT, PRES_TIME_MAX_DELAY);
+            LONGLONG target_diff = (LONGLONG)pres->prev_pres_diff - (LONGLONG)pres->prev_frame_times / PRES_TIME_TARGET_DELAY_F;
+            pres_timing = (ULONGLONG)((LONGLONG)pres_timing - target_diff / PRES_TIME_COUNT);
+            pres->prev_pres_timing = pres_timing;
+            return pres_timing;
+        }
+    }
+}
+
 int presentation_buffer_present(struct presentation_buffer_t *buf, int ctx_top_bot, int screen_top_bot, int win_shared, int width, int height)
 {
     HRESULT hr;
@@ -1362,7 +1419,17 @@ int presentation_buffer_present(struct presentation_buffer_t *buf, int ctx_top_b
         }
     }
 
-    hr = IPresentationManager_Present(win_shared ? pres_man_child[j] : presentation_manager[i]);
+    IPresentationManager *pres_man = win_shared ? pres_man_child[j] : presentation_manager[i];
+
+    SystemInterruptTime target_time;
+    target_time.value = get_next_pres_timing(j);
+    hr = IPresentationManager_SetTargetTime(pres_man, target_time);
+    if (hr) {
+        err_log("SetTargetTime failed: %d\n", (int)hr);
+        return -1;
+    }
+
+    hr = IPresentationManager_Present(pres_man);
     if (hr) {
         err_log("Present %d %d failed: %d\n", win_shared, win_shared ? j : i, (int)hr);
         if (hr == DXGI_ERROR_DEVICE_REMOVED) {
@@ -1624,12 +1691,13 @@ int ui_tex_present(int count_max)
 int presentation_tex_present(int ctx_top_bot, int screen_top_bot, int win_shared, int count_max)
 {
     int i = ctx_top_bot;
+    int j = screen_top_bot;
 
-    struct render_buffer_t *b = &render_buffers[i][screen_top_bot];
+    struct render_buffer_t *b = &render_buffers[i][j];
 
     int index_sc;
-    struct presentation_buffer_t *bufs = presentation_buffers[i][screen_top_bot];
-    if (presentation_buffer_get(bufs, win_shared ? screen_top_bot : i, win_shared, count_max, b->width, b->height, &index_sc) != 0) {
+    struct presentation_buffer_t *bufs = presentation_buffers[i][j];
+    if (presentation_buffer_get(bufs, win_shared ? j : i, win_shared, count_max, b->width, b->height, &index_sc) != 0) {
         return -1;
     }
 
@@ -1638,7 +1706,7 @@ int presentation_tex_present(int ctx_top_bot, int screen_top_bot, int win_shared
     HRESULT hr;
 
     hr = IPresentationSurface_SetBuffer(
-        win_shared ? pres_surf_child[screen_top_bot] : presentation_surface[i],
+        win_shared ? pres_surf_child[j] : presentation_surface[i],
         bufs[index_sc].buf);
     if (hr) {
         err_log("SetBuffer failed: %d\n", (int)hr);
@@ -1646,12 +1714,12 @@ int presentation_tex_present(int ctx_top_bot, int screen_top_bot, int win_shared
     }
 
     RECT *rect;
-    rect = win_shared ? &src_rect_child[screen_top_bot] : &src_rect[i];
+    rect = win_shared ? &src_rect_child[j] : &src_rect[i];
     if (rect->right != b->width || rect->bottom != b->height) {
         rect->right = b->width;
         rect->bottom = b->height;
         hr = IPresentationSurface_SetSourceRect(
-            win_shared ? pres_surf_child[screen_top_bot] : presentation_surface[i],
+            win_shared ? pres_surf_child[j] : presentation_surface[i],
             rect);
         if (hr) {
             err_log("SetSourceRect failed: %d\n", (int)hr);
@@ -1659,10 +1727,19 @@ int presentation_tex_present(int ctx_top_bot, int screen_top_bot, int win_shared
         }
     }
 
-    // err_log("%d %llu\n", win_shared ? screen_top_bot : i, (unsigned long long)IPresentationManager_GetNextPresentId(win_shared ? pres_man_child[screen_top_bot] : presentation_manager[i]));
-    hr = IPresentationManager_Present(win_shared ? pres_man_child[screen_top_bot] : presentation_manager[i]);
+    IPresentationManager *pres_man = win_shared ? pres_man_child[j] : presentation_manager[i];
+    SystemInterruptTime target_time;
+    target_time.value = get_next_pres_timing(j);
+    hr = IPresentationManager_SetTargetTime(pres_man, target_time);
     if (hr) {
-        err_log("Present %d %d failed: %d\n", win_shared, win_shared ? screen_top_bot : i, (int)hr);
+        err_log("SetTargetTime failed: %d\n", (int)hr);
+        return -1;
+    }
+
+    // err_log("%d %llu\n", win_shared ? j : i, (unsigned long long)IPresentationManager_GetNextPresentId(pres_man));
+    hr = IPresentationManager_Present(pres_man);
+    if (hr) {
+        err_log("Present %d %d failed: %d\n", win_shared, win_shared ? j : i, (int)hr);
         if (hr == DXGI_ERROR_DEVICE_REMOVED) {
             hr = ID3D11Device_GetDeviceRemovedReason(d3d11device[i]);
             err_log("GetDeviceRemovedReason: %d\n", (int)hr);
