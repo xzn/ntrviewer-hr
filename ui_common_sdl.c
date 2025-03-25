@@ -151,7 +151,9 @@ static uint64_t windows_titles_last_tick;
 
 static double kcp_get_connection_quality(void)
 {
-    int input_count = __atomic_load_n(&kcp_input_count, __ATOMIC_RELAXED);
+    int fec_count = __atomic_load_n(&kcp_input_fec_count, __ATOMIC_RELAXED);
+    int input_count = fec_count ?
+        (IUINT32)__atomic_load_n(&kcp_input_pid_count, __ATOMIC_RELAXED) * __atomic_load_n(&kcp_input_fid_count, __ATOMIC_RELAXED) / fec_count : 0;
     double ret = input_count ? (double)__atomic_load_n(&kcp_recv_pid_count, __ATOMIC_RELAXED) / input_count : 0.0;
     return ret * ret * 100;
 }
@@ -271,7 +273,7 @@ void ui_windows_titles_update(void)
             __atomic_store_n(&frame_size_tracker[top_bot], 0, __ATOMIC_RELAXED);
             __atomic_store_n(&delay_between_packet_tracker[top_bot], 0, __ATOMIC_RELAXED);
         }
-        __atomic_store_n(&kcp_input_count, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&kcp_input_fec_count, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&kcp_input_fid_count, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&kcp_input_pid_count, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&kcp_recv_pid_count, 0, __ATOMIC_RELAXED);

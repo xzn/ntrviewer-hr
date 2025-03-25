@@ -335,7 +335,6 @@ static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT1
 		} else {
 			kcp->segs[pid].data = ikcp_malloc(size);
 			memcpy(kcp->segs[pid].data, data, size);
-			__atomic_add_fetch(&kcp_input_pid_count, 1, __ATOMIC_RELAXED);
 		}
 	} else if (
 		((pid - kcp->input_pid) & ((1 << PID_NBITS) - 1)) < (1 << (PID_NBITS - 1))
@@ -346,7 +345,6 @@ static int ikcp_add_original(ikcpcb *kcp, const char *data, IUINT32 size, IUINT1
 		}
 		kcp->segs[pid].data = ikcp_malloc(size);
 		memcpy(kcp->segs[pid].data, data, size);
-		__atomic_add_fetch(&kcp_input_pid_count, 1, __ATOMIC_RELAXED);
 		kcp->input_pid = pid;
 	}
 	else if (((kcp->recv_pid - pid) & ((1 << PID_NBITS) - 1)) >= (1 << (PID_NBITS - 2))) {
@@ -454,8 +452,13 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 
 	kcp->session_data_received = true;
 
-	if (((fid - kcp->fid) & ((1 << FID_NBITS) - 1)) < (1 << (FID_NBITS - 1))) {
+	IUINT16 fid_count = (fid - kcp->fid) & ((1 << FID_NBITS) - 1);
+	if (fid_count < (1 << (FID_NBITS - 1))) {
+		__atomic_add_fetch(&kcp_input_fid_count, fid_count, __ATOMIC_RELAXED);
 		kcp->fid = fid;
+		kcp->gid = gid;
+	}
+	if (kcp->fid == fid && kcp->gid < gid) {
 		kcp->gid = gid;
 	}
 
@@ -465,8 +468,6 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 	} else if (ret > 0) {
 		return 3;
 	}
-
-	__atomic_add_fetch(&kcp_input_count, 1, __ATOMIC_RELAXED);
 
 	struct IKCPFEC *fec = &kcp->fecs[fid];
 
@@ -487,7 +488,8 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 		memset(fec->data_ptrs, 0, count * sizeof(*fec->data_ptrs));
 		fec->data_ptrs_count = count;
 		fec->fty = fty;
-		__atomic_add_fetch(&kcp_input_fid_count, 1, __ATOMIC_RELAXED);
+		__atomic_add_fetch(&kcp_input_fec_count, 1, __ATOMIC_RELAXED);
+		__atomic_add_fetch(&kcp_input_pid_count, count, __ATOMIC_RELAXED);
 	}
 
 	if (fec->data_ptrs[gid]) {
@@ -718,4 +720,4 @@ int ikcp_setmtu(ikcpcb *kcp, int mtu)
 	return 0;
 }
 
-IUINT16 kcp_input_fid_count, kcp_recv_pid_count, kcp_input_pid_count, kcp_input_count;
+IUINT16 kcp_input_fec_count, kcp_input_fid_count, kcp_recv_pid_count, kcp_input_pid_count;
