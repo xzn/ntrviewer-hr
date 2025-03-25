@@ -147,7 +147,7 @@ struct rashader_render_t {
     void *filter_chain;
 };
 
-struct rashader_render_t *rashader_render_init(struct rashader_t *rashader, size_t index, libra_preset_ctx_t *ctx, PFN_filter_chain_create fcc_fn, void *user) {
+struct rashader_render_t *rashader_render_init(struct rashader_t *rashader, size_t index, libra_preset_ctx_t *ctx, PFN_filter_chain_create fcc_fn, void *user, PFN_filter_chain_set_param fcp_fn) {
     auto render = std::make_unique<rashader_render_t>();
 
     struct libra_preset_opt_t opt = {
@@ -163,17 +163,17 @@ struct rashader_render_t *rashader_render_init(struct rashader_t *rashader, size
         goto fail;
     }
 
+    render->filter_chain = fcc_fn(&preset, user);
+    if (!render->filter_chain) {
+        goto fc_fail;
+    }
+
     for (auto &param : info.params) {
-        err = libra_preset_set_param(&preset, param.first.c_str(), param.second);
+        err = fcp_fn(&render->filter_chain, param.first.c_str(), param.second);
         if (err) {
             libra_error_print(err);
             libra_error_free(&err);
         }
-    }
-
-    render->filter_chain = fcc_fn(&preset, user);
-    if (!render->filter_chain) {
-        goto fc_fail;
     }
 
     render->preset = preset;

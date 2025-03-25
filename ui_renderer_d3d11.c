@@ -751,7 +751,7 @@ static int rashader_upscaling_update(int selected, int ctx_top_bot, int screen_t
             goto fail;
         }
 
-        rashader_render[i][screen_top_bot] = rashader_render_init(rashader, render_mode, &ctx, d3d11_filter_chain_create, d3d11device[i]);
+        rashader_render[i][screen_top_bot] = rashader_render_init(rashader, render_mode, &ctx, d3d11_filter_chain_create, d3d11device[i], (PFN_filter_chain_set_param)libra_d3d11_filter_chain_set_param);
         if (!rashader_render[i][screen_top_bot]) {
             err_log("rashader_render_init failed\n");
             goto fail;

@@ -922,7 +922,7 @@ static int rashader_upscaling_update(int selected, int ctx_top_bot, int screen_t
             goto fail;
         }
 
-        rashader_render[i][screen_top_bot] = rashader_render_init(rashader, render_mode, &ctx, ogl_filter_chain_create, NULL);
+        rashader_render[i][screen_top_bot] = rashader_render_init(rashader, render_mode, &ctx, ogl_filter_chain_create, NULL, (PFN_filter_chain_set_param)libra_gl_filter_chain_set_param);
         if (!rashader_render[i][screen_top_bot]) {
             err_log("rashader_render_init failed\n");
             goto fail;

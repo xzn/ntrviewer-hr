@@ -21,8 +21,9 @@ const char *rashader_mode_name(struct rashader_t *rashader, size_t index, const 
 typedef void *(*PFN_filter_chain_create)(libra_shader_preset_t *, void *);
 typedef void (*PFN_filter_chain_free)(void *);
 
+typedef libra_error_t (*PFN_filter_chain_set_param)(void *, const char *, float);
 struct rashader_render_t;
-struct rashader_render_t *rashader_render_init(struct rashader_t *rashader, size_t index, libra_preset_ctx_t *ctx, PFN_filter_chain_create fcc_fn, void *user);
+struct rashader_render_t *rashader_render_init(struct rashader_t *rashader, size_t index, libra_preset_ctx_t *ctx, PFN_filter_chain_create fcc_fn, void *user, PFN_filter_chain_set_param fcp_fn);
 void rashader_render_close(struct rashader_render_t *render, PFN_filter_chain_free fcf_fn);
 void *rashader_render_chain(struct rashader_render_t *render);
 
