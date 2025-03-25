@@ -1290,10 +1290,7 @@ void ui_renderer_d3d11_gen_cursor(stbi_t *image, const unsigned char *base, int 
 
     if (
         IS_PLACEBO(upscaling_selected) &&
-        (
-            placebo_upscaling_update(PLACEBO_MODE(upscaling_selected), i, screen_top_bot) == 0 ||
-            placebo_upscaling_update(PLACEBO_MODE(upscaling_selected), i, screen_top_bot) == 0
-        ) &&
+        placebo_upscaling_update(PLACEBO_MODE(upscaling_selected), i, screen_top_bot) == 0 &&
         placebo_render[i][screen_top_bot]
     ) {
         int fail = true;
@@ -1328,10 +1325,7 @@ placebo_fail:
             goto no_upscale;
     } else if (
         IS_RASHADER(upscaling_selected) &&
-        (
-            rashader_upscaling_update(RASHADER_MODE(upscaling_selected), i, screen_top_bot) == 0 ||
-            rashader_upscaling_update(RASHADER_MODE(upscaling_selected), i, screen_top_bot) == 0
-        ) &&
+        rashader_upscaling_update(RASHADER_MODE(upscaling_selected), i, screen_top_bot) == 0 &&
         rashader_render[i][screen_top_bot]
     ) {
         fail = true;

@@ -9,6 +9,7 @@
 #include "nuklear_sdl_gl3.h"
 #include "nuklear_sdl_gles2.h"
 #include "ui_main_nk.h"
+#include "ui_input_redirection.h"
 #include "placebo.h"
 #include "rashader.h"
 #include <libplacebo/opengl.h>
@@ -903,8 +904,7 @@ static int rashader_upscaling_update(int selected, int ctx_top_bot, int screen_t
     static libra_preset_ctx_t ctx = 0;
     if (!reset_mode && !rashader_render[i][screen_top_bot] && render_mode >= 0) {
         if (rashader_delay_init[i][screen_top_bot]) {
-            rashader_delay_init[i][screen_top_bot] = false;
-            reset_mode = true;
+            reset_mode = 1;
             goto fail;
         }
 
@@ -1133,6 +1133,12 @@ rashader_fail:
         }
     }
 
+    if (rashader_delay_init[i][screen_top_bot]) {
+        rashader_delay_init[i][screen_top_bot] = 0;
+        if (i == SCREEN_TOP)
+            cursor_scale_prev = 0.0f;
+    }
+
     if (is_renderer_csc())
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[i]);
     else
@@ -1358,10 +1364,7 @@ void ui_renderer_ogl_gen_cursor(stbi_t *image, const unsigned char *base, int wi
 
     if (
         IS_PLACEBO(upscaling_selected) &&
-        (
-            placebo_upscaling_update(PLACEBO_MODE(upscaling_selected), i, screen_top_bot) == 0 ||
-            placebo_upscaling_update(PLACEBO_MODE(upscaling_selected), i, screen_top_bot) == 0
-        ) &&
+        placebo_upscaling_update(PLACEBO_MODE(upscaling_selected), i, screen_top_bot) == 0 &&
         placebo_render[i][screen_top_bot]
     ) {
         pl_tex in_tex = NULL;
@@ -1427,10 +1430,7 @@ placebo_fail:
         }
     } else if (
         IS_RASHADER(upscaling_selected) &&
-        (
-            rashader_upscaling_update(RASHADER_MODE(upscaling_selected), i, screen_top_bot) == 0 ||
-            rashader_upscaling_update(RASHADER_MODE(upscaling_selected), i, screen_top_bot) == 0
-        ) &&
+        rashader_upscaling_update(RASHADER_MODE(upscaling_selected), i, screen_top_bot) == 0 &&
         rashader_render[i][screen_top_bot]
     ) {
         GLuint gl_out_tex = 0;
