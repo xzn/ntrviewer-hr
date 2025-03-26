@@ -743,6 +743,12 @@ static int handle_recv(uint8_t *buf, int size)
     return 0;
 }
 
+static int jpeg_get_v_total(int chroma_ss, bool top_bot) {
+    int h = JPEG_DCTSIZE * (chroma_ss == 0 ? 2 : 1);
+    int h_total = top_bot ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1;
+    return h_total / h;
+}
+
 static int handle_recv_kcp(uint8_t *buf, int size)
 {
     if (size < (int)sizeof(u16)) {
@@ -831,10 +837,24 @@ static int handle_recv_kcp(uint8_t *buf, int size)
                         return -8;
                     }
                     info->v_last_adjusted = v_adjusted;
-                } else if (t == 0) {
-                    info->v_adjusted = v_adjusted;
-                } else if (info->v_adjusted != v_adjusted) {
-                    return -7;
+                } else {
+                    int v_total = jpeg_get_v_total(info->chroma_ss, info->is_top);
+                    if (info->core_count == 1) {
+                        if (v_adjusted == (v_total & ((1 << RP_KCP_HDR_RC_NBITS) - 1))) {
+                            v_adjusted = v_total;
+                        } else {
+                            return -6;
+                        }
+                    } else {
+                        if (v_adjusted < (v_total + info->core_count - 1) / info->core_count) {
+                            v_adjusted += (1 << RP_KCP_HDR_RC_NBITS);
+                        }
+                    }
+                    if (t == 0) {
+                        info->v_adjusted = v_adjusted;
+                    } else if (info->v_adjusted != v_adjusted) {
+                        return -7;
+                    }
                 }
             }
         }
