@@ -842,7 +842,7 @@ void ui_main_nk(void)
         nk_label(ctx, "(Default key combo: L+Down+Select)", NK_TEXT_CENTERED);
         nk_layout_row_dynamic(ctx, 60, 1);
         nk_label_wrap(ctx,
-            "To enable remote play with games that disables Wi-Fi during gameplay, "
+            "To enable remote play with games that disable Wi-Fi during gameplay, "
             "such as games in the Pokemon series, "
             "enable either the debugger or the input redirection feature in Luma3DS/Rosalina's menu."
         );
