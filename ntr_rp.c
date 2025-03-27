@@ -838,6 +838,8 @@ static int handle_recv_kcp(uint8_t *buf, int size)
                     }
                     info->v_last_adjusted = v_adjusted;
                 } else {
+                    // HACK kind of, I didn't count the bits correctly so now I have to do this dumb thing
+                    // to get chroma subsampling working with reliable stream.
                     int v_total = jpeg_get_v_total(info->chroma_ss, info->is_top);
                     if (info->core_count == 1) {
                         if (v_adjusted == (v_total & ((1 << RP_KCP_HDR_RC_NBITS) - 1))) {
