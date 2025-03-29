@@ -36,7 +36,7 @@ static int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
 #define RP_PACKET_DATA_SIZE (RP_PACKET_SIZE - RP_DATA_HDR_SIZE)
 #define RP_DATA_HDR_ID_SIZE (2)
 
-#define RP_MAX_PACKET_COUNT (128)
+#define RP_MAX_PACKET_COUNT (240)
 
 #define RP_WORK_COUNT (3)
 static uint8_t recv_buf[RP_WORK_COUNT][RP_PACKET_SIZE * RP_MAX_PACKET_COUNT];
@@ -243,7 +243,7 @@ static int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
 
     if (tj3Decompress8(tjInstance, in, size, out, h * GL_CHANNELS_N, TJ_FORMAT) != 0)
     {
-        err_log("jpeg decompression error\n");
+        err_log("jpeg decompression error: %s\n", tj3GetErrorStr(tjInstance));
         goto final;
     }
 
