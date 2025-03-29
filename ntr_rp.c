@@ -211,7 +211,12 @@ atomic_int frame_fully_received_tracker;
 atomic_int frame_lost_tracker;
 static uint8_t last_decoded_frame_id[SCREEN_COUNT];
 
+#ifdef EMBED_JPEG_TURBO
+#include "jpeg_turbo/turbojpeg.h"
+#else
 #include <turbojpeg.h>
+#endif
+
 static int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
     tjhandle tjInstance = NULL;
     if ((tjInstance = tj3Init(TJINIT_DECOMPRESS)) == NULL)

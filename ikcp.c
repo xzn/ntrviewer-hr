@@ -529,7 +529,8 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 			return -5;
 		}
 
-		void *recovered_data[counts.recovery_count] = {};
+		void *recovered_data[counts.recovery_count];
+		memset(recovered_data, 0, counts.recovery_count * sizeof(void *));
 		int recovered_data_count = 0;
 
 		for (int i = 0; i < counts.original_count; ++i) {
