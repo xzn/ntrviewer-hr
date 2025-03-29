@@ -21,7 +21,7 @@ NASM := -DELF -felf64
 endif
 
 ifneq ($(LITE),1)
-LDLIBS += -lplacebo -lrashader -lshaderc_combined -fopenmp -lglslang -lMachineIndependent -lOSDependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -llcms2
+LDLIBS += -lplacebo -lrashader
 else
 CPPFLAGS += -DUSE_SDL_RENDERER_ONLY
 endif
@@ -31,8 +31,6 @@ GL_OBJ := libGLAD.o libNK_SDL_GL3.o libNK_SDL_GLES2.o ui_renderer_ogl.o placebo.
 ifeq ($(OS),Windows_NT)
 GL_OBJ += libGLAD_WGL.o libNK_D3D11.o ui_renderer_d3d11.o ui_compositor_csc.o
 LDLIBS += -lshlwapi -lmincore
-else
-LDLIBS += -lunwind -llzma
 endif
 endif
 
