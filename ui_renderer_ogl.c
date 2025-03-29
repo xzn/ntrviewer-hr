@@ -13,6 +13,7 @@
 #include "placebo.h"
 #include "rashader.h"
 #include <libplacebo/opengl.h>
+#include <limits.h>
 
 SDL_Window *ogl_win[SCREEN_COUNT];
 static SDL_Window *csc_win[SCREEN_COUNT];
