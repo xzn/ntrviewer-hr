@@ -14,7 +14,9 @@ int socket_startup(void) {
 int socket_shutdown(void) {
     return WSACleanup();
 }
-#define NTR_IP_NAME_LEN_MAX (32)
+#include <ipifcons.h>
+#include <iptypes.h>
+#define NTR_IP_NAME_LEN_MAX (16 + MAX_ADAPTER_DESCRIPTION_LENGTH + 4)
 #else
 #include <net/if.h>
 #define NTR_IP_NAME_LEN_MAX (16 + IFNAMSIZ + 4)
@@ -336,11 +338,13 @@ static int get_adapter_count(void) {
     if (adapter_info_list && adapter_info_list_size) {
         PIP_ADAPTER_INFO next = adapter_info_list;
         while (next) {
-            PIP_ADDR_STRING ip = &next->IpAddressList;
-            while (ip) {
-                if (parse_ip_address(ip->IpAddress.String) != 0)
-                  ++count;
-                ip = ip->Next;
+            if (next->Type == MIB_IF_TYPE_ETHERNET || next->Type == IF_TYPE_IEEE80211) {
+                PIP_ADDR_STRING ip = &next->IpAddressList;
+                while (ip) {
+                    if (parse_ip_address(ip->IpAddress.String) != 0)
+                    ++count;
+                    ip = ip->Next;
+                }
             }
             next = next->Next;
         }
@@ -362,16 +366,18 @@ static void update_adapter_list(void) {
 
     if (adapter_info_list && adapter_info_list_size) {
         PIP_ADAPTER_INFO next = adapter_info_list;
-        for (int i = 0; i < count;) {
-            PIP_ADDR_STRING ip = &next->IpAddressList;
-            while (ip) {
-                int addr;
-                if ((addr = parse_ip_address(ip->IpAddress.String)) != 0) {
-                    sprintf(ntr_adapter_list[i + NTR_ADAPTER_PRE_COUNT], "%s", ip->IpAddress.String);
-                    memcpy(ntr_adapter_octet_list[i + NTR_ADAPTER_PRE_COUNT], &addr, NTR_IP_OCTET_SIZE);
-                    ++i;
+        for (int i = 0; i < count && next;) {
+            if (next->Type == MIB_IF_TYPE_ETHERNET || next->Type == IF_TYPE_IEEE80211) {
+                PIP_ADDR_STRING ip = &next->IpAddressList;
+                while (ip) {
+                    int addr;
+                    if ((addr = parse_ip_address(ip->IpAddress.String)) != 0) {
+                        snprintf(ntr_adapter_list[i + NTR_ADAPTER_PRE_COUNT], NTR_IP_NAME_LEN_MAX, "%s %s", ip->IpAddress.String, next->Description);
+                        memcpy(ntr_adapter_octet_list[i + NTR_ADAPTER_PRE_COUNT], &addr, NTR_IP_OCTET_SIZE);
+                        ++i;
+                    }
+                    ip = ip->Next;
                 }
-                ip = ip->Next;
             }
             next = next->Next;
         }

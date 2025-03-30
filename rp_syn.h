@@ -43,7 +43,7 @@ typedef void *rp_e_t;
 
 extern bool rp_lock_srw;
 
-#define rp_lock_init(n) ({ \
+#define rp_lock_init(s) ({ \
 	if (rp_lock_srw) { \
 		InitializeSRWLock(&(s).srw); \
 	} else { \
@@ -51,7 +51,7 @@ extern bool rp_lock_srw;
 	} \
 	0; \
 })
-#define rp_lock_wait(n) ({ \
+#define rp_lock_wait(s) ({ \
 	if (rp_lock_srw) { \
 		AcquireSRWLockExclusive(&(s).srw); \
 	} else { \
@@ -59,7 +59,7 @@ extern bool rp_lock_srw;
 	} \
 	0; \
 })
-#define rp_lock_rel(n) ({ \
+#define rp_lock_rel(s) ({ \
 	if (rp_lock_srw) { \
 		ReleaseSRWLockExclusive(&(s).srw); \
 	} else { \
@@ -67,9 +67,9 @@ extern bool rp_lock_srw;
 	} \
 	0; \
 })
-#define rp_lock_close(n) ({ \
+#define rp_lock_close(s) ({ \
 	if (rp_lock_srw) { \
-		rp_lock_init(n); \
+		rp_lock_init(s); \
 	} else { \
 		DeleteCriticalSection(&(s).cs); \
 	} \

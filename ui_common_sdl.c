@@ -350,7 +350,7 @@ void sdl_win_destroy(SDL_Window *sdl_win[SCREEN_COUNT]) {
 void sdl_set_wminfo(void) {
 #ifdef _WIN32
     for (int i = 0; i < SCREEN_COUNT; ++i) {
-        SDL_PropertyID id = SDL_GetWindowProperties(ui_sdl_win[i]);
+        SDL_PropertiesID id = SDL_GetWindowProperties(ui_sdl_win[i]);
         ui_hwnd[i] = (HWND)SDL_GetPointerProperty(id, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
         ui_hdc[i] = (HDC)SDL_GetPointerProperty(id, SDL_PROP_WINDOW_WIN32_HDC_POINTER, NULL);
     }

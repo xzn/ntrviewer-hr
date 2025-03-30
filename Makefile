@@ -27,12 +27,12 @@ CFLAGS += -Wall -Wextra -MMD
 ifeq ($(CLANG),1)
 CFLAGS += -Wno-c2x-extensions -Wno-c++11-extensions -Wno-unknown-warning-option -Wno-comment
 else
-CFLAGS += -flarge-source-files
+CFLAGS += -flarge-source-files -Wno-unknown-pragmas
 endif
 EMBED_JPEG_TURBO := 1
 
 ifeq ($(OS),Windows_NT)
-LDLIBS := -Llib -static -lmingw32 -lSDL2main -lSDL2 -lm
+LDLIBS := -Llib -static -lmingw32 -lSDL3 -lm
 TARGET := ntrviewer.exe
 NASM := -DWIN64 -fwin64 -D__x86_64__
 else
@@ -64,7 +64,7 @@ endif
 ifeq ($(OS),Windows_NT)
 LDLIBS += -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8 -lws2_32 -liphlpapi
 ifneq ($(LITE),1)
-LDLIBS += -ld3dcompiler -ld3d11 -ldxgi -ldwmapi -lpathcch -lbcrypt -lruntimeobject -lntdll
+LDLIBS += -lshaderc_combined -lglslang -lMachineIndependent -lOSDependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -llcms2 -ld3dcompiler -ld3d11 -ldxgi -ldwmapi -lpathcch -lbcrypt -lruntimeobject -lntdll
 ifeq ($(DEBUG),1)
 LDLIBS += -lpropsys -luserenv -ldxcompiler
 endif
