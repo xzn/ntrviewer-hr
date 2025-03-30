@@ -432,7 +432,72 @@ fail:
 }
 #else
 
+struct ip_map_mac_t {
+    uint8_t ip_bytes[NTR_IP_OCTET_SIZE];
+    uint8_t mac_bytes[NTR_MAC_SIZE];
+};
+
+static struct ip_map_mac_t *ip_net_buf = 0;
+static size_t ip_net_buf_count = 0;
+
+static void clear_ip_map_mac(void) {
+    if (ip_net_buf) {
+        free(ip_net_buf);
+        ip_net_buf = 0;
+        ip_net_buf_count = 0;
+    }
+}
+
+static int match_mac(uint8_t *mac)
+{
+    for (unsigned i = 0; i < sizeof(known_mac_list) / sizeof(*known_mac_list); ++i) {
+        if (memcmp(mac, known_mac_list[i], 3) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static void get_ntr_detect_3ds_ip(void) {
+    unsigned detected_ip_count = 0;
+    unsigned *map_index = 0;
+    if (ip_net_buf_count) {
+        map_index = malloc(ip_net_buf_count * sizeof(*map_index));
+        for (unsigned i = 0; i < ip_net_buf_count; ++i) {
+            if (match_mac(ip_net_buf[i].mac_bytes)) {
+                map_index[detected_ip_count] = i;
+                ++detected_ip_count;
+            }
+        }
+    }
+
+    ntr_free_auto_ip_list();
+    ntr_alloc_auto_ip_list(detected_ip_count + NTR_AUTO_IP_PRE_COUNT);
+
+    if (detected_ip_count) {
+        strcpy(ntr_auto_ip_list[0], "");
+    } else {
+        strcpy(ntr_auto_ip_list[0], "None Detected");
+    }
+    memset(ntr_auto_ip_octet_list[0], 0, NTR_IP_OCTET_SIZE);
+
+    for (unsigned i = 0; i < detected_ip_count; ++i) {
+        struct ip_map_mac_t *b = &ip_net_buf[map_index[i]];
+        sprintf(ntr_auto_ip_list[i + NTR_AUTO_IP_PRE_COUNT], "%d.%d.%d.%d",
+                (int)b->ip_bytes[0],
+                (int)b->ip_bytes[1],
+                (int)b->ip_bytes[2],
+                (int)b->ip_bytes[3]);
+        memcpy(ntr_auto_ip_octet_list[i + NTR_AUTO_IP_PRE_COUNT], b->ip_bytes, NTR_IP_OCTET_SIZE);
+    }
+    free(map_index);
+
+    ntr_selected_ip = detected_ip_count ? NTR_AUTO_IP_PRE_COUNT : 0;
+    memcpy(ntr_ip_octet, ntr_auto_ip_octet_list[ntr_selected_ip], NTR_IP_OCTET_SIZE);
+}
+
 #ifdef __APPLE__
+#include "ui_main_nk.h"
+
 #define READ_END 0
 #define WRITE_END 1
 static bool detecting_3ds;
@@ -480,31 +545,67 @@ fail_child:
             goto fail_parent;
         }
 
+        clear_ip_map_mac();
+
+        int count = 0;
         char *line = NULL;
         size_t size = 0;
         ssize_t nread = 0;
         while ((nread = getline(&line, &size, file)) != -1) {
             char *next_tok = line;
             char *tok = NULL;
-#define ARP_MAC_FIELD_I (4)
-            for (int i = 0; i < ARP_MAC_FIELD_I; ++i) {
+#define ARP_IP_FIELD_I (1)
+#define ARP_MAC_FIELD_I (3)
+#define ARP_END_FIELD_I (ARP_MAC_FIELD_I + 1)
+
+            char *ip = NULL;
+            char *mac = NULL;
+            for (int i = 0; i < ARP_END_FIELD_I; ++i) {
                 tok = strsep(&next_tok, " ");
+                if (i == ARP_IP_FIELD_I) {
+                    ip = tok;
+                } else if (i == ARP_MAC_FIELD_I) {
+                    mac = tok;
+                }
             }
-            if (!tok) {
+            if (!ip || !mac) {
                 continue;
             }
-            err_log("%s\n", tok);
+
+            int next_count = count + 1;
+            ip_net_buf = realloc(ip_net_buf, next_count * sizeof(struct ip_map_mac_t));
+            struct ip_map_mac_t *b = &ip_net_buf[count];
+            sscanf(ip, "(%hhu.%hhu.%hhu.%hhu)",
+                    &b->ip_bytes[0],
+                    &b->ip_bytes[1],
+                    &b->ip_bytes[2],
+                    &b->ip_bytes[3]);
+            sscanf(mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                    &b->mac_bytes[0],
+                    &b->mac_bytes[1],
+                    &b->mac_bytes[2],
+                    &b->mac_bytes[3],
+                    &b->mac_bytes[4],
+                    &b->mac_bytes[5]);
+            count = next_count;
         }
+        ip_net_buf_count = count;
         free(line);
 
 fail_parent:
         close(fd[READ_END]);
+        goto fail;
     }
 
 fail_fork:
     close(fd[READ_END]);
     close(fd[WRITE_END]);
 fail:
+    rp_lock_wait(ui_nk_lock);
+    get_ntr_detect_3ds_ip();
+    ntr_try_auto_select_adapter();
+    rp_lock_rel(ui_nk_lock);
+
     __atomic_clear(&detecting_3ds, __ATOMIC_RELAXED);
 
     pthread_exit(0);
@@ -535,21 +636,9 @@ void ntr_detect_3ds_ip(void) {
     "%" xstr(ARP_STRING_LEN) "s %*s " \
     "%" xstr(ARP_STRING_LEN) "s"
 
-struct ip_map_mac_t {
-    uint8_t ip_bytes[NTR_IP_OCTET_SIZE];
-    uint8_t mac_bytes[NTR_MAC_SIZE];
-};
-
-static struct ip_map_mac_t *ip_net_buf = 0;
-static size_t ip_net_buf_count = 0;
-
 static void get_ip_map_mac(void)
 {
-    if (ip_net_buf) {
-        free(ip_net_buf);
-        ip_net_buf = 0;
-        ip_net_buf_count = 0;
-    }
+    clear_ip_map_mac();
 
     FILE *arp_cache = fopen(ARP_CACHE, "r");
     if (!arp_cache)
@@ -611,54 +700,10 @@ final:
     return;
 }
 
-static int match_mac(uint8_t *mac)
-{
-    for (unsigned i = 0; i < sizeof(known_mac_list) / sizeof(*known_mac_list); ++i) {
-        if (memcmp(mac, known_mac_list[i], 3) == 0)
-            return 1;
-    }
-    return 0;
-}
-
 void ntr_detect_3ds_ip(void)
 {
     get_ip_map_mac();
-
-    unsigned detected_ip_count = 0;
-    unsigned *map_index = 0;
-    if (ip_net_buf_count) {
-        map_index = malloc(ip_net_buf_count * sizeof(*map_index));
-        for (unsigned i = 0; i < ip_net_buf_count; ++i) {
-            if (match_mac(ip_net_buf[i].mac_bytes)) {
-                map_index[detected_ip_count] = i;
-                ++detected_ip_count;
-            }
-        }
-    }
-
-    ntr_free_auto_ip_list();
-    ntr_alloc_auto_ip_list(detected_ip_count + NTR_AUTO_IP_PRE_COUNT);
-
-    if (detected_ip_count) {
-        strcpy(ntr_auto_ip_list[0], "");
-    } else {
-        strcpy(ntr_auto_ip_list[0], "None Detected");
-    }
-    memset(ntr_auto_ip_octet_list[0], 0, NTR_IP_OCTET_SIZE);
-
-    for (unsigned i = 0; i < detected_ip_count; ++i) {
-        struct ip_map_mac_t *b = &ip_net_buf[map_index[i]];
-        sprintf(ntr_auto_ip_list[i + NTR_AUTO_IP_PRE_COUNT], "%d.%d.%d.%d",
-                (int)b->ip_bytes[0],
-                (int)b->ip_bytes[1],
-                (int)b->ip_bytes[2],
-                (int)b->ip_bytes[3]);
-        memcpy(ntr_auto_ip_octet_list[i + NTR_AUTO_IP_PRE_COUNT], b->ip_bytes, NTR_IP_OCTET_SIZE);
-    }
-    free(map_index);
-
-    ntr_selected_ip = detected_ip_count ? NTR_AUTO_IP_PRE_COUNT : 0;
-    memcpy(ntr_ip_octet, ntr_auto_ip_octet_list[ntr_selected_ip], NTR_IP_OCTET_SIZE);
+    get_ntr_detect_3ds_ip();
 }
 #endif
 

@@ -668,7 +668,9 @@ void ui_main_nk(void)
         if (nk_button_label(ctx, "Auto-Detect") || button_ret)
         {
             ntr_detect_3ds_ip();
+#ifndef __APPLE__
             ntr_try_auto_select_adapter();
+#endif
             set_nav_button_prev(NK_FOCUS_IP_AUTO_DETECT);
         }
         check_nav_button_prev(ctx);
