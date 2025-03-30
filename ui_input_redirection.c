@@ -605,17 +605,18 @@ void update_game_controller(void) {
         need_update_game_controllers = false;
     }
 
-    bool selected = ui_controller_selected >= 1 && ui_controller_selected < ui_num_controllers - 1;
+    int controller_selected = ui_controller_selected;
+    bool selected = controller_selected >= 1 && controller_selected < ui_num_controllers - 1;
     if (
-        ui_controller_selected != game_controller_selected || !selected
+        controller_selected != game_controller_selected || !selected
     ) {
         close_game_controller();
     }
 
     if (!sdl_game_controller && selected) {
-        sdl_game_controller = SDL_OpenGamepad(ui_controllers_ids[ui_controller_selected]);
+        sdl_game_controller = SDL_OpenGamepad(ui_controllers_ids[controller_selected]);
         if (sdl_game_controller) {
-            game_controller_selected = ui_controller_selected;
+            game_controller_selected = controller_selected;
         } else {
             do_ui_update_game_controllers();
         }
