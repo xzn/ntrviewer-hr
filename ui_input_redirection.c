@@ -541,8 +541,69 @@ static void close_game_controller(void) {
     game_controller_selected = 0;
 }
 
+int ui_num_controllers;
+int ui_controller_selected;
+const char **ui_controllers_names;
+int *ui_controllers_ids;
+nk_bool ui_controller_swap_face_buttons = 1;
+static bool need_update_game_controllers;
+
+static void do_ui_update_game_controllers(void) {
+    rp_lock_wait(ui_nk_lock);
+
+    ui_num_controllers = 0;
+    if (ui_controllers_names) {
+        free(ui_controllers_names);
+        ui_controllers_names = 0;
+    }
+    if (ui_controllers_ids) {
+        free(ui_controllers_ids);
+        ui_controllers_ids = 0;
+    }
+
+    int n = 0;
+    SDL_JoystickID *ids = SDL_GetJoysticks(&n);
+    if (!ids) {
+        n = 0;
+    }
+    int ui_n = 1 + n + 1;
+    ui_controllers_names = malloc(sizeof(const char *) * ui_n);
+    ui_controllers_ids = malloc(sizeof(int) * ui_n);
+
+    int nn = 0;
+    ui_controllers_names[nn] = ""; // Empty none entry (input redirection disabled)
+    ui_controllers_ids[nn] = -1;
+    ++nn;
+    for (int i = 0; i < n; ++i) {
+        SDL_JoystickID id = ids[i];
+        if (SDL_IsGamepad(id)) {
+            ui_controllers_names[nn] = SDL_GetGamepadNameForID(id);
+            if (!ui_controllers_names[nn]) {
+                ui_controllers_names[nn] = "(Unknown)";
+            }
+            ui_controllers_ids[nn] = id;
+            err_log("%d %d\n", nn, id);
+            ++nn;
+        }
+    }
+    SDL_free(ids);
+    ui_controllers_names[nn] = "Refresh List";
+    ui_controllers_ids[nn] = -1;
+    ui_num_controllers = ++nn;
+
+    ui_controller_selected = nn > 1 + 0 + 1;
+    close_game_controller();
+
+    rp_lock_rel(ui_nk_lock);
+}
+
 void update_game_controller(void) {
     rp_lock_wait(sdl_game_controller_lock);
+
+    if (need_update_game_controllers) {
+        do_ui_update_game_controllers();
+        need_update_game_controllers = false;
+    }
 
     bool selected = ui_controller_selected >= 1 && ui_controller_selected < ui_num_controllers - 1;
     if (
@@ -552,9 +613,11 @@ void update_game_controller(void) {
     }
 
     if (!sdl_game_controller && selected) {
-        sdl_game_controller = SDL_OpenGamepad(ui_controllers_ids[ui_controller_selected - 1]); // Skip empty entry
+        sdl_game_controller = SDL_OpenGamepad(ui_controllers_ids[ui_controller_selected]);
         if (sdl_game_controller) {
             game_controller_selected = ui_controller_selected;
+        } else {
+            do_ui_update_game_controllers();
         }
     }
 
@@ -700,10 +763,10 @@ Uint32 SDLCALL input_redirection_timer_cb(void *, SDL_TimerID, Uint32 interval) 
             input_redirection_frame.cppState = (y << 24) | (x << 16) | (((trigger_r << 1) | (trigger_l << 2)) << 8) | 0x81;
         }
 
-        // if (*SDL_GetError()) {
-        //     close_game_controller();
-        //     ui_controller_selected = 0;
-        // }
+        if (*SDL_GetError()) {
+            close_game_controller();
+            ui_controller_selected = 0;
+        }
     }
 
     rp_lock_rel(sdl_game_controller_lock);
@@ -722,52 +785,6 @@ Uint32 SDLCALL input_redirection_timer_cb(void *, SDL_TimerID, Uint32 interval) 
     return interval;
 }
 
-int ui_num_controllers;
-int ui_controller_selected;
-const char **ui_controllers_names;
-int *ui_controllers_ids;
-nk_bool ui_controller_swap_face_buttons = 1;
-
 void ui_update_game_controllers(void) {
-    ui_num_controllers = 0;
-    if (ui_controllers_names) {
-        free(ui_controllers_names);
-        ui_controllers_names = 0;
-    }
-    if (ui_controllers_ids) {
-        free(ui_controllers_ids);
-        ui_controllers_ids = 0;
-    }
-
-    int n = 0;
-    SDL_JoystickID *ids = SDL_GetJoysticks(&n);
-    if (!ids) {
-        n = 0;
-    }
-    int ui_n = 1 + n + 1;
-    ui_controllers_names = malloc(sizeof(const char *) * ui_n);
-    ui_controllers_ids = malloc(sizeof(int) * ui_n);
-
-    int nn = 0;
-    ui_controllers_names[nn] = ""; // Empty none entry (input redirection disabled)
-    ui_controllers_ids[nn] = -1;
-    ++nn;
-    for (int i = 0; i < n; ++i) {
-        SDL_JoystickID id = ids[i];
-        if (SDL_IsGamepad(id)) {
-            ui_controllers_names[nn] = SDL_GetGamepadNameForID(id);
-            if (!ui_controllers_names[nn]) {
-                ui_controllers_names[nn] = "(Unknown)";
-            }
-            ui_controllers_ids[nn] = id;
-            ++nn;
-        }
-    }
-    SDL_free(ids);
-    ui_controllers_names[nn] = "Refresh List";
-    ui_controllers_ids[nn] = -1;
-    ui_num_controllers = ++nn;
-
-    ui_controller_selected = nn > 1 + 0 + 1;
-    close_game_controller();
+    need_update_game_controllers = true;
 }
