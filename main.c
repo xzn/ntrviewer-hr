@@ -331,7 +331,7 @@ static LRESULT CALLBACK main_window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             SDL_Event event = {};
             switch (msg) {
                 case WM_MOUSEMOVE:
-                    event.type = SDL_MOUSEMOTION;
+                    event.type = SDL_EVENT_MOUSE_MOTION;
                     event.motion.windowID = ui_sdl_win_id[i];
                     event.motion.x = x;
                     event.motion.y = y;
@@ -346,7 +346,7 @@ static LRESULT CALLBACK main_window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 case WM_MBUTTONDOWN:
                     event.button.button = SDL_BUTTON_MIDDLE;
 mouse_down:
-                    event.type = SDL_MOUSEBUTTONDOWN;
+                    event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
                     goto mouse_button;
 
                 case WM_LBUTTONUP:
@@ -358,7 +358,7 @@ mouse_down:
                 case WM_MBUTTONUP:
                     event.button.button = SDL_BUTTON_MIDDLE;
 mouse_up:
-                    event.type = SDL_MOUSEBUTTONUP;
+                    event.type = SDL_EVENT_MOUSE_BUTTON_UP;
 
 mouse_button:
                     event.button.windowID = ui_sdl_win_id[i];
@@ -412,8 +412,8 @@ mouse_button:
 struct nk_color nk_window_bgcolor = { 28, 48, 62, 255 };
 
 #ifndef _WIN32
-static int sdl_win_resize_evt_watcher(void *, SDL_Event *event) {
-  if (event->type == SDL_WINDOWEVENT && event->window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+static bool sdl_win_resize_evt_watcher(void *, SDL_Event *event) {
+  if (event->type == SDL_EVENT_WINDOW_RESIZED || event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
     int i;
     for (i = 0; i < SCREEN_COUNT; ++i) {
       if (event->window.windowID == ui_sdl_win_id[i]) {
@@ -579,33 +579,33 @@ static void main_loop(void) {
     while (!renderer_single_thread && !renderer_evt_sync ? SDL_WaitEventTimeout(&evt, REST_EVERY_MS) : SDL_PollEvent(&evt))
     {
         if (
-            evt.type == SDL_QUIT ||
-            (evt.type == SDL_WINDOWEVENT && evt.window.event == SDL_WINDOWEVENT_CLOSE)
+            evt.type == SDL_EVENT_QUIT ||
+            (evt.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
         ) {
             program_running = 0;
             return;
         } else if (
-            evt.type == SDL_KEYDOWN &&
-            evt.key.keysym.sym == SDLK_f
+            evt.type == SDL_EVENT_KEY_DOWN &&
+            evt.key.key == SDLK_F
         ) {
             ui_fullscreen = !ui_fullscreen;
         } else if (
-            evt.type == SDL_KEYDOWN &&
-            evt.key.keysym.sym == SDLK_r
+            evt.type == SDL_EVENT_KEY_DOWN &&
+            evt.key.key == SDLK_R
         ) {
 #ifdef TDR_TEST_HOTKEY
 #error TODO
 #endif
         } else if (
-            evt.type == SDL_KEYDOWN &&
-            evt.key.keysym.sym == SDLK_t
+            evt.type == SDL_EVENT_KEY_DOWN &&
+            evt.key.key == SDLK_T
         ) {
 #ifdef TDR_TEST_HOTKEY
 #error TODO
 #endif
         } else {
             switch (evt.type) {
-                case SDL_MOUSEMOTION:
+                case SDL_EVENT_MOUSE_MOTION:
                     if (
                         (!is_renderer_d3d11() && sdl_process_bottom_screen_event(&evt)) ||
                         evt.motion.windowID != ui_sdl_win_id[SCREEN_TOP]
@@ -613,8 +613,8 @@ static void main_loop(void) {
                         goto skip_evt;
                     }
                     break;
-                case SDL_MOUSEBUTTONDOWN:
-                case SDL_MOUSEBUTTONUP:
+                case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                case SDL_EVENT_MOUSE_BUTTON_UP:
                     if (
                         (!is_renderer_d3d11() && sdl_process_bottom_screen_event(&evt)) ||
                         evt.button.windowID != ui_sdl_win_id[SCREEN_TOP]
@@ -622,18 +622,18 @@ static void main_loop(void) {
                         goto skip_evt;
                     }
                     break;
-                case SDL_MOUSEWHEEL:
+                case SDL_EVENT_MOUSE_WHEEL:
                     if (evt.wheel.windowID != ui_sdl_win_id[SCREEN_TOP]) {
                         goto skip_evt;
                     }
                     break;
-                case SDL_KEYDOWN:
+                case SDL_EVENT_KEY_DOWN:
                     if (evt.key.windowID != ui_sdl_win_id[SCREEN_TOP]) {
                         goto skip_evt;
                     }
-                    switch (evt.key.keysym.sym) {
+                    switch (evt.key.key) {
                         case SDLK_TAB: {
-                            int shift_down = SDL_GetModState() & (KMOD_LSHIFT | KMOD_RSHIFT);
+                            int shift_down = SDL_GetModState() & (SDL_KMOD_LSHIFT | SDL_KMOD_RSHIFT);
                             __atomic_store_n(&nk_nav_cmd, shift_down ? NK_NAV_PREVIOUS : NK_NAV_NEXT, __ATOMIC_RELAXED);
                             goto skip_evt;
                         }
@@ -693,14 +693,14 @@ skip_evt:
 
     if (ui_fullscreen_prev != ui_fullscreen) {
         if (ui_fullscreen) {
-            if (SDL_GetWindowDisplayIndex(ui_sdl_win[SCREEN_TOP]) != SDL_GetWindowDisplayIndex(ui_sdl_win[SCREEN_BOT])) {
-                SDL_SetWindowFullscreen(ui_sdl_win[SCREEN_TOP], SDL_WINDOW_FULLSCREEN_DESKTOP);
-                SDL_SetWindowFullscreen(ui_sdl_win[SCREEN_BOT], SDL_WINDOW_FULLSCREEN_DESKTOP);
+            if (SDL_GetDisplayForWindow(ui_sdl_win[SCREEN_TOP]) != SDL_GetDisplayForWindow(ui_sdl_win[SCREEN_BOT])) {
+                SDL_SetWindowFullscreen(ui_sdl_win[SCREEN_TOP], true);
+                SDL_SetWindowFullscreen(ui_sdl_win[SCREEN_BOT], true);
             } else if (SDL_GetWindowFlags(ui_sdl_win[SCREEN_BOT]) & SDL_WINDOW_INPUT_FOCUS) {
-                SDL_SetWindowFullscreen(ui_sdl_win[SCREEN_BOT], SDL_WINDOW_FULLSCREEN_DESKTOP);
+                SDL_SetWindowFullscreen(ui_sdl_win[SCREEN_BOT], true);
                 SDL_RaiseWindow(ui_sdl_win[SCREEN_BOT]);
             } else {
-                SDL_SetWindowFullscreen(ui_sdl_win[SCREEN_TOP], SDL_WINDOW_FULLSCREEN_DESKTOP);
+                SDL_SetWindowFullscreen(ui_sdl_win[SCREEN_TOP], true);
                 SDL_RaiseWindow(ui_sdl_win[SCREEN_TOP]);
             }
         } else {
@@ -866,6 +866,7 @@ static void main_windows(void) {
 
     for (int i = 0; i < SCREEN_COUNT; ++i) {
         ui_sdl_win_id[i] = SDL_GetWindowID(ui_sdl_win[i]);
+        SDL_SetWindowFullscreenMode(ui_sdl_win[i], NULL);
     }
 
     event_init(&update_bottom_screen_evt);

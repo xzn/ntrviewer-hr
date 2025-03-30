@@ -446,6 +446,8 @@ static int rashader_render_mode[SCREEN_COUNT][SCREEN_COUNT];
 
 static bool rashader_delay_init[SCREEN_COUNT][SCREEN_COUNT];
 
+#define GL_GetProcAddress (opt_flag_angle ? SDL_EGL_GetProcAddress : SDL_GL_GetProcAddress)
+
 static int ogl_upscaling_init(void) {
     bool use_placebo = true;
     bool use_rashader = is_renderer_ogl();
@@ -457,7 +459,7 @@ static int ogl_upscaling_init(void) {
         SDL_GL_MakeCurrent(ogl_win[j], gl_context[j]);
 
         pl_ogl_dev[j] = pl_opengl_create(pl_log_dev, pl_opengl_params(
-            .get_proc_addr = (pl_voidfunc_t (*)(const char *))SDL_GL_GetProcAddress,
+            .get_proc_addr = (pl_voidfunc_t (*)(const char *))GL_GetProcAddress,
         ));
         if (!pl_ogl_dev[j]) {
             use_placebo = false;
@@ -578,12 +580,12 @@ static int ogl_renderer_init(void) {
     SDL_GL_SetSwapInterval(1);
 
     if (is_renderer_gles()) {
-        if (!gladLoadGLES2Loader((GLADloadproc)SDL_GL_GetProcAddress)) {
+        if (!gladLoadGLES2Loader((GLADloadproc)GL_GetProcAddress)) {
             err_log("gladLoadGLES2Loader failed\n");
             return -1;
         }
     } else {
-        if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
+        if (!gladLoadGLLoader((GLADloadproc)GL_GetProcAddress)) {
             err_log("gladLoadGLLoader failed\n");
             return -1;
         }
@@ -609,7 +611,7 @@ static int ogl_renderer_init(void) {
             ogl_hdc[i] = wmInfo.info.win.hdc;
         }
 
-        if (!gladLoadWGLLoader((GLADloadproc)SDL_GL_GetProcAddress, ogl_hdc[SCREEN_TOP])) {
+        if (!gladLoadWGLLoader((GLADloadproc)GL_GetProcAddress, ogl_hdc[SCREEN_TOP])) {
             err_log("gladLoadWGLLoader failed\n");
         } else if (!(GLAD_WGL_NV_DX_interop && GLAD_WGL_NV_DX_interop2)) {
             err_log("WGL DX interop not available\n");
@@ -692,7 +694,7 @@ static void ogl_renderer_destroy(void) {
 
     for (int i = 0; i < SCREEN_COUNT; ++i) {
         if (gl_context[i]) {
-            SDL_GL_DeleteContext(gl_context[i]);
+            SDL_GL_DestroyContext(gl_context[i]);
             gl_context[i] = NULL;
         }
     }
@@ -856,7 +858,7 @@ static void *ogl_filter_chain_create(libra_shader_preset_t *preset, void *) {
         .glsl_version = ogl460 ? 460 : 330,
     };
     libra_gl_filter_chain_t out;
-    libra_error_t err = libra_gl_filter_chain_create(preset, (libra_gl_loader_t)SDL_GL_GetProcAddress, &opt, &out);
+    libra_error_t err = libra_gl_filter_chain_create(preset, (libra_gl_loader_t)GL_GetProcAddress, &opt, &out);
     if (err) {
         libra_error_print(err);
         libra_error_free(&err);

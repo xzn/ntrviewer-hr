@@ -1,5 +1,8 @@
 #include "ntr_jpeg_delta.h"
 
+#include <stdlib.h>
+#include <math.h>
+
 #define DELTA_Q_COUNT 32
 #define DELTA_Q_MAX 7.0f
 

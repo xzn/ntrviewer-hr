@@ -5,6 +5,7 @@
 #include "const.h"
 
 #include "nuklear_sdl_renderer.h"
+#include <stdlib.h>
 
 SDL_Renderer *sdl_renderer[SCREEN_COUNT];
 
@@ -13,7 +14,6 @@ static SDL_Texture *sdl_texture[SCREEN_COUNT][SCREEN_COUNT];
 static struct nk_context *nk_ctx;
 
 static int sdl_texture_init(void) {
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
     for (int j = 0; j < SCREEN_COUNT; ++j) {
         for (int i = 0; i < SCREEN_COUNT; ++i) {
             sdl_texture[j][i] = SDL_CreateTexture(sdl_renderer[j], SDL_FORMAT, SDL_TEXTUREACCESS_STREAMING, SCREEN_WIDTH, i == SCREEN_TOP ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1);
@@ -40,7 +40,7 @@ static void sdl_texture_destroy(void) {
 
 static int sdl_renderer_init(void) {
     bool renderer_hw = is_renderer_sdl_hw();
-    char *renderer_name = SDL_getenv(SDL_HINT_RENDER_DRIVER);
+    const char *renderer_name = SDL_getenv(SDL_HINT_RENDER_DRIVER);
 
     int renderer_index = -1;
     for (int i = 0; i < SCREEN_COUNT; ++i) {
@@ -50,27 +50,27 @@ static int sdl_renderer_init(void) {
             return -1;
         }
 
-        SDL_RendererInfo info = {};
+        const char *driver_name = NULL;
         if (i == SCREEN_TOP) {
             if (renderer_name) {
                 for (int j = 0; j < num_renderer; ++j) {
-                    if (SDL_GetRenderDriverInfo(j, &info)) {
-                        err_log("SDL_GetRenderDriverInfo: %s\n", SDL_GetError());
-                        return -1;
+                    if (!(driver_name = SDL_GetRenderDriver(j))) {
+                        err_log("SDL_GetRenderDriver: %s\n", SDL_GetError());
+                        continue;
                     }
 
 // D3D12 would crash when using multiple windows
 #define TRY_CREATE_RENDERER() ({ \
-    if (strcmp(info.name, "direct3d12") == 0) \
+    if (strcmp(driver_name, "direct3d12") == 0) \
         continue; \
-    sdl_renderer[i] = SDL_CreateRenderer(sdl_win[i], j, 0); \
+    sdl_renderer[i] = SDL_CreateRenderer(sdl_win[i], driver_name); \
     if (!sdl_renderer[i]) { \
         err_log("SDL_CreateRenderer: %s\n", SDL_GetError()); \
         continue; \
     } \
     renderer_index = j; \
  \
-    if (strcmp(info.name, "direct3d11") == 0) { \
+    if (strcmp(driver_name, "direct3d11") == 0) { \
         renderer_evt_sync = 1; \
     } else { \
         renderer_single_thread = 1; \
@@ -79,10 +79,10 @@ static int sdl_renderer_init(void) {
 })
 
                     if (
-                        strcmp(info.name, renderer_name) == 0 &&
+                        strcmp(driver_name, renderer_name) == 0 &&
                         (
-                            (renderer_hw && (info.flags & SDL_RENDERER_ACCELERATED)) ||
-                            (!renderer_hw && (info.flags & SDL_RENDERER_SOFTWARE))
+                            (renderer_hw && (strcmp(driver_name, SDL_SOFTWARE_RENDERER) != 0)) ||
+                            (!renderer_hw && (strcmp(driver_name, SDL_SOFTWARE_RENDERER) == 0))
                         )
                     ) {
 
@@ -94,16 +94,16 @@ static int sdl_renderer_init(void) {
 
             if (renderer_index < 0) {
                 for (int j = 0; j < num_renderer; ++j) {
-                    if (SDL_GetRenderDriverInfo(j, &info)) {
-                        err_log("SDL_GetRenderDriverInfo: %s\n", SDL_GetError());
+                    if (!(driver_name = SDL_GetRenderDriver(j))) {
+                        err_log("SDL_GetRenderDriver: %s\n", SDL_GetError());
                         return -1;
                     }
 
-                    if (renderer_hw && !(info.flags & SDL_RENDERER_ACCELERATED)) {
+                    if (renderer_hw && (strcmp(driver_name, SDL_SOFTWARE_RENDERER) == 0)) {
                         continue;
                     }
 
-                    if (!renderer_hw && !(info.flags & SDL_RENDERER_SOFTWARE)) {
+                    if (!renderer_hw && (strcmp(driver_name, SDL_SOFTWARE_RENDERER) != 0)) {
                         continue;
                     }
 
@@ -112,7 +112,7 @@ static int sdl_renderer_init(void) {
                 }
             }
         } else {
-            sdl_renderer[i] = SDL_CreateRenderer(sdl_win[i], renderer_index, 0);
+            sdl_renderer[i] = SDL_CreateRenderer(sdl_win[i], driver_name);
             if (!sdl_renderer[i]) {
                 err_log("SDL_CreateRenderer: %s\n", SDL_GetError());
                 return -1;
@@ -123,10 +123,10 @@ static int sdl_renderer_init(void) {
             return -1;
         }
 
-        SDL_RenderSetVSync(sdl_renderer[i], 1);
+        SDL_SetRenderVSync(sdl_renderer[i], 1);
 
         if (i == SCREEN_TOP) {
-            err_log("%s %s\n", info.name ? info.name : "", renderer_single_thread ? "single thread" : renderer_evt_sync ? "evt sync" : "");
+            err_log("%s %s\n", driver_name ? driver_name : "", renderer_single_thread ? "single thread" : renderer_evt_sync ? "evt sync" : "");
         }
     }
 
@@ -194,7 +194,7 @@ void ui_renderer_sdl_destroy(void) {
 #include "ntr_rp.h"
 void ui_renderer_sdl_main(int ctx_top_bot, view_mode_t view_mode, float bg[GL_CHANNELS_N]) {
     int i = ctx_top_bot;
-    SDL_RenderSetScale(sdl_renderer[i], ui_win_scale[i], ui_win_scale[i]);
+    SDL_SetRenderScale(sdl_renderer[i], ui_win_scale[i], ui_win_scale[i]);
     SDL_SetRenderDrawColor(sdl_renderer[i], bg[0] * 255, bg[1] * 255, bg[2] * 255, bg[3] * 255);
     SDL_RenderClear(sdl_renderer[i]);
 
@@ -215,7 +215,7 @@ void ui_renderer_sdl_draw(uint8_t *data, int width, int height, int screen_top_b
     if (data) {
         void *pixels;
         int pitch;
-        if (SDL_LockTexture(tex, NULL, &pixels, &pitch) < 0) {
+        if (!SDL_LockTexture(tex, NULL, &pixels, &pitch)) {
             err_log("SDL_LockTexture: %s\n", SDL_GetError());
             return;
         }
@@ -236,9 +236,9 @@ void ui_renderer_sdl_draw(uint8_t *data, int width, int height, int screen_top_b
 
     draw_screen_get_dims_lite(screen_top_bot, i, view_mode, width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
 
-    SDL_Rect rect = { ctx_left, ctx_top + ctx_height, ctx_height, ctx_width };
-    SDL_Point center = { 0, 0 };
-    SDL_RenderCopyEx(sdl_renderer[i], tex, NULL, &rect, -90, &center, SDL_FLIP_NONE);
+    SDL_FRect rect = { ctx_left, ctx_top + ctx_height, ctx_height, ctx_width };
+    SDL_FPoint center = { 0, 0 };
+    SDL_RenderTextureRotated(sdl_renderer[i], tex, NULL, &rect, -90, &center, SDL_FLIP_NONE);
 }
 
 void ui_renderer_sdl_present(int ctx_top_bot) {
@@ -264,7 +264,7 @@ void ui_renderer_sdl_gen_cursor(stbi_t *image, const unsigned char *base, int wi
     if (!tex) {
         return;
     }
-    if (SDL_UpdateTexture(tex, NULL, base, width * channels) < 0) {
+    if (!SDL_UpdateTexture(tex, NULL, base, width * channels)) {
         err_log("SDL_UpdateTexture failed: %s", SDL_GetError());
         goto final_tex;
     }
@@ -276,13 +276,13 @@ void ui_renderer_sdl_gen_cursor(stbi_t *image, const unsigned char *base, int wi
         goto final_tex;
     }
 
-    if (SDL_SetRenderTarget(sdl_renderer[i], target) < 0) {
+    if (!SDL_SetRenderTarget(sdl_renderer[i], target)) {
         err_log("SDL_SetRenderTarget failed: %s", SDL_GetError());
         goto final_target;
     }
 
-    if (SDL_RenderCopy(sdl_renderer[i], tex, NULL, NULL) < 0) {
-        err_log("SDL_RenderCopy failed: %s", SDL_GetError());
+    if (!SDL_RenderTexture(sdl_renderer[i], tex, NULL, NULL)) {
+        err_log("SDL_RenderTexture failed: %s", SDL_GetError());
         goto final_target;
     }
 
@@ -291,10 +291,22 @@ void ui_renderer_sdl_gen_cursor(stbi_t *image, const unsigned char *base, int wi
         goto final_target;
     }
 
-    if (SDL_RenderReadPixels(sdl_renderer[i], NULL, SDL_FORMAT, image->image, target_width * channels) < 0) {
+    SDL_Surface *read_surface = SDL_RenderReadPixels(sdl_renderer[i], NULL);
+    if (!read_surface) {
         err_log("SDL_RenderReadPixels failed: %s", SDL_GetError());
         free(image->image);
         image->image = NULL;
+    } else {
+        if (read_surface->format != SDL_FORMAT || read_surface->w != target_width || read_surface->h != target_height) {
+            err_log("SDL_RenderReadPixels unexpected: %d %d %d", (int)read_surface->format, read_surface->w, read_surface->h);
+            free(image->image);
+            image->image = NULL;
+        } else {
+            for (int y = 0; y < read_surface->h; ++y) {
+                memcpy(image->image + y * target_width * channels, (const char *)read_surface->pixels + y * read_surface->pitch, target_width * channels);
+            }
+        }
+        SDL_DestroySurface(read_surface);
     }
     image->width = target_width;
     image->height = target_height;

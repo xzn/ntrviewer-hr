@@ -2,6 +2,8 @@
 #include "main.h"
 #include "ntr_common.h"
 
+#include <stdlib.h>
+
 #define HEART_BEAT_EVERY_MS 250
 
 #define TCP_MAGIC 0x12345678

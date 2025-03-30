@@ -1,6 +1,8 @@
 #include "ntr_common.h"
 #include "const.h"
 
+#include <stdlib.h>
+
 #define NTR_IP_NAME_LEN_MAX (32)
 #define NTR_IP_OCTET_SIZE (4)
 #define NTR_MAC_SIZE (6)

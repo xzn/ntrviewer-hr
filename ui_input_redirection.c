@@ -23,7 +23,7 @@ enum CLARITY_ICON_SIZE {
 #define STBI_ONLY_PNG
 #include "stb_image.h"
 
-SDL_PixelFormat *sdl_cursor_pixel_format;
+static const SDL_PixelFormatDetails *sdl_cursor_pixel_format;
 typedef struct {
     SDL_Cursor *cursor;
     SDL_Surface *surface;
@@ -273,25 +273,25 @@ static int sdl_get_bottom_screen_ctx(view_mode_t vm) {
 
 static void generate_clarity_sdl_cursor(sdl_cursor_t *cursor, stbi_t *image, enum CLARITY_ICON icon) {
     if (!sdl_cursor_pixel_format) {
-        sdl_cursor_pixel_format = SDL_AllocFormat(SDL_FORMAT);
+        sdl_cursor_pixel_format = SDL_GetPixelFormatDetails(SDL_FORMAT);
         if (!sdl_cursor_pixel_format)
             return;
     }
 
     if (cursor->cursor) {
-        SDL_FreeCursor(cursor->cursor);
+        SDL_DestroyCursor(cursor->cursor);
         cursor->cursor = NULL;
     }
 
     if (cursor->surface) {
-        SDL_FreeSurface(cursor->surface);
+        SDL_DestroySurface(cursor->surface);
         cursor->surface = NULL;
     }
 
     if (!image->image) {
         return;
     }
-    cursor->surface = SDL_CreateRGBSurfaceWithFormatFrom(image->image, image->width, image->height, 1, image->width * image->channels, SDL_FORMAT);
+    cursor->surface = SDL_CreateSurfaceFrom(image->width, image->height, SDL_FORMAT, image->image, image->width * image->channels);
     if (!cursor->surface) {
         return;
     }
@@ -357,12 +357,12 @@ static void set_clarity_sdl_cursor(enum CLARITY_ICON icon, enum CLARITY_ICON_SIZ
             for (int size = 0; size < CLARITY_ICON_SIZE_COUNT; ++size) {
                 sdl_cursor_t *cursor = &sdl_cursors_curr[size][icon];
                 if (cursor->cursor) {
-                    SDL_FreeCursor(cursor->cursor);
+                    SDL_DestroyCursor(cursor->cursor);
                     cursor->cursor = NULL;
                 }
 
                 if (cursor->surface) {
-                    SDL_FreeSurface(cursor->surface);
+                    SDL_DestroySurface(cursor->surface);
                     cursor->surface = NULL;
                 }
             }
@@ -442,7 +442,7 @@ void update_bottom_screen_cursor(void) {
     if (sdl_bottom_screen_grabbing)
         return;
 
-    int x, y;
+    float x, y;
     UNUSED Uint32 state = SDL_GetMouseState(&x, &y);
     SDL_Point point;
     int i;
@@ -477,7 +477,7 @@ static void sdl_set_touch_screen_coord(SDL_Point *point) {
 bool sdl_process_bottom_screen_event(SDL_Event *evt) {
     view_mode_t vm = __atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED);
     switch (evt->type) {
-        case SDL_MOUSEMOTION: {
+        case SDL_EVENT_MOUSE_MOTION: {
             SDL_Point point;
             int reset = sdl_get_bottom_screen_mouse_coord(vm, evt->motion.windowID, evt->motion.x, evt->motion.y, &point);
 
@@ -493,7 +493,7 @@ bool sdl_process_bottom_screen_event(SDL_Event *evt) {
         }
         break;
 
-        case SDL_MOUSEBUTTONDOWN: {
+        case SDL_EVENT_MOUSE_BUTTON_DOWN: {
             if (evt->button.button != SDL_BUTTON_LEFT) {
                 break;
             }
@@ -509,7 +509,7 @@ bool sdl_process_bottom_screen_event(SDL_Event *evt) {
         }
         break;
 
-        case SDL_MOUSEBUTTONUP: {
+        case SDL_EVENT_MOUSE_BUTTON_UP: {
             if (
                 evt->button.button != SDL_BUTTON_LEFT ||
                 (!sdl_bottom_screen_grabbing && evt->button.windowID == ui_sdl_win_id[SCREEN_BOT])
@@ -531,11 +531,11 @@ bool sdl_process_bottom_screen_event(SDL_Event *evt) {
 }
 
 rp_lock_t sdl_game_controller_lock;
-static SDL_GameController *sdl_game_controller;
+static SDL_Gamepad *sdl_game_controller;
 static int game_controller_selected;
 static void close_game_controller(void) {
     if (sdl_game_controller) {
-        SDL_GameControllerClose(sdl_game_controller);
+        SDL_CloseGamepad(sdl_game_controller);
         sdl_game_controller = 0;
     }
     game_controller_selected = 0;
@@ -552,7 +552,7 @@ void update_game_controller(void) {
     }
 
     if (!sdl_game_controller && selected) {
-        sdl_game_controller = SDL_GameControllerOpen(ui_controller_selected - 1); // Skip empty entry
+        sdl_game_controller = SDL_OpenGamepad(ui_controllers_ids[ui_controller_selected - 1]); // Skip empty entry
         if (sdl_game_controller) {
             game_controller_selected = ui_controller_selected;
         }
@@ -564,7 +564,7 @@ void update_game_controller(void) {
 #include <math.h>
 
 static input_redirection_frame_t input_redirection_frame_send;
-Uint32 SDLCALL input_redirection_timer_cb(Uint32 interval, void *) {
+Uint32 SDLCALL input_redirection_timer_cb(void *, SDL_TimerID, Uint32 interval) {
     if (!program_running)
         return 0;
 
@@ -580,62 +580,62 @@ Uint32 SDLCALL input_redirection_timer_cb(Uint32 interval, void *) {
     if (sdl_game_controller) {
         SDL_ClearError();
 
-        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_GUIDE)) {
+        if (SDL_GetGamepadButton(sdl_game_controller, SDL_GAMEPAD_BUTTON_GUIDE)) {
             input_redirection_frame.interfaceButtons |= 1;
         }
-        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_MISC1)) {
+        if (SDL_GetGamepadButton(sdl_game_controller, SDL_GAMEPAD_BUTTON_MISC1)) {
             input_redirection_frame.interfaceButtons |= 2;
         }
-        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_A)) {
+        if (SDL_GetGamepadButton(sdl_game_controller, SDL_GAMEPAD_BUTTON_SOUTH)) {
             input_redirection_frame.hidPad &= swap_face ? ~(1 << 1) : ~(1 << 0);
         }
-        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_B)) {
+        if (SDL_GetGamepadButton(sdl_game_controller, SDL_GAMEPAD_BUTTON_EAST)) {
             input_redirection_frame.hidPad &= swap_face ? ~(1 << 0) : ~(1 << 1);
         }
-        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_X)) {
+        if (SDL_GetGamepadButton(sdl_game_controller, SDL_GAMEPAD_BUTTON_WEST)) {
             input_redirection_frame.hidPad &= swap_face ? ~(1 << 11) : ~(1 << 10);
         }
-        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_Y)) {
+        if (SDL_GetGamepadButton(sdl_game_controller, SDL_GAMEPAD_BUTTON_NORTH)) {
             input_redirection_frame.hidPad &= swap_face ? ~(1 << 10) : ~(1 << 11);
         }
-        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_BACK)) {
+        if (SDL_GetGamepadButton(sdl_game_controller, SDL_GAMEPAD_BUTTON_BACK)) {
             input_redirection_frame.hidPad &= ~(1 << 2);
         }
-        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_START)) {
+        if (SDL_GetGamepadButton(sdl_game_controller, SDL_GAMEPAD_BUTTON_START)) {
             input_redirection_frame.hidPad &= ~(1 << 3);
         }
-        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) {
+        if (SDL_GetGamepadButton(sdl_game_controller, SDL_GAMEPAD_BUTTON_DPAD_RIGHT)) {
             input_redirection_frame.hidPad &= ~(1 << 4);
         }
-        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_DPAD_LEFT)) {
+        if (SDL_GetGamepadButton(sdl_game_controller, SDL_GAMEPAD_BUTTON_DPAD_LEFT)) {
             input_redirection_frame.hidPad &= ~(1 << 5);
         }
-        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_DPAD_UP)) {
+        if (SDL_GetGamepadButton(sdl_game_controller, SDL_GAMEPAD_BUTTON_DPAD_UP)) {
             input_redirection_frame.hidPad &= ~(1 << 6);
         }
-        if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_DPAD_DOWN)) {
+        if (SDL_GetGamepadButton(sdl_game_controller, SDL_GAMEPAD_BUTTON_DPAD_DOWN)) {
             input_redirection_frame.hidPad &= ~(1 << 7);
         }
         if (
-            SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_RIGHTSTICK) &&
-            SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_LEFTSTICK) &&
-            SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) &&
-            SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_LEFTSHOULDER)
+            SDL_GetGamepadButton(sdl_game_controller, SDL_GAMEPAD_BUTTON_RIGHT_STICK) &&
+            SDL_GetGamepadButton(sdl_game_controller, SDL_GAMEPAD_BUTTON_LEFT_STICK) &&
+            SDL_GetGamepadButton(sdl_game_controller, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) &&
+            SDL_GetGamepadButton(sdl_game_controller, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)
         ) {
             input_redirection_frame.interfaceButtons |= 4;
         } else {
-            if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) {
+            if (SDL_GetGamepadButton(sdl_game_controller, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)) {
                 input_redirection_frame.hidPad &= ~(1 << 8);
             }
-            if (SDL_GameControllerGetButton(sdl_game_controller, SDL_CONTROLLER_BUTTON_LEFTSHOULDER)) {
+            if (SDL_GetGamepadButton(sdl_game_controller, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)) {
                 input_redirection_frame.hidPad &= ~(1 << 9);
             }
         }
 
         const int DEAD_ZONE = (1 << 15) / 10;
 
-        Sint16 left_x = SDL_GameControllerGetAxis(sdl_game_controller, SDL_CONTROLLER_AXIS_LEFTX);
-        Sint16 left_y = SDL_GameControllerGetAxis(sdl_game_controller, SDL_CONTROLLER_AXIS_LEFTY);
+        Sint16 left_x = SDL_GetGamepadAxis(sdl_game_controller, SDL_GAMEPAD_AXIS_LEFTX);
+        Sint16 left_y = SDL_GetGamepadAxis(sdl_game_controller, SDL_GAMEPAD_AXIS_LEFTY);
         left_x = abs(left_x) >= DEAD_ZONE ? left_x : 0;
         left_y = abs(left_y) >= DEAD_ZONE ? left_y : 0;
 
@@ -664,8 +664,8 @@ Uint32 SDLCALL input_redirection_timer_cb(Uint32 interval, void *) {
             input_redirection_frame.circlePadState = (left_y << 12) | left_x;
         }
 
-        Sint16 right_x = SDL_GameControllerGetAxis(sdl_game_controller, SDL_CONTROLLER_AXIS_RIGHTX);
-        Sint16 right_y = SDL_GameControllerGetAxis(sdl_game_controller, SDL_CONTROLLER_AXIS_RIGHTY);
+        Sint16 right_x = SDL_GetGamepadAxis(sdl_game_controller, SDL_GAMEPAD_AXIS_RIGHTX);
+        Sint16 right_y = SDL_GetGamepadAxis(sdl_game_controller, SDL_GAMEPAD_AXIS_RIGHTY);
         right_x = abs(right_x) >= DEAD_ZONE ? right_x : 0;
         right_y = abs(right_y) >= DEAD_ZONE ? right_y : 0;
 
@@ -676,8 +676,8 @@ Uint32 SDLCALL input_redirection_timer_cb(Uint32 interval, void *) {
 
         const int TRIGGER_ZONE = (1 << 4);
 
-        Sint16 trigger_l = SDL_GameControllerGetAxis(sdl_game_controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT);
-        Sint16 trigger_r = SDL_GameControllerGetAxis(sdl_game_controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
+        Sint16 trigger_l = SDL_GetGamepadAxis(sdl_game_controller, SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
+        Sint16 trigger_r = SDL_GetGamepadAxis(sdl_game_controller, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
         trigger_l = trigger_l >= TRIGGER_ZONE ? 1 : 0;
         trigger_r = trigger_r >= TRIGGER_ZONE ? 1 : 0;
 
@@ -739,7 +739,11 @@ void ui_update_game_controllers(void) {
         ui_controllers_ids = 0;
     }
 
-    int n = SDL_NumJoysticks();
+    int n = 0;
+    SDL_JoystickID *ids = SDL_GetJoysticks(&n);
+    if (!ids) {
+        n = 0;
+    }
     int ui_n = 1 + n + 1;
     ui_controllers_names = malloc(sizeof(const char *) * ui_n);
     ui_controllers_ids = malloc(sizeof(int) * ui_n);
@@ -749,15 +753,17 @@ void ui_update_game_controllers(void) {
     ui_controllers_ids[nn] = -1;
     ++nn;
     for (int i = 0; i < n; ++i) {
-        if (SDL_IsGameController(i)) {
-            ui_controllers_names[nn] = SDL_GameControllerNameForIndex(i);
+        SDL_JoystickID id = ids[i];
+        if (SDL_IsGamepad(id)) {
+            ui_controllers_names[nn] = SDL_GetGamepadNameForID(id);
             if (!ui_controllers_names[nn]) {
                 ui_controllers_names[nn] = "(Unknown)";
             }
-            ui_controllers_ids[nn] = i;
+            ui_controllers_ids[nn] = id;
             ++nn;
         }
     }
+    SDL_free(ids);
     ui_controllers_names[nn] = "Refresh List";
     ui_controllers_ids[nn] = -1;
     ui_num_controllers = ++nn;

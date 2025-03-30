@@ -15,7 +15,7 @@ endif
 
 CPPFLAGS := -Iinclude -DPL_STATIC
 ifeq ($(OS),Darwin)
-CPPFLAGS += $(shell sdl2-config --cflags) -DSDL2_SDL_H="<SDL.h>" -DSDL2_SDL_SYSWM_H="<SDL_syswm.h>" -DSDL2_SDL_OPENGL_H="<SDL_opengl.h>"
+CPPFLAGS += $(shell pkg-config sdl3 --cflags)
 endif
 ifeq ($(DEBUG),1)
 CFLAGS := -Og -g
@@ -37,7 +37,7 @@ TARGET := ntrviewer.exe
 NASM := -DWIN64 -fwin64 -D__x86_64__
 else
 ifeq ($(OS),Darwin)
-LDLIBS := -Llib $(shell sdl2-config --libs)
+LDLIBS := -Llib $(shell pkg-config sdl3 --libs)
 else
 LDLIBS := -static-libgcc -static-libstdc++ -Llib -Wl,-Bstatic -lSDL2
 endif

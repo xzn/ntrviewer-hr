@@ -12,7 +12,7 @@ extern float cursor_scale_prev;
 void generate_cursors_images(view_mode_t vm);
 void update_bottom_screen_cursor(void);
 bool sdl_process_bottom_screen_event(SDL_Event *evt);
-Uint32 SDLCALL input_redirection_timer_cb(Uint32 interval, void *);
+Uint32 SDLCALL input_redirection_timer_cb(void *userdata, SDL_TimerID timerID, Uint32 interval);
 
 extern rp_lock_t sdl_game_controller_lock;
 void update_game_controller(void);

@@ -5,6 +5,7 @@
 #include "ui_input_redirection.h"
 #include "main.h"
 #include "ikcp.h"
+#include <math.h>
 
 int is_renderer_ogl_dbg;
 
@@ -34,9 +35,6 @@ int ui_ctx_width[SCREEN_COUNT], ui_ctx_height[SCREEN_COUNT];
 event_t update_bottom_screen_evt;
 
 int ui_common_sdl_init(void) {
-    SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "0");
-    SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
-    SDL_SetHint(SDL_HINT_WINDOWS_DPI_SCALING, "1");
     SDL_SetHint(SDL_HINT_RENDER_VSYNC, "1");
 #ifdef _WIN32
     SDL_SetHint(SDL_HINT_RENDER_DIRECT3D_THREADSAFE, "1");
@@ -53,15 +51,9 @@ int ui_common_sdl_init(void) {
         SDL_SetHint(SDL_HINT_OPENGL_ES_DRIVER, "0");
     }
 
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMEPAD)) {
         err_log("SDL_Init: %s\n", SDL_GetError());
         return -1;
-    }
-
-    if (opt_flag_angle) {
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_EGL, 1);
-    } else {
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_EGL, 0);
     }
 
     return 0;
@@ -115,9 +107,9 @@ void ui_window_size_update(int window_top_bot) {
     SDL_GetWindowSize(ui_sdl_win[i], &ui_win_width[i], &ui_win_height[i]);
 
     if (is_renderer_sdl_renderer()) {
-        SDL_GetRendererOutputSize(sdl_renderer[i], &ui_win_width_drawable[i], &ui_win_height_drawable[i]);
+        SDL_GetCurrentRenderOutputSize(sdl_renderer[i], &ui_win_width_drawable[i], &ui_win_height_drawable[i]);
     } else if (is_renderer_sdl_ogl()) {
-        SDL_GL_GetDrawableSize(ui_sdl_win[i], &ui_win_width_drawable[i], &ui_win_height_drawable[i]);
+        SDL_GetWindowSizeInPixels(ui_sdl_win[i], &ui_win_width_drawable[i], &ui_win_height_drawable[i]);
     } else if (is_renderer_d3d11()) {
 #ifdef _WIN32
         RECT rect = {};
@@ -336,7 +328,6 @@ int draw_screen(struct rp_buffer_ctx_t *ctx, int width, int height, int screen_t
 int sdl_win_init(SDL_Window *sdl_win[SCREEN_COUNT], bool ogl) {
     for (int i = 0; i < SCREEN_COUNT; ++i) {
         sdl_win[i] = SDL_CreateWindow(WIN_TITLE,
-            SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
             WIN_WIDTH_DEFAULT, WIN_HEIGHT_DEFAULT, SDL_WIN_FLAGS_DEFAULT | (ogl ? SDL_WINDOW_OPENGL : 0));
         if (!sdl_win[i]) {
             err_log("SDL_CreateWindow: %s\n", SDL_GetError());
@@ -356,22 +347,12 @@ void sdl_win_destroy(SDL_Window *sdl_win[SCREEN_COUNT]) {
     }
 }
 
-#ifdef SDL2_SDL_SYSWM_H
-#include SDL2_SDL_SYSWM_H
-#else
-#include <SDL2/SDL_syswm.h>
-#endif
-
 void sdl_set_wminfo(void) {
 #ifdef _WIN32
     for (int i = 0; i < SCREEN_COUNT; ++i) {
-        SDL_SysWMinfo wmInfo;
-
-        SDL_VERSION(&wmInfo.version);
-        SDL_GetWindowWMInfo(ui_sdl_win[i], &wmInfo);
-
-        ui_hwnd[i] = wmInfo.info.win.window;
-        ui_hdc[i] = wmInfo.info.win.hdc;
+        SDL_PropertyID id = SDL_GetWindowProperties(ui_sdl_win[i]);
+        ui_hwnd[i] = (HWND)SDL_GetPointerProperty(id, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+        ui_hdc[i] = (HDC)SDL_GetPointerProperty(id, SDL_PROP_WINDOW_WIN32_HDC_POINTER, NULL);
     }
 #endif
 }
