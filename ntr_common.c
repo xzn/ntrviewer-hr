@@ -530,8 +530,6 @@ void ntr_detect_3ds_ip(void) {
 #define str(s) #s
 
 #define ARP_CACHE "/proc/net/arp"
-#define ARP_STRING_LEN 1023
-#define ARP_BUFFER_LEN (ARP_STRING_LEN + 1)
 #define ARP_LINE_FORMAT \
     "%" xstr(ARP_STRING_LEN) "s %*s %*s " \
     "%" xstr(ARP_STRING_LEN) "s %*s " \
@@ -557,40 +555,56 @@ static void get_ip_map_mac(void)
     if (!arp_cache)
         return;
 
-    /* Ignore the first line, which contains the header */
-    char header[ARP_BUFFER_LEN];
-    if (!fgets(header, sizeof(header), arp_cache))
+    char *line = NULL;
+    size_t size = 0;
+    ssize_t nread = 0;
+
+    // ignore the first line, which contains the header
+    if ((nread = getline(&line, &size, arp_cache)) == -1)
         goto final;
 
-    int beg = ftell(arp_cache);
-
-    char ip_addr[ARP_BUFFER_LEN], hw_addr[ARP_BUFFER_LEN], device[ARP_BUFFER_LEN];
     int count = 0;
-    while (3 == fscanf(arp_cache, ARP_LINE_FORMAT, ip_addr, hw_addr, device))
-        ++count;
+    while ((nread = getline(&line, &size, arp_cache)) != -1) {
+        char *next_tok = line;
+        char *tok = NULL;
+#define ARP_IP_FIELD_I (0)
+#define ARP_MAC_FIELD_I (3)
+#define ARP_END_FIELD_I (ARP_MAC_FIELD_I + 1)
 
-    ip_net_buf = calloc(count, sizeof(struct ip_map_mac_t));
-    if (ip_net_buf) {
-        fseek(arp_cache, beg, SEEK_SET);
-        int count = 0;
-        while (3 == fscanf(arp_cache, ARP_LINE_FORMAT, ip_addr, hw_addr, device)) {
-            struct ip_map_mac_t *b = &ip_net_buf[count];
-            sscanf(ip_addr, "%hhu.%hhu.%hhu.%hhu",
-                   &b->ip_bytes[0],
-                   &b->ip_bytes[1],
-                   &b->ip_bytes[2],
-                   &b->ip_bytes[3]);
-            sscanf(hw_addr, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-                   &b->mac_bytes[0],
-                   &b->mac_bytes[1],
-                   &b->mac_bytes[2],
-                   &b->mac_bytes[3],
-                   &b->mac_bytes[4],
-                   &b->mac_bytes[5]);
-            ++count;
+        char *ip = NULL;
+        char *mac = NULL;
+        for (int i = 0; i < ARP_END_FIELD_I; ++i) {
+            while ((tok = strsep(&next_tok, " ")) && strlen(tok) == 0) {}
+            if (!tok)
+                break;
+            if (i == ARP_IP_FIELD_I) {
+                ip = tok;
+            } else if (i == ARP_MAC_FIELD_I) {
+                mac = tok;
+            }
         }
-        ip_net_buf_count = count;
+
+        if (!ip || !mac) {
+            continue;
+        }
+        int next_count = count + 1;
+        ip_net_buf = realloc(ip_net_buf, next_count * sizeof(struct ip_map_mac_t));
+        struct ip_map_mac_t *b = &ip_net_buf[count];
+        sscanf(ip, "%hhu.%hhu.%hhu.%hhu",
+                &b->ip_bytes[0],
+                &b->ip_bytes[1],
+                &b->ip_bytes[2],
+                &b->ip_bytes[3]);
+        sscanf(mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                &b->mac_bytes[0],
+                &b->mac_bytes[1],
+                &b->mac_bytes[2],
+                &b->mac_bytes[3],
+                &b->mac_bytes[4],
+                &b->mac_bytes[5]);
+        count = next_count;
     }
+    ip_net_buf_count = count;
 
 final:
     fclose(arp_cache);
