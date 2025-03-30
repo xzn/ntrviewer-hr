@@ -3,7 +3,6 @@
 
 #include <stdlib.h>
 
-#define NTR_IP_NAME_LEN_MAX (32)
 #define NTR_IP_OCTET_SIZE (4)
 #define NTR_MAC_SIZE (6)
 
@@ -15,6 +14,10 @@ int socket_startup(void) {
 int socket_shutdown(void) {
     return WSACleanup();
 }
+#define NTR_IP_NAME_LEN_MAX (32)
+#else
+#include <net/if_var.h>
+#define NTR_IP_NAME_LEN_MAX (16 + IFNAMSIZ + 4)
 #endif
 
 int ntr_rp_port = 8001;
@@ -552,6 +555,7 @@ void ntr_detect_3ds_ip(void)
 // https://stackoverflow.com/a/12131131
 #include <ifaddrs.h>
 #include <netdb.h>
+#include <net/if.h>
 
 void ntr_get_adapter_list(void)
 {
@@ -564,6 +568,14 @@ void ntr_get_adapter_list(void)
         for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
             if (ifa->ifa_addr == NULL)
                 continue;
+
+            if (!(ifa->ifa_flags & IFF_RUNNING)) {
+                continue;
+            }
+
+            if (ifa->ifa_addr->sa_family != AF_INET) {
+                continue;
+            }
 
             char host[NI_MAXHOST] = {0};
             int s = getnameinfo(
@@ -591,6 +603,14 @@ void ntr_get_adapter_list(void)
             if (ifa->ifa_addr == NULL)
                 continue;
 
+            if (!(ifa->ifa_flags & IFF_RUNNING)) {
+                continue;
+            }
+
+            if (ifa->ifa_addr->sa_family != AF_INET) {
+                continue;
+            }
+
             char host[NI_MAXHOST] = {0};
             int s = getnameinfo(
                 ifa->ifa_addr,
@@ -607,13 +627,16 @@ void ntr_get_adapter_list(void)
                        &ntr_adapter_octet_list[i][1],
                        &ntr_adapter_octet_list[i][2],
                        &ntr_adapter_octet_list[i][3]);
-                sprintf(
+                snprintf(
                     ntr_adapter_list[i],
-                    "%d.%d.%d.%d",
+                    NTR_IP_NAME_LEN_MAX,
+                    "%d.%d.%d.%d %s",
                     (int)ntr_adapter_octet_list[i][0],
                     (int)ntr_adapter_octet_list[i][1],
                     (int)ntr_adapter_octet_list[i][2],
-                    (int)ntr_adapter_octet_list[i][3]);
+                    (int)ntr_adapter_octet_list[i][3],
+                    ifa->ifa_name
+                );
 
                 ++i;
             }
