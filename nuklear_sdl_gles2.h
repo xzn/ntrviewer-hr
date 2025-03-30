@@ -17,8 +17,16 @@
 
 #include "nuklear/nuklear.h"
 
+#ifdef SDL2_SDL_H
+#include SDL2_SDL_H
+#else
 #include <SDL2/SDL.h>
-#include <SDL2/SDL_opengles2.h>
+#endif
+#ifdef SDL2_SDL_OPENGL_H
+#include SDL2_SDL_OPENGL_H
+#else
+#include <SDL2/SDL_opengl.h>
+#endif
 
 NK_API struct nk_context*   nk_sdl_gles2_init(SDL_Window *win);
 NK_API void                 nk_sdl_gles2_font_stash_begin(struct nk_font_atlas **atlas);

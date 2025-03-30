@@ -13,7 +13,11 @@
 
 #include "nuklear/nuklear.h"
 
+#ifdef SDL2_SDL_H
+#include SDL2_SDL_H
+#else
 #include <SDL2/SDL.h>
+#endif
 
 NK_API struct nk_context*   nk_sdl_renderer_init(SDL_Window *win, SDL_Renderer *renderer);
 NK_API void                 nk_sdl_renderer_font_stash_begin(struct nk_font_atlas **atlas);

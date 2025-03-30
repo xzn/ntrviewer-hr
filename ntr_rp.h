@@ -21,12 +21,12 @@ using namespace std;
 #else
 #include <stdatomic.h>
 #endif
-extern atomic_int frame_rate_decoded_tracker[SCREEN_COUNT];
-extern atomic_int frame_rate_displayed_tracker[SCREEN_COUNT];
-extern atomic_int frame_size_tracker[SCREEN_COUNT];
-extern atomic_int delay_between_packet_tracker[SCREEN_COUNT];
-extern atomic_int frame_fully_received_tracker;
-extern atomic_int frame_lost_tracker;
+extern int frame_rate_decoded_tracker[SCREEN_COUNT];
+extern int frame_rate_displayed_tracker[SCREEN_COUNT];
+extern int frame_size_tracker[SCREEN_COUNT];
+extern int delay_between_packet_tracker[SCREEN_COUNT];
+extern int frame_fully_received_tracker;
+extern int frame_lost_tracker;
 extern atomic_bool kcp_active;
 extern atomic_bool kcp_dq;
 extern atomic_bool kcp_restart;

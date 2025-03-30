@@ -14,6 +14,8 @@ void update_bottom_screen_cursor(void);
 bool sdl_process_bottom_screen_event(SDL_Event *evt);
 Uint32 SDLCALL input_redirection_timer_cb(Uint32 interval, void *);
 
+extern rp_lock_t sdl_game_controller_lock;
+void update_game_controller(void);
 extern int ui_num_controllers;
 extern int ui_controller_selected;
 extern const char **ui_controllers_names;

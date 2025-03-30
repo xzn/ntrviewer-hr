@@ -17,6 +17,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+#pragma clang diagnostic ignored "-Wunused-function"
+
 #define err_log(f, ...) fprintf(stderr, "%s:%d:%s " f, __FILE__, __LINE__, __func__, ## __VA_ARGS__)
 // #define err_log(f, ...) ((void)0)
 

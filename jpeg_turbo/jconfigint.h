@@ -1,5 +1,5 @@
 /* libjpeg-turbo build number */
-#define BUILD  "20230611"
+#define BUILD  "20250329"
 
 /* How to hide global symbols. */
 #define HIDDEN  __attribute__((visibility("hidden")))
@@ -17,13 +17,13 @@
 #define PACKAGE_NAME  "libjpeg-turbo"
 
 /* Version number of package */
-#define VERSION  "3.0.4"
+#define VERSION  "3.1.1"
 
 /* The size of `size_t', as computed by sizeof. */
 #define SIZEOF_SIZE_T  8
 
 /* Define if your compiler has __builtin_ctzl() and sizeof(unsigned long) == sizeof(size_t). */
-/* #undef HAVE_BUILTIN_CTZL */
+#define HAVE_BUILTIN_CTZL
 
 /* Define to 1 if you have the <intrin.h> header file. */
 /* #undef HAVE_INTRIN_H */

@@ -1,5 +1,3 @@
-#include <SDL2/SDL.h>
-
 #include "ui_common_sdl.h"
 #include "ui_renderer_sdl.h"
 #include "ui_renderer_d3d11.h"
@@ -45,7 +43,7 @@ int ui_common_sdl_init(void) {
     SDL_SetHint(SDL_HINT_WINDOWS_USE_D3D9EX, "1");
     SDL_SetHint(SDL_HINT_RENDER_DRIVER, "direct3d11");
     SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, "direct3d11");
-#else
+#elif !defined(__APPLE__)
     SDL_SetHint(SDL_HINT_VIDEODRIVER, "wayland");
 #endif
 
@@ -358,7 +356,11 @@ void sdl_win_destroy(SDL_Window *sdl_win[SCREEN_COUNT]) {
     }
 }
 
+#ifdef SDL2_SDL_SYSWM_H
+#include SDL2_SDL_SYSWM_H
+#else
 #include <SDL2/SDL_syswm.h>
+#endif
 
 void sdl_set_wminfo(void) {
 #ifdef _WIN32

@@ -530,6 +530,7 @@ bool sdl_process_bottom_screen_event(SDL_Event *evt) {
     return false;
 }
 
+rp_lock_t sdl_game_controller_lock;
 static SDL_GameController *sdl_game_controller;
 static int game_controller_selected;
 static void close_game_controller(void) {
@@ -540,12 +541,8 @@ static void close_game_controller(void) {
     game_controller_selected = 0;
 }
 
-#include <math.h>
-
-static input_redirection_frame_t input_redirection_frame_send;
-Uint32 SDLCALL input_redirection_timer_cb(Uint32 interval, void *) {
-    if (!program_running)
-        return 0;
+void update_game_controller(void) {
+    rp_lock_wait(sdl_game_controller_lock);
 
     bool selected = ui_controller_selected >= 1 && ui_controller_selected < ui_num_controllers - 1;
     if (
@@ -561,12 +558,24 @@ Uint32 SDLCALL input_redirection_timer_cb(Uint32 interval, void *) {
         }
     }
 
+    rp_lock_rel(sdl_game_controller_lock);
+}
+
+#include <math.h>
+
+static input_redirection_frame_t input_redirection_frame_send;
+Uint32 SDLCALL input_redirection_timer_cb(Uint32 interval, void *) {
+    if (!program_running)
+        return 0;
+
     input_redirection_frame.hidPad = input_redirection_frame_default.hidPad;
     input_redirection_frame.circlePadState = input_redirection_frame_default.circlePadState;
     input_redirection_frame.cppState = input_redirection_frame_default.cppState;
     input_redirection_frame.interfaceButtons = input_redirection_frame_default.interfaceButtons;
 
     bool swap_face = ui_controller_swap_face_buttons;
+
+    rp_lock_wait(sdl_game_controller_lock);
 
     if (sdl_game_controller) {
         SDL_ClearError();
@@ -696,6 +705,8 @@ Uint32 SDLCALL input_redirection_timer_cb(Uint32 interval, void *) {
         //     ui_controller_selected = 0;
         // }
     }
+
+    rp_lock_rel(sdl_game_controller_lock);
 
     input_redirection_frame_t frame = {
         .hidPad = input_redirection_frame.hidPad,

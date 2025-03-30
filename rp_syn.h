@@ -24,7 +24,18 @@ typedef HANDLE rp_e_t;
 #else
 typedef pthread_mutex_t rp_lock_t;
 typedef pthread_cond_t rp_cond_t;
+#ifdef __APPLE__
+#define PTHREAD_SEM_NON_MONOTONIC_CLOCK
+#endif
+#ifdef PTHREAD_SEM_NON_MONOTONIC_CLOCK
+typedef struct rp_sem_t {
+	pthread_mutex_t mutex;
+	pthread_cond_t  cond;
+	unsigned n, m;
+} rp_sem_t;
+#else
 typedef sem_t rp_sem_t;
+#endif
 typedef void *rp_e_t;
 #endif
 
@@ -34,25 +45,25 @@ extern bool rp_lock_srw;
 
 #define rp_lock_init(n) ({ \
 	if (rp_lock_srw) { \
-		InitializeSRWLock(&(n).srw); \
+		InitializeSRWLock(&(s).srw); \
 	} else { \
-		InitializeCriticalSection(&(n).cs); \
+		InitializeCriticalSection(&(s).cs); \
 	} \
 	0; \
 })
 #define rp_lock_wait(n) ({ \
 	if (rp_lock_srw) { \
-		AcquireSRWLockExclusive(&(n).srw); \
+		AcquireSRWLockExclusive(&(s).srw); \
 	} else { \
-		EnterCriticalSection(&(n).cs); \
+		EnterCriticalSection(&(s).cs); \
 	} \
 	0; \
 })
 #define rp_lock_rel(n) ({ \
 	if (rp_lock_srw) { \
-		ReleaseSRWLockExclusive(&(n).srw); \
+		ReleaseSRWLockExclusive(&(s).srw); \
 	} else { \
-		LeaveCriticalSection(&(n).cs); \
+		LeaveCriticalSection(&(s).cs); \
 	} \
 	0; \
 })
@@ -60,7 +71,7 @@ extern bool rp_lock_srw;
 	if (rp_lock_srw) { \
 		rp_lock_init(n); \
 	} else { \
-		DeleteCriticalSection(&(n).cs); \
+		DeleteCriticalSection(&(s).cs); \
 	} \
 	0; \
 })
@@ -121,6 +132,66 @@ extern pthread_condattr_t rp_cond_attr;
 #define rp_lock_rel(n) pthread_mutex_unlock(&(n))
 #define rp_lock_close(n) pthread_mutex_destroy(&(n))
 
+#ifdef PTHREAD_SEM_NON_MONOTONIC_CLOCK
+#define rp_sem_create(s, _n, _m) ({ \
+	int _ret; \
+	_ret = pthread_mutex_init(&(s).mutex, NULL); \
+	if (_ret == 0) { \
+		_ret = pthread_cond_init(&(s).cond, &rp_cond_attr); \
+	} \
+	if (_ret == 0) { \
+		(s).n = _n; \
+		(s).m = _m; \
+	} \
+	_ret; \
+})
+#define rp_sem_timedwait(s, to_ns, e) ({ \
+	int _ret = pthread_mutex_lock(&(s).mutex); \
+	int _cret = 0; \
+	if (_ret == 0) { \
+		if ((s).n == 0) { \
+			struct timespec _to = clock_abs_ns_from_now(to_ns); \
+			_cret = pthread_cond_timedwait(&(s).cond, &(s).mutex, &_to); \
+			if (_cret == 0) { \
+				if ((s).n > 0) { \
+					--(s).n; \
+				} else { \
+					_cret = -1; \
+				} \
+			} \
+		} else { \
+			--(s).n; \
+		} \
+		_ret = pthread_mutex_unlock(&(s).mutex); \
+	} \
+	if (_ret == 0) { \
+		_ret = _cret; \
+	} \
+	_ret; \
+})
+#define rp_sem_rel(s) ({ \
+	int _ret = pthread_mutex_lock(&(s).mutex); \
+	int _cret = 0; \
+	if (_ret == 0) \
+	{ \
+		if ((s).n < (s).m) { \
+			++(s).n; \
+			_cret = pthread_cond_signal(&(s).cond); \
+		} else { \
+			_cret = -1; \
+		} \
+		_ret = pthread_mutex_unlock(&(s).mutex); \
+		if (_ret == 0) { \
+			_ret = _cret; \
+		} \
+	} \
+	_ret; \
+})
+#define rp_sem_close(s) ({ \
+	pthread_mutex_destroy(&(s).mutex); \
+    pthread_cond_destroy(&(s).cond); \
+})
+#else
 #define rp_sem_create(n, i, m) rp_sem_init(n, i)
 #define rp_sem_init(n, i) sem_init(&(n), 0, i)
 #define rp_sem_timedwait(n, to_ns, e) ({ \
@@ -131,6 +202,7 @@ extern pthread_condattr_t rp_cond_attr;
 })
 #define rp_sem_rel(n) sem_post(&(n))
 #define rp_sem_close(n) sem_destroy(&(n))
+#endif
 
 #define rp_cond_init(c) pthread_cond_init(&(c), &rp_cond_attr)
 #define rp_cond_timedwait(c, m, to_ns) ({ \
@@ -140,6 +212,19 @@ extern pthread_condattr_t rp_cond_attr;
 #define rp_cond_rel(c) pthread_cond_signal(&(c));
 #define rp_cond_close(c) pthread_cond_destroy(&(c))
 
+#ifdef PTHREAD_SEM_NON_MONOTONIC_CLOCK
+static struct timespec clock_abs_ns_from_now(long ns) {
+	struct timespec to;
+	if (clock_gettime(CLOCK_REALTIME, &to) != 0) {
+		return (struct timespec){ 0, 0 };
+	}
+	to.tv_nsec += ns;
+	to.tv_sec += to.tv_nsec / 1000000000;
+	to.tv_nsec %= 1000000000;
+
+	return to;
+}
+#else
 static struct timespec clock_monotonic_abs_ns_from_now(long ns) {
 	struct timespec to;
 	if (clock_gettime(CLOCK_MONOTONIC, &to) != 0) {
@@ -151,6 +236,7 @@ static struct timespec clock_monotonic_abs_ns_from_now(long ns) {
 
 	return to;
 }
+#endif
 
 #endif
 

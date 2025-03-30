@@ -98,7 +98,11 @@ UNUSED static void event_close(struct event_t *event) {
 UNUSED static int event_wait(struct event_t *event, int to_ns) {
     pthread_mutex_lock(&event->mutex);
     while (!event->flag) {
+#ifdef PTHREAD_SEM_NON_MONOTONIC_CLOCK
+        struct timespec to = clock_abs_ns_from_now(to_ns);
+#else
         struct timespec to = clock_monotonic_abs_ns_from_now(to_ns);
+#endif
         int res = pthread_cond_timedwait(&event->cond, &event->mutex, &to);
         if (res) {
             pthread_mutex_unlock(&event->mutex);
@@ -166,7 +170,11 @@ enum frame_buffer_status_t
     FBS_UPDATED_2,
 };
 
+#ifdef SDL2_SDL_H
+#include SDL2_SDL_H
+#else
 #include <SDL2/SDL.h>
+#endif
 #define SDL_WIN_FLAGS_DEFAULT (SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN)
 #define WIN_TITLE "NTRViewer-HR"
 

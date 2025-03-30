@@ -1,23 +1,50 @@
+ifneq ($(OS),Windows_NT)
+OS := $(shell uname -s)
+ARCH := $(shell uname -m)
+endif
+ifeq ($(OS),Darwin)
+CLANG := 1
+endif
+ifeq ($(CLANG),1)
+CC := clang
+CXX := clang++
+else
 CC := gcc
 CXX := g++
+endif
+
 CPPFLAGS := -Iinclude -DPL_STATIC
+ifeq ($(OS),Darwin)
+CPPFLAGS += $(shell sdl2-config --cflags) -DSDL2_SDL_H="<SDL.h>" -DSDL2_SDL_SYSWM_H="<SDL_syswm.h>" -DSDL2_SDL_OPENGL_H="<SDL_opengl.h>"
+endif
 ifeq ($(DEBUG),1)
 CFLAGS := -Og -g
 else
-CFLAGS := -flto=auto -Ofast -s -fno-strict-aliasing
+CFLAGS := -flto=auto -Ofast -fno-strict-aliasing
 CPPFLAGS += -DNDEBUG
 endif
-CFLAGS += -Wall -Wextra -flarge-source-files -MMD
+CFLAGS += -Wall -Wextra -MMD
+ifeq ($(CLANG),1)
+CFLAGS += -Wno-c2x-extensions -Wno-c++11-extensions -Wno-unknown-warning-option -Wno-comment
+else
+CFLAGS += -flarge-source-files
+endif
 EMBED_JPEG_TURBO := 1
 
 ifeq ($(OS),Windows_NT)
 LDLIBS := -Llib -static -lmingw32 -lSDL2main -lSDL2 -lm
 TARGET := ntrviewer.exe
-NASM := -DWIN64 -fwin64
+NASM := -DWIN64 -fwin64 -D__x86_64__
+else
+ifeq ($(OS),Darwin)
+LDLIBS := -Llib $(shell sdl2-config --libs)
 else
 LDLIBS := -static-libgcc -static-libstdc++ -Llib -Wl,-Bstatic -lSDL2
+endif
 TARGET := ntrviewer
-NASM := -DELF -felf64
+ifneq ($(ARCH),arm64)
+NASM := -DELF -felf64 -D__x86_64__
+endif
 endif
 
 ifneq ($(LITE),1)
@@ -52,7 +79,7 @@ endif
 CLA_SRC := $(wildcard clarity/18px/*.png) $(wildcard clarity/24px/*.png) $(wildcard clarity/27px/*.png) $(wildcard clarity/36px/*.png)
 CLA_INC := $(CLA_SRC:.png=.h)
 
-# LDFLAGS := -s
+LDFLAGS := -s
 
 RM := rm
 
@@ -66,10 +93,14 @@ JT12_OBJ := $(JT12_SRC:.c=.o) $(subst jpeg16,jpeg12,$(JT16_OBJ))
 JT8_SRC := $(wildcard jpeg_turbo/jpeg8/*.c)
 JT8_OBJ := $(JT8_SRC:.c=.o) $(subst jpeg12,jpeg8,$(JT12_OBJ))
 
+JT_SRC := $(wildcard jpeg_turbo/*.c)
+ifeq ($(ARCH),arm64)
+JT_SRC += $(wildcard jpeg_turbo/simd/arm/*.c) $(wildcard jpeg_turbo/simd/arm/aarch64/*.c)
+else
+JT_SRC += jpeg_turbo/simd/x86_64/jsimd.c
 JT_SRC_S := $(wildcard jpeg_turbo/simd/x86_64/*.asm)
 JT_OBJ_S := $(JT_SRC_S:.asm=.o)
-
-JT_SRC := $(wildcard jpeg_turbo/*.c) jpeg_turbo/simd/x86_64/jsimd.c
+endif
 JT_OBJ := $(JT16_OBJ) $(JT12_OBJ) $(JT8_OBJ) $(JT_SRC:.c=.o)
 
 CPPFLAGS += -DEMBED_JPEG_TURBO
@@ -84,7 +115,10 @@ NK_SRC := $(wildcard nuklear/*.c)
 NK_OBJ := $(NK_SRC:.c=.o)
 
 FEC_SRC := $(wildcard fecal/*.cpp)
-FEC_OBJ := $(FEC_SRC:.cpp=.o) fecal/gf256_ssse3.o fecal/gf256_avx2.o fecal/gf256_ssse3_avx2.o
+FEC_OBJ := $(FEC_SRC:.cpp=.o)
+ifneq ($(ARCH),arm64)
+FEC_OBJ += fecal/gf256_ssse3.o fecal/gf256_avx2.o fecal/gf256_ssse3_avx2.o
+endif
 
 TARGET_OBJ := main.o rp_syn.o ikcp.o $(GL_OBJ) $(JT_OBJ) $(JT_OBJ_S) $(FEC_OBJ) $(NK_OBJ)
 TARGET_DEP := $(TARGET_OBJ:.o=.d)
@@ -92,10 +126,7 @@ TARGET_DEP := $(TARGET_OBJ:.o=.d)
 $(TARGET): $(TARGET_OBJ)
 	$(CXX) $^ -o $@ $(CFLAGS) $(LDLIBS) $(LDFLAGS) -w
 
-CC_JT = $(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo -Ijpeg_turbo/include -Wno-stringop-overflow -Wno-unused-parameter -Wno-sign-compare
-
-jpeg_turbo/%.o: jpeg_turbo/%.c
-	$(CC_JT) -DBMP_SUPPORTED -DGIF_SUPPORTED -DPPM_SUPPORTED -Wno-clobbered
+CC_JT = $(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo -Ijpeg_turbo/src -Ijpeg_turbo/include -Wno-stringop-overflow -Wno-unused-parameter -Wno-sign-compare
 
 jpeg_turbo/jpeg8/%.o: jpeg_turbo/jpeg8/%.c
 	$(CC_JT) -DBMP_SUPPORTED -DPPM_SUPPORTED
@@ -115,17 +146,20 @@ jpeg_turbo/jpeg12/%.o: jpeg_turbo/jpeg16/%.c
 jpeg_turbo/jpeg16/%.o: jpeg_turbo/jpeg16/%.c
 	$(CC_JT) -DBITS_IN_JSAMPLE=16 -DGIF_SUPPORTED -DPPM_SUPPORTED
 
+jpeg_turbo/simd/arm/%.o: jpeg_turbo/simd/arm/%.c
+	$(CC_JT) -DNEON_INTRINSICS -Ijpeg_turbo/simd -Ijpeg_turbo/simd/aarch64
+
+jpeg_turbo/%.o: jpeg_turbo/%.c
+	$(CC_JT) -DBMP_SUPPORTED -DGIF_SUPPORTED -DPPM_SUPPORTED -Wno-clobbered
+
 %.o: %.asm
-	nasm $< -o $@ $(NASM) -D__x86_64__ -Ijpeg_turbo/simd/nasm -Ijpeg_turbo/simd
+	nasm $< -o $@ $(NASM) -Ijpeg_turbo/simd/nasm -Ijpeg_turbo/simd
 
 placebo.o: placebo.cpp
 	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-missing-field-initializers
 
 ntrviewer.res.o: win_manifest.rc win_manifest.xml
 	windres --input $< --output $@ --output-format=coff
-
-fecal/gf256.o: fecal/gf256.cpp
-	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-implicit-fallthrough -DGF256_TARGET_MOBILE
 
 fecal/gf256_ssse3.o: fecal/gf256.cpp
 	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-implicit-fallthrough -mssse3 -DGF_SUFFIX=_ssse3
@@ -136,8 +170,8 @@ fecal/gf256_avx2.o: fecal/gf256.cpp
 fecal/gf256_ssse3_avx2.o: fecal/gf256.cpp
 	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-implicit-fallthrough -mssse3 -mavx2 -DGF_SUFFIX=_ssse3_avx2
 
-fecal/FecalDecoder.o: fecal/FecalDecoder.cpp
-	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-restrict
+fecal/%.o: fecal/%.cpp
+	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-implicit-fallthrough -Wno-restrict -DGF256_TARGET_MOBILE
 
 nuklear/%.o: nuklear/%.c
 	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-unused-function -std=c89
@@ -164,5 +198,5 @@ clarity/%.h: clarity/%.png
 
 clean:
 	-$(RM) $(TARGET)
-	-$(RM) *.o jpeg_turbo/jpeg8/*.o jpeg_turbo/jpeg12/*.o jpeg_turbo/jpeg16/*.o jpeg_turbo/*.o jpeg_turbo/simd/x86_64/*.o fecal/*.o nuklear/*.o
-	-$(RM) *.d jpeg_turbo/jpeg8/*.d jpeg_turbo/jpeg12/*.d jpeg_turbo/jpeg16/*.d jpeg_turbo/*.d jpeg_turbo/simd/x86_64/*.d fecal/*.d nuklear/*.d
+	-$(RM) *.o jpeg_turbo/jpeg8/*.o jpeg_turbo/jpeg12/*.o jpeg_turbo/jpeg16/*.o jpeg_turbo/*.o jpeg_turbo/simd/x86_64/*.o jpeg_turbo/simd/arm/*.o jpeg_turbo/simd/arm/aarch64/*.o fecal/*.o nuklear/*.o
+	-$(RM) *.d jpeg_turbo/jpeg8/*.d jpeg_turbo/jpeg12/*.d jpeg_turbo/jpeg16/*.d jpeg_turbo/*.d jpeg_turbo/simd/x86_64/*.d jpeg_turbo/simd/arm/*.d jpeg_turbo/simd/arm/aarch64/*.d fecal/*.d nuklear/*.d

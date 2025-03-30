@@ -16,7 +16,9 @@ pthread_condattr_t rp_cond_attr;
 
 void rp_syn_startup(void) {
 	pthread_condattr_init(&rp_cond_attr);
+#ifndef PTHREAD_SEM_NON_MONOTONIC_CLOCK
 	pthread_condattr_setclock(&rp_cond_attr, CLOCK_MONOTONIC);
+#endif
 }
 #endif
 
@@ -86,7 +88,7 @@ int rp_syn_rel(struct rp_syn_comp_func_t *syn1, void *pos) {
 	// fprintf(stderr, "rel pos %d\n", pos_head);
 	int res;
 	if ((res = rp_sem_rel(syn1->sem))) {
-		fprintf(stderr, "rp_syn_rel rel sem error");
+		fprintf(stderr, "rp_syn_rel rel sem error\n");
 	}
 	return res;
 }
@@ -123,11 +125,11 @@ int rp_syn_rel1(struct rp_syn_comp_func_t *syn1, void *pos) {
 	syn1->pos[pos_head] = pos;
 	syn1->pos_head = (pos_head + 1) % syn1->count;
 	if ((res = rp_lock_rel(syn1->mutex))) {
-		fprintf(stderr, "rp_syn_rel1 rel mutex error");
+		fprintf(stderr, "rp_syn_rel1 rel mutex error\n");
 		return res;
 	}
 	if ((res = rp_sem_rel(syn1->sem))) {
-		fprintf(stderr, "rp_syn_rel1 rel sem error");
+		fprintf(stderr, "rp_syn_rel1 rel sem error\n");
 		return res;
 	}
 	return 0;

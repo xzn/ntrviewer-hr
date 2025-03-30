@@ -128,10 +128,10 @@ void rp_buffer_destroy(void) {
     }
 }
 
-atomic_int frame_rate_decoded_tracker[SCREEN_COUNT];
-atomic_int frame_rate_displayed_tracker[SCREEN_COUNT];
-atomic_int frame_size_tracker[SCREEN_COUNT];
-atomic_int delay_between_packet_tracker[SCREEN_COUNT];
+int frame_rate_decoded_tracker[SCREEN_COUNT];
+int frame_rate_displayed_tracker[SCREEN_COUNT];
+int frame_size_tracker[SCREEN_COUNT];
+int delay_between_packet_tracker[SCREEN_COUNT];
 
 static bool jpeg_decode_sem_inited;
 static bool jpeg_decode_queue_inited;
@@ -207,8 +207,8 @@ static int queue_decode_kcp(int w, int queue_w) {
     return 0;
 }
 
-atomic_int frame_fully_received_tracker;
-atomic_int frame_lost_tracker;
+int frame_fully_received_tracker;
+int frame_lost_tracker;
 static uint8_t last_decoded_frame_id[SCREEN_COUNT];
 
 #ifdef EMBED_JPEG_TURBO

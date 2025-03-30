@@ -67,7 +67,7 @@
 
 /******************************** Compressor *********************************/
 
-/* TurboJPEG 3+ */
+/* TurboJPEG 3.0+ */
 DLLEXPORT int GET_NAME(tj3Compress, BITS_IN_JSAMPLE)
   (tjhandle handle, const _JSAMPLE *srcBuf, int width, int pitch, int height,
    int pixelFormat, unsigned char **jpegBuf, size_t *jpegSize)
@@ -104,15 +104,22 @@ DLLEXPORT int GET_NAME(tj3Compress, BITS_IN_JSAMPLE)
   cinfo->image_width = width;
   cinfo->image_height = height;
   cinfo->data_precision = BITS_IN_JSAMPLE;
+#if BITS_IN_JSAMPLE == 8
+  if (this->lossless && this->precision >= 2 &&
+      this->precision <= BITS_IN_JSAMPLE)
+#else
+  if (this->lossless && this->precision >= BITS_IN_JSAMPLE - 3 &&
+      this->precision <= BITS_IN_JSAMPLE)
+#endif
+    cinfo->data_precision = this->precision;
 
   setCompDefaults(this, pixelFormat);
-  if (this->noRealloc) {
-    alloc = FALSE;
-    *jpegSize = tj3JPEGBufSize(width, height, this->subsamp);
-  }
+  if (this->noRealloc) alloc = FALSE;
   jpeg_mem_dest_tj(cinfo, jpegBuf, jpegSize, alloc);
 
   jpeg_start_compress(cinfo, TRUE);
+  if (this->iccBuf != NULL && this->iccSize != 0)
+    jpeg_write_icc_profile(cinfo, this->iccBuf, (unsigned int)this->iccSize);
   for (i = 0; i < height; i++) {
     if (this->bottomUp)
       row_pointer[i] = (_JSAMPROW)&srcBuf[(height - i - 1) * (size_t)pitch];
@@ -137,7 +144,7 @@ bailout:
 
 /******************************* Decompressor ********************************/
 
-/* TurboJPEG 3+ */
+/* TurboJPEG 3.0+ */
 DLLEXPORT int GET_NAME(tj3Decompress, BITS_IN_JSAMPLE)
   (tjhandle handle, const unsigned char *jpegBuf, size_t jpegSize,
    _JSAMPLE *dstBuf, int pitch, int pixelFormat)
@@ -282,7 +289,7 @@ bailout:
 
 /*************************** Packed-Pixel Image I/O **************************/
 
-/* TurboJPEG 3+ */
+/* TurboJPEG 3.0+ */
 DLLEXPORT _JSAMPLE *GET_NAME(tj3LoadImage, BITS_IN_JSAMPLE)
   (tjhandle handle, const char *filename, int *width, int align, int *height,
    int *pixelFormat)
@@ -342,6 +349,13 @@ DLLEXPORT _JSAMPLE *GET_NAME(tj3LoadImage, BITS_IN_JSAMPLE)
       THROW("Could not initialize bitmap loader");
     invert = !this->bottomUp;
   } else if (tempc == 'P') {
+#if BITS_IN_JSAMPLE == 8
+    if (this->precision >= 2 && this->precision <= BITS_IN_JSAMPLE)
+#else
+    if (this->precision >= BITS_IN_JSAMPLE - 3 &&
+        this->precision <= BITS_IN_JSAMPLE)
+#endif
+      cinfo->data_precision = this->precision;
     if ((src = _jinit_read_ppm(cinfo)) == NULL)
       THROW("Could not initialize PPM loader");
     invert = this->bottomUp;
@@ -424,7 +438,7 @@ bailout:
 }
 
 
-/* TurboJPEG 3+ */
+/* TurboJPEG 3.0+ */
 DLLEXPORT int GET_NAME(tj3SaveImage, BITS_IN_JSAMPLE)
   (tjhandle handle, const char *filename, const _JSAMPLE *buffer, int width,
    int pitch, int height, int pixelFormat)
@@ -484,6 +498,13 @@ DLLEXPORT int GET_NAME(tj3SaveImage, BITS_IN_JSAMPLE)
     dinfo->Y_density = (UINT16)this->yDensity;
     dinfo->density_unit = (UINT8)this->densityUnits;
   } else {
+#if BITS_IN_JSAMPLE == 8
+    if (this->precision >= 2 && this->precision <= BITS_IN_JSAMPLE)
+#else
+    if (this->precision >= BITS_IN_JSAMPLE - 3 &&
+        this->precision <= BITS_IN_JSAMPLE)
+#endif
+      dinfo->data_precision = this->precision;
     if ((dst = _jinit_write_ppm(dinfo)) == NULL)
       THROW("Could not initialize PPM writer");
     invert = this->bottomUp;

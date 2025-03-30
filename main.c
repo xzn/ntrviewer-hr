@@ -44,7 +44,11 @@ void itimeofday(int64_t *sec, int64_t *usec)
         *usec = (int64_t)((qpc % qpc_freq) * 1000000 / qpc_freq);
 #else
     struct timespec ts;
+#ifdef PTHREAD_SEM_NON_MONOTONIC_CLOCK
+    if (clock_gettime(CLOCK_REALTIME, &ts) < 0)
+#else
     if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0)
+#endif
     {
         program_running = 0;
         *sec = *usec = 0;
@@ -677,6 +681,7 @@ skip_evt:
         }
     }
 
+    update_game_controller();
     update_bottom_screen_cursor();
 
     view_mode_t view_mode = __atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED);
@@ -766,6 +771,7 @@ static void main_ntr(void) {
     }
 
     rp_lock_init(sdl_cursors_lock);
+    rp_lock_init(sdl_game_controller_lock);
     rp_lock_init(ui_nk_lock);
     thread_t window_top_thread = 0;
     thread_t window_bot_thread = 0;
@@ -807,6 +813,7 @@ join_win_bot:
 join_win_top:
     }
     rp_lock_close(ui_nk_lock);
+    rp_lock_close(sdl_game_controller_lock);
     rp_lock_close(sdl_cursors_lock);
 
 #ifndef _WIN32
@@ -863,11 +870,11 @@ static void main_windows(void) {
 
     event_init(&update_bottom_screen_evt);
 
-    SDL_ShowWindow(ui_sdl_win[SCREEN_TOP]);
     ui_view_mode_update(ui_view_mode);
     for (int i = 0; i < SCREEN_COUNT; ++i) {
         ui_window_size_update(i);
     }
+    SDL_ShowWindow(ui_sdl_win[SCREEN_TOP]);
 
     nk_backend_font_init();
 
