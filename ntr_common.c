@@ -432,6 +432,96 @@ fail:
 }
 #else
 
+#ifdef __APPLE__
+#define READ_END 0
+#define WRITE_END 1
+static bool detecting_3ds;
+
+void *do_ntr_detect_3ds_ip(void *) {
+    pid_t pid;
+    int fd[2];
+
+    if (pipe(fd) < 0) {
+        goto fail;
+    }
+    pid = fork();
+    if (pid == -1) {
+        goto fail_fork;
+    }
+    if (pid == 0) {
+        // child
+        if (close(fd[READ_END]) == -1) {
+            goto fail_child_close;
+        }
+        if (dup2(fd[WRITE_END], STDOUT_FILENO) == -1) {
+            goto fail_child_close;
+        }
+        if (close(fd[WRITE_END]) == -1) {
+            goto fail_child;
+        }
+#define ARP_CMD "arp"
+#define ARP_ARGS "-n", "-a", NULL
+        execlp(ARP_CMD, ARP_ARGS);
+        err_log("execlp %s failed: %d\n", ARP_CMD, errno);
+        exit(-2);
+
+fail_child_close:
+        close(fd[WRITE_END]);
+fail_child:
+        exit(-1);
+    } else {
+        // parent
+        if (close(fd[WRITE_END]) == -1) {
+            goto fail_parent;
+        }
+
+        FILE *file = fdopen(fd[READ_END], "r");
+        if (!file) {
+            goto fail_parent;
+        }
+
+        char *line = NULL;
+        size_t size = 0;
+        ssize_t nread = 0;
+        while ((nread = getline(&line, &size, file)) != -1) {
+            char *next_tok = line;
+            char *tok = NULL;
+#define ARP_MAC_FIELD_I (4)
+            for (int i = 0; i < ARP_MAC_FIELD_I; ++i) {
+                tok = strsep(&next_tok, " ");
+            }
+            if (!tok) {
+                continue;
+            }
+            err_log("%s\n", tok);
+        }
+        free(line);
+
+fail_parent:
+        close(fd[READ_END]);
+    }
+
+fail_fork:
+    close(fd[READ_END]);
+    close(fd[WRITE_END]);
+fail:
+    __atomic_clear(&detecting_3ds, __ATOMIC_RELAXED);
+
+    pthread_exit(0);
+}
+
+void ntr_detect_3ds_ip(void) {
+    if (__atomic_test_and_set(&detecting_3ds, __ATOMIC_RELAXED)) {
+        return;
+    }
+
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, do_ntr_detect_3ds_ip, NULL) != 0) {
+        err_log("pthread_create failed\n");
+        __atomic_clear(&detecting_3ds, __ATOMIC_RELAXED);
+    }
+}
+#else
 // Taken from stackexchange
 // https://codereview.stackexchange.com/a/58107
 #include <stdio.h>
@@ -556,6 +646,7 @@ void ntr_detect_3ds_ip(void)
     ntr_selected_ip = detected_ip_count ? NTR_AUTO_IP_PRE_COUNT : 0;
     memcpy(ntr_ip_octet, ntr_auto_ip_octet_list[ntr_selected_ip], NTR_IP_OCTET_SIZE);
 }
+#endif
 
 // Taken from stackoverflow
 // https://stackoverflow.com/a/12131131
