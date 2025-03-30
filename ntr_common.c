@@ -16,7 +16,7 @@ int socket_shutdown(void) {
 }
 #define NTR_IP_NAME_LEN_MAX (32)
 #else
-#include <net/if_var.h>
+#include <net/if.h>
 #define NTR_IP_NAME_LEN_MAX (16 + IFNAMSIZ + 4)
 #endif
 
@@ -555,7 +555,6 @@ void ntr_detect_3ds_ip(void)
 // https://stackoverflow.com/a/12131131
 #include <ifaddrs.h>
 #include <netdb.h>
-#include <net/if.h>
 
 void ntr_get_adapter_list(void)
 {

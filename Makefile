@@ -39,7 +39,7 @@ else
 ifeq ($(OS),Darwin)
 LDLIBS := -Llib $(shell pkg-config sdl3 --libs)
 else
-LDLIBS := -static-libgcc -static-libstdc++ -Llib -Wl,-Bstatic -lSDL2
+LDLIBS := -static-libgcc -static-libstdc++ -Llib -Wl,-Bstatic -lSDL3
 endif
 TARGET := ntrviewer
 ifneq ($(ARCH),arm64)

@@ -42,7 +42,7 @@ int ui_common_sdl_init(void) {
     SDL_SetHint(SDL_HINT_RENDER_DRIVER, "direct3d11");
     SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, "direct3d11");
 #elif !defined(__APPLE__)
-    SDL_SetHint(SDL_HINT_VIDEODRIVER, "wayland");
+    SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland");
 #endif
 
     if (opt_flag_angle) {
