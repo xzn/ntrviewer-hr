@@ -4,7 +4,6 @@
 #ifdef _WIN32
 #include "ui_compositor_csc.h"
 #include "glad/glad_wgl.h"
-#include <SDL2/SDL_syswm.h>
 #endif
 #include "nuklear_sdl_gl3.h"
 #include "nuklear_sdl_gles2.h"
@@ -603,13 +602,9 @@ static int ogl_renderer_init(void) {
     if (is_renderer_csc()) {
 #ifdef _WIN32
         for (int i = 0; i < SCREEN_COUNT; ++i) {
-            SDL_SysWMinfo wmInfo;
-
-            SDL_VERSION(&wmInfo.version);
-            SDL_GetWindowWMInfo(ogl_win[i], &wmInfo);
-
-            ogl_hwnd[i] = wmInfo.info.win.window;
-            ogl_hdc[i] = wmInfo.info.win.hdc;
+            SDL_PropertiesID id = SDL_GetWindowProperties(ogl_win[i]);
+            ogl_hwnd[i] = (HWND)SDL_GetPointerProperty(id, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+            ogl_hdc[i] = (HDC)SDL_GetPointerProperty(id, SDL_PROP_WINDOW_WIN32_HDC_POINTER, NULL);
         }
 
         if (!gladLoadWGLLoader((GLADloadproc)GL_GetProcAddress, ogl_hdc[SCREEN_TOP])) {

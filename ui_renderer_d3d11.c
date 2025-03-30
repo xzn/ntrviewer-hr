@@ -13,6 +13,7 @@ static struct nk_context *nk_ctx;
 #include "nuklear_d3d11.h"
 
 #include <versionhelpers.h>
+#include <math.h>
 
 #define MAX_VERTEX_BUFFER 512 * 1024
 #define MAX_INDEX_BUFFER 128 * 1024
