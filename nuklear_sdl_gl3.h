@@ -18,6 +18,8 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_opengl.h>
 
+#include <stddef.h>
+
 NK_API struct nk_context*   nk_sdl_gl3_init(SDL_Window *win);
 NK_API void                 nk_sdl_gl3_font_stash_begin(struct nk_font_atlas **atlas);
 NK_API void                 nk_sdl_gl3_font_stash_end(void);
@@ -370,10 +372,10 @@ nk_sdl_gl3_handle_grab(void)
 {
     struct nk_context *ctx = &sdl.ctx;
     if (ctx->input.mouse.grab) {
-        SDL_SetRelativeMouseMode(true);
+        SDL_SetWindowRelativeMouseMode(sdl.win, true);
     } else if (ctx->input.mouse.ungrab) {
         /* better support for older SDL by setting mode first; causes an extra mouse motion event */
-        SDL_SetRelativeMouseMode(false);
+        SDL_SetWindowRelativeMouseMode(sdl.win, false);
         SDL_WarpMouseInWindow(sdl.win, (int)ctx->input.mouse.prev.x, (int)ctx->input.mouse.prev.y);
     } else if (ctx->input.mouse.grabbed) {
         ctx->input.mouse.pos.x = ctx->input.mouse.prev.x;
@@ -393,7 +395,7 @@ nk_sdl_gl3_handle_event(SDL_Event *evt)
             {
                 int down = evt->type == SDL_EVENT_KEY_DOWN;
                 const int ctrl_down = SDL_GetModState() & (SDL_KMOD_LCTRL | SDL_KMOD_RCTRL);
-                switch(evt->key.keysym.sym)
+                switch(evt->key.key)
                 {
                     case SDLK_RSHIFT: /* RSHIFT & LSHIFT share same routine */
                     case SDLK_LSHIFT:    nk_input_key(ctx, NK_KEY_SHIFT, down); break;
