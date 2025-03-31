@@ -29,6 +29,7 @@ CFLAGS += -Wno-c2x-extensions -Wno-c++11-extensions -Wno-unknown-warning-option 
 else
 CFLAGS += -flarge-source-files -Wno-unknown-pragmas
 endif
+CFLAGS += -Wno-missing-field-initializers
 EMBED_JPEG_TURBO := 1
 
 ifeq ($(OS),Windows_NT)
@@ -166,7 +167,7 @@ jpeg_turbo/%.o: jpeg_turbo/%.c
 	nasm $< -o $@ $(NASM) -Ijpeg_turbo/simd/nasm -Ijpeg_turbo/simd
 
 placebo.o: placebo.cpp
-	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-missing-field-initializers -std=c++17
+	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -std=c++17
 
 rashader.o: rashader.cpp
 	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -std=c++17
@@ -198,13 +199,13 @@ nuklear/stb_%.o: nuklear/stb_%.c
 libSTB_%.o: libSTB_%.c
 	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-unused-function
 
-main.o: main.c $(CLA_INC)
+main.o: main.c
 	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -D_GNU_SOURCE
 
 vk_mem_alloc.o: vk_mem_alloc.cpp
-	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -std=c++20 -Wno-nullability-completeness -Wno-unused-parameter -Wno-missing-field-initializers -Wno-unused-private-field -Wno-unused-variable
+	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -std=c++20 -Wno-nullability-completeness -Wno-unused-parameter -Wno-unused-private-field -Wno-unused-variable
 
-%.o: %.c
+%.o: %.c $(CLA_INC)
 	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -D_GNU_SOURCE
 
 clarity/%.h: clarity/%.png
