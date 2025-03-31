@@ -89,6 +89,7 @@ struct vulkan_demo {
     VkDeviceMemory *overlay_image_memories;
 
     VkRenderPass render_pass;
+    VkRenderPass cursor_render_pass;
     VkFramebuffer *framebuffers;
     VkDescriptorSetLayout descriptor_set_layout;
     VkDescriptorPool descriptor_pool;
@@ -96,6 +97,7 @@ struct vulkan_demo {
     VkPipelineLayout pipeline_layout;
     VkPipeline pipeline;
     VkPipeline data_pipeline;
+    VkPipeline cursor_pipeline;
     VkCommandPool command_pool;
     VkCommandBuffer *command_buffers;
     VkSemaphore image_available;
@@ -1043,6 +1045,24 @@ static bool create_render_pass(struct vulkan_demo *demo) {
         err_log("vkCreateRenderPass failed: %d\n", result);
         return false;
     }
+
+    attachment.format = VK_FORMAT;
+    attachment.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+
+    dependency.srcSubpass = 0;
+    dependency.dstSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    dependency.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+    result = vkCreateRenderPass(demo->device, &render_pass_info, NULL,
+                                &demo->cursor_render_pass);
+    if (result != VK_SUCCESS) {
+        err_log("vkCreateRenderPass cursor failed: %d\n", result);
+        return false;
+    }
+
     return true;
 }
 
@@ -1642,6 +1662,16 @@ static bool create_graphics_pipeline(struct vulkan_demo *demo) {
         goto cleanup;
     }
 
+    shader_stages[1].module = frag_shader_module;
+    pipeline_info.renderPass = demo->cursor_render_pass;
+
+    result = vkCreateGraphicsPipelines(demo->device, NULL, 1, &pipeline_info,
+                                       NULL, &demo->cursor_pipeline);
+    if (result != VK_SUCCESS) {
+        err_log("vkCreateGraphicsPipelines failed: %d\n", result);
+        goto cleanup;
+    }
+
     ret = true;
 cleanup:
     if (data_frag_shader_module) {
@@ -1777,8 +1807,10 @@ static bool destroy_swap_chain_related_resources(struct vulkan_demo *demo) {
     }
     vkDestroySwapchainKHR(demo->device, demo->swap_chain, NULL);
     vkDestroyRenderPass(demo->device, demo->render_pass, NULL);
+    vkDestroyRenderPass(demo->device, demo->cursor_render_pass, NULL);
     vkDestroyPipeline(demo->device, demo->pipeline, NULL);
     vkDestroyPipeline(demo->device, demo->data_pipeline, NULL);
+    vkDestroyPipeline(demo->device, demo->cursor_pipeline, NULL);
     vkDestroyPipelineLayout(demo->device, demo->pipeline_layout, NULL);
     return true;
 }
@@ -2122,6 +2154,7 @@ void ui_renderer_vk_main(int ctx_top_bot, view_mode_t view_mode, float bg[4]) {
     memset(&command_buffer_begin_info, 0, sizeof(VkCommandBufferBeginInfo));
     command_buffer_begin_info.sType =
         VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    command_buffer_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
     command_buffer = demo->command_buffers[demo->image_index];
     result = vkBeginCommandBuffer(command_buffer, &command_buffer_begin_info);
@@ -2295,7 +2328,7 @@ static bool vk_render_create(struct vulkan_demo *demo, VmaAllocator vma, struct 
     return true;
 }
 
-static bool vk_render_dst_create(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_dst_t *render, int width, int height) {
+static bool vk_render_dst_create(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_dst_t *render, VkRenderPass render_pass, int width, int height) {
     VkResult result;
 
     if (width != (int)render->width || height != (int)render->height) {
@@ -2323,6 +2356,7 @@ static bool vk_render_dst_create(struct vulkan_demo *demo, VmaAllocator vma, str
     img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     VmaAllocationCreateInfo alloc_info = {};
+    alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
     alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
 
     if (!render->staging.img) {
@@ -2360,6 +2394,20 @@ static bool vk_render_dst_create(struct vulkan_demo *demo, VmaAllocator vma, str
         }
     }
     if (!render->dst_view.fb) {
+        VkFramebufferCreateInfo fb_info = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+        fb_info.renderPass = render_pass;
+        fb_info.attachmentCount = 1;
+        fb_info.width = width;
+        fb_info.height = height;
+        fb_info.layers = 1;
+        fb_info.pAttachments = &render->dst_view.view;
+
+        result = vkCreateFramebuffer(demo->device, &fb_info, NULL,
+                                     &render->dst_view.fb);
+        if (result != VK_SUCCESS) {
+            err_log("vkCreateFramebuffer dst_view failed: %d\n", result);
+            return false;
+        }
     }
 
     render->width  = width;
@@ -2368,12 +2416,105 @@ static bool vk_render_dst_create(struct vulkan_demo *demo, VmaAllocator vma, str
     return true;
 }
 
+static void vk_render_upload_and_gen_mip_maps(VkCommandBuffer cmd, VmaAllocator vma, struct vk_render_src_t *render, const void *data, int width, int height) {
+    VkResult result;
+
+    VkImageSubresourceRange range = {};
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = 1;
+    range.layerCount = 1;
+
+    VkImageMemoryBarrier barrier[BARRIER_COUNT] = {};
+    barrier[BARRIER_DST].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier[BARRIER_DST].image = render->staging.img;
+    barrier[BARRIER_DST].subresourceRange = range;
+    barrier[BARRIER_DST].srcAccessMask = 0;
+    barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+    barrier[BARRIER_DST].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier[BARRIER_DST].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 0, NULL, 1, &barrier[BARRIER_DST]);
+
+    result = vmaCopyMemoryToAllocation(vma, data, render->staging.alloc, 0, width * height * GL_CHANNELS_N);
+    if (result != VK_SUCCESS) {
+        err_log("vmaCopyMemoryToAllocation staging failed: %d\n", (int)result);
+        return;
+    }
+
+    barrier[BARRIER_SRC].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier[BARRIER_SRC].image = render->staging.img;
+    barrier[BARRIER_SRC].subresourceRange = range;
+    barrier[BARRIER_SRC].srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+    barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier[BARRIER_SRC].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier[BARRIER_SRC].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier[BARRIER_DST].image = render->src.img;
+    barrier[BARRIER_DST].subresourceRange = range;
+    barrier[BARRIER_DST].srcAccessMask = 0;
+    barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, BARRIER_COUNT, barrier);
+
+    VkImageSubresourceLayers layer = {};
+    layer.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    layer.layerCount = 1;
+    VkOffset3D offset = { 0, 0, 0 };
+    VkExtent3D extent = { width, height, 1 };
+    VkImageCopy region = {};
+    region.srcSubresource = layer;
+    region.srcOffset = offset;
+    region.dstSubresource = layer;
+    region.dstOffset = offset;
+    region.extent = extent;
+
+    vkCmdCopyImage(cmd, render->staging.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, render->src.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    for (uint32_t i = 1; i < render->src_mip; ++i) {
+        VkImageBlit blt = {};
+        blt.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blt.srcSubresource.layerCount = 1;
+        blt.srcSubresource.mipLevel = i - 1;
+        blt.srcOffsets[1].x = MAX((uint32_t)width >> (i - 1), 1);
+        blt.srcOffsets[1].y = MAX((uint32_t)height >> (i - 1), 1);
+        blt.srcOffsets[1].z = 1;
+        blt.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blt.dstSubresource.layerCount = 1;
+        blt.dstSubresource.mipLevel = i;
+        blt.dstOffsets[1].x = MAX((uint32_t)width >> i, 1);
+        blt.dstOffsets[1].y = MAX((uint32_t)height >> i, 1);
+        blt.dstOffsets[1].z = 1;
+
+        barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier[BARRIER_SRC].image = render->src.img;
+        barrier[BARRIER_SRC].subresourceRange = range;
+        barrier[BARRIER_SRC].subresourceRange.baseMipLevel = i - 1;
+        barrier[BARRIER_SRC].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier[BARRIER_DST].image = render->src.img;
+        barrier[BARRIER_DST].subresourceRange = range;
+        barrier[BARRIER_DST].subresourceRange.baseMipLevel = i;
+        barrier[BARRIER_DST].srcAccessMask = 0;
+        barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, BARRIER_COUNT, barrier);
+        vkCmdBlitImage(cmd, render->src.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, render->src.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blt, VK_FILTER_LINEAR);
+    }
+
+    barrier[BARRIER_SRC].subresourceRange.baseMipLevel = render->src_mip - 1;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier[BARRIER_SRC]);
+}
+
 void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode) {
     int i = ctx_top_bot;
     struct vulkan_demo *demo = &vk_demo[i];
     VkCommandBuffer cmd = demo->command_buffers[demo->image_index];
     struct vk_render_src_t *render = &vk_render[i][screen_top_bot];
-    VkResult result;
 
     if (!vk_render_create(demo, vma[i], render, height, width))
         return;
@@ -2387,90 +2528,7 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
     range_mip.levelCount = render->src_mip;
 
     if (data) {
-        VkImageMemoryBarrier barrier[BARRIER_COUNT] = {};
-        barrier[BARRIER_DST].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        barrier[BARRIER_DST].image = render->staging.img;
-        barrier[BARRIER_DST].subresourceRange = range;
-        barrier[BARRIER_DST].srcAccessMask = 0;
-        barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-        barrier[BARRIER_DST].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier[BARRIER_DST].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 0, NULL, 1, &barrier[BARRIER_DST]);
-
-        result = vmaCopyMemoryToAllocation(vma[i], data, render->staging.alloc, 0, width * height * GL_CHANNELS_N);
-        if (result != VK_SUCCESS) {
-            err_log("vmaCopyMemoryToAllocation staging failed: %d\n", (int)result);
-            return;
-        }
-
-        barrier[BARRIER_SRC].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barrier[BARRIER_SRC].image = render->staging.img;
-        barrier[BARRIER_SRC].subresourceRange = range;
-        barrier[BARRIER_SRC].srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-        barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        barrier[BARRIER_SRC].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier[BARRIER_SRC].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier[BARRIER_DST].image = render->src.img;
-        barrier[BARRIER_DST].subresourceRange = range;
-        barrier[BARRIER_DST].srcAccessMask = 0;
-        barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, BARRIER_COUNT, barrier);
-
-        VkImageSubresourceLayers layer = {};
-        layer.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        layer.layerCount = 1;
-        VkOffset3D offset = { 0, 0, 0 };
-        VkExtent3D extent = { height, width, 1 };
-        VkImageCopy region = {};
-        region.srcSubresource = layer;
-        region.srcOffset = offset;
-        region.dstSubresource = layer;
-        region.dstOffset = offset;
-        region.extent = extent;
-
-        vkCmdCopyImage(cmd, render->staging.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, render->src.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-        for (uint32_t i = 1; i < render->src_mip; ++i) {
-            VkImageBlit blt = {};
-            blt.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            blt.srcSubresource.layerCount = 1;
-            blt.srcSubresource.mipLevel = i - 1;
-            blt.srcOffsets[1].x = MAX((uint32_t)height >> (i - 1), 1);
-            blt.srcOffsets[1].y = MAX((uint32_t)width >> (i - 1), 1);
-            blt.srcOffsets[1].z = 1;
-            blt.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            blt.dstSubresource.layerCount = 1;
-            blt.dstSubresource.mipLevel = i;
-            blt.dstOffsets[1].x = MAX((uint32_t)height >> i, 1);
-            blt.dstOffsets[1].y = MAX((uint32_t)width >> i, 1);
-            blt.dstOffsets[1].z = 1;
-
-            barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            barrier[BARRIER_SRC].image = render->src.img;
-            barrier[BARRIER_SRC].subresourceRange = range;
-            barrier[BARRIER_SRC].subresourceRange.baseMipLevel = i - 1;
-            barrier[BARRIER_SRC].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            barrier[BARRIER_DST].image = render->src.img;
-            barrier[BARRIER_DST].subresourceRange = range;
-            barrier[BARRIER_DST].subresourceRange.baseMipLevel = i;
-            barrier[BARRIER_DST].srcAccessMask = 0;
-            barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, BARRIER_COUNT, barrier);
-            vkCmdBlitImage(cmd, render->src.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, render->src.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blt, VK_FILTER_LINEAR);
-        }
-
-        barrier[BARRIER_SRC].subresourceRange.baseMipLevel = render->src_mip - 1;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier[BARRIER_SRC]);
+        vk_render_upload_and_gen_mip_maps(cmd, vma[i], render, data, height, width);
     }
 
     struct vk_draw_t *draw = &vk_draw[i][vk_draw_count[i]];
@@ -2644,6 +2702,7 @@ void ui_renderer_vk_present(int ctx_top_bot) {
 
 static struct vk_render_src_t cursor_src;
 static struct vk_render_dst_t cursor_dst;
+
 void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale) {
     if (channels != GL_CHANNELS_N) {
         return;
@@ -2651,7 +2710,6 @@ void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int wid
     bool fail = true;
 
     int i = SCREEN_TOP;
-    int screen_top_bot = i;
 
     int target_width = roundf(width * scale);
     int target_height = roundf(height * scale);
@@ -2683,10 +2741,160 @@ void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int wid
         }
     }
 
+    VkResult result;
+    result = vkWaitForFences(demo->device, 1, &demo->render_fence, VK_TRUE, UINT64_MAX);
+    if (result != VK_SUCCESS) {
+        err_log("vkWaitForFences failed: %d\n", result);
+        goto fail;
+    }
+
+    result = vkResetFences(demo->device, 1, &demo->render_fence);
+    if (result != VK_SUCCESS) {
+        err_log("vkResetFences failed: %d\n", result);
+        goto fail;
+    }
+
     if (!vk_render_create(demo, vma[i], &cursor_src, width, height)) {
         goto fail;
     }
-    if (!vk_render_dst_create(demo, vma[i], &cursor_dst, target_width, target_height)) {
+
+    if (!vk_render_dst_create(demo, vma[i], &cursor_dst, demo->cursor_render_pass, target_width, target_height)) {
+        goto fail;
+    }
+
+    // NOTE: we are using the same fence every frame anyway so we only really need one command buffer;
+    // in case we change to one fence per swap chain image, make sure to change this to use its own command buffer
+    // as well.
+    VkCommandBuffer cmd = demo->command_buffers[demo->image_index];
+    VkCommandBufferBeginInfo cmd_beg_info = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+    cmd_beg_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    result = vkBeginCommandBuffer(cmd, &cmd_beg_info);
+
+    if (result != VK_SUCCESS) {
+        err_log("vkBeginCommandBuffer failed: %d\n", result);
+        goto fail;
+    }
+
+    vk_render_upload_and_gen_mip_maps(cmd, vma[i], &cursor_src, base2, width, height);
+
+    VkImageSubresourceRange range = {};
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = 1;
+    range.layerCount = 1;
+
+    VkImageSubresourceRange range_mip = range;
+    range_mip.levelCount = cursor_src.src_mip;
+
+    VkImageMemoryBarrier barrier[BARRIER_COUNT] = {};
+    barrier[BARRIER_SRC].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier[BARRIER_SRC].image = cursor_src.src.img;
+    barrier[BARRIER_SRC].subresourceRange = range_mip;
+    barrier[BARRIER_SRC].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier[BARRIER_SRC].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier[BARRIER_SRC].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier[BARRIER_DST].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrier[BARRIER_DST].image = cursor_dst.dst.img;
+    barrier[BARRIER_DST].subresourceRange = range;
+    barrier[BARRIER_DST].srcAccessMask = 0;
+    barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier[BARRIER_DST].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier[BARRIER_DST].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, NULL, 0, NULL, BARRIER_COUNT,
+        barrier);
+
+    VkClearValue clear_color = {};
+    VkRenderPassBeginInfo render_pass_info = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+    render_pass_info.renderPass = demo->cursor_render_pass;
+    render_pass_info.framebuffer = cursor_dst.dst_view.fb;
+    render_pass_info.renderArea.offset.x = 0;
+    render_pass_info.renderArea.offset.y = 0;
+    render_pass_info.renderArea.extent.width = target_width;
+    render_pass_info.renderArea.extent.height = target_height;
+    render_pass_info.clearValueCount = 1;
+    render_pass_info.pClearValues = &clear_color;
+
+    vkCmdBeginRenderPass(cmd, &render_pass_info,
+                         VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        demo->cursor_pipeline);
+    vkCmdBindDescriptorSets(
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        demo->pipeline_layout, 0, 1,
+        &cursor_src.src_view.desc, 0, NULL);
+    VkViewport viewport;
+    VkRect2D scissor;
+    memset(&viewport, 0, sizeof(VkViewport));
+    memset(&scissor, 0, sizeof(VkRect2D));
+    scissor.offset.x = viewport.x = 0.0f;
+    scissor.offset.y = viewport.y = 0.0f;
+    scissor.extent.width = viewport.width = (float)target_width;
+    scissor.extent.height = viewport.height = (float)target_height;
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRenderPass(cmd);
+
+    barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier[BARRIER_SRC].image = cursor_dst.staging.img;
+    barrier[BARRIER_SRC].subresourceRange = range;
+    barrier[BARRIER_SRC].srcAccessMask = 0;
+    barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1,
+        &barrier[BARRIER_SRC]);
+
+    VkImageSubresourceLayers layer = {};
+    layer.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    layer.layerCount = 1;
+    VkOffset3D offset = { 0, 0, 0 };
+    VkExtent3D extent = { target_width, target_height, 1 };
+    VkImageCopy region = {};
+    region.srcSubresource = layer;
+    region.srcOffset = offset;
+    region.dstSubresource = layer;
+    region.dstOffset = offset;
+    region.extent = extent;
+
+    vkCmdCopyImage(cmd, cursor_dst.dst.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, cursor_dst.staging.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    result = vkEndCommandBuffer(cmd);
+    if (result != VK_SUCCESS) {
+        err_log("vkEndCommandBuffer failed: %d\n", result);
+        goto fail;
+    }
+
+    VkSubmitInfo submit_info = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &cmd;
+
+    result = vkQueueSubmit(demo->graphics_queue, 1, &submit_info,
+                           demo->render_fence);
+
+    if (result != VK_SUCCESS) {
+        err_log("vkQueueSubmit failed: %d\n", result);
+        goto fail;
+    }
+
+    result = vkWaitForFences(demo->device, 1, &demo->render_fence, VK_TRUE, UINT64_MAX);
+    if (result != VK_SUCCESS) {
+        err_log("vkWaitForFences failed: %d\n", result);
+        goto fail;
+    }
+
+    result = vmaCopyAllocationToMemory(vma[i], cursor_dst.staging.alloc, 0, image_base2, target_width * target_height * GL_CHANNELS_N);
+    if (result != VK_SUCCESS) {
+        err_log("vmaCopyAllocationToMemory failed: %d\n", result);
         goto fail;
     }
 

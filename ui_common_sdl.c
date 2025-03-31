@@ -531,6 +531,12 @@ void generate_cursor_image(stbi_t *image, const unsigned char *base, int width, 
 #ifndef USE_SDL_RENDERER_ONLY
         ui_renderer_ogl_gen_cursor(image, base, width, height, channels, scale);
 #endif
+    } else if (is_renderer_metal()) {
+#ifndef USE_SDL_RENDERER_ONLY
+#ifdef __APPLE__
+        ui_renderer_vk_gen_cursor(image, base, width, height, channels, scale);
+#endif
+#endif
     } else if (is_renderer_sdl_renderer()) {
         ui_renderer_sdl_gen_cursor(image, base, width, height, channels, scale);
     }
