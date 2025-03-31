@@ -632,6 +632,11 @@ nk_d3d11_font_stash_end(void)
     hr = ID3D11Device_CreateTexture2D(d3d11.device, &desc, &data, &font_texture);
     assert(SUCCEEDED(hr));}
 
+    if (d3d11.font_texture_view) {
+        ID3D11ShaderResourceView_Release(d3d11.font_texture_view);
+        d3d11.font_texture_view = NULL;
+    }
+
     {D3D11_SHADER_RESOURCE_VIEW_DESC srv;
     memset(&srv, 0, sizeof(srv));
     srv.Format = desc.Format;

@@ -168,6 +168,10 @@ NK_INTERN void
 nk_sdl_device_upload_atlas(const void *image, int width, int height)
 {
     struct nk_sdl_device *dev = &sdl.ogl;
+    if (dev->font_tex) {
+        glDeleteTextures(1, &dev->font_tex);
+        dev->font_tex = 0;
+    }
     glGenTextures(1, &dev->font_tex);
     glBindTexture(GL_TEXTURE_2D, dev->font_tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);

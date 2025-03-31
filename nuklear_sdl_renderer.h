@@ -70,6 +70,9 @@ nk_sdl_device_upload_atlas(const void *image, int width, int height)
     }
     SDL_UpdateTexture(g_SDLFontTexture, NULL, image, 4 * width);
     SDL_SetTextureBlendMode(g_SDLFontTexture, SDL_BLENDMODE_BLEND);
+    if (dev->font_tex) {
+        SDL_DestroyTexture(dev->font_tex);
+    }
     dev->font_tex = g_SDLFontTexture;
 }
 
