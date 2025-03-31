@@ -690,14 +690,15 @@ static VkPresentModeKHR choose_swap_present_mode(
         if (available_present_modes[i] == VK_PRESENT_MODE_MAILBOX_KHR) {
             return available_present_modes[i];
         }
+#ifdef __APPLE__
+        if (available_present_modes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR) {
+            return available_present_modes[i];
+        }
+#endif
     }
 
     /* must be supported */
-#ifdef __APPLE__
-    return VK_PRESENT_MODE_IMMEDIATE_KHR;
-#else
     return VK_PRESENT_MODE_FIFO_KHR;
-#endif
 }
 
 static VkExtent2D choose_swap_extent(
@@ -2146,6 +2147,7 @@ static struct vk_draw_t {
     VkDescriptorSet desc;
     VkViewport vp;
     VkRect2D sc;
+    bool need_barrier;
     VkImageMemoryBarrier barrier;
 } vk_draw[SCREEN_COUNT][SCREEN_COUNT];
 
@@ -2242,59 +2244,59 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
         vkUpdateDescriptorSets(demo->device, 1, &descriptor_write, 0, NULL);
     }
 
-    VkImageMemoryBarrier barrier[BARRIER_COUNT] = {};
-    barrier[BARRIER_DST].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    barrier[BARRIER_DST].image = render->staging.img;
-    barrier[BARRIER_DST].subresourceRange = range;
-    barrier[BARRIER_DST].srcAccessMask = 0;
-    barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-    barrier[BARRIER_DST].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier[BARRIER_DST].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 0, NULL, 1, &barrier[BARRIER_DST]);
-
     if (data) {
+        VkImageMemoryBarrier barrier[BARRIER_COUNT] = {};
+        barrier[BARRIER_DST].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier[BARRIER_DST].image = render->staging.img;
+        barrier[BARRIER_DST].subresourceRange = range;
+        barrier[BARRIER_DST].srcAccessMask = 0;
+        barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+        barrier[BARRIER_DST].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier[BARRIER_DST].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 0, NULL, 1, &barrier[BARRIER_DST]);    
+
         result = vmaCopyMemoryToAllocation(vma[i], data, render->staging.alloc, 0, width * height * GL_CHANNELS_N);
         if (result != VK_SUCCESS) {
             err_log("vmaCopyMemoryToAllocation staging failed: %d\n", (int)result);
             return;
         }
+
+        barrier[BARRIER_SRC].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier[BARRIER_SRC].image = render->staging.img;
+        barrier[BARRIER_SRC].subresourceRange = range;
+        barrier[BARRIER_SRC].srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+        barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier[BARRIER_SRC].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier[BARRIER_SRC].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier[BARRIER_DST].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier[BARRIER_DST].image = render->src.img;
+        barrier[BARRIER_DST].subresourceRange = range;
+        barrier[BARRIER_DST].srcAccessMask = 0;
+        barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, BARRIER_COUNT, barrier);
+
+        VkImageSubresourceLayers layer = {};
+        layer.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        layer.mipLevel = 0;
+        layer.baseArrayLayer = 0;
+        layer.layerCount = 1;
+        VkOffset3D offset = { 0, 0, 0 };
+        VkExtent3D extent = { img_info.extent.width, img_info.extent.height, 1 };
+        VkImageCopy region = {};
+        region.srcSubresource = layer;
+        region.srcOffset = offset;
+        region.dstSubresource = layer;
+        region.dstOffset = offset;
+        region.extent = extent;
+
+        vkCmdCopyImage(cmd, render->staging.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, render->src.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
     }
-
-    barrier[BARRIER_SRC].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-    barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    barrier[BARRIER_SRC].image = render->staging.img;
-    barrier[BARRIER_SRC].subresourceRange = range;
-    barrier[BARRIER_SRC].srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-    barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    barrier[BARRIER_SRC].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier[BARRIER_SRC].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier[BARRIER_DST].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier[BARRIER_DST].image = render->src.img;
-    barrier[BARRIER_DST].subresourceRange = range;
-    barrier[BARRIER_DST].srcAccessMask = 0;
-    barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, BARRIER_COUNT, barrier);
-
-    VkImageSubresourceLayers layer = {};
-    layer.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    layer.mipLevel = 0;
-    layer.baseArrayLayer = 0;
-    layer.layerCount = 1;
-    VkOffset3D offset = { 0, 0, 0 };
-    VkExtent3D extent = { img_info.extent.width, img_info.extent.height, 1 };
-    VkImageCopy region = {};
-    region.srcSubresource = layer;
-    region.srcOffset = offset;
-    region.dstSubresource = layer;
-    region.dstOffset = offset;
-    region.extent = extent;
-
-    vkCmdCopyImage(cmd, render->staging.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, render->src.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
     struct vk_draw_t *draw = &vk_draw[i][vk_draw_count[i]];
     draw->desc = render->src_view.desc;
@@ -2310,16 +2312,20 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
     draw->sc.extent.height = draw->vp.height = ctx_height * ui_win_scale[i];
     draw->vp.minDepth = 0;
     draw->vp.maxDepth = 1;
-    draw->barrier = (VkImageMemoryBarrier){ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-    draw->barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    draw->barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    draw->barrier.image = render->src.img;
-    draw->barrier.subresourceRange = range;
-    draw->barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    draw->barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    draw->barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    draw->barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-
+    if (data) {
+        draw->barrier = (VkImageMemoryBarrier){ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+        draw->barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        draw->barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        draw->barrier.image = render->src.img;
+        draw->barrier.subresourceRange = range;
+        draw->barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        draw->barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        draw->barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        draw->barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        draw->need_barrier = 1;
+    } else {
+        draw->need_barrier = 0;
+    }
     ++vk_draw_count[i];
 }
 
@@ -2349,9 +2355,11 @@ void ui_renderer_vk_present(int ctx_top_bot) {
 
     for (uint32_t k = 0; k < vk_draw_count[i]; ++k) {
         struct vk_draw_t *draw = &vk_draw[i][k];
-        vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1,
-            &draw->barrier);
+        if (draw->need_barrier) {
+            vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1,
+                &draw->barrier);
+        }
     }
 
     memset(&render_pass_info, 0, sizeof(VkRenderPassBeginInfo));
