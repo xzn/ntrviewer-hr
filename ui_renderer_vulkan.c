@@ -2180,14 +2180,19 @@ struct vk_image_t {
     VmaAllocation alloc;
     VmaAllocationInfo info;
 };
+struct vk_buffer_t {
+    VkBuffer buf;
+    VmaAllocation alloc;
+    VmaAllocationInfo info;
+};
 struct vk_view_desc_t {
     VkImageView view;
     VkDescriptorSet desc;
 };
 struct vk_render_src_t {
     uint32_t width, height;
-    bool inited;
-    struct vk_image_t staging, src;
+    struct vk_buffer_t staging;
+    struct vk_image_t src;
     uint32_t src_mip;
     struct vk_view_desc_t src_view;
 };
@@ -2198,7 +2203,8 @@ struct vk_view_fb_t {
 };
 struct vk_render_dst_t {
     uint32_t width, height;
-    struct vk_image_t dst, staging;
+    struct vk_image_t dst;
+    struct vk_buffer_t staging;
     struct vk_view_fb_t dst_view;
 };
 
@@ -2236,32 +2242,31 @@ static bool vk_render_create(struct vulkan_demo *demo, VmaAllocator vma, struct 
     range.levelCount = 1;
     range.layerCount = 1;
 
-    VkImageCreateInfo img_info = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
-    img_info.imageType = VK_IMAGE_TYPE_2D;
-    img_info.format = VK_FORMAT;
-    img_info.extent.width = width;
-    img_info.extent.height = height;
-    img_info.extent.depth = 1;
-    img_info.mipLevels = 1;
-    img_info.arrayLayers = 1;
-    img_info.samples = VK_SAMPLE_COUNT_1_BIT;
-    img_info.tiling = VK_IMAGE_TILING_LINEAR;
-    img_info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    img_info.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
+    VkBufferCreateInfo buf_info = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+    buf_info.size = width * height * GL_CHANNELS_N;
+    buf_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
     VmaAllocationCreateInfo alloc_info = {};
     alloc_info.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
     alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
 
-    if (!render->staging.img) {
-        result = vmaCreateImage(vma, &img_info, &alloc_info, &render->staging.img, &render->staging.alloc, &render->staging.info);
+    if (!render->staging.buf) {
+        result = vmaCreateBuffer(vma, &buf_info, &alloc_info, &render->staging.buf, &render->staging.alloc, &render->staging.info);
         if (result != VK_SUCCESS) {
-            err_log("vmaCreateImage staging failed: %d\n", (int)result);
+            err_log("vmaCreateBuffer staging failed: %d\n", (int)result);
             return false;
         }
-        render->inited = false;
     }
     if (!render->src.img) {
+        VkImageCreateInfo img_info = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+        img_info.imageType = VK_IMAGE_TYPE_2D;
+        img_info.format = VK_FORMAT;
+        img_info.extent.width = width;
+        img_info.extent.height = height;
+        img_info.extent.depth = 1;
+        img_info.arrayLayers = 1;
+        img_info.samples = VK_SAMPLE_COUNT_1_BIT;
+        img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
         img_info.mipLevels = floorf(log2f(MAX(img_info.extent.width, img_info.extent.height))) + 1;
         img_info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -2340,36 +2345,38 @@ static bool vk_render_dst_create(struct vulkan_demo *demo, VmaAllocator vma, str
         render->height = 0;
     }
 
+    VkBufferCreateInfo buf_info = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+    buf_info.size = width * height * GL_CHANNELS_N;
+    buf_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
     VkImageSubresourceRange range = {};
     range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     range.levelCount = 1;
     range.layerCount = 1;
 
-    VkImageCreateInfo img_info = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
-    img_info.imageType = VK_IMAGE_TYPE_2D;
-    img_info.format = VK_FORMAT;
-    img_info.extent.width = width;
-    img_info.extent.height = height;
-    img_info.extent.depth = 1;
-    img_info.mipLevels = 1;
-    img_info.arrayLayers = 1;
-    img_info.samples = VK_SAMPLE_COUNT_1_BIT;
-    img_info.tiling = VK_IMAGE_TILING_LINEAR;
-    img_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     VmaAllocationCreateInfo alloc_info = {};
     alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
     alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
 
-    if (!render->staging.img) {
-        result = vmaCreateImage(vma, &img_info, &alloc_info, &render->staging.img, &render->staging.alloc, &render->staging.info);
+    if (!render->staging.buf) {
+        result = vmaCreateBuffer(vma, &buf_info, &alloc_info, &render->staging.buf, &render->staging.alloc, &render->staging.info);
         if (result != VK_SUCCESS) {
             err_log("vmaCreateImage staging failed: %d\n", (int)result);
             return false;
         }
     }
     if (!render->dst.img) {
+        VkImageCreateInfo img_info = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+        img_info.imageType = VK_IMAGE_TYPE_2D;
+        img_info.format = VK_FORMAT;
+        img_info.extent.width = width;
+        img_info.extent.height = height;
+        img_info.extent.depth = 1;
+        img_info.mipLevels = 1;
+        img_info.arrayLayers = 1;
+        img_info.samples = VK_SAMPLE_COUNT_1_BIT;
+        img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
         img_info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
@@ -2434,14 +2441,7 @@ static void vk_render_upload_and_gen_mip_maps(VkCommandBuffer cmd, VmaAllocator 
     }
 
     VkImageMemoryBarrier barrier[BARRIER_COUNT] = {};
-
     barrier[BARRIER_SRC].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
-    barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    barrier[BARRIER_SRC].image = render->staging.img;
-    barrier[BARRIER_SRC].subresourceRange = range;
-    barrier[BARRIER_SRC].srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-    barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     barrier[BARRIER_SRC].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier[BARRIER_SRC].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier[BARRIER_DST].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -2453,26 +2453,19 @@ static void vk_render_upload_and_gen_mip_maps(VkCommandBuffer cmd, VmaAllocator 
     barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier[BARRIER_DST].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier[BARRIER_DST].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    if (render->inited) {
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier[BARRIER_DST]);
-    } else {
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, BARRIER_COUNT, barrier);
-        render->inited = true;
-    }
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier[BARRIER_DST]);
 
     VkImageSubresourceLayers layer = {};
     layer.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     layer.layerCount = 1;
     VkOffset3D offset = { 0, 0, 0 };
     VkExtent3D extent = { width, height, 1 };
-    VkImageCopy region = {};
-    region.srcSubresource = layer;
-    region.srcOffset = offset;
-    region.dstSubresource = layer;
-    region.dstOffset = offset;
-    region.extent = extent;
+    VkBufferImageCopy region = {};
+    region.imageSubresource = layer;
+    region.imageOffset = offset;
+    region.imageExtent = extent;
 
-    vkCmdCopyImage(cmd, render->staging.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, render->src.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    vkCmdCopyBufferToImage(cmd, render->staging.buf, render->src.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
     for (uint32_t i = 1; i < render->src_mip; ++i) {
         VkImageBlit blt = {};
@@ -2839,29 +2832,17 @@ void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int wid
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRenderPass(cmd);
 
-    barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier[BARRIER_SRC].image = cursor_dst.staging.img;
-    barrier[BARRIER_SRC].subresourceRange = range;
-    barrier[BARRIER_SRC].srcAccessMask = 0;
-    barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1,
-        &barrier[BARRIER_SRC]);
-
     VkImageSubresourceLayers layer = {};
     layer.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     layer.layerCount = 1;
     VkOffset3D offset = { 0, 0, 0 };
     VkExtent3D extent = { target_width, target_height, 1 };
-    VkImageCopy region = {};
-    region.srcSubresource = layer;
-    region.srcOffset = offset;
-    region.dstSubresource = layer;
-    region.dstOffset = offset;
-    region.extent = extent;
+    VkBufferImageCopy region = {};
+    region.imageSubresource = layer;
+    region.imageOffset = offset;
+    region.imageExtent = extent;
 
-    vkCmdCopyImage(cmd, cursor_dst.dst.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, cursor_dst.staging.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    vkCmdCopyImageToBuffer(cmd, cursor_dst.dst.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, cursor_dst.staging.buf, 1, &region);
 
     result = vkEndCommandBuffer(cmd);
     if (result != VK_SUCCESS) {
@@ -2926,9 +2907,9 @@ fail_base2:
 }
 
 static void vk_render_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render) {
-    if (render->staging.img) {
-        vmaDestroyImage(vma, render->staging.img, render->staging.alloc);
-        render->staging = (struct vk_image_t){};
+    if (render->staging.buf) {
+        vmaDestroyBuffer(vma, render->staging.buf, render->staging.alloc);
+        render->staging = (struct vk_buffer_t){};
     }
     // do not destroy descriptor set, update it for reuse instead.
     if (render->src_view.view) {
@@ -2942,9 +2923,9 @@ static void vk_render_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct
 }
 
 static void vk_render_dst_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_dst_t *render) {
-    if (render->staging.img) {
-        vmaDestroyImage(vma, render->staging.img, render->staging.alloc);
-        render->staging = (struct vk_image_t){};
+    if (render->staging.buf) {
+        vmaDestroyBuffer(vma, render->staging.buf, render->staging.alloc);
+        render->staging = (struct vk_buffer_t){};
     }
     if (render->dst_view.fb) {
         vkDestroyFramebuffer(demo->device, render->dst_view.fb, NULL);
