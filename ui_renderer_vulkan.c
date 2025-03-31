@@ -6,6 +6,10 @@
 #include "nuklear_sdl_vulkan.h"
 #include "vk_mem_alloc.h"
 
+#include "placebo.h"
+#include "rashader.h"
+#include <libplacebo/vulkan.h>
+
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
@@ -2118,6 +2122,7 @@ struct vk_view_desc_t {
 static struct vk_render_t {
     uint32_t width, height;
     struct vk_image_t staging, src;
+    uint32_t src_mip;
     struct vk_view_desc_t src_view;
 } vk_render[SCREEN_COUNT][SCREEN_COUNT];
 
@@ -2160,16 +2165,14 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
 
     VkImageSubresourceRange range = {};
     range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    range.baseMipLevel = 0;
     range.levelCount = 1;
-    range.baseArrayLayer = 0;
     range.layerCount = 1;
 
     VkImageCreateInfo img_info = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
     img_info.imageType = VK_IMAGE_TYPE_2D;
     img_info.format = VK_FORMAT;
-    img_info.extent.width = SCREEN_WIDTH;
-    img_info.extent.height = screen_top_bot == 0 ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1;
+    img_info.extent.width = height;
+    img_info.extent.height = width;
     img_info.extent.depth = 1;
     img_info.mipLevels = 1;
     img_info.arrayLayers = 1;
@@ -2192,14 +2195,18 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
     if (!render->src.img) {
         img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
         img_info.mipLevels = floorf(log2f(MAX(img_info.extent.width, img_info.extent.height))) + 1;
-        img_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        img_info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
         result = vmaCreateImage(vma[i], &img_info, &alloc_info, &render->src.img, &render->src.alloc, &render->src.info);
         if (result != VK_SUCCESS) {
             err_log("vmaCreateImage src failed: %d\n", (int)result);
             return;
         }
+        render->src_mip = img_info.mipLevels;
     }
+
+    VkImageSubresourceRange range_mip = range;
+    range_mip.levelCount = render->src_mip;
 
     if (!render->src_view.view) {
         VkImageViewCreateInfo view_info = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
@@ -2210,7 +2217,7 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
         view_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
         view_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
         view_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-        view_info.subresourceRange = range;
+        view_info.subresourceRange = range_mip;
         result = vkCreateImageView(demo->device, &view_info, NULL, &render->src_view.view);
         if (result != VK_SUCCESS) {
             err_log("vkCreateImageView src_view failed: %d\n", (int)result);
@@ -2255,7 +2262,7 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
         barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_HOST_WRITE_BIT;
         barrier[BARRIER_DST].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier[BARRIER_DST].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 0, NULL, 1, &barrier[BARRIER_DST]);    
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 0, NULL, 1, &barrier[BARRIER_DST]);
 
         result = vmaCopyMemoryToAllocation(vma[i], data, render->staging.alloc, 0, width * height * GL_CHANNELS_N);
         if (result != VK_SUCCESS) {
@@ -2272,7 +2279,6 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
         barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         barrier[BARRIER_SRC].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier[BARRIER_SRC].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier[BARRIER_DST].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         barrier[BARRIER_DST].image = render->src.img;
@@ -2283,8 +2289,6 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
 
         VkImageSubresourceLayers layer = {};
         layer.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        layer.mipLevel = 0;
-        layer.baseArrayLayer = 0;
         layer.layerCount = 1;
         VkOffset3D offset = { 0, 0, 0 };
         VkExtent3D extent = { img_info.extent.width, img_info.extent.height, 1 };
@@ -2296,6 +2300,42 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
         region.extent = extent;
 
         vkCmdCopyImage(cmd, render->staging.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, render->src.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+        for (uint32_t i = 1; i < render->src_mip; ++i) {
+            VkImageBlit blt = {};
+            blt.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            blt.srcSubresource.layerCount = 1;
+            blt.srcSubresource.mipLevel = i - 1;
+            blt.srcOffsets[1].x = MAX((uint32_t)height >> (i - 1), 1);
+            blt.srcOffsets[1].y = MAX((uint32_t)width >> (i - 1), 1);
+            blt.srcOffsets[1].z = 1;
+            blt.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            blt.dstSubresource.layerCount = 1;
+            blt.dstSubresource.mipLevel = i;
+            blt.dstOffsets[1].x = MAX((uint32_t)height >> i, 1);
+            blt.dstOffsets[1].y = MAX((uint32_t)width >> i, 1);
+            blt.dstOffsets[1].z = 1;
+
+            barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier[BARRIER_SRC].image = render->src.img;
+            barrier[BARRIER_SRC].subresourceRange = range;
+            barrier[BARRIER_SRC].subresourceRange.baseMipLevel = i - 1;
+            barrier[BARRIER_SRC].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier[BARRIER_DST].image = render->src.img;
+            barrier[BARRIER_DST].subresourceRange = range;
+            barrier[BARRIER_DST].subresourceRange.baseMipLevel = i;
+            barrier[BARRIER_DST].srcAccessMask = 0;
+            barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, BARRIER_COUNT, barrier);
+            vkCmdBlitImage(cmd, render->src.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, render->src.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blt, VK_FILTER_LINEAR);
+        }
+
+        barrier[BARRIER_SRC].subresourceRange.baseMipLevel = render->src_mip - 1;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier[BARRIER_SRC]);
     }
 
     struct vk_draw_t *draw = &vk_draw[i][vk_draw_count[i]];
@@ -2308,17 +2348,17 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
     draw_screen_get_dims_lite(screen_top_bot, i, view_mode, width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
     draw->sc.offset.x = draw->vp.x = ctx_left * ui_win_scale[i];
     draw->sc.offset.y = draw->vp.y = ctx_top * ui_win_scale[i];
-    draw->sc.extent.width = draw->vp.width = ctx_width * ui_win_scale[i];
-    draw->sc.extent.height = draw->vp.height = ctx_height * ui_win_scale[i];
+    draw->sc.extent.width = draw->vp.width = MAX(ctx_width, 1) * ui_win_scale[i];
+    draw->sc.extent.height = draw->vp.height = MAX(ctx_height, 1) * ui_win_scale[i];
     draw->vp.minDepth = 0;
     draw->vp.maxDepth = 1;
     if (data) {
         draw->barrier = (VkImageMemoryBarrier){ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-        draw->barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        draw->barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         draw->barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         draw->barrier.image = render->src.img;
-        draw->barrier.subresourceRange = range;
-        draw->barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        draw->barrier.subresourceRange = range_mip;
+        draw->barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         draw->barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         draw->barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         draw->barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -2467,4 +2507,68 @@ void ui_renderer_vk_present(int ctx_top_bot) {
     }
 }
 
-void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale) {}
+void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale) {
+    if (channels != GL_CHANNELS_N) {
+        return;
+    }
+    bool fail = true;
+
+    int i = SCREEN_TOP;
+    int screen_top_bot = i;
+
+    int target_width = roundf(width * scale);
+    int target_height = roundf(height * scale);
+
+    image->image = malloc(target_width * target_height * channels);
+    if (!image->image) {
+        return;
+    }
+
+    unsigned char *base2 = malloc(width * height * GL_CHANNELS_N);
+    if (!base2) {
+        goto fail_base2;
+    }
+
+    unsigned char *image_base2 = malloc(target_width * target_height * GL_CHANNELS_N);
+    if (!image_base2) {
+        goto fail_image_base2;
+    }
+
+    for (int x = 0; x < width; ++x) {
+        for (int y = 0; y < height; ++y) {
+            int base2_i = (y * width + x) * GL_CHANNELS_N;
+            int base_i = (y * width + x) * channels;
+            base2[base2_i + 2] = base2[base2_i] = ((int)base[base_i] + (int)base[base_i + 1] + (int)base[base_i + 2]) / 3;
+            base2[base2_i + 1] = base[base_i + 3];
+            base2[base2_i + 3] = UCHAR_MAX;
+        }
+    }
+
+    struct vk_render_t src, dst;
+
+    fail = false;
+    for (int x = 0; x < target_width; ++x) {
+        for (int y = 0; y < target_height; ++y) {
+            int image_i = (y * target_width + x) * channels;
+            int image2_i = (y * target_width + x) * GL_CHANNELS_N;
+            image->image[image_i + 2] = image->image[image_i + 1] = image->image[image_i] =
+                ((int)image_base2[image2_i] + (int)image_base2[image2_i + 2]) / 2;
+            image->image[image_i + 3] = image_base2[image2_i + 1];
+        }
+    }
+
+    image->width = target_width;
+    image->height = target_height;
+    image->channels = channels;
+
+fail:
+
+    free(image_base2);
+fail_image_base2:
+    free(base2);
+fail_base2:
+    if (fail) {
+        free(image->image);
+        image->image = 0;
+    }
+}
