@@ -95,10 +95,6 @@ struct vulkan_demo {
     VkSemaphore image_available;
     VkSemaphore render_finished;
 
-    VkImage demo_texture_image;
-    VkImageView demo_texture_image_view;
-    VkDeviceMemory demo_texture_memory;
-
     VkFence render_fence;
 };
 
@@ -1272,7 +1268,7 @@ static const char shaders_demo_frag_spv[] = {
 };
 static const unsigned int shaders_demo_frag_spv_len = 664;
 
-static unsigned char shaders_demo_data_frag_spv[] = {
+static const char shaders_demo_data_frag_spv[] = {
     0x03, 0x02, 0x23, 0x07, 0x00, 0x00, 0x01, 0x00, 0x0b, 0x00, 0x0d, 0x00,
     0x1d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x00, 0x02, 0x00,
     0x01, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00,
@@ -1343,7 +1339,7 @@ static unsigned char shaders_demo_data_frag_spv[] = {
     0x09, 0x00, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x00, 0xfd, 0x00, 0x01, 0x00,
     0x38, 0x00, 0x01, 0x00
 };
-static unsigned int shaders_demo_data_frag_spv_len = 820;
+static const unsigned int shaders_demo_data_frag_spv_len = 820;
 
 static const char shaders_demo_vert_spv[] = {
     0x03, 0x02, 0x23, 0x07, 0x00, 0x00, 0x01, 0x00, 0x0b, 0x00, 0x0d, 0x00,
@@ -1777,274 +1773,6 @@ static bool destroy_swap_chain_related_resources(struct vulkan_demo *demo) {
     return true;
 }
 
-static bool create_demo_texture(struct vulkan_demo *demo) {
-    VkResult result;
-    VkMemoryRequirements mem_requirements;
-    VkPhysicalDeviceMemoryProperties mem_properties;
-    int found;
-    uint32_t i;
-    VkImageCreateInfo image_info;
-    VkMemoryAllocateInfo alloc_info;
-    VkImageViewCreateInfo image_view_info;
-    VkBufferCreateInfo buffer_info;
-    struct {
-        VkDeviceMemory memory;
-        VkBuffer buffer;
-    } staging_buffer;
-    void *data;
-    VkCommandBuffer command_buffer;
-    VkCommandBufferBeginInfo begin_info;
-    VkImageMemoryBarrier image_transfer_dst_memory_barrier;
-    VkBufferImageCopy buffer_copy_region;
-    VkImageMemoryBarrier image_shader_memory_barrier;
-    VkFence fence;
-    VkFenceCreateInfo fence_create;
-    VkSubmitInfo submit_info;
-
-    memset(&image_info, 0, sizeof(VkImageCreateInfo));
-    image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    image_info.imageType = VK_IMAGE_TYPE_2D;
-    image_info.extent.width = 2;
-    image_info.extent.height = 2;
-    image_info.extent.depth = 1;
-    image_info.mipLevels = 1;
-    image_info.arrayLayers = 1;
-    image_info.format = VK_FORMAT_R8_UNORM;
-    image_info.tiling = VK_IMAGE_TILING_LINEAR;
-    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    image_info.usage =
-        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
-    image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    memset(&alloc_info, 0, sizeof(VkMemoryAllocateInfo));
-    alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-
-    memset(&image_view_info, 0, sizeof(VkImageViewCreateInfo));
-    image_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    image_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    image_view_info.format = VK_FORMAT_R8_UNORM;
-    image_view_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-    image_view_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-    image_view_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-    image_view_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-    image_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    image_view_info.subresourceRange.baseMipLevel = 0;
-    image_view_info.subresourceRange.levelCount = 1;
-    image_view_info.subresourceRange.baseArrayLayer = 0;
-    image_view_info.subresourceRange.layerCount = 1;
-
-    result = vkCreateImage(demo->device, &image_info, NULL,
-                           &demo->demo_texture_image);
-
-    if (result != VK_SUCCESS) {
-        err_log("vkCreateImage failed: %d\n", result);
-        return false;
-    }
-
-    vkGetImageMemoryRequirements(demo->device, demo->demo_texture_image,
-                                 &mem_requirements);
-
-    alloc_info.allocationSize = mem_requirements.size;
-
-    vkGetPhysicalDeviceMemoryProperties(demo->physical_device, &mem_properties);
-    found = 0;
-    for (i = 0; i < mem_properties.memoryTypeCount; i++) {
-        if ((mem_requirements.memoryTypeBits & (1 << i)) &&
-            (mem_properties.memoryTypes[i].propertyFlags &
-             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ==
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
-            found = 1;
-            break;
-        }
-    }
-    if (!found) {
-        err_log("failed to find suitable memory for demo texture!\n");
-        return false;
-    }
-    alloc_info.memoryTypeIndex = i;
-    result = vkAllocateMemory(demo->device, &alloc_info, NULL,
-                              &demo->demo_texture_memory);
-    if (result != VK_SUCCESS) {
-        err_log(
-                "failed to allocate vulkan memory for demo texture: %d!\n",
-                result);
-        return false;
-    }
-    result = vkBindImageMemory(demo->device, demo->demo_texture_image,
-                               demo->demo_texture_memory, 0);
-    if (result != VK_SUCCESS) {
-        err_log("Couldn't bind image memory for demo texture: %d\n",
-                result);
-        return false;
-    }
-
-    image_view_info.image = demo->demo_texture_image;
-    result = vkCreateImageView(demo->device, &image_view_info, NULL,
-                               &demo->demo_texture_image_view);
-
-    if (result != VK_SUCCESS) {
-        err_log("vkCreateImageView failed for demo texture: %d\n",
-                result);
-        return false;
-    }
-
-    memset(&buffer_info, 0, sizeof(VkBufferCreateInfo));
-    buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buffer_info.size = alloc_info.allocationSize;
-    buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-    buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    result = vkCreateBuffer(demo->device, &buffer_info, NULL,
-                            &staging_buffer.buffer);
-    if (result != VK_SUCCESS) {
-        err_log("vkCreateBuffer failed for demo texture: %d\n", result);
-        return false;
-    }
-    vkGetBufferMemoryRequirements(demo->device, staging_buffer.buffer,
-                                  &mem_requirements);
-
-    alloc_info.allocationSize = mem_requirements.size;
-    found = 0;
-    for (i = 0; i < mem_properties.memoryTypeCount; i++) {
-        if ((mem_requirements.memoryTypeBits & (1 << i)) &&
-            (mem_properties.memoryTypes[i].propertyFlags &
-             (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
-                (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-            found = 1;
-            break;
-        }
-    }
-    if (!found) {
-        err_log("failed to find suitable staging buffer memory for "
-                        "demo texture!\n");
-        return false;
-    }
-    alloc_info.memoryTypeIndex = i;
-    result = vkAllocateMemory(demo->device, &alloc_info, NULL,
-                              &staging_buffer.memory);
-    if (!found) {
-        err_log("vkAllocateMemory failed for demo texture: %d\n",
-                result);
-        return false;
-    }
-    result = vkBindBufferMemory(demo->device, staging_buffer.buffer,
-                                staging_buffer.memory, 0);
-    if (!found) {
-        err_log("vkBindBufferMemory failed for demo texture: %d\n",
-                result);
-        return false;
-    }
-
-    result = vkMapMemory(demo->device, staging_buffer.memory, 0,
-                         sizeof(uint32_t), 0, &data);
-    if (result != VK_SUCCESS) {
-        err_log("vkMapMemory failed for demo texture: %d\n", result);
-        return false;
-    }
-    *((uint32_t *)data) = 0x00FFFF00;
-    vkUnmapMemory(demo->device, staging_buffer.memory);
-
-    memset(&begin_info, 0, sizeof(VkCommandBufferBeginInfo));
-    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-
-    command_buffer = demo->command_buffers[0];
-    result = vkBeginCommandBuffer(command_buffer, &begin_info);
-
-    memset(&image_transfer_dst_memory_barrier, 0, sizeof(VkImageMemoryBarrier));
-    image_transfer_dst_memory_barrier.sType =
-        VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    image_transfer_dst_memory_barrier.image = demo->demo_texture_image;
-    image_transfer_dst_memory_barrier.srcQueueFamilyIndex =
-        VK_QUEUE_FAMILY_IGNORED;
-    image_transfer_dst_memory_barrier.dstQueueFamilyIndex =
-        VK_QUEUE_FAMILY_IGNORED;
-    image_transfer_dst_memory_barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    image_transfer_dst_memory_barrier.newLayout =
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    image_transfer_dst_memory_barrier.subresourceRange.aspectMask =
-        VK_IMAGE_ASPECT_COLOR_BIT;
-    image_transfer_dst_memory_barrier.subresourceRange.levelCount = 1;
-    image_transfer_dst_memory_barrier.subresourceRange.layerCount = 1;
-    image_transfer_dst_memory_barrier.dstAccessMask =
-        VK_ACCESS_TRANSFER_WRITE_BIT;
-
-    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1,
-                         &image_transfer_dst_memory_barrier);
-
-    memset(&buffer_copy_region, 0, sizeof(VkBufferImageCopy));
-    buffer_copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    buffer_copy_region.imageSubresource.layerCount = 1;
-    buffer_copy_region.imageExtent.width = 2;
-    buffer_copy_region.imageExtent.height = 2;
-    buffer_copy_region.imageExtent.depth = 1;
-
-    vkCmdCopyBufferToImage(
-        command_buffer, staging_buffer.buffer, demo->demo_texture_image,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &buffer_copy_region);
-
-    memset(&image_shader_memory_barrier, 0, sizeof(VkImageMemoryBarrier));
-    image_shader_memory_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    image_shader_memory_barrier.image = demo->demo_texture_image;
-    image_shader_memory_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    image_shader_memory_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    image_shader_memory_barrier.oldLayout =
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    image_shader_memory_barrier.newLayout =
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    image_shader_memory_barrier.subresourceRange.aspectMask =
-        VK_IMAGE_ASPECT_COLOR_BIT;
-    image_shader_memory_barrier.subresourceRange.levelCount = 1;
-    image_shader_memory_barrier.subresourceRange.layerCount = 1;
-    image_shader_memory_barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-    image_shader_memory_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
-
-    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0,
-                         NULL, 1, &image_shader_memory_barrier);
-
-    result = vkEndCommandBuffer(command_buffer);
-    if (result != VK_SUCCESS) {
-        err_log("vkEndCommandBuffer failed for demo texture: %d\n",
-                result);
-        return false;
-    }
-
-    memset(&fence_create, 0, sizeof(VkFenceCreateInfo));
-    fence_create.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    result = vkCreateFence(demo->device, &fence_create, NULL, &fence);
-    if (result != VK_SUCCESS) {
-        err_log("vkCreateFence failed for demo texture: %d\n", result);
-        return false;
-    }
-
-    memset(&submit_info, 0, sizeof(VkSubmitInfo));
-    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submit_info.commandBufferCount = 1;
-    submit_info.pCommandBuffers = &command_buffer;
-
-    result = vkQueueSubmit(demo->graphics_queue, 1, &submit_info, fence);
-    if (result != VK_SUCCESS) {
-        err_log("vkQueueSubmit failed for demo texture: %d\n", result);
-        return false;
-    }
-    result = vkWaitForFences(demo->device, 1, &fence, VK_TRUE, UINT64_MAX);
-    if (result != VK_SUCCESS) {
-        err_log("vkWaitForFences failed for demo texture: %d\n",
-                result);
-        return false;
-    }
-
-    vkDestroyBuffer(demo->device, staging_buffer.buffer, NULL);
-    vkFreeMemory(demo->device, staging_buffer.memory, NULL);
-    vkDestroyFence(demo->device, fence, NULL);
-
-    return true;
-}
-
 static bool create_vulkan_demo(struct vulkan_demo *demo) {
     if (!create_surface(demo)) {
         return false;
@@ -2080,9 +1808,6 @@ static bool create_vulkan_demo(struct vulkan_demo *demo) {
         return false;
     }
     if (!create_fence(demo)) {
-        return false;
-    }
-    if (!create_demo_texture(demo)) {
         return false;
     }
 
@@ -2139,10 +1864,6 @@ static void destroy_vulkan_demo(struct vulkan_demo *demo) {
     vkDestroySemaphore(demo->device, demo->render_finished, NULL);
     vkDestroySemaphore(demo->device, demo->image_available, NULL);
     vkDestroyFence(demo->device, demo->render_fence, NULL);
-
-    vkDestroyImage(demo->device, demo->demo_texture_image, NULL);
-    vkDestroyImageView(demo->device, demo->demo_texture_image_view, NULL);
-    vkFreeMemory(demo->device, demo->demo_texture_memory, NULL);
 
     vkDestroyDescriptorSetLayout(demo->device, demo->descriptor_set_layout,
                                  NULL);
