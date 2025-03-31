@@ -2186,6 +2186,7 @@ struct vk_view_desc_t {
 };
 struct vk_render_src_t {
     uint32_t width, height;
+    bool inited;
     struct vk_image_t staging, src;
     uint32_t src_mip;
     struct vk_view_desc_t src_view;
@@ -2247,7 +2248,7 @@ static bool vk_render_create(struct vulkan_demo *demo, VmaAllocator vma, struct 
     img_info.tiling = VK_IMAGE_TILING_LINEAR;
     img_info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    img_info.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
     VmaAllocationCreateInfo alloc_info = {};
     alloc_info.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
     alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
@@ -2258,11 +2259,13 @@ static bool vk_render_create(struct vulkan_demo *demo, VmaAllocator vma, struct 
             err_log("vmaCreateImage staging failed: %d\n", (int)result);
             return false;
         }
+        render->inited = false;
     }
     if (!render->src.img) {
         img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
         img_info.mipLevels = floorf(log2f(MAX(img_info.extent.width, img_info.extent.height))) + 1;
         img_info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
         result = vmaCreateImage(vma, &img_info, &alloc_info, &render->src.img, &render->src.alloc, &render->src.info);
         if (result != VK_SUCCESS) {
@@ -2424,26 +2427,16 @@ static void vk_render_upload_and_gen_mip_maps(VkCommandBuffer cmd, VmaAllocator 
     range.levelCount = 1;
     range.layerCount = 1;
 
-    VkImageMemoryBarrier barrier[BARRIER_COUNT] = {};
-    barrier[BARRIER_DST].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    barrier[BARRIER_DST].image = render->staging.img;
-    barrier[BARRIER_DST].subresourceRange = range;
-    barrier[BARRIER_DST].srcAccessMask = 0;
-    barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-    barrier[BARRIER_DST].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier[BARRIER_DST].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 0, NULL, 1, &barrier[BARRIER_DST]);
-
     result = vmaCopyMemoryToAllocation(vma, data, render->staging.alloc, 0, width * height * GL_CHANNELS_N);
     if (result != VK_SUCCESS) {
         err_log("vmaCopyMemoryToAllocation staging failed: %d\n", (int)result);
         return;
     }
 
+    VkImageMemoryBarrier barrier[BARRIER_COUNT] = {};
+
     barrier[BARRIER_SRC].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
     barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     barrier[BARRIER_SRC].image = render->staging.img;
     barrier[BARRIER_SRC].subresourceRange = range;
@@ -2451,13 +2444,21 @@ static void vk_render_upload_and_gen_mip_maps(VkCommandBuffer cmd, VmaAllocator 
     barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     barrier[BARRIER_SRC].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier[BARRIER_SRC].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier[BARRIER_DST].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     barrier[BARRIER_DST].image = render->src.img;
     barrier[BARRIER_DST].subresourceRange = range;
     barrier[BARRIER_DST].srcAccessMask = 0;
     barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, BARRIER_COUNT, barrier);
+    barrier[BARRIER_DST].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier[BARRIER_DST].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    if (render->inited) {
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier[BARRIER_DST]);
+    } else {
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, BARRIER_COUNT, barrier);
+        render->inited = true;
+    }
 
     VkImageSubresourceLayers layer = {};
     layer.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -2748,12 +2749,6 @@ void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int wid
         goto fail;
     }
 
-    result = vkResetFences(demo->device, 1, &demo->render_fence);
-    if (result != VK_SUCCESS) {
-        err_log("vkResetFences failed: %d\n", result);
-        goto fail;
-    }
-
     if (!vk_render_create(demo, vma[i], &cursor_src, width, height)) {
         goto fail;
     }
@@ -2877,6 +2872,12 @@ void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int wid
     VkSubmitInfo submit_info = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
     submit_info.commandBufferCount = 1;
     submit_info.pCommandBuffers = &cmd;
+
+    result = vkResetFences(demo->device, 1, &demo->render_fence);
+    if (result != VK_SUCCESS) {
+        err_log("vkResetFences failed: %d\n", result);
+        goto fail;
+    }
 
     result = vkQueueSubmit(demo->graphics_queue, 1, &submit_info,
                            demo->render_fence);
