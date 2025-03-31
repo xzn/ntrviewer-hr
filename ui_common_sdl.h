@@ -14,6 +14,7 @@ enum ui_renderer_t {
     UI_RENDERER_GLES_CSC,
     UI_RENDERER_GLES,
     UI_RENDERER_GLES_ANGLE,
+    UI_RENDERER_METAL,
     UI_RENDERER_SDL_HW,
     UI_RENDERER_SDL_SW,
 
@@ -42,6 +43,7 @@ extern LONG_PTR ui_sdl_wnd_proc[SCREEN_COUNT];
 #endif
 extern Uint32 ui_sdl_win_id[SCREEN_COUNT];
 
+extern rp_lock_t ui_size_lock;
 extern int ui_nk_width, ui_nk_height;
 extern float ui_nk_scale;
 
@@ -79,13 +81,17 @@ UNUSED static bool is_renderer_gles_angle(void) {
     return ui_renderer == UI_RENDERER_GLES_ANGLE;
 }
 
+UNUSED static bool is_renderer_metal(void) {
+    return ui_renderer == UI_RENDERER_METAL;
+}
+
 UNUSED static bool is_renderer_sdl_hw(void) {
     return ui_renderer == UI_RENDERER_SDL_HW;
 }
 
 int ui_common_sdl_init(void);
 void ui_common_sdl_destroy(void);
-int sdl_win_init(SDL_Window *sdl_win[SCREEN_COUNT], bool ogl);
+int sdl_win_init(SDL_Window *sdl_win[SCREEN_COUNT], SDL_WindowFlags aflags);
 void sdl_win_destroy(SDL_Window *sdl_win[SCREEN_COUNT]);
 void sdl_set_wminfo(void);
 void sdl_reset_wminfo(void);

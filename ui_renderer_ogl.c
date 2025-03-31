@@ -697,12 +697,12 @@ static void ogl_renderer_destroy(void) {
 }
 
 int ui_renderer_ogl_init(void) {
-    if (sdl_win_init(ogl_win, 1)) {
+    if (sdl_win_init(ogl_win, SDL_WINDOW_OPENGL)) {
         return -1;
     }
 
     if (is_renderer_csc()) {
-        if (sdl_win_init(csc_win, 1)) {
+        if (sdl_win_init(csc_win, SDL_WINDOW_OPENGL)) {
             return -1;
         }
         for (int i = 0; i < SCREEN_COUNT; ++i)

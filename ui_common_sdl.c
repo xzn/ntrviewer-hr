@@ -2,6 +2,7 @@
 #include "ui_renderer_sdl.h"
 #include "ui_renderer_d3d11.h"
 #include "ui_renderer_ogl.h"
+#include "ui_renderer_vulkan.h"
 #include "ui_input_redirection.h"
 #include "main.h"
 #include "ikcp.h"
@@ -23,6 +24,7 @@ LONG_PTR ui_sdl_wnd_proc[SCREEN_COUNT];
 #endif
 Uint32 ui_sdl_win_id[SCREEN_COUNT];
 
+rp_lock_t ui_size_lock;
 int ui_nk_width, ui_nk_height;
 float ui_nk_scale;
 
@@ -104,11 +106,13 @@ void ui_view_mode_update(view_mode_t view_mode) {
 void ui_window_size_update(int window_top_bot) {
     int i = window_top_bot;
 
+    rp_lock_wait(ui_size_lock);
+
     SDL_GetWindowSize(ui_sdl_win[i], &ui_win_width[i], &ui_win_height[i]);
 
     if (is_renderer_sdl_renderer()) {
         SDL_GetCurrentRenderOutputSize(sdl_renderer[i], &ui_win_width_drawable[i], &ui_win_height_drawable[i]);
-    } else if (is_renderer_sdl_ogl()) {
+    } else if (is_renderer_sdl_ogl() || is_renderer_metal()) {
         SDL_GetWindowSizeInPixels(ui_sdl_win[i], &ui_win_width_drawable[i], &ui_win_height_drawable[i]);
     } else if (is_renderer_d3d11()) {
 #ifdef _WIN32
@@ -133,6 +137,8 @@ void ui_window_size_update(int window_top_bot) {
         ui_nk_height = ui_win_height[i];
         ui_nk_scale = ui_win_scale[i];
     }
+
+    rp_lock_rel(ui_size_lock);
 }
 
 #define FRAME_STAT_EVERY_X_US 1000000
@@ -282,6 +288,12 @@ static void draw_screen_dispatch(UNUSED struct rp_buffer_ctx_t *ctx, uint8_t *da
 #ifndef USE_SDL_RENDERER_ONLY
         ui_renderer_ogl_draw(ctx, data, width, height, screen_top_bot, ctx_top_bot, view_mode, win_shared);
 #endif
+    } else if (is_renderer_metal()) {
+#ifndef USE_SDL_RENDERER_ONLY
+#ifdef __APPLE__
+        ui_renderer_vk_draw(data, width, height, screen_top_bot, ctx_top_bot, view_mode);
+#endif
+#endif
     } else if (is_renderer_sdl_renderer()) {
         ui_renderer_sdl_draw(data, width, height, screen_top_bot, ctx_top_bot, view_mode);
     }
@@ -325,10 +337,10 @@ int draw_screen(struct rp_buffer_ctx_t *ctx, int width, int height, int screen_t
     }
 }
 
-int sdl_win_init(SDL_Window *sdl_win[SCREEN_COUNT], bool ogl) {
+int sdl_win_init(SDL_Window *sdl_win[SCREEN_COUNT], SDL_WindowFlags aflags) {
     for (int i = 0; i < SCREEN_COUNT; ++i) {
         sdl_win[i] = SDL_CreateWindow(WIN_TITLE,
-            WIN_WIDTH_DEFAULT, WIN_HEIGHT_DEFAULT, SDL_WIN_FLAGS_DEFAULT | (ogl ? SDL_WINDOW_OPENGL : 0));
+            WIN_WIDTH_DEFAULT, WIN_HEIGHT_DEFAULT, SDL_WIN_FLAGS_DEFAULT | aflags);
         if (!sdl_win[i]) {
             err_log("SDL_CreateWindow: %s\n", SDL_GetError());
             return -1;

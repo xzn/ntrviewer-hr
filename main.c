@@ -7,12 +7,14 @@
 #ifndef USE_SDL_RENDERER_ONLY
 #include "ui_renderer_d3d11.h"
 #include "ui_renderer_ogl.h"
+#include "ui_renderer_vulkan.h"
 #ifdef _WIN32
 #include "nuklear_d3d11.h"
 #include "ui_compositor_csc.h"
 #endif
 #include "nuklear_sdl_gl3.h"
 #include "nuklear_sdl_gles2.h"
+#include "nuklear_sdl_vulkan.h"
 #endif
 #include "nuklear_sdl_renderer.h"
 #include "ntr_hb.h"
@@ -96,12 +98,14 @@ bool renderer_evt_sync;
 
 #include <getopt.h>
 
-int opt_flag_d3d, opt_flag_ogl, opt_flag_gles, opt_flag_angle, opt_flag_no_csc, opt_flag_sdl_hw, opt_flag_sdl_sw;
+int opt_flag_d3d, opt_flag_ogl, opt_flag_gles, opt_flag_angle, opt_flag_metal;
+int opt_flag_no_csc, opt_flag_sdl_hw, opt_flag_sdl_sw;
 
 #define opt_name_d3d "d3d"
 #define opt_name_ogl "ogl"
 #define opt_name_gles "gles"
 #define opt_name_angle "angle"
+#define opt_name_metal "metal"
 #define opt_name_sdl_hw "sdl-hw"
 #define opt_name_sdl_sw "sdl-sw"
 #define opt_name_no_csc "no-csc"
@@ -117,12 +121,16 @@ static struct option long_options[] = {
     {opt_name_no_csc, no_argument, &opt_flag_no_csc, 1},
     {opt_name_d3d, no_argument, &opt_flag_d3d, 1},
 #endif
+#ifdef __APPLE__
+    {opt_name_metal, no_argument, &opt_flag_metal, 1},
+#else
     {opt_name_ogl, no_argument, &opt_flag_ogl, 1},
     {opt_name_gles, no_argument, &opt_flag_gles, 1},
     {opt_name_angle, no_argument, &opt_flag_angle, 1},
+    {opt_name_ogl_dbg, no_argument, &is_renderer_ogl_dbg, 1},
+#endif
     {opt_name_sdl_hw, no_argument, &opt_flag_sdl_hw, 1},
     {opt_name_sdl_sw, no_argument, &opt_flag_sdl_sw, 1},
-    {opt_name_ogl_dbg, no_argument, &is_renderer_ogl_dbg, 1},
     {0, 0, 0, 0}};
 
 static void add_arg(enum ui_renderer_t arg, const char *name) {
@@ -219,6 +227,8 @@ static void parse_args(int argc, char **argv)
                     } else if (strcmp(name, opt_name_angle) == 0) {
                         remove_ogl_args();
                         add_arg(UI_RENDERER_GLES_ANGLE, opt_name_angle);
+                    } else if (strcmp(name, opt_name_metal) == 0) {
+                        add_arg(UI_RENDERER_METAL, opt_name_metal);
                     } else if (strcmp(name, opt_name_sdl_hw) == 0) {
                         add_arg(UI_RENDERER_SDL_HW, opt_name_sdl_hw);
                     } else if (strcmp(name, opt_name_sdl_sw) == 0) {
@@ -493,6 +503,12 @@ static void thread_loop(int i) {
 #ifndef USE_SDL_RENDERER_ONLY
         ui_renderer_ogl_main(screen_top_bot, ctx_top_bot, view_mode, win_shared, bg);
 #endif
+    } else if (is_renderer_metal()) {
+#ifndef USE_SDL_RENDERER_ONLY
+#ifdef __APPLE__
+        ui_renderer_vk_main(ctx_top_bot, view_mode, bg);
+#endif
+#endif
     } else if (is_renderer_sdl_renderer()) {
         ui_renderer_sdl_main(ctx_top_bot, view_mode, bg);
     }
@@ -547,6 +563,12 @@ static void thread_loop(int i) {
 #ifndef USE_SDL_RENDERER_ONLY
         ui_renderer_ogl_present(screen_top_bot, ctx_top_bot, win_shared);
 #endif
+    } else if (is_renderer_metal()) {
+#ifndef USE_SDL_RENDERER_ONLY
+#ifdef __APPLE__
+        ui_renderer_vk_present(ctx_top_bot);
+#endif
+#endif
     } else if (is_renderer_sdl_renderer()) {
         ui_renderer_sdl_present(ctx_top_bot);
     }
@@ -560,8 +582,10 @@ static thread_ret_t window_thread_func(void *arg) {
 
     int i = (int)(uintptr_t)arg;
 #ifndef USE_SDL_RENDERER_ONLY
+#ifndef __APPLE__
     if (is_renderer_sdl_ogl())
         SDL_GL_MakeCurrent(ogl_win[i], gl_context[i]);
+#endif
 #endif
     while (program_running)
         thread_loop(i);
@@ -663,11 +687,21 @@ static void main_loop(void) {
 
                 if (is_renderer_ogl()) {
 #ifndef USE_SDL_RENDERER_ONLY
+#ifndef __APPLE__
                     nk_sdl_gl3_handle_event(&evt);
+#endif
 #endif
                 } else if (is_renderer_gles()) {
 #ifndef USE_SDL_RENDERER_ONLY
+#ifndef __APPLE__
                     nk_sdl_gles2_handle_event(&evt);
+#endif
+#endif
+                } else if (is_renderer_metal()) {
+#ifndef USE_SDL_RENDERER_ONLY
+#ifdef __APPLE__
+                    nk_sdl_vk_handle_event(&evt);
+#endif
 #endif
                 } else if (is_renderer_sdl_renderer()) {
                     nk_sdl_renderer_handle_event(&evt);
@@ -773,6 +807,7 @@ static void main_ntr(void) {
     rp_lock_init(sdl_cursors_lock);
     rp_lock_init(sdl_game_controller_lock);
     rp_lock_init(ui_nk_lock);
+    rp_lock_init(ui_size_lock);
     thread_t window_top_thread = 0;
     thread_t window_bot_thread = 0;
 
@@ -812,6 +847,7 @@ join_win_bot:
         thread_join(window_top_thread);
 join_win_top:
     }
+    rp_lock_close(ui_size_lock);
     rp_lock_close(ui_nk_lock);
     rp_lock_close(sdl_game_controller_lock);
     rp_lock_close(sdl_cursors_lock);
@@ -922,6 +958,9 @@ int main(int argc, char **argv) {
     bool renderer_inited = 0;
     for (int i = 0; i < renderer_count; ++i) {
         ui_renderer = renderer_list[i];
+        renderer_single_thread = 0;
+        renderer_evt_sync = 0;
+
         if (is_renderer_d3d11()) {
 #ifndef USE_SDL_RENDERER_ONLY
             if (ui_renderer_d3d11_init())
@@ -935,6 +974,15 @@ int main(int argc, char **argv) {
                 ui_renderer_ogl_destroy();
             else
                 renderer_inited = 1;
+#endif
+        } else if (is_renderer_metal()) {
+#ifndef USE_SDL_RENDERER_ONLY
+#ifdef __APPLE__
+            if (ui_renderer_vk_init())
+                ui_renderer_vk_destroy();
+            else
+                renderer_inited = 1;
+#endif
 #endif
         } else if (is_renderer_sdl_renderer()) {
             if (ui_renderer_sdl_init())
@@ -960,7 +1008,13 @@ int main(int argc, char **argv) {
 #ifndef USE_SDL_RENDERER_ONLY
         ui_renderer_ogl_destroy();
 #endif
-    } else if (is_renderer_sdl_renderer()) {
+    } else if (is_renderer_metal()) {
+#ifndef USE_SDL_RENDERER_ONLY
+#ifdef __APPLE__
+        ui_renderer_vk_destroy();
+#endif
+#endif
+        } else if (is_renderer_sdl_renderer()) {
         ui_renderer_sdl_destroy();
     }
 

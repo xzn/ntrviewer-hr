@@ -15,7 +15,7 @@ endif
 
 CPPFLAGS := -Iinclude -DPL_STATIC
 ifeq ($(OS),Darwin)
-CPPFLAGS += $(shell pkg-config sdl3 --cflags)
+CPPFLAGS += $(shell pkg-config sdl3 --cflags) $(shell pkg-config libplacebo --cflags)
 endif
 ifeq ($(DEBUG),1)
 CFLAGS := -Og -g
@@ -37,7 +37,7 @@ TARGET := ntrviewer.exe
 NASM := -DWIN64 -fwin64 -D__x86_64__
 else
 ifeq ($(OS),Darwin)
-LDLIBS := -Llib $(shell pkg-config sdl3 --libs)
+LDLIBS := -Llib $(shell pkg-config sdl3 --libs --static)
 else
 LDLIBS := -static-libgcc -static-libstdc++ -Llib -Wl,-Bstatic -lSDL3
 endif
@@ -48,13 +48,23 @@ endif
 endif
 
 ifneq ($(LITE),1)
-LDLIBS += -lplacebo -lrashader
+ifeq ($(OS),Darwin)
+LDLIBS += $(shell pkg-config libplacebo --libs --static)
+else
+LDLIBS += -lplacebo
+endif
+LDLIBS += -lrashader
 else
 CPPFLAGS += -DUSE_SDL_RENDERER_ONLY
 endif
 
 ifneq ($(LITE),1)
-GL_OBJ := libGLAD.o libNK_SDL_GL3.o libNK_SDL_GLES2.o ui_renderer_ogl.o placebo.o rashader.o
+GL_OBJ := placebo.o rashader.o
+ifeq ($(OS),Darwin)
+GL_OBJ += libNK_SDL_Vulkan.o libvolk.o ui_renderer_vulkan.o
+else
+GL_OBJ += libGLAD.o libNK_SDL_GL3.o libNK_SDL_GLES2.o ui_renderer_ogl.o
+endif
 ifeq ($(OS),Windows_NT)
 GL_OBJ += libGLAD_WGL.o libNK_D3D11.o ui_renderer_d3d11.o ui_compositor_csc.o
 LDLIBS += -lshlwapi -lmincore
@@ -156,7 +166,10 @@ jpeg_turbo/%.o: jpeg_turbo/%.c
 	nasm $< -o $@ $(NASM) -Ijpeg_turbo/simd/nasm -Ijpeg_turbo/simd
 
 placebo.o: placebo.cpp
-	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-missing-field-initializers
+	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Wno-missing-field-initializers -std=c++17
+
+rashader.o: rashader.cpp
+	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -std=c++17
 
 ntrviewer.res.o: win_manifest.rc win_manifest.xml
 	windres --input $< --output $@ --output-format=coff
@@ -187,6 +200,9 @@ libSTB_%.o: libSTB_%.c
 
 main.o: main.c $(CLA_INC)
 	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -D_GNU_SOURCE
+
+%.o: %.m
+	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS)
 
 %.o: %.c
 	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -D_GNU_SOURCE
