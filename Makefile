@@ -61,7 +61,7 @@ endif
 ifneq ($(LITE),1)
 GL_OBJ := placebo.o rashader.o
 ifeq ($(OS),Darwin)
-GL_OBJ += libNK_SDL_Vulkan.o libvolk.o ui_renderer_vulkan.o
+GL_OBJ += libNK_SDL_Vulkan.o libvolk.o ui_renderer_vulkan.o vk_mem_alloc.o
 else
 GL_OBJ += libGLAD.o libNK_SDL_GL3.o libNK_SDL_GLES2.o ui_renderer_ogl.o
 endif
@@ -201,8 +201,8 @@ libSTB_%.o: libSTB_%.c
 main.o: main.c $(CLA_INC)
 	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -D_GNU_SOURCE
 
-%.o: %.m
-	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS)
+vk_mem_alloc.o: vk_mem_alloc.cpp
+	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -std=c++20 -Wno-nullability-completeness -Wno-unused-parameter -Wno-missing-field-initializers -Wno-unused-private-field -Wno-unused-variable
 
 %.o: %.c
 	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -D_GNU_SOURCE

@@ -423,18 +423,22 @@ struct nk_color nk_window_bgcolor = { 28, 48, 62, 255 };
 
 #ifndef _WIN32
 static bool sdl_win_resize_evt_watcher(void *, SDL_Event *event) {
-  if (event->type == SDL_EVENT_WINDOW_RESIZED || event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
-    int i;
-    for (i = 0; i < SCREEN_COUNT; ++i) {
-      if (event->window.windowID == ui_sdl_win_id[i]) {
-        break;
-      }
+    if (
+        event->type == SDL_EVENT_WINDOW_RESIZED ||
+        event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
+        event->type == SDL_EVENT_WINDOW_METAL_VIEW_RESIZED
+    ) {
+        int i;
+        for (i = 0; i < SCREEN_COUNT; ++i) {
+            if (event->window.windowID == ui_sdl_win_id[i]) {
+                break;
+            }
+        }
+        if (i < SCREEN_COUNT) {
+            ui_window_size_update(i);
+        }
     }
-    if (i < SCREEN_COUNT) {
-      ui_window_size_update(i);
-    }
-  }
-  return 0;
+    return 0;
 }
 #endif
 

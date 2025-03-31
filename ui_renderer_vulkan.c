@@ -4,6 +4,7 @@
 
 /* nuklear - 1.32.0 - public domain */
 #include "nuklear_sdl_vulkan.h"
+#include "vk_mem_alloc.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -14,6 +15,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#define VK_API_VERSION VK_MAKE_API_VERSION(0, 1, 1, 0)
 #define MAX_VERTEX_BUFFER 512 * 1024
 #define MAX_ELEMENT_BUFFER 128 * 1024
 
@@ -53,6 +55,7 @@ void swap_chain_support_details_free(
 struct vulkan_demo {
     SDL_Window *win;
     uint32_t win_width, win_height;
+    bool resizing;
     bool portability;
     VkInstance instance;
     VkDebugUtilsMessengerEXT debug_messenger;
@@ -237,6 +240,10 @@ static bool create_instance(struct vulkan_demo *demo) {
         goto cleanup;
     }
 
+#ifdef NDEBUG
+    validation_layers_installed = 0;
+#endif
+
     enabled_extension_count =
         sdl_extension_count + (validation_layers_installed ? 1 : 0);
 
@@ -275,14 +282,16 @@ static bool create_instance(struct vulkan_demo *demo) {
     app_info.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     app_info.pEngineName = "No Engine";
     app_info.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    app_info.apiVersion = VK_MAKE_API_VERSION(0, 1, 1, 0);
+    app_info.apiVersion = VK_API_VERSION;
 
     memset(&create_info, 0, sizeof(VkInstanceCreateInfo));
     create_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     create_info.pApplicationInfo = &app_info;
     create_info.enabledExtensionCount = enabled_extension_count;
     create_info.ppEnabledExtensionNames = enabled_extensions;
+#ifdef __APPLE__
     create_info.flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
     if (validation_layers_installed) {
         create_info.enabledLayerCount = 1;
         create_info.ppEnabledLayerNames = &validation_layer_name;
@@ -685,7 +694,8 @@ static VkPresentModeKHR choose_swap_present_mode(
     }
 
     /* must be supported */
-    return VK_PRESENT_MODE_FIFO_KHR;
+    return VK_PRESENT_MODE_IMMEDIATE_KHR;
+    // return VK_PRESENT_MODE_FIFO_KHR;
 }
 
 static VkExtent2D choose_swap_extent(
@@ -731,6 +741,15 @@ static bool create_swap_chain(struct vulkan_demo *demo) {
                                                 swap_chain_support.formats_len);
     present_mode = choose_swap_present_mode(
         swap_chain_support.present_modes, swap_chain_support.present_modes_len);
+    if (present_mode != VK_PRESENT_MODE_MAILBOX_KHR) {
+        // HACK to workaround pink border on macOS
+        // https://github.com/libsdl-org/SDL/issues/7789
+        if (demo->resizing) {
+            present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+        } else {
+            present_mode = VK_PRESENT_MODE_FIFO_KHR;
+        }
+    }
     extent = choose_swap_extent(demo, &swap_chain_support.capabilities);
 
     demo->swap_chain_images_len =
@@ -2066,6 +2085,7 @@ static void destroy_instance(struct vulkan_demo *demo) {
 static struct vulkan_demo vk_demo[SCREEN_COUNT];
 static SDL_Window *sdl_win[SCREEN_COUNT];
 static struct nk_context *nk_ctx;
+static VmaAllocator vma[SCREEN_COUNT];
 
 void ui_renderer_vk_destroy(void) {
     ui_nk_ctx = NULL;
@@ -2076,11 +2096,17 @@ void ui_renderer_vk_destroy(void) {
     for (int i = 0; i < SCREEN_COUNT; ++i)
         ui_sdl_win[i] = NULL;
 
+    for (int i = 0; i < SCREEN_COUNT; ++i)
+        vmaDestroyAllocator(vma[i]);
+
     sdl_win_destroy(sdl_win);
+
     destroy_instance(&vk_demo[SCREEN_TOP]);
 }
 
 int ui_renderer_vk_init(void) {
+    VkResult result;
+
     if (volkInitialize() != VK_SUCCESS) {
         err_log("volk initialization failed\n");
         return -1;
@@ -2102,7 +2128,46 @@ int ui_renderer_vk_init(void) {
     for (int i = 0; i < SCREEN_COUNT; ++i) {
         ui_sdl_win[i] = vk_demo[i].win = sdl_win[i];
         if (!create_vulkan_demo(&vk_demo[i])) {
-            err_log("failed to create vulkan demo!\n");
+            err_log("failed to create vulkan resources!\n");
+            return -1;
+        }
+    }
+
+    VmaVulkanFunctions vma_funcs = {};
+    vma_funcs.vkAllocateMemory = vkAllocateMemory;
+    vma_funcs.vkBindBufferMemory = vkBindBufferMemory;
+    vma_funcs.vkBindImageMemory = vkBindImageMemory;
+    vma_funcs.vkCreateBuffer = vkCreateBuffer;
+    vma_funcs.vkCreateImage = vkCreateImage;
+    vma_funcs.vkDestroyBuffer = vkDestroyBuffer;
+    vma_funcs.vkDestroyImage = vkDestroyImage;
+    vma_funcs.vkFlushMappedMemoryRanges = vkFlushMappedMemoryRanges;
+    vma_funcs.vkFreeMemory = vkFreeMemory;
+    vma_funcs.vkGetBufferMemoryRequirements = vkGetBufferMemoryRequirements;
+    vma_funcs.vkGetImageMemoryRequirements = vkGetImageMemoryRequirements;
+    vma_funcs.vkGetPhysicalDeviceMemoryProperties = vkGetPhysicalDeviceMemoryProperties;
+    vma_funcs.vkGetPhysicalDeviceProperties = vkGetPhysicalDeviceProperties;
+    vma_funcs.vkInvalidateMappedMemoryRanges = vkInvalidateMappedMemoryRanges;
+    vma_funcs.vkMapMemory = vkMapMemory;
+    vma_funcs.vkUnmapMemory = vkUnmapMemory;
+    vma_funcs.vkCmdCopyBuffer = vkCmdCopyBuffer;
+    vma_funcs.vkGetBufferMemoryRequirements2KHR = vkGetBufferMemoryRequirements2;
+    vma_funcs.vkGetImageMemoryRequirements2KHR = vkGetImageMemoryRequirements2;
+    vma_funcs.vkBindBufferMemory2KHR = vkBindBufferMemory2;
+    vma_funcs.vkBindImageMemory2KHR = vkBindImageMemory2;
+    vma_funcs.vkGetPhysicalDeviceMemoryProperties2KHR = vkGetPhysicalDeviceMemoryProperties2;
+
+    VmaAllocatorCreateInfo vma_create_info = {};
+    vma_create_info.flags = VMA_ALLOCATOR_CREATE_EXTERNALLY_SYNCHRONIZED_BIT;
+    vma_create_info.pVulkanFunctions = &vma_funcs;
+    vma_create_info.vulkanApiVersion = VK_API_VERSION;
+    vma_create_info.instance = vk_demo[SCREEN_TOP].instance;
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+        vma_create_info.physicalDevice = vk_demo[i].physical_device;
+        vma_create_info.device = vk_demo[i].device;
+        result = vmaCreateAllocator(&vma_create_info, &vma[i]);
+        if (result != VK_SUCCESS) {
+            err_log("failed to create vma\n");
             return -1;
         }
     }
@@ -2152,6 +2217,10 @@ void ui_renderer_vk_main(int ctx_top_bot, view_mode_t view_mode, float bg[4]) {
     ) {
         demo->win_width = ui_win_width_drawable[i];
         demo->win_height = ui_win_height_drawable[i];
+        demo->resizing = 1;
+        recreate_swap_chain(demo, i == SCREEN_TOP);
+    } else if (demo->resizing) {
+        demo->resizing = 0;
         recreate_swap_chain(demo, i == SCREEN_TOP);
     }
 
