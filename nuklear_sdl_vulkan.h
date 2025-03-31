@@ -956,6 +956,21 @@ nk_sdl_vk_device_create(VkDevice logical_device, VkPhysicalDevice physical_devic
     nk_sdl_create_render_resources(dev, framebuffer_width, framebuffer_height);
 }
 
+NK_INTERN void nk_sdl_device_clear_atlas(struct nk_sdl_device *dev) {
+    if (dev->font_memory) {
+        vkFreeMemory(dev->logical_device, dev->font_memory, NULL);
+        dev->font_memory = NULL;
+    }
+    if (dev->font_image) {
+        vkDestroyImage(dev->logical_device, dev->font_image, NULL);
+        dev->font_image = NULL;
+    }
+    if (dev->font_image_view) {
+        vkDestroyImageView(dev->logical_device, dev->font_image_view, NULL);
+        dev->font_image_view = NULL;
+    }
+}
+
 NK_INTERN void nk_sdl_device_upload_atlas(VkQueue graphics_queue,
                                           const void *image, int width,
                                           int height) {
@@ -980,6 +995,8 @@ NK_INTERN void nk_sdl_device_upload_atlas(VkQueue graphics_queue,
         VkDeviceMemory memory;
         VkBuffer buffer;
     } staging_buffer;
+
+    nk_sdl_device_clear_atlas(dev);
 
     memset(&image_info, 0, sizeof(VkImageCreateInfo));
     image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -1189,6 +1206,8 @@ NK_API void nk_sdl_vk_device_destroy(void) {
 
     vkDeviceWaitIdle(dev->logical_device);
 
+    nk_sdl_device_clear_atlas(dev);
+
     nk_sdl_destroy_render_resources(dev);
 
     vkFreeCommandBuffers(dev->logical_device, dev->command_pool,
@@ -1209,10 +1228,6 @@ NK_API void nk_sdl_vk_device_destroy(void) {
     vkDestroyBuffer(dev->logical_device, dev->uniform_buffer, NULL);
 
     vkDestroySampler(dev->logical_device, dev->sampler, NULL);
-
-    vkFreeMemory(dev->logical_device, dev->font_memory, NULL);
-    vkDestroyImage(dev->logical_device, dev->font_image, NULL);
-    vkDestroyImageView(dev->logical_device, dev->font_image_view, NULL);
 
     free(dev->command_buffers);
     nk_buffer_free(&dev->cmds);

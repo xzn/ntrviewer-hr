@@ -518,19 +518,6 @@ static void thread_loop(int i) {
     }
 
     if (i == SCREEN_TOP) {
-        if (!nk_gui_next) {
-            if (nk_input_current) {
-                nk_input_end(ui_nk_ctx);
-                nk_input_current = 0;
-            } else {
-                nk_input_begin(ui_nk_ctx);
-                nk_input_end(ui_nk_ctx);
-            }
-
-            ui_main_nk();
-            nk_gui_next = 1;
-        }
-
         if (
             fabsf(ui_font_scale - ui_win_scale[ctx_top_bot]) >= ui_font_scale_epsilon)
         {
@@ -556,6 +543,19 @@ static void thread_loop(int i) {
                 // nk_style_load_all_cursors(ui_nk_ctx, atlas->cursors);
                 nk_style_set_font(ui_nk_ctx, &font->handle);
             }
+        }
+
+        if (!nk_gui_next) {
+            if (nk_input_current) {
+                nk_input_end(ui_nk_ctx);
+                nk_input_current = 0;
+            } else {
+                nk_input_begin(ui_nk_ctx);
+                nk_input_end(ui_nk_ctx);
+            }
+
+            ui_main_nk();
+            nk_gui_next = 1;
         }
     }
 

@@ -23,7 +23,9 @@
 #define VK_API_VERSION VK_MAKE_API_VERSION(0, 1, 1, 0)
 #define MAX_VERTEX_BUFFER 512 * 1024
 #define MAX_ELEMENT_BUFFER 128 * 1024
-#define VK_VIEW_DESC_COUNT_MAX (SCREEN_COUNT * SCREEN_COUNT)
+// two screens for top ctx and one for bottom, plus cursor
+// top and bottom ctxs have separate pools
+#define VK_VIEW_DESC_COUNT_MAX (SCREEN_COUNT + 1)
 
 /* ===============================================================
  *
@@ -694,12 +696,14 @@ static VkPresentModeKHR choose_swap_present_mode(
         if (available_present_modes[i] == VK_PRESENT_MODE_MAILBOX_KHR) {
             return available_present_modes[i];
         }
+    }
 #ifdef __APPLE__
+    for (i = 0; i < available_present_modes_len; i++) {
         if (available_present_modes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR) {
             return available_present_modes[i];
         }
-#endif
     }
+#endif
 
     /* must be supported */
     return VK_PRESENT_MODE_FIFO_KHR;
@@ -1774,6 +1778,7 @@ static bool destroy_swap_chain_related_resources(struct vulkan_demo *demo) {
     vkDestroySwapchainKHR(demo->device, demo->swap_chain, NULL);
     vkDestroyRenderPass(demo->device, demo->render_pass, NULL);
     vkDestroyPipeline(demo->device, demo->pipeline, NULL);
+    vkDestroyPipeline(demo->device, demo->data_pipeline, NULL);
     vkDestroyPipelineLayout(demo->device, demo->pipeline_layout, NULL);
     return true;
 }
@@ -1926,6 +1931,33 @@ static VmaAllocator vma[SCREEN_COUNT];
 static void vmaAuxCleanup(void);
 void ui_renderer_vk_destroy(void) {
     ui_nk_ctx = NULL;
+
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+        VkResult result;
+        struct vulkan_demo *demo = &vk_demo[i];
+        if (demo->render_fence) {
+            result = vkWaitForFences(demo->device, 1, &demo->render_fence, VK_TRUE, UINT64_MAX);
+            if (result != VK_SUCCESS) {
+                err_log("vkWaitForFences failed: %d\n", result);
+            }
+        }
+
+        if (demo->device) {
+            result = vkDeviceWaitIdle(demo->device);
+            if (result != VK_SUCCESS) {
+                err_log("vkDeviceWaitIdle failed: %d\n", result);
+            }
+        }
+
+        if (demo->graphics_queue) {
+            result = vkQueueWaitIdle(demo->graphics_queue);
+            if (result != VK_SUCCESS) {
+                err_log("vkQueueWaitIdle failed: %d\n", result);
+            }
+        }
+    }
+
+    nk_sdl_vk_shutdown();
 
     vmaAuxCleanup();
 
@@ -2119,28 +2151,24 @@ struct vk_view_desc_t {
     VkImageView view;
     VkDescriptorSet desc;
 };
-static struct vk_render_t {
+struct vk_render_src_t {
     uint32_t width, height;
     struct vk_image_t staging, src;
     uint32_t src_mip;
     struct vk_view_desc_t src_view;
-} vk_render[SCREEN_COUNT][SCREEN_COUNT];
+};
 
-static void vmaAuxCleanup(void) {
-    for (int j = 0; j < SCREEN_COUNT; ++j) {
-        for (int i = 0; i < SCREEN_COUNT; ++i) {
-            if (vk_render[j][i].staging.img) {
-                vmaDestroyImage(vma[j], vk_render[j][i].staging.img, vk_render[j][i].staging.alloc);
-            }
-            if (vk_render[j][i].src_view.view) {
-                vkDestroyImageView(vk_demo[j].device, vk_render[j][i].src_view.view, NULL);
-            }
-            if (vk_render[j][i].src.img) {
-                vmaDestroyImage(vma[j], vk_render[j][i].src.img, vk_render[j][i].src.alloc);
-            }
-        }
-    }
-}
+struct vk_view_fb_t {
+    VkImageView view;
+    VkFramebuffer fb;
+};
+struct vk_render_dst_t {
+    uint32_t width, height;
+    struct vk_image_t dst, staging;
+    struct vk_view_fb_t dst_view;
+};
+
+static struct vk_render_src_t vk_render[SCREEN_COUNT][SCREEN_COUNT];
 
 enum {
     BARRIER_SRC,
@@ -2156,12 +2184,18 @@ static struct vk_draw_t {
     VkImageMemoryBarrier barrier;
 } vk_draw[SCREEN_COUNT][SCREEN_COUNT];
 
-void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode) {
-    int i = ctx_top_bot;
-    struct vulkan_demo *demo = &vk_demo[i];
-    VkCommandBuffer cmd = demo->command_buffers[demo->image_index];
-    struct vk_render_t *render = &vk_render[i][screen_top_bot];
+static void vk_render_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render);
+static void vk_render_dst_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_dst_t *render);
+
+static bool vk_render_create(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render, int width, int height) {
     VkResult result;
+    bool need_update_descriptor_set = false;
+
+    if (width != (int)render->width || height != (int)render->height) {
+        vk_render_destroy(demo, vma, render);
+        render->width  = 0;
+        render->height = 0;
+    }
 
     VkImageSubresourceRange range = {};
     range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -2171,8 +2205,8 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
     VkImageCreateInfo img_info = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
     img_info.imageType = VK_IMAGE_TYPE_2D;
     img_info.format = VK_FORMAT;
-    img_info.extent.width = height;
-    img_info.extent.height = width;
+    img_info.extent.width = width;
+    img_info.extent.height = height;
     img_info.extent.depth = 1;
     img_info.mipLevels = 1;
     img_info.arrayLayers = 1;
@@ -2183,13 +2217,13 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
     img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     VmaAllocationCreateInfo alloc_info = {};
     alloc_info.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-    alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
 
     if (!render->staging.img) {
-        result = vmaCreateImage(vma[i], &img_info, &alloc_info, &render->staging.img, &render->staging.alloc, &render->staging.info);
+        result = vmaCreateImage(vma, &img_info, &alloc_info, &render->staging.img, &render->staging.alloc, &render->staging.info);
         if (result != VK_SUCCESS) {
             err_log("vmaCreateImage staging failed: %d\n", (int)result);
-            return;
+            return false;
         }
     }
     if (!render->src.img) {
@@ -2197,10 +2231,10 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
         img_info.mipLevels = floorf(log2f(MAX(img_info.extent.width, img_info.extent.height))) + 1;
         img_info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-        result = vmaCreateImage(vma[i], &img_info, &alloc_info, &render->src.img, &render->src.alloc, &render->src.info);
+        result = vmaCreateImage(vma, &img_info, &alloc_info, &render->src.img, &render->src.alloc, &render->src.info);
         if (result != VK_SUCCESS) {
             err_log("vmaCreateImage src failed: %d\n", (int)result);
-            return;
+            return false;
         }
         render->src_mip = img_info.mipLevels;
     }
@@ -2221,8 +2255,9 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
         result = vkCreateImageView(demo->device, &view_info, NULL, &render->src_view.view);
         if (result != VK_SUCCESS) {
             err_log("vkCreateImageView src_view failed: %d\n", (int)result);
-            return;
+            return false;
         }
+        need_update_descriptor_set = true;
     }
     if (!render->src_view.desc) {
         VkDescriptorSetAllocateInfo alloc_info = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
@@ -2233,9 +2268,12 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
             &render->src_view.desc);
         if (result != VK_SUCCESS) {
             err_log("vkAllocateDescriptorSets src_view failed: %d\n", result);
-            return;
+            return false;
         }
+        need_update_descriptor_set = true;
+    }
 
+    if (need_update_descriptor_set) {
         VkDescriptorImageInfo descriptor_image_info;
         VkWriteDescriptorSet descriptor_write;
         descriptor_image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -2250,6 +2288,103 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
         descriptor_write.dstSet = render->src_view.desc;
         vkUpdateDescriptorSets(demo->device, 1, &descriptor_write, 0, NULL);
     }
+
+    render->width  = width;
+    render->height = height;
+
+    return true;
+}
+
+static bool vk_render_dst_create(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_dst_t *render, int width, int height) {
+    VkResult result;
+
+    if (width != (int)render->width || height != (int)render->height) {
+        vk_render_dst_destroy(demo, vma, render);
+        render->width  = 0;
+        render->height = 0;
+    }
+
+    VkImageSubresourceRange range = {};
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = 1;
+    range.layerCount = 1;
+
+    VkImageCreateInfo img_info = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+    img_info.imageType = VK_IMAGE_TYPE_2D;
+    img_info.format = VK_FORMAT;
+    img_info.extent.width = width;
+    img_info.extent.height = height;
+    img_info.extent.depth = 1;
+    img_info.mipLevels = 1;
+    img_info.arrayLayers = 1;
+    img_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    img_info.tiling = VK_IMAGE_TILING_LINEAR;
+    img_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VmaAllocationCreateInfo alloc_info = {};
+    alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
+
+    if (!render->staging.img) {
+        result = vmaCreateImage(vma, &img_info, &alloc_info, &render->staging.img, &render->staging.alloc, &render->staging.info);
+        if (result != VK_SUCCESS) {
+            err_log("vmaCreateImage staging failed: %d\n", (int)result);
+            return false;
+        }
+    }
+    if (!render->dst.img) {
+        img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        img_info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        result = vmaCreateImage(vma, &img_info, &alloc_info, &render->dst.img, &render->dst.alloc, &render->dst.info);
+        if (result != VK_SUCCESS) {
+            err_log("vmaCreateImage dst failed: %d\n", (int)result);
+            return false;
+        }
+    }
+
+    if (!render->dst_view.view) {
+        VkImageViewCreateInfo view_info = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+        view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view_info.image = render->dst.img;
+        view_info.format = VK_FORMAT;
+        view_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+        view_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+        view_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+        view_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+        view_info.subresourceRange = range;
+        result = vkCreateImageView(demo->device, &view_info, NULL, &render->dst_view.view);
+        if (result != VK_SUCCESS) {
+            err_log("vkCreateImageView dst_view failed: %d\n", (int)result);
+            return false;
+        }
+    }
+    if (!render->dst_view.fb) {
+    }
+
+    render->width  = width;
+    render->height = height;
+
+    return true;
+}
+
+void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode) {
+    int i = ctx_top_bot;
+    struct vulkan_demo *demo = &vk_demo[i];
+    VkCommandBuffer cmd = demo->command_buffers[demo->image_index];
+    struct vk_render_src_t *render = &vk_render[i][screen_top_bot];
+    VkResult result;
+
+    if (!vk_render_create(demo, vma[i], render, height, width))
+        return;
+
+    VkImageSubresourceRange range = {};
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = 1;
+    range.layerCount = 1;
+
+    VkImageSubresourceRange range_mip = range;
+    range_mip.levelCount = render->src_mip;
 
     if (data) {
         VkImageMemoryBarrier barrier[BARRIER_COUNT] = {};
@@ -2291,7 +2426,7 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
         layer.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         layer.layerCount = 1;
         VkOffset3D offset = { 0, 0, 0 };
-        VkExtent3D extent = { img_info.extent.width, img_info.extent.height, 1 };
+        VkExtent3D extent = { height, width, 1 };
         VkImageCopy region = {};
         region.srcSubresource = layer;
         region.srcOffset = offset;
@@ -2507,6 +2642,8 @@ void ui_renderer_vk_present(int ctx_top_bot) {
     }
 }
 
+static struct vk_render_src_t cursor_src;
+static struct vk_render_dst_t cursor_dst;
 void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale) {
     if (channels != GL_CHANNELS_N) {
         return;
@@ -2518,6 +2655,8 @@ void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int wid
 
     int target_width = roundf(width * scale);
     int target_height = roundf(height * scale);
+
+    struct vulkan_demo *demo = &vk_demo[i];
 
     image->image = malloc(target_width * target_height * channels);
     if (!image->image) {
@@ -2544,7 +2683,12 @@ void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int wid
         }
     }
 
-    struct vk_render_t src, dst;
+    if (!vk_render_create(demo, vma[i], &cursor_src, width, height)) {
+        goto fail;
+    }
+    if (!vk_render_dst_create(demo, vma[i], &cursor_dst, target_width, target_height)) {
+        goto fail;
+    }
 
     fail = false;
     for (int x = 0; x < target_width; ++x) {
@@ -2562,7 +2706,6 @@ void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int wid
     image->channels = channels;
 
 fail:
-
     free(image_base2);
 fail_image_base2:
     free(base2);
@@ -2571,4 +2714,49 @@ fail_base2:
         free(image->image);
         image->image = 0;
     }
+}
+
+static void vk_render_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render) {
+    if (render->staging.img) {
+        vmaDestroyImage(vma, render->staging.img, render->staging.alloc);
+        render->staging = (struct vk_image_t){};
+    }
+    // do not destroy descriptor set, update it for reuse instead.
+    if (render->src_view.view) {
+        vkDestroyImageView(demo->device, render->src_view.view, NULL);
+        render->src_view.view = NULL;
+    }
+    if (render->src.img) {
+        vmaDestroyImage(vma, render->src.img, render->src.alloc);
+        render->src = (struct vk_image_t){};
+    }
+}
+
+static void vk_render_dst_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_dst_t *render) {
+    if (render->staging.img) {
+        vmaDestroyImage(vma, render->staging.img, render->staging.alloc);
+        render->staging = (struct vk_image_t){};
+    }
+    if (render->dst_view.fb) {
+        vkDestroyFramebuffer(demo->device, render->dst_view.fb, NULL);
+        render->dst_view.fb = 0;
+    }
+    if (render->dst_view.view) {
+        vkDestroyImageView(demo->device, render->dst_view.view, NULL);
+        render->dst_view.view = NULL;
+    }
+    if (render->dst.img) {
+        vmaDestroyImage(vma, render->dst.img, render->dst.alloc);
+        render->dst = (struct vk_image_t){};
+    }
+}
+
+static void vmaAuxCleanup(void) {
+    for (int j = 0; j < SCREEN_COUNT; ++j) {
+        for (int i = 0; i < SCREEN_COUNT; ++i) {
+            vk_render_destroy(&vk_demo[j], vma[j], &vk_render[j][i]);
+        }
+    }
+    vk_render_destroy(&vk_demo[SCREEN_TOP], vma[SCREEN_TOP], &cursor_src);
+    vk_render_dst_destroy(&vk_demo[SCREEN_TOP], vma[SCREEN_TOP], &cursor_dst);
 }
