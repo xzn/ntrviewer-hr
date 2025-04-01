@@ -5,8 +5,14 @@
 extern "C" {
 #endif
 
+#ifdef __APPLE__
+#define LIBRA_RUNTIME_VULKAN
+#else
+#ifdef _WIN32
 #define LIBRA_RUNTIME_D3D11
+#endif
 #define LIBRA_RUNTIME_OPENGL
+#endif
 #include <librashader.h>
 
 #include <stdint.h>
