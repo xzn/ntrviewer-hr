@@ -288,7 +288,7 @@ static bool create_instance(struct vulkan_demo *demo) {
     validation_layers_installed = 0;
 #endif
 
-#if 0
+#if 1
     enabled_extension_count =
         sdl_extension_count + (validation_layers_installed ? 1 : 0);
 
@@ -3432,8 +3432,13 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
     struct vulkan_demo *demo = &vk_demo[i];
     struct vk_render_src_t *render = &vk_render[i][screen_top_bot];
 
+#ifdef __APPLE__
+    if (!vk_render_create_mtl(demo, vma[i], render, height, width, 1))
+        return;
+#else
     if (!vk_render_create(demo, vma[i], render, height, width))
         return;
+#endif
 
     int ctx_left;
     int ctx_top;
