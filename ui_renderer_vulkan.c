@@ -3037,7 +3037,11 @@ static bool vk_render_create_mtl(struct vulkan_demo *demo, VmaAllocator vma, str
         img_info.samples = VK_SAMPLE_COUNT_1_BIT;
         img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+#ifdef __APPLE__
+        img_info.mipLevels = 1;
+#else
         img_info.mipLevels = floorf(log2f(MAX(img_info.extent.width, img_info.extent.height))) + 1;
+#endif
         img_info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
@@ -3236,7 +3240,11 @@ static bool vk_render_img_create(struct vulkan_demo *demo, VmaAllocator vma, str
         img_info.extent.width = width;
         img_info.extent.height = height;
         img_info.extent.depth = 1;
+#ifdef __APPLE__
+        img_info.mipLevels = 1;
+#else
         img_info.mipLevels = floorf(log2f(MAX(img_info.extent.width, img_info.extent.height))) + 1;
+#endif
         img_info.arrayLayers = 1;
         img_info.samples = VK_SAMPLE_COUNT_1_BIT;
         img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -3445,12 +3453,16 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
     int ctx_width;
     int ctx_height;
     draw_screen_get_dims_lite(screen_top_bot, i, view_mode, width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
+    ctx_left *= ui_win_scale[i];
+    ctx_top *= ui_win_scale[i];
+    ctx_width *= ui_win_scale[i];
+    ctx_height *= ui_win_scale[i];
 
     struct vk_draw_t *draw = &vk_draw[i][vk_draw_count[i]];
-    draw->sc.offset.x = draw->vp.x = ctx_left * ui_win_scale[i];
-    draw->sc.offset.y = draw->vp.y = ctx_top * ui_win_scale[i];
-    draw->sc.extent.width = draw->vp.width = MAX(ctx_width, 1) * ui_win_scale[i];
-    draw->sc.extent.height = draw->vp.height = MAX(ctx_height, 1) * ui_win_scale[i];
+    draw->sc.offset.x = draw->vp.x = ctx_left;
+    draw->sc.offset.y = draw->vp.y = ctx_top;
+    draw->sc.extent.width = draw->vp.width = MAX(ctx_width, 1);
+    draw->sc.extent.height = draw->vp.height = MAX(ctx_height, 1);
     draw->vp.minDepth = 0;
     draw->vp.maxDepth = 1;
 
