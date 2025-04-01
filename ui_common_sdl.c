@@ -85,7 +85,7 @@ void ui_view_mode_update(view_mode_t view_mode) {
     if (view_mode != VIEW_MODE_SEPARATE)
         SDL_HideWindow(ui_sdl_win[SCREEN_BOT]);
 
-    float scale[SCREEN_COUNT] = {};
+    float scale[SCREEN_COUNT] = { 1.0, 1.0 };
     if (is_win_size_in_pixels) {
         scale[SCREEN_TOP] = ui_win_scale[SCREEN_TOP];
         scale[SCREEN_BOT] = ui_win_scale[SCREEN_BOT];
