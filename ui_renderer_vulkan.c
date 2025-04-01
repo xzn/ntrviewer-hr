@@ -25,9 +25,9 @@
 #define VK_MIN_VERSION VK_API_VERSION_1_1
 #define MAX_VERTEX_BUFFER 512 * 1024
 #define MAX_ELEMENT_BUFFER 128 * 1024
-// two screens for top ctx and one for bottom, plus cursor
+// two screens for top ctx and one for bottom, times two for upscaled, plus cursor
 // top and bottom ctxs have separate pools
-#define VK_VIEW_DESC_COUNT_MAX (SCREEN_COUNT + 1)
+#define VK_VIEW_DESC_COUNT_MAX (SCREEN_COUNT * 2 + 1)
 
 /* ===============================================================
  *
@@ -66,14 +66,12 @@ struct vulkan_demo {
     SDL_Window *win;
     uint32_t win_width, win_height;
     bool resizing;
-    bool portability;
     VkPhysicalDeviceFeatures2 physical_features2;
     VkPhysicalDeviceVulkan11Features physical_features11;
     VkPhysicalDeviceVulkan12Features physical_features12;
     VkPhysicalDeviceVulkan13Features physical_features13;
     const char **extensions;
     uint32_t num_extensions;
-    uint32_t api_version;
     VkInstance instance;
     VkDebugUtilsMessengerEXT debug_messenger;
     uint32_t image_index;
@@ -109,6 +107,8 @@ struct vulkan_demo {
     VkPipeline cursor_pipeline;
     VkCommandPool command_pool;
     VkCommandBuffer *command_buffers;
+    VkCommandBuffer *upload_command_buffers[SCREEN_COUNT];
+    VkSemaphore upload_sem[SCREEN_COUNT];
     VkSemaphore image_available;
     VkSemaphore render_finished;
 
@@ -301,7 +301,7 @@ static bool create_instance(struct vulkan_demo *demo) {
     app_info.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     app_info.pEngineName = "No Engine";
     app_info.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    app_info.apiVersion = MAX(VK_MIN_VERSION, PL_VK_MIN_VERSION);
+    app_info.apiVersion = VK_VERSION;
 
     memset(&create_info, 0, sizeof(VkInstanceCreateInfo));
     create_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -467,12 +467,10 @@ enum PHY_DEV {
 static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device,
                                  VkSurfaceKHR surface,
                                  struct queue_family_indices *indices,
-                                 bool *portability,
                                  VkPhysicalDeviceFeatures2 *physical_features2,
                                  VkPhysicalDeviceVulkan11Features *physical_features11,
                                  VkPhysicalDeviceVulkan12Features *physical_features12,
                                  VkPhysicalDeviceVulkan13Features *physical_features13,
-                                 uint32_t *api_version,
                                  const char ***extensions,
                                  uint32_t *num_extensions) {
     VkResult result;
@@ -482,13 +480,14 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
     enum PHY_DEV ret = PHY_DEV_NO;
     struct swap_chain_support_details swap_chain_support;
     int found_khr_surface = 0;
+    int portability = 0;
+    int synchronization2 = 0;
 
     VkPhysicalDeviceProperties device_properties;
     vkGetPhysicalDeviceProperties(physical_device, &device_properties);
 
     err_log("Probing physical device %s\n", device_properties.deviceName);
 
-    *portability = 0;
     *extensions = NULL;
     *num_extensions = 0;
 
@@ -528,7 +527,11 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
         }
         if (strcmp(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
                    device_extensions[i].extensionName) == 0) {
-            *portability = 1;
+            portability = 1;
+        }
+        if (strcmp(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
+                   device_extensions[i].extensionName) == 0) {
+            synchronization2 = 1;
         }
     }
     if (!found_khr_surface) {
@@ -559,10 +562,9 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
         err_log(" Device doesn't support any swap chain present modes\n");
         goto cleanup;
     }
-    *api_version = VK_MIN_VERSION;
     ret = PHY_DEV_YES;
 
-    if (device_properties.apiVersion < PL_VK_MIN_VERSION) {
+    if (device_properties.apiVersion < PL_VK_MIN_VERSION || !synchronization2) {
         goto cleanup;
     }
 
@@ -587,7 +589,7 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
             err_log(" Device doesn't support required feature for libplacebo: %d\n", i);
             goto cleanup;
         }
-        if (features_avail[i]) {
+        if (0 && features_avail[i]) {
             if (features_required[i] || features_rec[i]) {
                 err_log("keeping feature %d\n", i);
                 continue;
@@ -625,7 +627,7 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
             err_log(" Device doesn't support required " n " feature for libplacebo: %d\n", i); \
             goto cleanup; \
         } \
-        if (features_avail[i]) { \
+        if (0 && features_avail[i]) { \
             if ((features_required && features_required[i]) || (features_rec && features_rec[i])) { \
                 err_log("keeping " n " feature %d\n", i); \
                 continue; \
@@ -640,9 +642,8 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
     CHECK_FEATURES(physical_features12, VkPhysicalDeviceVulkan12Features, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, "Vulkan 1.2");
     CHECK_FEATURES(physical_features13, VkPhysicalDeviceVulkan13Features, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, "Vulkan 1.3");
 
-    *api_version = PL_VK_MIN_VERSION;
     ret = PHY_DEV_PLACEBO;
-    *num_extensions = found_khr_surface + *portability;
+    *num_extensions = found_khr_surface + portability + synchronization2;
     for (int i = 0; i < pl_vulkan_num_recommended_extensions; ++i) {
         for (int j = 0; j < (int)device_extension_count; j++) {
             if (strcmp(pl_vulkan_recommended_extensions[i], device_extensions[j].extensionName) == 0) {
@@ -657,8 +658,12 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
         (*extensions)[ext_i] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
         ++ext_i;
     }
-    if (*portability) {
+    if (portability) {
         (*extensions)[ext_i] = VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME;
+        ++ext_i;
+    }
+    if (synchronization2) {
+        (*extensions)[ext_i] = VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME;
         ++ext_i;
     }
     for (int i = 0; i < pl_vulkan_num_recommended_extensions; ++i) {
@@ -705,18 +710,15 @@ static bool create_physical_device(struct vulkan_demo *demo) {
     enum PHY_DEV phy_dev = PHY_DEV_NO;
     for (i = 0; i < device_count; i++) {
         struct queue_family_indices indices = {-1, -1};
-        bool portability = 0;
-        uint32_t api_version;
         const char **extensions;
         uint32_t num_extensions;
         enum PHY_DEV phy_dev_ret = is_suitable_physical_device(
             physical_devices[i], demo->surface,
-            &indices, &portability,
+            &indices,
             &demo->physical_features2,
             &demo->physical_features11,
             &demo->physical_features12,
             &demo->physical_features13,
-            &api_version,
             &extensions, &num_extensions);
         if (phy_dev_ret > phy_dev) {
             err_log("  Selecting this device for rendering. Queue families: "
@@ -729,8 +731,6 @@ static bool create_physical_device(struct vulkan_demo *demo) {
             demo->num_extensions = num_extensions;
             demo->physical_device = physical_devices[i];
             demo->indices = indices;
-            demo->portability = portability;
-            demo->api_version = api_version;
             phy_dev = phy_dev_ret;
         }
         if (phy_dev == PHY_DEV_PLACEBO) {
@@ -1878,6 +1878,10 @@ static bool create_command_buffers(struct vulkan_demo *demo) {
     demo->command_buffers =
         malloc(demo->swap_chain_images_len * sizeof(VkCommandBuffer));
 
+    for (int i = 0; i < SCREEN_COUNT; ++i)
+        demo->upload_command_buffers[i] =
+            malloc(demo->swap_chain_images_len * sizeof(VkCommandBuffer));
+
     memset(&alloc_info, 0, sizeof(VkCommandBufferAllocateInfo));
     alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     alloc_info.commandPool = demo->command_pool;
@@ -1889,6 +1893,16 @@ static bool create_command_buffers(struct vulkan_demo *demo) {
     if (result != VK_SUCCESS) {
         err_log("vkAllocateCommandBuffers failed: %d\n", result);
         return false;
+    }
+
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+        result = vkAllocateCommandBuffers(
+            demo->device, &alloc_info,
+            demo->upload_command_buffers[i]);
+        if (result != VK_SUCCESS) {
+        err_log("vkAllocateCommandBuffers failed: %d\n", result);
+        return false;
+        }
     }
 
     return true;
@@ -1911,6 +1925,14 @@ static bool create_semaphores(struct vulkan_demo *demo) {
     if (result != VK_SUCCESS) {
         err_log("vkCreateSemaphore failed: %d\n", result);
         return false;
+    }
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+        result = vkCreateSemaphore(demo->device, &semaphore_info, NULL,
+            &demo->upload_sem[i]);
+        if (result != VK_SUCCESS) {
+            err_log("vkCreateSemaphore failed: %d\n", result);
+            return false;
+        }
     }
     return true;
 }
@@ -2068,10 +2090,16 @@ static void destroy_vulkan_demo(struct vulkan_demo *demo) {
 
     vkFreeCommandBuffers(demo->device, demo->command_pool,
                          demo->swap_chain_images_len, demo->command_buffers);
+    for(int i = 0; i < SCREEN_COUNT; ++i)
+        vkFreeCommandBuffers(demo->device, demo->command_pool,
+            demo->swap_chain_images_len, demo->upload_command_buffers[i]);
     vkDestroyCommandPool(demo->device, demo->command_pool, NULL);
     vkDestroySampler(demo->device, demo->sampler, NULL);
     vkDestroySemaphore(demo->device, demo->render_finished, NULL);
     vkDestroySemaphore(demo->device, demo->image_available, NULL);
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+        vkDestroySemaphore(demo->device, demo->upload_sem[i], NULL);
+    }
     vkDestroyFence(demo->device, demo->render_fence, NULL);
 
     vkDestroyDescriptorSetLayout(demo->device, demo->descriptor_set_layout,
@@ -2110,6 +2138,10 @@ static void destroy_vulkan_demo(struct vulkan_demo *demo) {
     if (demo->command_buffers) {
         free(demo->command_buffers);
     }
+    for (int i = 0; i < SCREEN_COUNT; ++i)
+        if (demo->upload_command_buffers[i]) {
+            free(demo->upload_command_buffers[i]);
+        }
 
     use_placebo = false;
 }
@@ -2145,6 +2177,8 @@ static struct placebo_t *placebo;
 static int placebo_count;
 static struct placebo_render_t *placebo_render[SCREEN_COUNT][SCREEN_COUNT];
 static int placebo_render_mode[SCREEN_COUNT][SCREEN_COUNT];
+static VkSemaphore placebo_in_sem[SCREEN_COUNT][SCREEN_COUNT];
+static VkSemaphore placebo_sem[SCREEN_COUNT][SCREEN_COUNT];
 
 static pl_vulkan pl_vk_dev[SCREEN_COUNT];
 static pl_log pl_log_dev;
@@ -2180,6 +2214,12 @@ static int vk_upscaling_init(void) {
         for (int i = 0; i < SCREEN_COUNT; ++i) {
             placebo_render_mode[j][i] = -1;
             rashader_render_mode[j][i] = -1;
+
+            placebo_in_sem[j][i] = pl_vulkan_sem_create(pl_vk_dev[j]->gpu, pl_vulkan_sem_params());
+            placebo_sem[j][i] = pl_vulkan_sem_create(pl_vk_dev[j]->gpu, pl_vulkan_sem_params());
+            if (!placebo_in_sem[j][i] || !placebo_sem[j][i]) {
+                use_placebo = false;
+            }
         }
     }
 
@@ -2222,6 +2262,12 @@ static int vk_upscaling_init(void) {
 static void vk_filter_chain_free(void *) {}
 static void vk_upscaling_close(void) {
     for (int j = 0; j < SCREEN_COUNT; ++j) {
+        pl_gpu_finish(pl_vk_dev[j]->gpu);
+        for (int i = 0; i < SCREEN_COUNT; ++i) {
+            pl_vulkan_sem_destroy(pl_vk_dev[j]->gpu, &placebo_sem[j][i]);
+            pl_vulkan_sem_destroy(pl_vk_dev[j]->gpu, &placebo_in_sem[j][i]);
+        }
+
         for (int i = 0; i < SCREEN_COUNT; ++i) {
             if (placebo_render[j][i]) {
                 placebo_render_close(placebo_render[j][i]);
@@ -2297,7 +2343,6 @@ fail:
 static void vmaAuxCleanup(void);
 void ui_renderer_vk_destroy(void) {
     ui_upscaling_filters = 0;
-    vk_upscaling_close();
 
     ui_nk_ctx = NULL;
 
@@ -2325,6 +2370,8 @@ void ui_renderer_vk_destroy(void) {
             }
         }
     }
+
+    vk_upscaling_close();
 
     nk_sdl_vk_shutdown();
 
@@ -2402,7 +2449,7 @@ int ui_renderer_vk_init(void) {
     vma_create_info.pVulkanFunctions = &vma_funcs;
     vma_create_info.instance = vk_demo[SCREEN_TOP].instance;
     for (int i = 0; i < SCREEN_COUNT; ++i) {
-        vma_create_info.vulkanApiVersion = vk_demo[i].api_version;
+        vma_create_info.vulkanApiVersion = VK_VERSION;
         vma_create_info.physicalDevice = vk_demo[i].physical_device;
         vma_create_info.device = vk_demo[i].device;
         result = vmaCreateAllocator(&vma_create_info, &vma[i]);
@@ -2442,8 +2489,6 @@ static uint32_t vk_draw_count[SCREEN_COUNT];
 void ui_renderer_vk_main(int ctx_top_bot, view_mode_t view_mode, float bg[4]) {
     int i = ctx_top_bot;
     VkResult result;
-    VkCommandBufferBeginInfo command_buffer_begin_info;
-    VkCommandBuffer command_buffer;
     struct vulkan_demo *demo = &vk_demo[i];
 
     result = vkWaitForFences(demo->device, 1, &demo->render_fence, VK_TRUE,
@@ -2499,19 +2544,6 @@ void ui_renderer_vk_main(int ctx_top_bot, view_mode_t view_mode, float bg[4]) {
 
     memcpy(&demo->clear_color.color, bg, sizeof(VkClearColorValue));
 
-    memset(&command_buffer_begin_info, 0, sizeof(VkCommandBufferBeginInfo));
-    command_buffer_begin_info.sType =
-        VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    command_buffer_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-    command_buffer = demo->command_buffers[demo->image_index];
-    result = vkBeginCommandBuffer(command_buffer, &command_buffer_begin_info);
-
-    if (result != VK_SUCCESS) {
-        err_log("vkBeginCommandBuffer failed: %d\n", result);
-        return;
-    }
-
     vk_draw_count[i] = 0;
     if (view_mode == VIEW_MODE_TOP_BOT) {
         draw_screen(&rp_buffer_ctx[SCREEN_TOP], SCREEN_HEIGHT0, SCREEN_WIDTH, SCREEN_TOP, i, view_mode, 0);
@@ -2558,6 +2590,15 @@ struct vk_render_dst_t {
 
 static struct vk_render_src_t vk_render[SCREEN_COUNT][SCREEN_COUNT];
 
+struct vk_render_img_t {
+    uint32_t width, height;
+    struct vk_image_t img;
+    uint32_t mip;
+    struct vk_view_desc_t view;
+};
+
+static struct vk_render_img_t vk_render_upscaled[SCREEN_COUNT][SCREEN_COUNT];
+
 enum {
     BARRIER_SRC,
     BARRIER_DST,
@@ -2568,12 +2609,17 @@ static struct vk_draw_t {
     VkDescriptorSet desc;
     VkViewport vp;
     VkRect2D sc;
+    bool need_mips;
+    uint32_t width, height;
     bool need_barrier;
     VkImageMemoryBarrier barrier;
+    VkSemaphore sem, sem_in;
+    VkPipelineStageFlags stages;
 } vk_draw[SCREEN_COUNT][SCREEN_COUNT];
 
 static void vk_render_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render);
 static void vk_render_dst_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_dst_t *render);
+static void vk_render_img_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_img_t *render);
 
 static bool vk_render_create(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render, int width, int height) {
     VkResult result;
@@ -2774,48 +2820,129 @@ static bool vk_render_dst_create(struct vulkan_demo *demo, VmaAllocator vma, str
     return true;
 }
 
-static void vk_render_upload_and_gen_mip_maps(VkCommandBuffer cmd, VmaAllocator vma, struct vk_render_src_t *render, const void *data, int width, int height) {
+static bool vk_render_img_create(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_img_t *render, int width, int height) {
     VkResult result;
+    bool need_update_descriptor_set = false;
+
+    if (width != (int)render->width || height != (int)render->height) {
+        vk_render_img_destroy(demo, vma, render);
+        render->width  = 0;
+        render->height = 0;
+    }
 
     VkImageSubresourceRange range = {};
     range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     range.levelCount = 1;
     range.layerCount = 1;
 
-    result = vmaCopyMemoryToAllocation(vma, data, render->staging.alloc, 0, width * height * GL_CHANNELS_N);
-    if (result != VK_SUCCESS) {
-        err_log("vmaCopyMemoryToAllocation staging failed: %d\n", (int)result);
-        return;
+    if (!render->img.img) {
+        VkImageCreateInfo img_info = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+        img_info.imageType = VK_IMAGE_TYPE_2D;
+        img_info.format = VK_FORMAT;
+        img_info.extent.width = width;
+        img_info.extent.height = height;
+        img_info.extent.depth = 1;
+        img_info.mipLevels = floorf(log2f(MAX(img_info.extent.width, img_info.extent.height))) + 1;
+        img_info.arrayLayers = 1;
+        img_info.samples = VK_SAMPLE_COUNT_1_BIT;
+        img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        img_info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        VmaAllocationCreateInfo alloc_info = {};
+        alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
+        alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        result = vmaCreateImage(vma, &img_info, &alloc_info, &render->img.img, &render->img.alloc, &render->img.info);
+        if (result != VK_SUCCESS) {
+            err_log("vmaCreateImage dst failed: %d\n", (int)result);
+            return false;
+        }
+        render->mip = img_info.mipLevels;
     }
+
+    VkImageSubresourceRange range_mip = range;
+    range_mip.levelCount = render->mip;
+
+    if (!render->view.view) {
+        VkImageViewCreateInfo view_info = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+        view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view_info.image = render->img.img;
+        view_info.format = VK_FORMAT;
+        view_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+        view_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+        view_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+        view_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+        view_info.subresourceRange = range_mip;
+        result = vkCreateImageView(demo->device, &view_info, NULL, &render->view.view);
+        if (result != VK_SUCCESS) {
+            err_log("vkCreateImageView dst_view failed: %d\n", (int)result);
+            return false;
+        }
+        need_update_descriptor_set = true;
+    }
+    if (!render->view.desc) {
+        VkDescriptorSetAllocateInfo alloc_info = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+        alloc_info.descriptorPool = demo->descriptor_pool;
+        alloc_info.descriptorSetCount = 1;
+        alloc_info.pSetLayouts = &demo->descriptor_set_layout;
+        result = vkAllocateDescriptorSets(demo->device, &alloc_info,
+            &render->view.desc);
+        if (result != VK_SUCCESS) {
+            err_log("vkAllocateDescriptorSets src_view failed: %d\n", result);
+            return false;
+        }
+        need_update_descriptor_set = true;
+    }
+
+    if (need_update_descriptor_set) {
+        VkDescriptorImageInfo descriptor_image_info;
+        VkWriteDescriptorSet descriptor_write;
+        descriptor_image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        descriptor_image_info.sampler = demo->sampler;
+        descriptor_image_info.imageView = render->view.view;
+        descriptor_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptor_write.dstBinding = 0;
+        descriptor_write.dstArrayElement = 0;
+        descriptor_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptor_write.descriptorCount = 1;
+        descriptor_write.pImageInfo = &descriptor_image_info;
+        descriptor_write.dstSet = render->view.desc;
+        vkUpdateDescriptorSets(demo->device, 1, &descriptor_write, 0, NULL);
+    }
+
+    render->width  = width;
+    render->height = height;
+
+    return true;
+}
+
+static void vk_gen_mip_maps(VkCommandBuffer cmd, VkImage img, uint32_t mip, int width, int height, bool layout) {
+    VkImageSubresourceRange range = {};
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = 1;
+    range.layerCount = 1;
 
     VkImageMemoryBarrier barrier[BARRIER_COUNT] = {};
     barrier[BARRIER_SRC].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier[BARRIER_SRC].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier[BARRIER_SRC].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier[BARRIER_SRC].image = img;
+    barrier[BARRIER_SRC].subresourceRange = range;
+    barrier[BARRIER_SRC].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     barrier[BARRIER_DST].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier[BARRIER_DST].image = render->src.img;
+    barrier[BARRIER_DST].image = img;
     barrier[BARRIER_DST].subresourceRange = range;
     barrier[BARRIER_DST].srcAccessMask = 0;
     barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier[BARRIER_DST].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier[BARRIER_DST].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier[BARRIER_DST]);
 
-    VkImageSubresourceLayers layer = {};
-    layer.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    layer.layerCount = 1;
-    VkOffset3D offset = { 0, 0, 0 };
-    VkExtent3D extent = { width, height, 1 };
-    VkBufferImageCopy region = {};
-    region.imageSubresource = layer;
-    region.imageOffset = offset;
-    region.imageExtent = extent;
-
-    vkCmdCopyBufferToImage(cmd, render->staging.buf, render->src.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-    for (uint32_t i = 1; i < render->src_mip; ++i) {
+    for (uint32_t i = 1; i < mip; ++i) {
         VkImageBlit blt = {};
         blt.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         blt.srcSubresource.layerCount = 1;
@@ -2830,36 +2957,94 @@ static void vk_render_upload_and_gen_mip_maps(VkCommandBuffer cmd, VmaAllocator 
         blt.dstOffsets[1].y = MAX((uint32_t)height >> i, 1);
         blt.dstOffsets[1].z = 1;
 
-        barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barrier[BARRIER_SRC].image = render->src.img;
-        barrier[BARRIER_SRC].subresourceRange = range;
         barrier[BARRIER_SRC].subresourceRange.baseMipLevel = i - 1;
-        barrier[BARRIER_SRC].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier[BARRIER_DST].image = render->src.img;
-        barrier[BARRIER_DST].subresourceRange = range;
         barrier[BARRIER_DST].subresourceRange.baseMipLevel = i;
-        barrier[BARRIER_DST].srcAccessMask = 0;
-        barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, BARRIER_COUNT, barrier);
-        vkCmdBlitImage(cmd, render->src.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, render->src.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blt, VK_FILTER_LINEAR);
+        if (i == 1 && layout) {
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier[BARRIER_DST]);
+        } else {
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, BARRIER_COUNT, barrier);
+        }
+        vkCmdBlitImage(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blt, VK_FILTER_LINEAR);
     }
 
-    barrier[BARRIER_SRC].subresourceRange.baseMipLevel = render->src_mip - 1;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier[BARRIER_SRC]);
+    barrier[BARRIER_SRC].subresourceRange.baseMipLevel = mip - 1;
+    if (mip == 1 && layout) {
+    } else {
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier[BARRIER_SRC]);
+    }
 }
+
+static void vk_render_upload_and_gen_mip_maps(VkCommandBuffer cmd, VmaAllocator vma, struct vk_render_src_t *render, const void *data, int width, int height) {
+    VkResult result;
+
+    VkImageSubresourceRange range = {};
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = 1;
+    range.layerCount = 1;
+
+    result = vmaCopyMemoryToAllocation(vma, data, render->staging.alloc, 0, width * height * GL_CHANNELS_N);
+    if (result != VK_SUCCESS) {
+        err_log("vmaCopyMemoryToAllocation staging failed: %d\n", (int)result);
+        return;
+    }
+
+    VkImageMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.image = render->src.img;
+    barrier.subresourceRange = range;
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
+
+    VkImageSubresourceLayers layer = {};
+    layer.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    layer.layerCount = 1;
+    VkOffset3D offset = { 0, 0, 0 };
+    VkExtent3D extent = { width, height, 1 };
+    VkBufferImageCopy region = {};
+    region.imageSubresource = layer;
+    region.imageOffset = offset;
+    region.imageExtent = extent;
+
+    vkCmdCopyBufferToImage(cmd, render->staging.buf, render->src.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    vk_gen_mip_maps(cmd, render->src.img, render->src_mip, width, height, 0);
+}
+
+enum upscaling_t {
+    UPSCALING_NONE,
+    UPSCALING_PLACEBO,
+    UPSCALING_RASHADER,
+};
+
+static struct ui_prev_dims_t {
+    int upscaling_selected, width, height;
+} ui_prev_dims[SCREEN_COUNT][SCREEN_COUNT];
 
 void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode) {
     int i = ctx_top_bot;
     struct vulkan_demo *demo = &vk_demo[i];
-    VkCommandBuffer cmd = demo->command_buffers[demo->image_index];
     struct vk_render_src_t *render = &vk_render[i][screen_top_bot];
 
     if (!vk_render_create(demo, vma[i], render, height, width))
         return;
+
+    int ctx_left;
+    int ctx_top;
+    int ctx_width;
+    int ctx_height;
+    draw_screen_get_dims_lite(screen_top_bot, i, view_mode, width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
+
+    struct vk_draw_t *draw = &vk_draw[i][vk_draw_count[i]];
+    draw->sc.offset.x = draw->vp.x = ctx_left * ui_win_scale[i];
+    draw->sc.offset.y = draw->vp.y = ctx_top * ui_win_scale[i];
+    draw->sc.extent.width = draw->vp.width = MAX(ctx_width, 1) * ui_win_scale[i];
+    draw->sc.extent.height = draw->vp.height = MAX(ctx_height, 1) * ui_win_scale[i];
+    draw->vp.minDepth = 0;
+    draw->vp.maxDepth = 1;
 
     VkImageSubresourceRange range = {};
     range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -2870,9 +3055,59 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
     range_mip.levelCount = render->src_mip;
 
     int upscaling_selected = ui_upscaling_selected;
+    enum upscaling_t upscaling = UPSCALING_NONE;
+    draw->desc = render->src_view.desc;
+    draw->need_mips = 0;
+    draw->sem_in = 0;
+
+    struct ui_prev_dims_t *prev = &ui_prev_dims[i][screen_top_bot];
+    bool need_tex_update = data || prev->upscaling_selected != upscaling_selected || prev->width != ctx_width || prev->height != ctx_height;
 
     if (data) {
-        vk_render_upload_and_gen_mip_maps(cmd, vma[i], render, data, height, width);
+        VkCommandBufferBeginInfo command_buffer_begin_info;
+        memset(&command_buffer_begin_info, 0, sizeof(VkCommandBufferBeginInfo));
+        command_buffer_begin_info.sType =
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        command_buffer_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+        VkCommandBuffer command_buffer = demo->upload_command_buffers[screen_top_bot][demo->image_index];
+        VkResult result;
+        result = vkBeginCommandBuffer(command_buffer, &command_buffer_begin_info);
+
+        if (result != VK_SUCCESS) {
+            err_log("vkBeginCommandBuffer failed: %d\n", result);
+            return;
+        }
+
+        vk_render_upload_and_gen_mip_maps(command_buffer, vma[i], render, data, height, width);
+
+        result = vkEndCommandBuffer(command_buffer);
+        if (result != VK_SUCCESS) {
+            err_log("vkEndCommandBuffer failed: %d\n", result);
+            return;
+        }
+
+        VkSubmitInfo submit_info;
+        memset(&submit_info, 0, sizeof(VkSubmitInfo));
+        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &command_buffer;
+        submit_info.signalSemaphoreCount = 1;
+        submit_info.pSignalSemaphores = &demo->upload_sem[screen_top_bot];
+
+        result = vkQueueSubmit(demo->graphics_queue, 1, &submit_info, 0);
+
+        if (result != VK_SUCCESS) {
+            err_log("vkQueueSubmit failed: %d\n", result);
+            return;
+        }
+    }
+
+    struct vk_render_img_t *render_upscaled = &vk_render_upscaled[i][screen_top_bot];
+    if (need_tex_update) {
+        if (!vk_render_img_create(demo, vma[i], render_upscaled, ctx_height, ctx_width)) {
+            goto upscale_fail;
+        }
 
         if (!IS_PLACEBO(upscaling_selected)) {
             placebo_upscaling_update(-1, i, screen_top_bot);
@@ -2884,21 +3119,64 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
             int reset_mode = placebo_upscaling_update(PLACEBO_MODE(upscaling_selected), i, screen_top_bot);
             if (placebo_render[i][screen_top_bot]) {
                 struct pl_vulkan_wrap_params in_tex_pars = {};
+                in_tex_pars.image = render->src.img;
+                in_tex_pars.width = height;
+                in_tex_pars.height = width;
+                in_tex_pars.format = VK_FORMAT;
+                in_tex_pars.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
                 in_tex = pl_vulkan_wrap(pl_vk_dev[i]->gpu, &in_tex_pars);
                 if (!in_tex) {
                     goto placebo_fail;
                 }
 
                 struct pl_vulkan_wrap_params out_tex_pars = {};
+                out_tex_pars.image = render_upscaled->img.img;
+                out_tex_pars.width = ctx_height;
+                out_tex_pars.height = ctx_width;
+                out_tex_pars.format = VK_FORMAT;
+                out_tex_pars.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
                 out_tex = pl_vulkan_wrap(pl_vk_dev[i]->gpu, &out_tex_pars);
                 if (!out_tex) {
                     goto placebo_fail;
                 }
 
+                pl_vulkan_release_ex(pl_vk_dev[i]->gpu, pl_vulkan_release_params(
+                    .tex = in_tex,
+                    .layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    .qf = demo->indices.graphics,
+                    .semaphore = { demo->upload_sem[screen_top_bot] },
+                ));
+
+                pl_vulkan_release_ex(pl_vk_dev[i]->gpu, pl_vulkan_release_params(
+                    .tex = out_tex,
+                    .layout = VK_IMAGE_LAYOUT_UNDEFINED,
+                    .qf = demo->indices.graphics,
+                ));
+
                 bool ret = placebo_render_run(placebo_render[i][screen_top_bot], in_tex, out_tex, 0, 0) != NULL;
                 if (!ret) {
                     goto placebo_fail;
                 }
+
+                if (!pl_vulkan_hold_ex(pl_vk_dev[i]->gpu, pl_vulkan_hold_params(
+                    .tex = in_tex,
+                    .layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    .qf = demo->indices.graphics,
+                    .semaphore = { placebo_in_sem[i][screen_top_bot] },
+                ))) {
+                    goto placebo_fail;
+                }
+
+                if (!pl_vulkan_hold_ex(pl_vk_dev[i]->gpu, pl_vulkan_hold_params(
+                    .tex = out_tex,
+                    .layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    .qf = demo->indices.graphics,
+                    .semaphore = { placebo_sem[i][screen_top_bot] },
+                ))) {
+                    goto placebo_fail;
+                }
+
+                upscaling = UPSCALING_PLACEBO;
             } else if (!reset_mode) {
 placebo_fail:
                 err_log("placebo render failed\n");
@@ -2911,44 +3189,70 @@ placebo_fail:
         if (out_tex)
             pl_tex_destroy(pl_vk_dev[i]->gpu, &out_tex);
 
+upscale_fail:
         if (ui_upscaling_selected == UPSCALING_DEFAULT_NONE) {
         }
     }
 
-    struct vk_draw_t *draw = &vk_draw[i][vk_draw_count[i]];
-    draw->desc = render->src_view.desc;
+    if (need_tex_update) {
+        switch(upscaling) {
+            default:
+            case UPSCALING_NONE:
+                draw->barrier = (VkImageMemoryBarrier){ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+                draw->barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                draw->barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                draw->barrier.image = render->src.img;
+                draw->barrier.subresourceRange = range_mip;
+                draw->barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                draw->barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                draw->barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                draw->barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                draw->need_barrier = 1;
+                draw->sem = demo->upload_sem[screen_top_bot];
+                draw->stages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+                break;
 
-    int ctx_left;
-    int ctx_top;
-    int ctx_width;
-    int ctx_height;
-    draw_screen_get_dims_lite(screen_top_bot, i, view_mode, width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
-    draw->sc.offset.x = draw->vp.x = ctx_left * ui_win_scale[i];
-    draw->sc.offset.y = draw->vp.y = ctx_top * ui_win_scale[i];
-    draw->sc.extent.width = draw->vp.width = MAX(ctx_width, 1) * ui_win_scale[i];
-    draw->sc.extent.height = draw->vp.height = MAX(ctx_height, 1) * ui_win_scale[i];
-    draw->vp.minDepth = 0;
-    draw->vp.maxDepth = 1;
-    if (data) {
-        draw->barrier = (VkImageMemoryBarrier){ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-        draw->barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        draw->barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        draw->barrier.image = render->src.img;
-        draw->barrier.subresourceRange = range_mip;
-        draw->barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        draw->barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        draw->barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        draw->barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        draw->need_barrier = 1;
+            case UPSCALING_PLACEBO:
+                draw->barrier = (VkImageMemoryBarrier){ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+                draw->barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                draw->barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                draw->barrier.image = render_upscaled->img.img;
+                draw->barrier.subresourceRange = range;
+                draw->barrier.subresourceRange.levelCount = render_upscaled->mip;
+                draw->barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                draw->barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                draw->barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                draw->barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                draw->need_barrier = 1;
+                draw->width = render_upscaled->width;
+                draw->height = render_upscaled->height;
+                draw->need_mips = 1;
+                draw->sem = placebo_sem[i][screen_top_bot];
+                draw->sem_in = placebo_in_sem[i][screen_top_bot];
+                draw->stages = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+                draw->desc = render_upscaled->view.desc;
+                break;
+
+            case UPSCALING_RASHADER:
+        }
     } else {
         draw->need_barrier = 0;
+        draw->sem = 0;
+        if (IS_PLACEBO(prev->upscaling_selected)) {
+            draw->desc = render_upscaled->view.desc;
+        }
     }
     ++vk_draw_count[i];
+
+    prev->upscaling_selected = upscaling_selected;
+    prev->width = ctx_width;
+    prev->height = ctx_height;
 }
 
 void ui_renderer_vk_present(int ctx_top_bot) {
     int i = ctx_top_bot;
     VkResult result;
+    VkCommandBufferBeginInfo command_buffer_begin_info;
     VkCommandBuffer command_buffer;
     VkSubmitInfo submit_info;
     VkRenderPassBeginInfo render_pass_info;
@@ -2956,6 +3260,11 @@ void ui_renderer_vk_present(int ctx_top_bot) {
     VkPipelineStageFlags wait_stage =
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSemaphore nk_semaphore = NULL;
+// see struct vk_draw_t for this number
+#define SEM_COUNT_MAX (SCREEN_COUNT * 2 + 1)
+    VkSemaphore sems[SEM_COUNT_MAX];
+    VkPipelineStageFlags stages[SEM_COUNT_MAX];
+    uint32_t sems_count = 0;
     struct vulkan_demo *demo = &vk_demo[i];
     bool ret;
 
@@ -2968,14 +3277,39 @@ void ui_renderer_vk_present(int ctx_top_bot) {
         }
     }
 
+    memset(&command_buffer_begin_info, 0, sizeof(VkCommandBufferBeginInfo));
+    command_buffer_begin_info.sType =
+        VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    command_buffer_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
     command_buffer = demo->command_buffers[demo->image_index];
+    result = vkBeginCommandBuffer(command_buffer, &command_buffer_begin_info);
+
+    if (result != VK_SUCCESS) {
+        err_log("vkBeginCommandBuffer failed: %d\n", result);
+        return;
+    }
 
     for (uint32_t k = 0; k < vk_draw_count[i]; ++k) {
         struct vk_draw_t *draw = &vk_draw[i][k];
+        if (draw->need_mips) {
+            vk_gen_mip_maps(command_buffer, draw->barrier.image, draw->barrier.subresourceRange.levelCount,
+                draw->width, draw->height, 1);
+        }
         if (draw->need_barrier) {
             vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1,
                 &draw->barrier);
+        }
+        if (draw->sem) {
+            sems[sems_count] = draw->sem;
+            stages[sems_count] = draw->stages;
+            ++sems_count;
+        }
+        if (draw->sem_in) {
+            sems[sems_count] = draw->sem_in;
+            stages[sems_count] = draw->stages;
+            ++sems_count;
         }
     }
 
@@ -3033,6 +3367,10 @@ void ui_renderer_vk_present(int ctx_top_bot) {
         wait_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
     }
 
+    sems[sems_count] = nk_semaphore;
+    stages[sems_count] = wait_stage;
+    ++sems_count;
+
     vkCmdEndRenderPass(command_buffer);
 
     result = vkEndCommandBuffer(command_buffer);
@@ -3043,9 +3381,9 @@ void ui_renderer_vk_present(int ctx_top_bot) {
 
     memset(&submit_info, 0, sizeof(VkSubmitInfo));
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submit_info.waitSemaphoreCount = 1;
-    submit_info.pWaitSemaphores = &nk_semaphore;
-    submit_info.pWaitDstStageMask = &wait_stage;
+    submit_info.waitSemaphoreCount = sems_count;
+    submit_info.pWaitSemaphores = sems;
+    submit_info.pWaitDstStageMask = stages;
     submit_info.commandBufferCount = 1;
     submit_info.pCommandBuffers = &command_buffer;
     submit_info.signalSemaphoreCount = 1;
@@ -3331,10 +3669,23 @@ static void vk_render_dst_destroy(struct vulkan_demo *demo, VmaAllocator vma, st
     }
 }
 
+static void vk_render_img_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_img_t *render) {
+    // do not destroy descriptor set, update it for reuse instead.
+    if (render->view.view) {
+        vkDestroyImageView(demo->device, render->view.view, NULL);
+        render->view.view = NULL;
+    }
+    if (render->img.img) {
+        vmaDestroyImage(vma, render->img.img, render->img.alloc);
+        render->img = (struct vk_image_t){};
+    }
+}
+
 static void vmaAuxCleanup(void) {
     for (int j = 0; j < SCREEN_COUNT; ++j) {
         for (int i = 0; i < SCREEN_COUNT; ++i) {
             vk_render_destroy(&vk_demo[j], vma[j], &vk_render[j][i]);
+            vk_render_img_destroy(&vk_demo[j], vma[j], &vk_render_upscaled[j][i]);
         }
     }
     vk_render_destroy(&vk_demo[SCREEN_TOP], vma[SCREEN_TOP], &cursor_src);

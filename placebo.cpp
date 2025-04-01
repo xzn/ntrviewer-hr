@@ -297,7 +297,7 @@ void placebo_render_close(struct placebo_render_t *render) {
 
 pl_tex placebo_render_run(struct placebo_render_t *render, pl_tex in_tex, pl_tex out_tex, int out_width, int out_height) {
     if (!out_tex) {
-        pl_fmt out_fmt = pl_find_fmt(render->gpu, PL_FMT_UNORM, 3, 0, 0, pl_fmt_caps(PL_FMT_CAP_SAMPLEABLE | PL_FMT_CAP_RENDERABLE));
+        pl_fmt out_fmt = pl_find_fmt(render->gpu, PL_FMT_UNORM, 4, 0, 0, pl_fmt_caps(PL_FMT_CAP_SAMPLEABLE | PL_FMT_CAP_RENDERABLE));
         if (!out_fmt)
             return 0;
 
@@ -319,8 +319,8 @@ pl_tex placebo_render_run(struct placebo_render_t *render, pl_tex in_tex, pl_tex
             .num_planes = 1,
             .planes = {{
                 .texture = in_tex,
-                .components = 3,
-                .component_mapping = {0, 1, 2, -1},
+                .components = 4,
+                .component_mapping = {0, 1, 2, 3},
             }},
             .repr = pl_color_repr_rgb,
             .color = pl_color_space_monitor,
@@ -342,8 +342,8 @@ pl_tex placebo_render_run(struct placebo_render_t *render, pl_tex in_tex, pl_tex
             .num_planes = 1,
             .planes = {{
                 .texture = in_tex,
-                .components = 3,
-                .component_mapping = {0, 1, 2, -1},
+                .components = 4,
+                .component_mapping = {0, 1, 2, 3},
             }},
             .repr = pl_color_repr_rgb,
             .color = pl_color_space_monitor,
