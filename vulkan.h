@@ -1,4 +1,10 @@
+#ifdef __APPLE__
 #define VK_USE_PLATFORM_MACOS_MVK
+#define VK_USE_PLATFORM_METAL_EXT
+#endif
+#ifdef _WIN32
+#define VK_USE_PLATFORM_WIN32_KHR
+#endif
 #define VK_ENABLE_BETA_EXTENSIONS
 #include "volk.h"
 #define VMA_STATIC_VULKAN_FUNCTIONS 0

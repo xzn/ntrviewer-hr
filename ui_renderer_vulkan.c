@@ -67,6 +67,7 @@ struct vulkan_demo {
     uint32_t win_width_pixel, win_height_pixel;
     float win_scale;
     bool resizing;
+    bool dynamic_rendering;
     VkPhysicalDeviceFeatures2 physical_features2;
     VkPhysicalDeviceVulkan11Features physical_features11;
     VkPhysicalDeviceVulkan12Features physical_features12;
@@ -123,7 +124,6 @@ struct vulkan_demo {
 
 static bool use_placebo;
 static bool use_rashader = true;
-static bool use_dynamic_rendering[SCREEN_COUNT];
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL vulkan_debug_callback(
     VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
@@ -695,6 +695,11 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
 #ifndef NDEBUG
                 err_log("%s available for libplacebo\n", pl_vulkan_recommended_extensions[i]);
 #endif
+#ifdef VK_EXT_full_screen_exclusive
+                if (strcmp(pl_vulkan_recommended_extensions[i], VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME) == 0) {
+                    continue;
+                }
+#endif
                 ++*num_extensions;
             }
         }
@@ -730,6 +735,11 @@ cleanup:
         for (int i = 0; i < pl_vulkan_num_recommended_extensions; ++i) {
             for (int j = 0; j < (int)device_extension_count; j++) {
                 if (strcmp(pl_vulkan_recommended_extensions[i], device_extensions[j].extensionName) == 0) {
+#ifdef VK_EXT_full_screen_exclusive
+                    if (strcmp(pl_vulkan_recommended_extensions[i], VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME) == 0) {
+                        continue;
+                    }
+#endif
                     (*extensions)[ext_i] = pl_vulkan_recommended_extensions[i];
                     ++ext_i;
                 }
@@ -798,7 +808,7 @@ static bool create_physical_device(struct vulkan_demo *demo) {
             demo->num_extensions = num_extensions;
             demo->physical_device = physical_devices[i];
             demo->indices = indices;
-            use_dynamic_rendering[i] = dynamic_rendering;
+            demo->dynamic_rendering = dynamic_rendering;
             phy_dev = phy_dev_ret;
         }
         if (phy_dev == PHY_DEV_PLACEBO) {
@@ -848,7 +858,7 @@ static bool create_logical_device(struct vulkan_demo *demo) {
     create_info.pQueueCreateInfos = queue_create_infos;
     create_info.enabledExtensionCount = demo->num_extensions;
     create_info.ppEnabledExtensionNames = demo->extensions;
-    if (use_placebo) {
+    if (use_placebo || demo->dynamic_rendering) {
         create_info.pNext = &demo->physical_features2;
     }
 
@@ -953,20 +963,18 @@ static VkExtent2D choose_swap_extent(
     VkSurfaceCapabilitiesKHR *capabilities
 ) {
     VkExtent2D actual_extent;
-    if (0 && capabilities->currentExtent.width != 0xFFFFFFFF) {
+    if (capabilities->currentExtent.width != 0xFFFFFFFF) {
         return capabilities->currentExtent;
     } else {
         actual_extent.width = demo->win_width_pixel;
         actual_extent.height = demo->win_height_pixel;
 
-        if (0) {
-            actual_extent.width = NK_MAX(
-                capabilities->minImageExtent.width,
-                NK_MIN(capabilities->maxImageExtent.width, actual_extent.width));
-            actual_extent.height = NK_MAX(
-                capabilities->minImageExtent.height,
-                NK_MIN(capabilities->maxImageExtent.height, actual_extent.height));
-        }
+        actual_extent.width = NK_MAX(
+            capabilities->minImageExtent.width,
+            NK_MIN(capabilities->maxImageExtent.width, actual_extent.width));
+        actual_extent.height = NK_MAX(
+            capabilities->minImageExtent.height,
+            NK_MIN(capabilities->maxImageExtent.height, actual_extent.height));
 
         return actual_extent;
     }
@@ -2441,12 +2449,11 @@ fail:
 }
 
 static void *vk_filter_chain_create(libra_shader_preset_t *preset, void *i) {
-
+    struct vulkan_demo *demo = &vk_demo[(size_t)i];
     struct filter_chain_vk_opt_t opt = {
         .version = libra_instance_api_version(),
-        .use_dynamic_rendering = use_dynamic_rendering[(size_t)i],
+        .use_dynamic_rendering = demo->dynamic_rendering,
     };
-    struct vulkan_demo *demo = &vk_demo[(size_t)i];
     struct libra_device_vk_t dev = {
         .device = demo->device,
         .physical_device = demo->physical_device,
@@ -2698,22 +2705,22 @@ void ui_renderer_vk_main(int ctx_top_bot, view_mode_t view_mode, float bg[4]) {
     }
 
     if (
-        (int)demo->win_width_pixel != ui_win_width_drawable[i] ||
-        (int)demo->win_height_pixel != ui_win_height_drawable[i] ||
+        (int)demo->swap_chain_image_extent.width != ui_win_width_drawable[i] ||
+        (int)demo->swap_chain_image_extent.height != ui_win_height_drawable[i] ||
         demo->win_scale != ui_win_scale[i]
     ) {
-        if (!recreate_swap_chain(demo, i == SCREEN_TOP)) {
-            return;
-        }
         demo->win_width_pixel = ui_win_width_drawable[i];
         demo->win_height_pixel = ui_win_height_drawable[i];
         demo->win_scale = ui_win_scale[i];
         demo->resizing = 1;
-    } else if (demo->resizing) {
         if (!recreate_swap_chain(demo, i == SCREEN_TOP)) {
             return;
         }
+    } else if (demo->resizing) {
         demo->resizing = 0;
+        if (!recreate_swap_chain(demo, i == SCREEN_TOP)) {
+            return;
+        }
     }
 
     result =
