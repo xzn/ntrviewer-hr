@@ -227,12 +227,16 @@ struct placebo_render_t *placebo_render_init(struct placebo_t *placebo, size_t i
         auto &effect = mode.effects[i];
 
         std::string shader = read_file((PLACEBO_SHADER_DIR "/" + effect.filename + ".glsl").c_str());
-        if (!shader.size())
+        if (!shader.size()) {
+            err_log("placebo read shader failed %s\n", effect.filename.c_str());
             goto fail;
+        }
 
         hook = pl_mpv_user_shader_parse(gpu, shader.data(), shader.size());
-        if (!hook)
+        if (!hook) {
+            err_log("placebo parse shader failed\n");
             goto fail;
+        }
 
         for (int j = 0; j < hook->num_parameters; ++j) {
             const pl_hook_par &par = hook->parameters[j];
@@ -268,6 +272,7 @@ struct placebo_render_t *placebo_render_init(struct placebo_t *placebo, size_t i
 
     render->render = pl_renderer_create(log, gpu);
     if (!render->render) {
+        err_log("placebo create renderer failed\n");
         goto fail;
     }
 

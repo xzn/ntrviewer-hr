@@ -1,6 +1,7 @@
 #include "ui_renderer_vulkan.h"
 #include "ui_common_sdl.h"
 #include "main.h"
+#include "ui_main_nk.h"
 
 /* nuklear - 1.32.0 - public domain */
 #include "nuklear_sdl_vulkan.h"
@@ -20,7 +21,8 @@
 #include <stdlib.h>
 #include <math.h>
 
-#define VK_API_VERSION VK_MAKE_API_VERSION(0, 1, 1, 0)
+#define VK_VERSION VK_API_VERSION_1_3
+#define VK_MIN_VERSION VK_API_VERSION_1_1
 #define MAX_VERTEX_BUFFER 512 * 1024
 #define MAX_ELEMENT_BUFFER 128 * 1024
 // two screens for top ctx and one for bottom, plus cursor
@@ -65,6 +67,13 @@ struct vulkan_demo {
     uint32_t win_width, win_height;
     bool resizing;
     bool portability;
+    VkPhysicalDeviceFeatures2 physical_features2;
+    VkPhysicalDeviceVulkan11Features physical_features11;
+    VkPhysicalDeviceVulkan12Features physical_features12;
+    VkPhysicalDeviceVulkan13Features physical_features13;
+    const char **extensions;
+    uint32_t num_extensions;
+    uint32_t api_version;
     VkInstance instance;
     VkDebugUtilsMessengerEXT debug_messenger;
     uint32_t image_index;
@@ -105,6 +114,9 @@ struct vulkan_demo {
 
     VkFence render_fence;
 };
+
+static bool use_placebo;
+static bool use_rashader;
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL vulkan_debug_callback(
     VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
@@ -289,7 +301,7 @@ static bool create_instance(struct vulkan_demo *demo) {
     app_info.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     app_info.pEngineName = "No Engine";
     app_info.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    app_info.apiVersion = VK_API_VERSION;
+    app_info.apiVersion = MAX(VK_MIN_VERSION, PL_VK_MIN_VERSION);
 
     memset(&create_info, 0, sizeof(VkInstanceCreateInfo));
     create_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -446,15 +458,28 @@ static bool query_swap_chain_support(
     return true;
 }
 
-static bool is_suitable_physical_device(VkPhysicalDevice physical_device,
+enum PHY_DEV {
+    PHY_DEV_NO,
+    PHY_DEV_YES,
+    PHY_DEV_PLACEBO,
+};
+
+static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device,
                                  VkSurfaceKHR surface,
                                  struct queue_family_indices *indices,
-                                 bool *portability) {
+                                 bool *portability,
+                                 VkPhysicalDeviceFeatures2 *physical_features2,
+                                 VkPhysicalDeviceVulkan11Features *physical_features11,
+                                 VkPhysicalDeviceVulkan12Features *physical_features12,
+                                 VkPhysicalDeviceVulkan13Features *physical_features13,
+                                 uint32_t *api_version,
+                                 const char ***extensions,
+                                 uint32_t *num_extensions) {
     VkResult result;
     uint32_t device_extension_count;
     uint32_t i;
     VkExtensionProperties *device_extensions;
-    bool ret = false;
+    enum PHY_DEV ret = PHY_DEV_NO;
     struct swap_chain_support_details swap_chain_support;
     int found_khr_surface = 0;
 
@@ -463,12 +488,22 @@ static bool is_suitable_physical_device(VkPhysicalDevice physical_device,
 
     err_log("Probing physical device %s\n", device_properties.deviceName);
 
+    *portability = 0;
+    *extensions = NULL;
+    *num_extensions = 0;
+
+    if (device_properties.apiVersion < VK_MIN_VERSION) {
+        err_log("vulkan version %d not available\n",
+            VK_MIN_VERSION);
+        return PHY_DEV_NO;
+    }
+
     result = vkEnumerateDeviceExtensionProperties(
         physical_device, NULL, &device_extension_count, NULL);
     if (result != VK_SUCCESS) {
         err_log("vkEnumerateDeviceExtensionProperties failed: %d\n",
                 result);
-        return false;
+        return PHY_DEV_NO;
     }
 
     device_extensions =
@@ -524,7 +559,116 @@ static bool is_suitable_physical_device(VkPhysicalDevice physical_device,
         err_log(" Device doesn't support any swap chain present modes\n");
         goto cleanup;
     }
-    ret = true;
+    *api_version = VK_MIN_VERSION;
+    ret = PHY_DEV_YES;
+
+    if (device_properties.apiVersion < PL_VK_MIN_VERSION) {
+        goto cleanup;
+    }
+
+    *physical_features2 = (VkPhysicalDeviceFeatures2){ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+    *physical_features11 = (VkPhysicalDeviceVulkan11Features){ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES };
+    *physical_features12 = (VkPhysicalDeviceVulkan12Features){ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
+    *physical_features13 = (VkPhysicalDeviceVulkan13Features){ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
+    physical_features2->pNext = physical_features11;
+    physical_features11->pNext = physical_features12;
+    physical_features12->pNext = physical_features13;
+
+    vkGetPhysicalDeviceFeatures2(physical_device, physical_features2);
+    VkPhysicalDeviceFeatures *features = &physical_features2->features;
+
+    int features_count = sizeof(VkPhysicalDeviceFeatures) / sizeof(VkBool32);
+    VkBool32 *features_avail = (VkBool32 *)features;
+    const VkBool32 *features_required = (const VkBool32 *)&pl_vulkan_required_features.features;
+    const VkBool32 *features_rec = (const VkBool32 *)&pl_vulkan_recommended_features.features;
+
+    for (int i = 0; i < features_count; ++i) {
+        if (features_required[i] && !features_avail[i]) {
+            err_log(" Device doesn't support required feature for libplacebo: %d\n", i);
+            goto cleanup;
+        }
+        if (features_avail[i]) {
+            if (features_required[i] || features_rec[i]) {
+                err_log("keeping feature %d\n", i);
+                continue;
+            }
+            err_log("skipping feature %d\n", i);
+            features_avail[i] = 0;
+        }
+    }
+
+    struct vk_t {
+        VkStructureType sType;
+        void *pNext;
+    } *vk_s;
+
+#define CHECK_FEATURES(a, t, s, n) do { \
+    int features_count = \
+        (sizeof(t) - sizeof(struct vk_t)) / sizeof(VkBool32); \
+ \
+    features_avail = (VkBool32 *)((struct vk_t *)(a) + 1); \
+ \
+    vk_s = (struct vk_t *)&pl_vulkan_required_features; \
+    while (vk_s && vk_s->sType != s) { \
+        vk_s = vk_s->pNext; \
+    } \
+    features_required = vk_s ? (const VkBool32 *)(vk_s + 1) : NULL; \
+ \
+    vk_s = (struct vk_t *)&pl_vulkan_recommended_features; \
+    while (vk_s && vk_s->sType != s) { \
+        vk_s = vk_s->pNext; \
+    } \
+    features_rec = vk_s ? (const VkBool32 *)(vk_s + 1) : NULL; \
+ \
+    for (int i = 0; i < features_count; ++i) { \
+        if (features_required && features_required[i] && !features_avail[i]) { \
+            err_log(" Device doesn't support required " n " feature for libplacebo: %d\n", i); \
+            goto cleanup; \
+        } \
+        if (features_avail[i]) { \
+            if ((features_required && features_required[i]) || (features_rec && features_rec[i])) { \
+                err_log("keeping " n " feature %d\n", i); \
+                continue; \
+            } \
+            err_log("skipping " n " feature %d\n", i); \
+            features_avail[i] = 0; \
+        } \
+    } \
+} while (0)
+
+    CHECK_FEATURES(physical_features11, VkPhysicalDeviceVulkan11Features, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES, "Vulkan 1.1");
+    CHECK_FEATURES(physical_features12, VkPhysicalDeviceVulkan12Features, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, "Vulkan 1.2");
+    CHECK_FEATURES(physical_features13, VkPhysicalDeviceVulkan13Features, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, "Vulkan 1.3");
+
+    *api_version = PL_VK_MIN_VERSION;
+    ret = PHY_DEV_PLACEBO;
+    *num_extensions = found_khr_surface + *portability;
+    for (int i = 0; i < pl_vulkan_num_recommended_extensions; ++i) {
+        for (int j = 0; j < (int)device_extension_count; j++) {
+            if (strcmp(pl_vulkan_recommended_extensions[i], device_extensions[j].extensionName) == 0) {
+                err_log("%s available for libplacebo\n", pl_vulkan_recommended_extensions[i]);
+                ++*num_extensions;
+            }
+        }
+    }
+    *extensions = malloc(sizeof(const char *) * *num_extensions);
+    int ext_i = 0;
+    if (found_khr_surface) {
+        (*extensions)[ext_i] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+        ++ext_i;
+    }
+    if (*portability) {
+        (*extensions)[ext_i] = VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME;
+        ++ext_i;
+    }
+    for (int i = 0; i < pl_vulkan_num_recommended_extensions; ++i) {
+        for (int j = 0; j < (int)device_extension_count; j++) {
+            if (strcmp(pl_vulkan_recommended_extensions[i], device_extensions[j].extensionName) == 0) {
+                (*extensions)[ext_i] = pl_vulkan_recommended_extensions[i];
+                ++ext_i;
+            }
+        }
+    }
 
 cleanup:
     free(device_extensions);
@@ -558,15 +702,39 @@ static bool create_physical_device(struct vulkan_demo *demo) {
         goto cleanup;
     }
 
+    enum PHY_DEV phy_dev = PHY_DEV_NO;
     for (i = 0; i < device_count; i++) {
         struct queue_family_indices indices = {-1, -1};
-        if (is_suitable_physical_device(physical_devices[i], demo->surface,
-                                        &indices, &demo->portability)) {
+        bool portability = 0;
+        uint32_t api_version;
+        const char **extensions;
+        uint32_t num_extensions;
+        enum PHY_DEV phy_dev_ret = is_suitable_physical_device(
+            physical_devices[i], demo->surface,
+            &indices, &portability,
+            &demo->physical_features2,
+            &demo->physical_features11,
+            &demo->physical_features12,
+            &demo->physical_features13,
+            &api_version,
+            &extensions, &num_extensions);
+        if (phy_dev_ret > phy_dev) {
             err_log("  Selecting this device for rendering. Queue families: "
                    "graphics: %d, present: %d!\n",
                    indices.graphics, indices.present);
+            if (demo->extensions) {
+                free(demo->extensions);
+            }
+            demo->extensions = extensions;
+            demo->num_extensions = num_extensions;
             demo->physical_device = physical_devices[i];
             demo->indices = indices;
+            demo->portability = portability;
+            demo->api_version = api_version;
+            phy_dev = phy_dev_ret;
+        }
+        if (phy_dev == PHY_DEV_PLACEBO) {
+            err_log("libplacebo available with the selected physical device.\n");
             break;
         }
     }
@@ -575,6 +743,7 @@ static bool create_physical_device(struct vulkan_demo *demo) {
     } else {
         ret = true;
     }
+    use_placebo = phy_dev == PHY_DEV_PLACEBO;
 cleanup:
     free(physical_devices);
     return ret;
@@ -587,11 +756,6 @@ static bool create_logical_device(struct vulkan_demo *demo) {
     uint32_t num_queues = 1;
     VkDeviceQueueCreateInfo *queue_create_infos;
     VkDeviceCreateInfo create_info;
-    const char *swap_chain_extension_name[] = {
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-        demo->portability ? VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME : 0
-    };
-    uint32_t swap_chain_extension_name_count = 1 + (demo->portability ? 1 : 0);
 
     queue_create_infos = calloc(2, sizeof(VkDeviceQueueCreateInfo));
     queue_create_infos[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -612,8 +776,11 @@ static bool create_logical_device(struct vulkan_demo *demo) {
     create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     create_info.queueCreateInfoCount = num_queues;
     create_info.pQueueCreateInfos = queue_create_infos;
-    create_info.enabledExtensionCount = swap_chain_extension_name_count;
-    create_info.ppEnabledExtensionNames = swap_chain_extension_name;
+    create_info.enabledExtensionCount = demo->num_extensions;
+    create_info.ppEnabledExtensionNames = demo->extensions;
+    if (use_placebo) {
+        create_info.pNext = &demo->physical_features2;
+    }
 
     result = vkCreateDevice(demo->physical_device, &create_info, NULL,
                             &demo->device);
@@ -1914,6 +2081,9 @@ static void destroy_vulkan_demo(struct vulkan_demo *demo) {
     vkDestroyDevice(demo->device, NULL);
     vkDestroySurfaceKHR(demo->instance, demo->surface, NULL);
 
+    if (demo->extensions) {
+        free(demo->extensions);
+    }
     if (demo->swap_chain_images) {
         free(demo->swap_chain_images);
     }
@@ -1940,6 +2110,8 @@ static void destroy_vulkan_demo(struct vulkan_demo *demo) {
     if (demo->command_buffers) {
         free(demo->command_buffers);
     }
+
+    use_placebo = false;
 }
 
 static void destroy_instance(struct vulkan_demo *demo) {
@@ -1960,8 +2132,173 @@ static SDL_Window *sdl_win[SCREEN_COUNT];
 static struct nk_context *nk_ctx;
 static VmaAllocator vma[SCREEN_COUNT];
 
+enum {
+    UPSCALING_DEFAULT_NONE = 0,
+    UPSCALING_DEFAULT_COUNT,
+};
+
+#define PLACEBO_UI_INDEX(mode) (UPSCALING_DEFAULT_COUNT + mode)
+#define PLACEBO_MODE(ui_index) (ui_index - PLACEBO_UI_INDEX(0))
+#define IS_PLACEBO(ui_index) (PLACEBO_MODE(ui_index) >= 0 && PLACEBO_MODE(ui_index) < placebo_count)
+
+static struct placebo_t *placebo;
+static int placebo_count;
+static struct placebo_render_t *placebo_render[SCREEN_COUNT][SCREEN_COUNT];
+static int placebo_render_mode[SCREEN_COUNT][SCREEN_COUNT];
+
+static pl_vulkan pl_vk_dev[SCREEN_COUNT];
+static pl_log pl_log_dev;
+
+#define RASHADER_UI_INDEX(mode) (UPSCALING_DEFAULT_COUNT + placebo_count + mode)
+#define RASHADER_MODE(ui_index) (ui_index - RASHADER_UI_INDEX(0))
+#define IS_RASHADER(ui_index) (RASHADER_MODE(ui_index) >= 0 && RASHADER_MODE(ui_index) < rashader_count)
+
+static struct rashader_t *rashader;
+static int rashader_count;
+static struct rashader_render_t *rashader_render[SCREEN_COUNT][SCREEN_COUNT];
+static int rashader_render_mode[SCREEN_COUNT][SCREEN_COUNT];
+
+static int vk_upscaling_init(void) {
+    ui_upscaling_filter_count = UPSCALING_DEFAULT_COUNT;
+
+    pl_log_dev = placebo_log_create();
+    for (int j = 0; j < SCREEN_COUNT; ++j) {
+        pl_vk_dev[j] = pl_vulkan_import(pl_log_dev, pl_vulkan_import_params(
+            .instance = vk_demo[j].instance,
+            .phys_device = vk_demo[j].physical_device,
+            .device = vk_demo[j].device,
+            .get_proc_addr = vkGetInstanceProcAddr,
+            .queue_graphics = { vk_demo[j].indices.graphics, 1 },
+            .features = &vk_demo[j].physical_features2,
+            .extensions = vk_demo[j].extensions,
+            .num_extensions = vk_demo[j].num_extensions,
+        ));
+        if (!pl_vk_dev[j]) {
+            use_placebo = false;
+        }
+
+        for (int i = 0; i < SCREEN_COUNT; ++i) {
+            placebo_render_mode[j][i] = -1;
+            rashader_render_mode[j][i] = -1;
+        }
+    }
+
+    if (use_placebo) {
+        placebo = placebo_load("placebo.json");
+        if (placebo) {
+            placebo_count = placebo_mode_count(placebo);
+            ui_upscaling_filter_count += placebo_count;
+        }
+    }
+
+    if (use_rashader) {
+        rashader = rashader_load("rashader.json");
+        if (rashader) {
+            rashader_count = rashader_mode_count(rashader);
+            ui_upscaling_filter_count += rashader_count;
+        }
+    }
+
+    ui_upscaling_filter_options = malloc(ui_upscaling_filter_count * sizeof(*ui_upscaling_filter_options));
+    if (!ui_upscaling_filter_options) {
+        return -1;
+    }
+
+    ui_upscaling_filter_options[UPSCALING_DEFAULT_NONE] = NK_UPSCALE_TYPE_TEXT_NONE "None";
+
+    for (int i = 0; i < placebo_count; ++i) {
+        ui_upscaling_filter_options[PLACEBO_UI_INDEX(i)] = placebo_mode_name(placebo, i, NK_UPSCALE_TYPE_TEXT_PLACEBO);
+    }
+
+    for (int i = 0; i < rashader_count; ++i) {
+        ui_upscaling_filter_options[RASHADER_UI_INDEX(i)] = rashader_mode_name(rashader, i, NK_UPSCALE_TYPE_TEXT_RASHADER);
+    }
+
+    ui_upscaling_selected = UPSCALING_DEFAULT_NONE;
+
+    return 0;
+}
+
+static void vk_filter_chain_free(void *) {}
+static void vk_upscaling_close(void) {
+    for (int j = 0; j < SCREEN_COUNT; ++j) {
+        for (int i = 0; i < SCREEN_COUNT; ++i) {
+            if (placebo_render[j][i]) {
+                placebo_render_close(placebo_render[j][i]);
+                placebo_render[j][i] = 0;
+            }
+        }
+
+        for (int i = 0; i < SCREEN_COUNT; ++i) {
+            if (rashader_render[j][i]) {
+                rashader_render_close(rashader_render[j][i], vk_filter_chain_free);
+                rashader_render[j][i] = 0;
+            }
+        }
+
+        pl_vulkan_destroy(&pl_vk_dev[j]);
+    }
+    placebo_log_destroy(&pl_log_dev);
+
+    if (placebo) {
+        placebo_unload(placebo);
+        placebo = 0;
+    }
+    placebo_count = 0;
+
+    if (rashader) {
+        rashader_unload(rashader);
+        rashader = 0;
+    }
+    rashader_count = 0;
+
+    if (ui_upscaling_filter_options) {
+        free(ui_upscaling_filter_options);
+        ui_upscaling_filter_options = 0;
+    }
+    ui_upscaling_filter_count = 0;
+}
+
+static int placebo_upscaling_update(int selected, int ctx_top_bot, int screen_top_bot) {
+    int i = ctx_top_bot;
+
+    int render_mode = -1;
+    bool reset_mode = 0;
+    if (selected >= 0) {
+        render_mode = selected;
+    } else {
+        reset_mode = 1;
+    }
+
+    if (
+        placebo_render[i][screen_top_bot] && (
+            placebo_render_mode[i][screen_top_bot] != render_mode ||
+            reset_mode
+        )
+    ) {
+        placebo_render_close(placebo_render[i][screen_top_bot]);
+        placebo_render[i][screen_top_bot] = 0;
+    }
+
+    if (!reset_mode && !placebo_render[i][screen_top_bot] && render_mode >= 0 && placebo) {
+        placebo_render[i][screen_top_bot] = placebo_render_init(placebo, render_mode, pl_vk_dev[i]->gpu, pl_log_dev);
+        if (!placebo_render[i][screen_top_bot]) {
+            err_log("placebo_render_init failed\n");
+            goto fail;
+        }
+
+        placebo_render_mode[i][screen_top_bot] = render_mode;
+    }
+
+fail:
+    return reset_mode;
+}
+
 static void vmaAuxCleanup(void);
 void ui_renderer_vk_destroy(void) {
+    ui_upscaling_filters = 0;
+    vk_upscaling_close();
+
     ui_nk_ctx = NULL;
 
     for (int i = 0; i < SCREEN_COUNT; ++i) {
@@ -2063,9 +2400,9 @@ int ui_renderer_vk_init(void) {
     VmaAllocatorCreateInfo vma_create_info = {};
     vma_create_info.flags = VMA_ALLOCATOR_CREATE_EXTERNALLY_SYNCHRONIZED_BIT;
     vma_create_info.pVulkanFunctions = &vma_funcs;
-    vma_create_info.vulkanApiVersion = VK_API_VERSION;
     vma_create_info.instance = vk_demo[SCREEN_TOP].instance;
     for (int i = 0; i < SCREEN_COUNT; ++i) {
+        vma_create_info.vulkanApiVersion = vk_demo[i].api_version;
         vma_create_info.physicalDevice = vk_demo[i].physical_device;
         vma_create_info.device = vk_demo[i].device;
         result = vmaCreateAllocator(&vma_create_info, &vma[i]);
@@ -2086,6 +2423,17 @@ int ui_renderer_vk_init(void) {
         return -1;
     }
     ui_nk_ctx = nk_ctx;
+
+    if (vk_upscaling_init()) {
+        return -1;
+    }
+    ui_upscaling_filters = 1;
+
+#ifdef __APPLE__
+    err_log("vulkan (via moltenvk/metal)\n");
+#else
+    err_log("vulkan\n");
+#endif
 
     return 0;
 }
@@ -2521,8 +2869,50 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
     VkImageSubresourceRange range_mip = range;
     range_mip.levelCount = render->src_mip;
 
+    int upscaling_selected = ui_upscaling_selected;
+
     if (data) {
         vk_render_upload_and_gen_mip_maps(cmd, vma[i], render, data, height, width);
+
+        if (!IS_PLACEBO(upscaling_selected)) {
+            placebo_upscaling_update(-1, i, screen_top_bot);
+        }
+
+        pl_tex in_tex = NULL;
+        pl_tex out_tex = NULL;
+        if (IS_PLACEBO(upscaling_selected)) {
+            int reset_mode = placebo_upscaling_update(PLACEBO_MODE(upscaling_selected), i, screen_top_bot);
+            if (placebo_render[i][screen_top_bot]) {
+                struct pl_vulkan_wrap_params in_tex_pars = {};
+                in_tex = pl_vulkan_wrap(pl_vk_dev[i]->gpu, &in_tex_pars);
+                if (!in_tex) {
+                    goto placebo_fail;
+                }
+
+                struct pl_vulkan_wrap_params out_tex_pars = {};
+                out_tex = pl_vulkan_wrap(pl_vk_dev[i]->gpu, &out_tex_pars);
+                if (!out_tex) {
+                    goto placebo_fail;
+                }
+
+                bool ret = placebo_render_run(placebo_render[i][screen_top_bot], in_tex, out_tex, 0, 0) != NULL;
+                if (!ret) {
+                    goto placebo_fail;
+                }
+            } else if (!reset_mode) {
+placebo_fail:
+                err_log("placebo render failed\n");
+                ui_upscaling_selected = UPSCALING_DEFAULT_NONE;
+            }
+        }
+
+        if (in_tex)
+            pl_tex_destroy(pl_vk_dev[i]->gpu, &in_tex);
+        if (out_tex)
+            pl_tex_destroy(pl_vk_dev[i]->gpu, &out_tex);
+
+        if (ui_upscaling_selected == UPSCALING_DEFAULT_NONE) {
+        }
     }
 
     struct vk_draw_t *draw = &vk_draw[i][vk_draw_count[i]];
