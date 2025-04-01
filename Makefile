@@ -54,7 +54,7 @@ endif
 
 ifneq ($(LITE),1)
 ifeq ($(OS),Darwin)
-LDLIBS += $(shell pkg-config libplacebo --libs) $(shell pkg-config lcms2 --libs)
+LDLIBS += $(shell pkg-config libplacebo --libs) $(shell pkg-config lcms2 --libs) $(shell pkg-config shaderc --libs)
 ifeq ($(STATIC_MVK),1)
 LDLIBS += -L${VULKAN_SDK}/lib/MoltenVK.xcframework/macos-arm64_x86_64 -lMoltenVK
 LDLIBS += -Wl,-framework,IOSurface -Wl,-framework,Metal -Wl,-framework,CoreFoundation -Wl,-framework,CoreGraphics -Wl,-framework,IOKit -Wl,-framework,QuartzCore -Wl,-framework,Foundation -Wl,-framework,AppKit
