@@ -491,7 +491,7 @@ static int d3d11_renderer_init(void) {
         }
     }
 
-    nk_ctx = nk_d3d11_init(d3d11device[SCREEN_TOP], WIN_WIDTH_DEFAULT, WIN_HEIGHT_DEFAULT, MAX_VERTEX_BUFFER, MAX_INDEX_BUFFER);
+    nk_ctx = nk_d3d11_init(d3d11device[SCREEN_TOP], 1, 1, MAX_VERTEX_BUFFER, MAX_INDEX_BUFFER);
     if (!nk_ctx)
         return -1;
 
@@ -546,8 +546,8 @@ int ui_renderer_d3d11_init(void) {
     sdl_set_wminfo();
 
     for (int i = 0; i < SCREEN_COUNT; ++i) {
-        ui_win_width_drawable[i] = WIN_WIDTH_DEFAULT;
-        ui_win_height_drawable[i] = WIN_HEIGHT_DEFAULT;
+        ui_win_width_drawable[i] = 1;
+        ui_win_height_drawable[i] = 1;
         ui_win_scale[i] = 1.0f;
     }
 

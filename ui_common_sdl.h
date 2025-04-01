@@ -6,6 +6,8 @@
 #include <stdbool.h>
 #include "nuklear/nuklear.h"
 
+extern bool is_win_size_in_pixels;
+
 enum ui_renderer_t {
     UI_RENDERER_D3D11_CSC,
     UI_RENDERER_D3D11,
@@ -14,6 +16,7 @@ enum ui_renderer_t {
     UI_RENDERER_GLES_CSC,
     UI_RENDERER_GLES,
     UI_RENDERER_GLES_ANGLE,
+    UI_RENDERER_VULKAN,
     UI_RENDERER_METAL,
     UI_RENDERER_SDL_HW,
     UI_RENDERER_SDL_SW,
@@ -43,7 +46,6 @@ extern LONG_PTR ui_sdl_wnd_proc[SCREEN_COUNT];
 #endif
 extern Uint32 ui_sdl_win_id[SCREEN_COUNT];
 
-extern rp_lock_t ui_size_lock;
 extern int ui_nk_width, ui_nk_height;
 extern float ui_nk_scale;
 
@@ -81,8 +83,12 @@ UNUSED static bool is_renderer_gles_angle(void) {
     return ui_renderer == UI_RENDERER_GLES_ANGLE;
 }
 
-UNUSED static bool is_renderer_metal(void) {
+UNUSED static bool is_renderer_vulkan(void) {
+#ifdef __APPLE__
     return ui_renderer == UI_RENDERER_METAL;
+#else
+    return ui_renderer == UI_RENDERER_VULKAN;
+#endif
 }
 
 UNUSED static bool is_renderer_sdl_hw(void) {

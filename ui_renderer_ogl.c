@@ -446,7 +446,7 @@ static int rashader_render_mode[SCREEN_COUNT][SCREEN_COUNT];
 
 static bool rashader_delay_init[SCREEN_COUNT][SCREEN_COUNT];
 
-#define GL_GetProcAddress (opt_flag_angle ? SDL_EGL_GetProcAddress : SDL_GL_GetProcAddress)
+#define GL_GetProcAddress (SDL_GL_GetProcAddress)
 
 static int ogl_upscaling_init(void) {
     bool use_placebo = true;
@@ -715,8 +715,8 @@ int ui_renderer_ogl_init(void) {
     sdl_set_wminfo();
 
     for (int i = 0; i < SCREEN_COUNT; ++i) {
-        ui_win_width_drawable[i] = WIN_WIDTH_DEFAULT;
-        ui_win_height_drawable[i] = WIN_HEIGHT_DEFAULT;
+        ui_win_width_drawable[i] = 1;
+        ui_win_height_drawable[i] = 1;
         ui_win_scale[i] = 1.0f;
     }
 

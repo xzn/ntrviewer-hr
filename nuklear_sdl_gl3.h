@@ -375,12 +375,13 @@ NK_API void
 nk_sdl_gl3_handle_grab(void)
 {
     struct nk_context *ctx = &sdl.ctx;
+    float scale = is_win_size_in_pixels ? ui_nk_scale : 1;
     if (ctx->input.mouse.grab) {
         SDL_SetWindowRelativeMouseMode(sdl.win, true);
     } else if (ctx->input.mouse.ungrab) {
         /* better support for older SDL by setting mode first; causes an extra mouse motion event */
         SDL_SetWindowRelativeMouseMode(sdl.win, false);
-        SDL_WarpMouseInWindow(sdl.win, (int)ctx->input.mouse.prev.x, (int)ctx->input.mouse.prev.y);
+        SDL_WarpMouseInWindow(sdl.win, (int)ctx->input.mouse.prev.x * scale, (int)ctx->input.mouse.prev.y * scale);
     } else if (ctx->input.mouse.grabbed) {
         ctx->input.mouse.pos.x = ctx->input.mouse.prev.x;
         ctx->input.mouse.pos.y = ctx->input.mouse.prev.y;
@@ -391,6 +392,7 @@ NK_API int
 nk_sdl_gl3_handle_event(SDL_Event *evt)
 {
     struct nk_context *ctx = &sdl.ctx;
+    float scale = is_win_size_in_pixels ? 1 / ui_nk_scale : 1;
 
     switch(evt->type)
     {
@@ -447,7 +449,7 @@ nk_sdl_gl3_handle_event(SDL_Event *evt)
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
             {
                 int down = evt->type == SDL_EVENT_MOUSE_BUTTON_DOWN;
-                const int x = evt->button.x, y = evt->button.y;
+                const int x = evt->button.x * scale, y = evt->button.y * scale;
                 switch(evt->button.button)
                 {
                     case SDL_BUTTON_LEFT:
@@ -463,9 +465,9 @@ nk_sdl_gl3_handle_event(SDL_Event *evt)
         case SDL_EVENT_MOUSE_MOTION:
             if (ctx->input.mouse.grabbed) {
                 int x = (int)ctx->input.mouse.prev.x, y = (int)ctx->input.mouse.prev.y;
-                nk_input_motion(ctx, x + evt->motion.xrel, y + evt->motion.yrel);
+                nk_input_motion(ctx, x + evt->motion.xrel * scale, y + evt->motion.yrel * scale);
             }
-            else nk_input_motion(ctx, evt->motion.x, evt->motion.y);
+            else nk_input_motion(ctx, evt->motion.x * scale, evt->motion.y * scale);
             return 1;
 
         case SDL_EVENT_TEXT_INPUT:

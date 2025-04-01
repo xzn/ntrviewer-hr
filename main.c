@@ -98,7 +98,7 @@ bool renderer_evt_sync;
 
 #include <getopt.h>
 
-int opt_flag_d3d, opt_flag_ogl, opt_flag_gles, opt_flag_angle, opt_flag_metal;
+int opt_flag_d3d, opt_flag_ogl, opt_flag_gles, opt_flag_angle, opt_flag_metal, opt_flag_vulkan;
 int opt_flag_no_csc, opt_flag_sdl_hw, opt_flag_sdl_sw;
 
 #define opt_name_d3d "d3d"
@@ -106,6 +106,7 @@ int opt_flag_no_csc, opt_flag_sdl_hw, opt_flag_sdl_sw;
 #define opt_name_gles "gles"
 #define opt_name_angle "angle"
 #define opt_name_metal "metal"
+#define opt_name_vulkan "vulkan"
 #define opt_name_sdl_hw "sdl-hw"
 #define opt_name_sdl_sw "sdl-sw"
 #define opt_name_no_csc "no-csc"
@@ -124,6 +125,7 @@ static struct option long_options[] = {
 #ifdef __APPLE__
     {opt_name_metal, no_argument, &opt_flag_metal, 1},
 #else
+    {opt_name_vulkan, no_argument, &opt_flag_vulkan, 1},
     {opt_name_ogl, no_argument, &opt_flag_ogl, 1},
     {opt_name_gles, no_argument, &opt_flag_gles, 1},
     {opt_name_angle, no_argument, &opt_flag_angle, 1},
@@ -229,6 +231,8 @@ static void parse_args(int argc, char **argv)
                         add_arg(UI_RENDERER_GLES_ANGLE, opt_name_angle);
                     } else if (strcmp(name, opt_name_metal) == 0) {
                         add_arg(UI_RENDERER_METAL, opt_name_metal);
+                    } else if (strcmp(name, opt_name_vulkan) == 0) {
+                        add_arg(UI_RENDERER_VULKAN, opt_name_vulkan);
                     } else if (strcmp(name, opt_name_sdl_hw) == 0) {
                         add_arg(UI_RENDERER_SDL_HW, opt_name_sdl_hw);
                     } else if (strcmp(name, opt_name_sdl_sw) == 0) {
@@ -317,12 +321,14 @@ static LRESULT CALLBACK main_window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             break;
         }
 
-        case WM_DPICHANGED:
+        case WM_DPICHANGED: {
             ui_win_scale[i] = (float)HIWORD(wparam) / USER_DEFAULT_SCREEN_DPI;
             if (resize_top_and_ui) {
                 ui_nk_scale = ui_win_scale[i];
             }
+            SDL_SetWindowSize(ui_sdl_win[i], ui_win_scale[i] * ui_win_width[i], ui_win_scale[i] * ui_win_height[i]);
             break;
+        }
 
         case WM_LBUTTONDOWN:
         case WM_LBUTTONUP:
@@ -507,11 +513,9 @@ static void thread_loop(int i) {
 #ifndef USE_SDL_RENDERER_ONLY
         ui_renderer_ogl_main(screen_top_bot, ctx_top_bot, view_mode, win_shared, bg);
 #endif
-    } else if (is_renderer_metal()) {
+    } else if (is_renderer_vulkan()) {
 #ifndef USE_SDL_RENDERER_ONLY
-#ifdef __APPLE__
         ui_renderer_vk_main(ctx_top_bot, view_mode, bg);
-#endif
 #endif
     } else if (is_renderer_sdl_renderer()) {
         ui_renderer_sdl_main(ctx_top_bot, view_mode, bg);
@@ -567,11 +571,9 @@ static void thread_loop(int i) {
 #ifndef USE_SDL_RENDERER_ONLY
         ui_renderer_ogl_present(screen_top_bot, ctx_top_bot, win_shared);
 #endif
-    } else if (is_renderer_metal()) {
+    } else if (is_renderer_vulkan()) {
 #ifndef USE_SDL_RENDERER_ONLY
-#ifdef __APPLE__
         ui_renderer_vk_present(ctx_top_bot);
-#endif
 #endif
     } else if (is_renderer_sdl_renderer()) {
         ui_renderer_sdl_present(ctx_top_bot);
@@ -701,11 +703,9 @@ static void main_loop(void) {
                     nk_sdl_gles2_handle_event(&evt);
 #endif
 #endif
-                } else if (is_renderer_metal()) {
+                } else if (is_renderer_vulkan()) {
 #ifndef USE_SDL_RENDERER_ONLY
-#ifdef __APPLE__
                     nk_sdl_vk_handle_event(&evt);
-#endif
 #endif
                 } else if (is_renderer_sdl_renderer()) {
                     nk_sdl_renderer_handle_event(&evt);
@@ -811,7 +811,6 @@ static void main_ntr(void) {
     rp_lock_init(sdl_cursors_lock);
     rp_lock_init(sdl_game_controller_lock);
     rp_lock_init(ui_nk_lock);
-    rp_lock_init(ui_size_lock);
     thread_t window_top_thread = 0;
     thread_t window_bot_thread = 0;
 
@@ -851,7 +850,6 @@ join_win_bot:
         thread_join(window_top_thread);
 join_win_top:
     }
-    rp_lock_close(ui_size_lock);
     rp_lock_close(ui_nk_lock);
     rp_lock_close(sdl_game_controller_lock);
     rp_lock_close(sdl_cursors_lock);
@@ -911,10 +909,10 @@ static void main_windows(void) {
 
     event_init(&update_bottom_screen_evt);
 
-    ui_view_mode_update(ui_view_mode);
     for (int i = 0; i < SCREEN_COUNT; ++i) {
         ui_window_size_update(i);
     }
+    ui_view_mode_update(ui_view_mode);
     SDL_ShowWindow(ui_sdl_win[SCREEN_TOP]);
 
     nk_backend_font_init();
@@ -979,14 +977,12 @@ int main(int argc, char **argv) {
             else
                 renderer_inited = 1;
 #endif
-        } else if (is_renderer_metal()) {
+        } else if (is_renderer_vulkan()) {
 #ifndef USE_SDL_RENDERER_ONLY
-#ifdef __APPLE__
             if (ui_renderer_vk_init())
                 ui_renderer_vk_destroy();
             else
                 renderer_inited = 1;
-#endif
 #endif
         } else if (is_renderer_sdl_renderer()) {
             if (ui_renderer_sdl_init())
@@ -1012,11 +1008,9 @@ int main(int argc, char **argv) {
 #ifndef USE_SDL_RENDERER_ONLY
         ui_renderer_ogl_destroy();
 #endif
-    } else if (is_renderer_metal()) {
+    } else if (is_renderer_vulkan()) {
 #ifndef USE_SDL_RENDERER_ONLY
-#ifdef __APPLE__
         ui_renderer_vk_destroy();
-#endif
 #endif
         } else if (is_renderer_sdl_renderer()) {
         ui_renderer_sdl_destroy();

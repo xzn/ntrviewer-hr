@@ -169,6 +169,12 @@ int ui_renderer_sdl_init(void) {
 
     sdl_set_wminfo();
 
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+        ui_win_width_drawable[i] = 1;
+        ui_win_height_drawable[i] = 1;
+        ui_win_scale[i] = 1.0f;
+    }
+
     if (sdl_renderer_init()) {
         return -1;
     }
@@ -265,7 +271,7 @@ void ui_renderer_sdl_gen_cursor(stbi_t *image, const unsigned char *base, int wi
         return;
     }
     if (!SDL_UpdateTexture(tex, NULL, base, width * channels)) {
-        err_log("SDL_UpdateTexture failed: %s", SDL_GetError());
+        err_log("SDL_UpdateTexture failed: %s\n", SDL_GetError());
         goto final_tex;
     }
 
@@ -277,12 +283,12 @@ void ui_renderer_sdl_gen_cursor(stbi_t *image, const unsigned char *base, int wi
     }
 
     if (!SDL_SetRenderTarget(sdl_renderer[i], target)) {
-        err_log("SDL_SetRenderTarget failed: %s", SDL_GetError());
+        err_log("SDL_SetRenderTarget failed: %s\n", SDL_GetError());
         goto final_target;
     }
 
     if (!SDL_RenderTexture(sdl_renderer[i], tex, NULL, NULL)) {
-        err_log("SDL_RenderTexture failed: %s", SDL_GetError());
+        err_log("SDL_RenderTexture failed: %s\n", SDL_GetError());
         goto final_target;
     }
 
@@ -293,14 +299,30 @@ void ui_renderer_sdl_gen_cursor(stbi_t *image, const unsigned char *base, int wi
 
     SDL_Surface *read_surface = SDL_RenderReadPixels(sdl_renderer[i], NULL);
     if (!read_surface) {
-        err_log("SDL_RenderReadPixels failed: %s", SDL_GetError());
+        err_log("SDL_RenderReadPixels failed: %s\n", SDL_GetError());
         free(image->image);
         image->image = NULL;
     } else {
-        if (read_surface->format != SDL_FORMAT || read_surface->w != target_width || read_surface->h != target_height) {
-            err_log("SDL_RenderReadPixels unexpected: %d %d %d", (int)read_surface->format, read_surface->w, read_surface->h);
+        if (read_surface->w != target_width || read_surface->h != target_height) {
+            err_log("SDL_RenderReadPixels unexpected: %d %d %d\n", (int)read_surface->format, read_surface->w, read_surface->h);
             free(image->image);
             image->image = NULL;
+        } else if (read_surface->format != SDL_FORMAT) {
+            const SDL_PixelFormatDetails *fmt = SDL_GetPixelFormatDetails(read_surface->format);
+            for (int y = 0; y < read_surface->h; ++y) {
+                for (int x = 0; x < read_surface->w; ++x) {
+                    uint32_t pix = *(uint32_t *)((const char *)read_surface->pixels + y * read_surface->pitch + x * fmt->bytes_per_pixel);
+                    uint32_t r = (pix & fmt->Rmask) >> fmt->Rshift;
+                    uint32_t g = (pix & fmt->Gmask) >> fmt->Gshift;
+                    uint32_t b = (pix & fmt->Bmask) >> fmt->Bshift;
+                    uint32_t a = (pix & fmt->Amask) >> fmt->Ashift;
+                    unsigned char *out = image->image + (y * target_width + x) * channels;
+                    out[0] = r;
+                    out[1] = g;
+                    out[2] = b;
+                    out[3] = a;
+                }
+            }
         } else {
             for (int y = 0; y < read_surface->h; ++y) {
                 memcpy(image->image + y * target_width * channels, (const char *)read_surface->pixels + y * read_surface->pitch, target_width * channels);

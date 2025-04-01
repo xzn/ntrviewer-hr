@@ -5,9 +5,8 @@
 extern "C" {
 #endif
 
-#ifdef __APPLE__
+#ifndef __APPLE__
 #define LIBRA_RUNTIME_VULKAN
-#else
 #ifdef _WIN32
 #define LIBRA_RUNTIME_D3D11
 #endif

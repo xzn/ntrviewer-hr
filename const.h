@@ -43,6 +43,7 @@ UNUSED static int event_wait(HANDLE *event, int to_ns) {
 UNUSED static void event_rel(HANDLE *event) {
     SetEvent(*event);
 }
+#include "rp_syn.h"
 #else
 typedef unsigned char boolean;
 #ifndef FALSE

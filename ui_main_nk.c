@@ -16,9 +16,8 @@ rp_lock_t ui_nk_lock;
 static struct nk_style nk_style_current;
 
 #include "nuklear_sdl_renderer.h"
-#ifdef __APPLE__
 #include "nuklear_sdl_vulkan.h"
-#else
+#ifndef __APPLE__
 #include "nuklear_sdl_gl3.h"
 #include "nuklear_sdl_gles2.h"
 #endif
@@ -48,11 +47,9 @@ void nk_font_stash_begin(struct nk_font_atlas **atlas) {
         nk_sdl_gles2_font_stash_begin(atlas);
 #endif
 #endif
-    } else if (is_renderer_metal()) {
+    } else if (is_renderer_vulkan()) {
 #ifndef USE_SDL_RENDERER_ONLY
-#ifdef __APPLE__
         nk_sdl_vk_font_stash_begin(atlas);
-#endif
 #endif
     } else if (is_renderer_sdl_renderer()) {
         nk_sdl_renderer_font_stash_begin(atlas);
@@ -78,11 +75,9 @@ void nk_font_stash_end(void) {
         nk_sdl_gles2_font_stash_end();
 #endif
 #endif
-    } else if (is_renderer_metal()) {
+    } else if (is_renderer_vulkan()) {
 #ifndef USE_SDL_RENDERER_ONLY
-#ifdef __APPLE__
         nk_sdl_vk_font_stash_end();
-#endif
 #endif
     } else if (is_renderer_sdl_renderer()) {
         nk_sdl_renderer_font_stash_end();

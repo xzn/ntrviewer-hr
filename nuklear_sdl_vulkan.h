@@ -37,7 +37,8 @@ NK_API int nk_sdl_vk_handle_event(SDL_Event *evt);
 NK_API VkSemaphore nk_sdl_vk_render(uint32_t buffer_index,
                                     VkSemaphore wait_semaphore,
                                     enum nk_anti_aliasing AA);
-NK_API void nk_sdl_vk_resize(uint32_t framebuffer_width,
+NK_API void nk_sdl_vk_resize(float win_scale,
+                             uint32_t framebuffer_width,
                              uint32_t framebuffer_height);
 NK_API void nk_sdl_vk_device_destroy(void);
 NK_API void
@@ -59,6 +60,8 @@ NK_API void nk_sdl_vk_handle_grab(void);
  */
 #ifdef NK_SDL_VULKAN_IMPLEMENTATION
 #undef NK_SDL_VULKAN_IMPLEMENTATION
+
+#include "ui_common_sdl.h"
 
 NK_INTERN unsigned char nuklearshaders_nuklear_vert_spv[] = {
     0x03, 0x02, 0x23, 0x07, 0x00, 0x00, 0x01, 0x00, 0x0b, 0x00, 0x0d, 0x00,
@@ -1185,17 +1188,16 @@ NK_INTERN void nk_sdl_destroy_render_resources(struct nk_sdl_device *dev) {
     vkDestroyRenderPass(dev->logical_device, dev->render_pass, NULL);
 }
 #include <stdio.h>
-extern int ui_nk_width, ui_nk_height;
-extern float ui_nk_scale;
-NK_API void nk_sdl_vk_resize(uint32_t framebuffer_width,
+NK_API void nk_sdl_vk_resize(float win_scale,
+                             uint32_t framebuffer_width,
                              uint32_t framebuffer_height) {
     struct nk_sdl_device *dev = &sdl.vulkan;
 
-    sdl.width = ui_nk_width;
-    sdl.height = ui_nk_height;
-    sdl.scale = ui_nk_scale;
+    sdl.width = framebuffer_width / win_scale;
+    sdl.height = framebuffer_height / win_scale;
     sdl.display_width = framebuffer_width;
     sdl.display_height = framebuffer_height;
+    sdl.scale = win_scale;
 
     nk_sdl_destroy_render_resources(dev);
     nk_sdl_create_render_resources(dev, sdl.display_width, sdl.display_height);
@@ -1263,14 +1265,15 @@ NK_API void nk_sdl_vk_font_stash_end(void) {
 
 NK_API void nk_sdl_vk_handle_grab(void) {
     struct nk_context *ctx = &sdl.ctx;
+    float scale = is_win_size_in_pixels ? sdl.scale : 1;
     if (ctx->input.mouse.grab) {
         SDL_SetWindowRelativeMouseMode(sdl.win, true);
     } else if (ctx->input.mouse.ungrab) {
         /* better support for older SDL by setting mode first; causes an extra
          * mouse motion event */
         SDL_SetWindowRelativeMouseMode(sdl.win, false);
-        SDL_WarpMouseInWindow(sdl.win, (int)ctx->input.mouse.prev.x,
-                              (int)ctx->input.mouse.prev.y);
+        SDL_WarpMouseInWindow(sdl.win, (int)ctx->input.mouse.prev.x * scale,
+                              (int)ctx->input.mouse.prev.y * scale);
     } else if (ctx->input.mouse.grabbed) {
         ctx->input.mouse.pos.x = ctx->input.mouse.prev.x;
         ctx->input.mouse.pos.y = ctx->input.mouse.prev.y;
@@ -1280,6 +1283,7 @@ NK_API void nk_sdl_vk_handle_grab(void) {
 NK_API int nk_sdl_vk_handle_event(SDL_Event *evt) {
     struct nk_context *ctx = &sdl.ctx;
     int ctrl_down = SDL_GetModState() & (SDL_KMOD_LCTRL | SDL_KMOD_RCTRL);
+    float scale = is_win_size_in_pixels ? 1 / sdl.scale : 1;
 
     switch (evt->type) {
     case SDL_EVENT_KEY_UP: /* KEYUP & KEYDOWN share same routine */
@@ -1372,7 +1376,7 @@ NK_API int nk_sdl_vk_handle_event(SDL_Event *evt) {
                                        routine */
     case SDL_EVENT_MOUSE_BUTTON_DOWN: {
         int down = evt->type == SDL_EVENT_MOUSE_BUTTON_DOWN;
-        const int x = evt->button.x, y = evt->button.y;
+        const int x = evt->button.x * scale, y = evt->button.y * scale;
         switch (evt->button.button) {
         case SDL_BUTTON_LEFT:
             if (evt->button.clicks > 1)
@@ -1393,9 +1397,9 @@ NK_API int nk_sdl_vk_handle_event(SDL_Event *evt) {
         if (ctx->input.mouse.grabbed) {
             int x = (int)ctx->input.mouse.prev.x,
                 y = (int)ctx->input.mouse.prev.y;
-            nk_input_motion(ctx, x + evt->motion.xrel, y + evt->motion.yrel);
+            nk_input_motion(ctx, x + evt->motion.xrel * scale, y + evt->motion.yrel * scale);
         } else
-            nk_input_motion(ctx, evt->motion.x, evt->motion.y);
+            nk_input_motion(ctx, evt->motion.x * scale, evt->motion.y * scale);
         return 1;
     }
 
@@ -1666,8 +1670,7 @@ nk_sdl_vk_init(SDL_Window *win, VkDevice logical_device,
     sdl.ctx.clip.paste = nk_sdl_clipboard_paste;
     sdl.ctx.clip.userdata = nk_handle_ptr(0);
 
-    SDL_GetWindowSize(win, &sdl.width, &sdl.height);
-    SDL_GetWindowSizeInPixels(win, &sdl.display_width, &sdl.display_height);
+    sdl.display_width = sdl.display_height = sdl.width = sdl.height = 1;
 
     float scale_x = (float)(sdl.display_width) / (float)(sdl.width);
     float scale_y = (float)(sdl.display_height) / (float)(sdl.height);

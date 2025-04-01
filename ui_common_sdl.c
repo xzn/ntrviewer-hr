@@ -8,6 +8,7 @@
 #include "ikcp.h"
 #include <math.h>
 
+bool is_win_size_in_pixels;
 int is_renderer_ogl_dbg;
 
 enum ui_renderer_t ui_renderer;
@@ -24,7 +25,6 @@ LONG_PTR ui_sdl_wnd_proc[SCREEN_COUNT];
 #endif
 Uint32 ui_sdl_win_id[SCREEN_COUNT];
 
-rp_lock_t ui_size_lock;
 int ui_nk_width, ui_nk_height;
 float ui_nk_scale;
 
@@ -58,6 +58,12 @@ int ui_common_sdl_init(void) {
         return -1;
     }
 
+#ifdef _WIN32
+    is_win_size_in_pixels = 1;
+#else
+    is_win_size_in_pixels = 0;
+#endif
+
     return 0;
 }
 
@@ -79,22 +85,27 @@ void ui_view_mode_update(view_mode_t view_mode) {
     if (view_mode != VIEW_MODE_SEPARATE)
         SDL_HideWindow(ui_sdl_win[SCREEN_BOT]);
 
+    float scale[SCREEN_COUNT] = {};
+    if (is_win_size_in_pixels) {
+        scale[SCREEN_TOP] = ui_win_scale[SCREEN_TOP];
+        scale[SCREEN_BOT] = ui_win_scale[SCREEN_BOT];
+    }
     switch (view_mode) {
         case VIEW_MODE_TOP_BOT:
-            SDL_SetWindowSize(ui_sdl_win[SCREEN_TOP], WIN_WIDTH_DEFAULT, WIN_HEIGHT_DEFAULT);
+            SDL_SetWindowSize(ui_sdl_win[SCREEN_TOP], WIN_WIDTH_DEFAULT * scale[SCREEN_TOP], WIN_HEIGHT_DEFAULT * scale[SCREEN_TOP]);
             break;
 
         case VIEW_MODE_TOP:
-            SDL_SetWindowSize(ui_sdl_win[SCREEN_TOP], WIN_WIDTH_DEFAULT, WIN_HEIGHT12_DEFAULT);
+            SDL_SetWindowSize(ui_sdl_win[SCREEN_TOP], WIN_WIDTH_DEFAULT * scale[SCREEN_TOP], WIN_HEIGHT12_DEFAULT * scale[SCREEN_TOP]);
             break;
 
         case VIEW_MODE_BOT:
-            SDL_SetWindowSize(ui_sdl_win[SCREEN_TOP], WIN_WIDTH2_DEFAULT, WIN_HEIGHT12_DEFAULT);
+            SDL_SetWindowSize(ui_sdl_win[SCREEN_TOP], WIN_WIDTH2_DEFAULT * scale[SCREEN_TOP], WIN_HEIGHT12_DEFAULT * scale[SCREEN_TOP]);
             break;
 
         case VIEW_MODE_SEPARATE:
-            SDL_SetWindowSize(ui_sdl_win[SCREEN_TOP], WIN_WIDTH_DEFAULT, WIN_HEIGHT12_DEFAULT);
-            SDL_SetWindowSize(ui_sdl_win[SCREEN_BOT], WIN_WIDTH2_DEFAULT, WIN_HEIGHT12_DEFAULT);
+            SDL_SetWindowSize(ui_sdl_win[SCREEN_TOP], WIN_WIDTH_DEFAULT * scale[SCREEN_TOP], WIN_HEIGHT12_DEFAULT * scale[SCREEN_TOP]);
+            SDL_SetWindowSize(ui_sdl_win[SCREEN_BOT], WIN_WIDTH2_DEFAULT * scale[SCREEN_BOT], WIN_HEIGHT12_DEFAULT * scale[SCREEN_BOT]);
             break;
     }
 
@@ -106,13 +117,15 @@ void ui_view_mode_update(view_mode_t view_mode) {
 void ui_window_size_update(int window_top_bot) {
     int i = window_top_bot;
 
-    rp_lock_wait(ui_size_lock);
-
-    SDL_GetWindowSize(ui_sdl_win[i], &ui_win_width[i], &ui_win_height[i]);
+    if (!is_win_size_in_pixels) {
+        SDL_GetWindowSize(ui_sdl_win[i], &ui_win_width[i], &ui_win_height[i]);
+        ui_win_width[i] = NK_MAX(ui_win_width[i], 1);
+        ui_win_height[i] = NK_MAX(ui_win_height[i], 1);
+    }
 
     if (is_renderer_sdl_renderer()) {
-        SDL_GetCurrentRenderOutputSize(sdl_renderer[i], &ui_win_width_drawable[i], &ui_win_height_drawable[i]);
-    } else if (is_renderer_sdl_ogl() || is_renderer_metal()) {
+        SDL_GetRenderOutputSize(sdl_renderer[i], &ui_win_width_drawable[i], &ui_win_height_drawable[i]);
+    } else if (is_renderer_sdl_ogl() || is_renderer_vulkan()) {
         SDL_GetWindowSizeInPixels(ui_sdl_win[i], &ui_win_width_drawable[i], &ui_win_height_drawable[i]);
     } else if (is_renderer_d3d11()) {
 #ifdef _WIN32
@@ -126,19 +139,24 @@ void ui_window_size_update(int window_top_bot) {
     ui_win_width_drawable[i] = NK_MAX(ui_win_width_drawable[i], 1);
     ui_win_height_drawable[i] = NK_MAX(ui_win_height_drawable[i], 1);
 
-    float scale_x = (float)(ui_win_width_drawable[i]) / (float)(ui_win_width[i]);
-    float scale_y = (float)(ui_win_height_drawable[i]) / (float)(ui_win_height[i]);
-    scale_x = roundf(scale_x * ui_font_scale_step_factor) / ui_font_scale_step_factor;
-    scale_y = roundf(scale_y * ui_font_scale_step_factor) / ui_font_scale_step_factor;
-    ui_win_scale[i] = (scale_x + scale_y) * 0.5;
+    if (is_win_size_in_pixels) {
+        ui_win_scale[i] = SDL_GetWindowDisplayScale(ui_sdl_win[i]);
+        ui_win_scale[i] = roundf(ui_win_scale[i] * ui_font_scale_step_factor) / ui_font_scale_step_factor;
+        ui_win_width[i] = ui_win_width_drawable[i] / ui_win_scale[i];
+        ui_win_height[i] = ui_win_height_drawable[i] / ui_win_scale[i];
+    } else {
+        float scale_x = (float)(ui_win_width_drawable[i]) / (float)(ui_win_width[i]);
+        float scale_y = (float)(ui_win_height_drawable[i]) / (float)(ui_win_height[i]);
+        scale_x = roundf(scale_x * ui_font_scale_step_factor) / ui_font_scale_step_factor;
+        scale_y = roundf(scale_y * ui_font_scale_step_factor) / ui_font_scale_step_factor;
+        ui_win_scale[i] = (scale_x + scale_y) * 0.5;
+    }
 
     if (i == SCREEN_TOP) {
         ui_nk_width = ui_win_width[i];
         ui_nk_height = ui_win_height[i];
         ui_nk_scale = ui_win_scale[i];
     }
-
-    rp_lock_rel(ui_size_lock);
 }
 
 #define FRAME_STAT_EVERY_X_US 1000000
@@ -288,11 +306,9 @@ static void draw_screen_dispatch(UNUSED struct rp_buffer_ctx_t *ctx, uint8_t *da
 #ifndef USE_SDL_RENDERER_ONLY
         ui_renderer_ogl_draw(ctx, data, width, height, screen_top_bot, ctx_top_bot, view_mode, win_shared);
 #endif
-    } else if (is_renderer_metal()) {
+    } else if (is_renderer_vulkan()) {
 #ifndef USE_SDL_RENDERER_ONLY
-#ifdef __APPLE__
         ui_renderer_vk_draw(data, width, height, screen_top_bot, ctx_top_bot, view_mode);
-#endif
 #endif
     } else if (is_renderer_sdl_renderer()) {
         ui_renderer_sdl_draw(data, width, height, screen_top_bot, ctx_top_bot, view_mode);
@@ -531,11 +547,9 @@ void generate_cursor_image(stbi_t *image, const unsigned char *base, int width, 
 #ifndef USE_SDL_RENDERER_ONLY
         ui_renderer_ogl_gen_cursor(image, base, width, height, channels, scale);
 #endif
-    } else if (is_renderer_metal()) {
+    } else if (is_renderer_vulkan()) {
 #ifndef USE_SDL_RENDERER_ONLY
-#ifdef __APPLE__
         ui_renderer_vk_gen_cursor(image, base, width, height, channels, scale);
-#endif
 #endif
     } else if (is_renderer_sdl_renderer()) {
         ui_renderer_sdl_gen_cursor(image, base, width, height, channels, scale);

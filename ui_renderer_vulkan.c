@@ -64,7 +64,8 @@ void swap_chain_support_details_free(
 
 struct vulkan_demo {
     SDL_Window *win;
-    uint32_t win_width, win_height;
+    uint32_t win_width_pixel, win_height_pixel;
+    float win_scale;
     bool resizing;
     VkPhysicalDeviceFeatures2 physical_features2;
     VkPhysicalDeviceVulkan11Features physical_features11;
@@ -160,9 +161,13 @@ static bool check_validation_layer_support() {
         goto cleanup;
     }
 
+#ifndef NDEBUG
     err_log("Available vulkan layers:\n");
+#endif
     for (i = 0; i < layer_count; i++) {
+        #ifndef NDEBUG
         err_log("  %s\n", available_layers[i].layerName);
+#endif
         if (strcmp(validation_layer_name, available_layers[i].layerName) == 0) {
             ret = true;
             break;
@@ -252,11 +257,12 @@ static bool create_instance(struct vulkan_demo *demo) {
                 result);
         goto cleanup;
     }
-
+#ifndef NDEBUG
     err_log("available instance extensions:\n");
     for (i = 0; i < available_instance_extension_count; i++) {
         err_log("  %s\n", available_instance_extensions[i].extensionName);
     }
+#endif
 
     sdl_enabled_extensions = SDL_Vulkan_GetInstanceExtensions(&sdl_extension_count);
     if (!sdl_enabled_extensions) {
@@ -280,11 +286,12 @@ static bool create_instance(struct vulkan_demo *demo) {
             VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
     }
 
+#ifndef NDEBUG
     err_log("Trying to enable the following instance extensions:\n");
     for (i = 0; i < enabled_extension_count; i++) {
         err_log("%s\n", enabled_extensions[i]);
     }
-    err_log("\n");
+#endif
     for (i = 0; i < enabled_extension_count; i++) {
         int extension_missing = 1;
         uint32_t j;
@@ -497,7 +504,9 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
     VkPhysicalDeviceProperties device_properties;
     vkGetPhysicalDeviceProperties(physical_device, &device_properties);
 
+#ifndef NDEBUG
     err_log("Probing physical device %s\n", device_properties.deviceName);
+#endif
 
     *extensions = NULL;
     *num_extensions = 0;
@@ -528,10 +537,14 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
         goto cleanup;
     }
 
+#ifndef NDEBUG
     err_log("  Supported device extensions:\n");
+#endif
 
     for (i = 0; i < device_extension_count; i++) {
+#ifndef NDEBUG
         err_log("    %s\n", device_extensions[i].extensionName);
+#endif
         if (strcmp(VK_KHR_SWAPCHAIN_EXTENSION_NAME,
                    device_extensions[i].extensionName) == 0) {
             found_khr_surface = 1;
@@ -600,10 +613,15 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
 #endif
 
     vkGetPhysicalDeviceFeatures2(physical_device, physical_features2);
-
+#ifdef __APPLE__
     if (device_properties.apiVersion < PL_VK_MIN_VERSION || !synchronization2 || !syn2_features->synchronization2) {
         goto cleanup;
     }
+#else
+    if (device_properties.apiVersion < PL_VK_MIN_VERSION || !synchronization2 || !physical_features13->synchronization2) {
+        goto cleanup;
+    }
+#endif
 
     VkPhysicalDeviceFeatures *features = &physical_features2->features;
 
@@ -674,7 +692,9 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
     for (int i = 0; i < pl_vulkan_num_recommended_extensions; ++i) {
         for (int j = 0; j < (int)device_extension_count; j++) {
             if (strcmp(pl_vulkan_recommended_extensions[i], device_extensions[j].extensionName) == 0) {
+#ifndef NDEBUG
                 err_log("%s available for libplacebo\n", pl_vulkan_recommended_extensions[i]);
+#endif
                 ++*num_extensions;
             }
         }
@@ -700,8 +720,10 @@ cleanup:
         (*extensions)[ext_i] = VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME;
         ++ext_i;
     }
-#ifndef __APPLE__
-    *use_dynamic_rendering = dynamic_rendering && dyn_ren_features->dynamicRendering;
+#ifdef __APPLE__
+    *use_dynamic_rendering = 0 && dynamic_rendering && dyn_ren_features->dynamicRendering;
+#else
+    *use_dynamic_rendering = 0 && dynamic_rendering && physical_features13->dynamicRendering;
 #endif
 
     if (ret == PHY_DEV_PLACEBO) {
@@ -764,9 +786,11 @@ static bool create_physical_device(struct vulkan_demo *demo) {
             &demo->port_sub_features,
             &extensions, &num_extensions, &dynamic_rendering);
         if (phy_dev_ret > phy_dev) {
+#ifndef NDEBUG
             err_log("  Selecting this device for rendering. Queue families: "
                    "graphics: %d, present: %d!\n",
                    indices.graphics, indices.present);
+#endif
             if (demo->extensions) {
                 free(demo->extensions);
             }
@@ -778,7 +802,9 @@ static bool create_physical_device(struct vulkan_demo *demo) {
             phy_dev = phy_dev_ret;
         }
         if (phy_dev == PHY_DEV_PLACEBO) {
+#ifndef NDEBUG
             err_log("libplacebo available with the selected physical device.\n");
+#endif
             break;
         }
     }
@@ -927,18 +953,20 @@ static VkExtent2D choose_swap_extent(
     VkSurfaceCapabilitiesKHR *capabilities
 ) {
     VkExtent2D actual_extent;
-    if (capabilities->currentExtent.width != 0xFFFFFFFF) {
+    if (0 && capabilities->currentExtent.width != 0xFFFFFFFF) {
         return capabilities->currentExtent;
     } else {
-        actual_extent.width = demo->win_width;
-        actual_extent.height = demo->win_height;
+        actual_extent.width = demo->win_width_pixel;
+        actual_extent.height = demo->win_height_pixel;
 
-        actual_extent.width = NK_MAX(
-            capabilities->minImageExtent.width,
-            NK_MIN(capabilities->maxImageExtent.width, actual_extent.width));
-        actual_extent.height = NK_MAX(
-            capabilities->minImageExtent.height,
-            NK_MIN(capabilities->maxImageExtent.height, actual_extent.height));
+        if (0) {
+            actual_extent.width = NK_MAX(
+                capabilities->minImageExtent.width,
+                NK_MIN(capabilities->maxImageExtent.width, actual_extent.width));
+            actual_extent.height = NK_MAX(
+                capabilities->minImageExtent.height,
+                NK_MIN(capabilities->maxImageExtent.height, actual_extent.height));
+        }
 
         return actual_extent;
     }
@@ -2116,7 +2144,8 @@ static bool recreate_swap_chain(struct vulkan_demo *demo, bool nk) {
 
     update_descriptor_sets(demo);
     if (nk)
-        nk_sdl_vk_resize(demo->swap_chain_image_extent.width,
+        nk_sdl_vk_resize(demo->win_scale,
+                         demo->swap_chain_image_extent.width,
                          demo->swap_chain_image_extent.height);
 
     return true;
@@ -2141,7 +2170,9 @@ static VkResult destroy_debug_utils_messenger_ext(
 static void destroy_vulkan_demo(struct vulkan_demo *demo) {
     VkResult result;
 
+#ifndef NDEBUG
     err_log("cleaning up\n");
+#endif
     result = vkDeviceWaitIdle(demo->device);
     if (result != VK_SUCCESS) {
         err_log("vkDeviceWaitIdle failed: %d\n", result);
@@ -2573,6 +2604,14 @@ int ui_renderer_vk_init(void) {
         }
     }
 
+    sdl_set_wminfo();
+
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+        ui_win_width_drawable[i] = 1;
+        ui_win_height_drawable[i] = 1;
+        ui_win_scale[i] = 1.0f;
+    }
+
     VmaVulkanFunctions vma_funcs = {};
     vma_funcs.vkAllocateMemory = vkAllocateMemory;
     vma_funcs.vkBindBufferMemory = vkBindBufferMemory;
@@ -2658,33 +2697,31 @@ void ui_renderer_vk_main(int ctx_top_bot, view_mode_t view_mode, float bg[4]) {
         return;
     }
 
-    rp_lock_wait(ui_size_lock);
-
     if (
-        (int)demo->win_width != ui_win_width_drawable[i] ||
-        (int)demo->win_height != ui_win_height_drawable[i]
+        (int)demo->win_width_pixel != ui_win_width_drawable[i] ||
+        (int)demo->win_height_pixel != ui_win_height_drawable[i] ||
+        demo->win_scale != ui_win_scale[i]
     ) {
-        demo->win_width = ui_win_width_drawable[i];
-        demo->win_height = ui_win_height_drawable[i];
+        if (!recreate_swap_chain(demo, i == SCREEN_TOP)) {
+            return;
+        }
+        demo->win_width_pixel = ui_win_width_drawable[i];
+        demo->win_height_pixel = ui_win_height_drawable[i];
+        demo->win_scale = ui_win_scale[i];
         demo->resizing = 1;
-        recreate_swap_chain(demo, i == SCREEN_TOP);
     } else if (demo->resizing) {
+        if (!recreate_swap_chain(demo, i == SCREEN_TOP)) {
+            return;
+        }
         demo->resizing = 0;
-        recreate_swap_chain(demo, i == SCREEN_TOP);
     }
-
-    rp_lock_rel(ui_size_lock);
 
     result =
         vkAcquireNextImageKHR(demo->device, demo->swap_chain, UINT64_MAX,
                                 demo->image_available, NULL, &demo->image_index);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-        rp_lock_wait(ui_size_lock);
-        demo->win_width = ui_win_width_drawable[i];
-        demo->win_height = ui_win_height_drawable[i];
         recreate_swap_chain(demo, i == SCREEN_TOP);
-        rp_lock_rel(ui_size_lock);
 
         /* If vkAcquireNextImageKHR does not successfully acquire an image,
             * semaphore and fence are unaffected. */
@@ -3697,11 +3734,7 @@ void ui_renderer_vk_present(int ctx_top_bot) {
     result = vkQueuePresentKHR(demo->present_queue, &present_info);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-        rp_lock_wait(ui_size_lock);
-        demo->win_width = ui_win_width_drawable[i];
-        demo->win_height = ui_win_height_drawable[i];
         ret = recreate_swap_chain(demo, i == SCREEN_TOP);
-        rp_lock_rel(ui_size_lock);
 
         if (!ret) {
             err_log("failed to recreate swap chain!\n");

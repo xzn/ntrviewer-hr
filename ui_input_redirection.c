@@ -444,6 +444,7 @@ void update_bottom_screen_cursor(void) {
 
     float x, y;
     UNUSED Uint32 state = SDL_GetMouseState(&x, &y);
+    float scale = is_win_size_in_pixels ? 1 / ui_nk_scale : 1;
     SDL_Point point;
     int i;
     for (i = 0; i < SCREEN_COUNT; ++i) {
@@ -454,7 +455,7 @@ void update_bottom_screen_cursor(void) {
     if (i == SCREEN_COUNT && !sdl_bottom_screen_grabbing) {
         sdl_set_bottom_screen_cursor(true);
     }
-    int reset = sdl_get_bottom_screen_mouse_coord(__atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED), ui_sdl_win_id[i], x, y, &point);
+    int reset = sdl_get_bottom_screen_mouse_coord(__atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED), ui_sdl_win_id[i], x * scale, y * scale, &point);
     if (reset >= 0)
         sdl_set_bottom_screen_cursor(reset);
 }
@@ -476,10 +477,11 @@ static void sdl_set_touch_screen_coord(SDL_Point *point) {
 
 bool sdl_process_bottom_screen_event(SDL_Event *evt) {
     view_mode_t vm = __atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED);
+    float scale = is_win_size_in_pixels ? 1 / ui_nk_scale : 1;
     switch (evt->type) {
         case SDL_EVENT_MOUSE_MOTION: {
             SDL_Point point;
-            int reset = sdl_get_bottom_screen_mouse_coord(vm, evt->motion.windowID, evt->motion.x, evt->motion.y, &point);
+            int reset = sdl_get_bottom_screen_mouse_coord(vm, evt->motion.windowID, evt->motion.x * scale, evt->motion.y * scale, &point);
 
             if (sdl_bottom_screen_grabbing) {
                 if (!reset)
@@ -498,7 +500,7 @@ bool sdl_process_bottom_screen_event(SDL_Event *evt) {
                 break;
             }
             SDL_Point point;
-            int reset = sdl_get_bottom_screen_mouse_coord(vm, evt->button.windowID, evt->button.x, evt->button.y, &point);
+            int reset = sdl_get_bottom_screen_mouse_coord(vm, evt->button.windowID, evt->button.x * scale, evt->button.y * scale, &point);
             if (!reset) {
                 sdl_bottom_screen_grabbing = true;
                 sdl_set_touch_screen_coord(&point);
