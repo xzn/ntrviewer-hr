@@ -186,10 +186,10 @@ fail:
     return NULL;
 }
 
-void rashader_render_close(struct rashader_render_t *render, PFN_filter_chain_free fcf_fn) {
+void rashader_render_close(struct rashader_render_t *render, PFN_filter_chain_free fcf_fn, void *user) {
     if (render) {
         if (render->filter_chain)
-            fcf_fn(&render->filter_chain);
+            fcf_fn(&render->filter_chain, user);
         if (render->preset)
             libra_preset_free(&render->preset);
         delete render;

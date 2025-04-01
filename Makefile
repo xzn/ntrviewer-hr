@@ -4,6 +4,7 @@ ARCH := $(shell uname -m)
 endif
 ifeq ($(OS),Darwin)
 CLANG := 1
+STATIC_MVK := 0
 endif
 ifeq ($(CLANG),1)
 CC := clang
@@ -30,6 +31,9 @@ else
 CFLAGS += -flarge-source-files -Wno-unknown-pragmas
 endif
 CFLAGS += -Wno-missing-field-initializers
+ifeq ($(STATIC_MVK),1)
+CFLAGS += -DSTATIC_MVK
+endif
 EMBED_JPEG_TURBO := 1
 
 ifeq ($(OS),Windows_NT)
@@ -38,7 +42,7 @@ TARGET := ntrviewer.exe
 NASM := -DWIN64 -fwin64 -D__x86_64__
 else
 ifeq ($(OS),Darwin)
-LDLIBS := -Llib $(shell pkg-config sdl3 --libs --static)
+LDLIBS := -Llib $(shell pkg-config sdl3 --libs)
 else
 LDLIBS := -static-libgcc -static-libstdc++ -Llib -Wl,-Bstatic -lSDL3
 endif
@@ -50,7 +54,13 @@ endif
 
 ifneq ($(LITE),1)
 ifeq ($(OS),Darwin)
-LDLIBS += $(shell pkg-config libplacebo --libs --static)
+LDLIBS += $(shell pkg-config libplacebo --libs) $(shell pkg-config lcms2 --libs)
+ifeq ($(STATIC_MVK),1)
+LDLIBS += -L${VULKAN_SDK}/lib/MoltenVK.xcframework/macos-arm64_x86_64 -lMoltenVK
+LDLIBS += -Wl,-framework,IOSurface -Wl,-framework,Metal -Wl,-framework,CoreFoundation -Wl,-framework,CoreGraphics -Wl,-framework,IOKit -Wl,-framework,QuartzCore -Wl,-framework,Foundation -Wl,-framework,AppKit
+else
+LDLIBS += -Wl,-framework,CoreFoundation
+endif
 else
 LDLIBS += -lplacebo
 endif
@@ -62,6 +72,7 @@ endif
 ifneq ($(LITE),1)
 GL_OBJ := placebo.o rashader.o
 ifeq ($(OS),Darwin)
+GL_OBJ += ui_renderer_metal.o
 else
 GL_OBJ += libGLAD.o libNK_SDL_GL3.o libNK_SDL_GLES2.o ui_renderer_ogl.o
 endif
@@ -69,7 +80,10 @@ ifeq ($(OS),Windows_NT)
 GL_OBJ += libGLAD_WGL.o libNK_D3D11.o ui_renderer_d3d11.o ui_compositor_csc.o
 LDLIBS += -lshlwapi -lmincore
 endif
-GL_OBJ += libNK_SDL_Vulkan.o libvolk.o ui_renderer_vulkan.o vk_mem_alloc.o
+GL_OBJ += libNK_SDL_Vulkan.o ui_renderer_vulkan.o vk_mem_alloc.o
+endif
+ifneq ($(STATIC_MVK),1)
+GL_OBJ += libvolk.o
 endif
 
 ifeq ($(OS),Windows_NT)
@@ -204,6 +218,9 @@ main.o: main.c
 
 vk_mem_alloc.o: vk_mem_alloc.cpp
 	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -std=c++20 -Wno-nullability-completeness -Wno-unused-parameter -Wno-unused-private-field -Wno-unused-variable
+
+%.o: %.m
+	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS)
 
 %.o: %.c $(CLA_INC)
 	$(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -D_GNU_SOURCE

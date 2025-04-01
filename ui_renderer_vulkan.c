@@ -11,6 +11,8 @@
 #include "rashader.h"
 #include <libplacebo/vulkan.h>
 
+#include "ui_renderer_metal.h"
+
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
@@ -68,6 +70,7 @@ struct vulkan_demo {
     float win_scale;
     bool resizing;
     bool dynamic_rendering;
+    bool metal_objects;
     VkPhysicalDeviceFeatures2 physical_features2;
     VkPhysicalDeviceVulkan11Features physical_features11;
     VkPhysicalDeviceVulkan12Features physical_features12;
@@ -120,10 +123,18 @@ struct vulkan_demo {
     VkSemaphore render_finished;
 
     VkFence render_fence;
+
+#ifdef __APPLE__
+    MTLCommandQueue_id mtl_queue;
+    MTLSharedEvent_id upload_evt[SCREEN_COUNT];
+    MTLSharedEvent_id libra_evt[SCREEN_COUNT];
+    uint64_t upload_val[SCREEN_COUNT];
+    uint64_t libra_val[SCREEN_COUNT];
+#endif
 };
 
 static bool use_placebo;
-static bool use_rashader = true;
+static bool use_rashader;
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL vulkan_debug_callback(
     VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
@@ -231,12 +242,14 @@ static bool create_instance(struct vulkan_demo *demo) {
 
     validation_layers_installed = check_validation_layer_support();
 
+#ifndef NDEBUG
     if (!validation_layers_installed) {
         err_log(
                 "Couldn't find validation layer %s. Continuing without "
                 "validation layers.\n",
                 validation_layer_name);
     }
+#endif
     result = vkEnumerateInstanceExtensionProperties(
         NULL, &available_instance_extension_count, NULL);
     if (result != VK_SUCCESS) {
@@ -275,6 +288,7 @@ static bool create_instance(struct vulkan_demo *demo) {
     validation_layers_installed = 0;
 #endif
 
+#if 0
     enabled_extension_count =
         sdl_extension_count + (validation_layers_installed ? 1 : 0);
 
@@ -307,6 +321,13 @@ static bool create_instance(struct vulkan_demo *demo) {
             return ret;
         }
     }
+#else
+    enabled_extension_count = available_instance_extension_count;
+    enabled_extensions = malloc(available_instance_extension_count * sizeof(char *));
+    for (i = 0; i < available_instance_extension_count; ++i) {
+        enabled_extensions[i] = available_instance_extensions[i].extensionName;
+    }
+#endif
 
     memset(&app_info, 0, sizeof(VkApplicationInfo));
     app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -323,6 +344,9 @@ static bool create_instance(struct vulkan_demo *demo) {
     create_info.ppEnabledExtensionNames = enabled_extensions;
 #ifdef __APPLE__
     create_info.flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    VkExportMetalObjectCreateInfoEXT metal_info_queue = { VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT };
+    metal_info_queue.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_COMMAND_QUEUE_BIT_EXT;;
+    create_info.pNext = &metal_info_queue;
 #endif
     if (validation_layers_installed) {
         create_info.enabledLayerCount = 1;
@@ -489,6 +513,7 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
                                  VkPhysicalDevicePortabilitySubsetFeaturesKHR *port_sub_features,
                                  const char ***extensions,
                                  uint32_t *num_extensions,
+                                 __attribute__((unused)) bool *use_metal_objects,
                                  __attribute__((unused)) bool *use_dynamic_rendering) {
     VkResult result;
     uint32_t device_extension_count;
@@ -500,6 +525,7 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
     int portability = 0;
     int synchronization2 = 0;
     int dynamic_rendering = 0;
+    int metal_objects = 0;
 
     VkPhysicalDeviceProperties device_properties;
     vkGetPhysicalDeviceProperties(physical_device, &device_properties);
@@ -560,6 +586,10 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
         if (strcmp(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
                    device_extensions[i].extensionName) == 0) {
             dynamic_rendering = 1;
+        }
+        if (strcmp(VK_EXT_METAL_OBJECTS_EXTENSION_NAME,
+                   device_extensions[i].extensionName) == 0) {
+            metal_objects = 1;
         }
     }
     if (!found_khr_surface) {
@@ -706,7 +736,7 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
     }
 
 cleanup:
-    *num_extensions += found_khr_surface + portability + synchronization2 + dynamic_rendering;
+    *num_extensions += found_khr_surface + portability + synchronization2 + dynamic_rendering + metal_objects;
     *extensions = malloc(sizeof(const char *) * *num_extensions);
     int ext_i = 0;
     if (found_khr_surface) {
@@ -725,8 +755,13 @@ cleanup:
         (*extensions)[ext_i] = VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME;
         ++ext_i;
     }
+    if (metal_objects) {
+        (*extensions)[ext_i] = VK_EXT_METAL_OBJECTS_EXTENSION_NAME;
+        ++ext_i;
+    }
 #ifdef __APPLE__
     *use_dynamic_rendering = 0 && dynamic_rendering && dyn_ren_features->dynamicRendering;
+    *use_metal_objects = metal_objects;
 #else
     *use_dynamic_rendering = 0 && dynamic_rendering && physical_features13->dynamicRendering;
 #endif
@@ -784,6 +819,7 @@ static bool create_physical_device(struct vulkan_demo *demo) {
         const char **extensions;
         uint32_t num_extensions;
         bool dynamic_rendering;
+        bool metal_objects;
         enum PHY_DEV phy_dev_ret = is_suitable_physical_device(
             physical_devices[i], demo->surface,
             &indices,
@@ -794,7 +830,7 @@ static bool create_physical_device(struct vulkan_demo *demo) {
             &demo->dyn_ren_features,
             &demo->syn2_features,
             &demo->port_sub_features,
-            &extensions, &num_extensions, &dynamic_rendering);
+            &extensions, &num_extensions, &metal_objects, &dynamic_rendering);
         if (phy_dev_ret > phy_dev) {
 #ifndef NDEBUG
             err_log("  Selecting this device for rendering. Queue families: "
@@ -809,6 +845,7 @@ static bool create_physical_device(struct vulkan_demo *demo) {
             demo->physical_device = physical_devices[i];
             demo->indices = indices;
             demo->dynamic_rendering = dynamic_rendering;
+            demo->metal_objects = metal_objects;
             phy_dev = phy_dev_ret;
         }
         if (phy_dev == PHY_DEV_PLACEBO) {
@@ -824,6 +861,11 @@ static bool create_physical_device(struct vulkan_demo *demo) {
         ret = true;
     }
     use_placebo = phy_dev == PHY_DEV_PLACEBO;
+#ifdef __APPLE__
+    use_rashader = demo->metal_objects;
+#else
+    use_rashader = 1;
+#endif
 cleanup:
     free(physical_devices);
     return ret;
@@ -874,6 +916,16 @@ static bool create_logical_device(struct vulkan_demo *demo) {
                      &demo->graphics_queue);
     vkGetDeviceQueue(demo->device, demo->indices.present, 0,
                      &demo->present_queue);
+
+#ifdef __APPLE__
+    VkExportMetalObjectsInfoEXT mtl_ex_info = { VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECTS_INFO_EXT };
+    VkExportMetalCommandQueueInfoEXT mtl_queue_ex_info = { VK_STRUCTURE_TYPE_EXPORT_METAL_COMMAND_QUEUE_INFO_EXT };
+    mtl_queue_ex_info.queue = demo->graphics_queue;
+    mtl_ex_info.pNext = &mtl_queue_ex_info;
+    vkExportMetalObjectsEXT(demo->device, &mtl_ex_info);
+    demo->mtl_queue = mtl_queue_ex_info.mtlCommandQueue;
+#endif
+
     ret = true;
 cleanup:
     free(queue_create_infos);
@@ -2017,6 +2069,15 @@ static bool create_semaphores(struct vulkan_demo *demo) {
         err_log("vkCreateSemaphore failed: %d\n", result);
         return false;
     }
+#ifdef __APPLE__
+    VkExportMetalObjectCreateInfoEXT mtl_ex_info = { VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT };
+    mtl_ex_info.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_SHARED_EVENT_BIT_EXT;
+    semaphore_info.pNext = &mtl_ex_info;
+
+    VkSemaphoreTypeCreateInfo tl_info = { VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
+    tl_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+    mtl_ex_info.pNext = &tl_info;
+#endif
     for (int i = 0; i < SCREEN_COUNT; ++i) {
         result = vkCreateSemaphore(demo->device, &semaphore_info, NULL,
             &demo->upload_sem[i]);
@@ -2030,6 +2091,21 @@ static bool create_semaphores(struct vulkan_demo *demo) {
             err_log("vkCreateSemaphore failed: %d\n", result);
             return false;
         }
+#ifdef __APPLE__
+        VkExportMetalObjectsInfoEXT ex_info = { VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECTS_INFO_EXT };
+        VkExportMetalSharedEventInfoEXT evt_ex_info = { VK_STRUCTURE_TYPE_EXPORT_METAL_SHARED_EVENT_INFO_EXT };
+        ex_info.pNext = &evt_ex_info;
+
+        evt_ex_info.semaphore = demo->upload_sem[i];
+        vkExportMetalObjectsEXT(demo->device, &ex_info);
+        demo->upload_evt[i] = evt_ex_info.mtlSharedEvent;
+        demo->upload_val[i] = 1;
+
+        evt_ex_info.semaphore = demo->libra_sem[i];
+        vkExportMetalObjectsEXT(demo->device, &ex_info);
+        demo->libra_evt[i] = evt_ex_info.mtlSharedEvent;
+        demo->libra_val[i] = 1;
+#endif
     }
     return true;
 }
@@ -2287,6 +2363,10 @@ static struct placebo_render_t *placebo_render[SCREEN_COUNT][SCREEN_COUNT];
 static int placebo_render_mode[SCREEN_COUNT][SCREEN_COUNT];
 static VkSemaphore placebo_in_sem[SCREEN_COUNT][SCREEN_COUNT];
 static VkSemaphore placebo_sem[SCREEN_COUNT][SCREEN_COUNT];
+#ifdef __APPLE__
+static uint64_t placebo_in_val[SCREEN_COUNT][SCREEN_COUNT];
+static uint64_t placebo_val[SCREEN_COUNT][SCREEN_COUNT];
+#endif
 
 static pl_vulkan pl_vk_dev[SCREEN_COUNT];
 static pl_log pl_log_dev;
@@ -2323,11 +2403,22 @@ static int vk_upscaling_init(void) {
             placebo_render_mode[j][i] = -1;
             rashader_render_mode[j][i] = -1;
 
-            placebo_in_sem[j][i] = pl_vulkan_sem_create(pl_vk_dev[j]->gpu, pl_vulkan_sem_params());
-            placebo_sem[j][i] = pl_vulkan_sem_create(pl_vk_dev[j]->gpu, pl_vulkan_sem_params());
+            placebo_in_sem[j][i] = pl_vulkan_sem_create(pl_vk_dev[j]->gpu, pl_vulkan_sem_params(
+#ifdef __APPLE__
+                .type = VK_SEMAPHORE_TYPE_TIMELINE
+#endif
+            ));
+            placebo_sem[j][i] = pl_vulkan_sem_create(pl_vk_dev[j]->gpu, pl_vulkan_sem_params(
+#ifdef __APPLE__
+                .type = VK_SEMAPHORE_TYPE_TIMELINE
+#endif
+            ));
             if (!placebo_in_sem[j][i] || !placebo_sem[j][i]) {
                 use_placebo = false;
             }
+#ifdef __APPLE__
+            placebo_in_val[j][i] = placebo_val[j][i] = 1;
+#endif
         }
     }
 
@@ -2367,7 +2458,10 @@ static int vk_upscaling_init(void) {
     return 0;
 }
 
-static void vk_filter_chain_free(void *);
+#ifndef __APPLE__
+static void vk_filter_chain_free(void *, void *);
+#endif
+
 static void vk_upscaling_close(void) {
     for (int j = 0; j < SCREEN_COUNT; ++j) {
         pl_gpu_finish(pl_vk_dev[j]->gpu);
@@ -2385,7 +2479,11 @@ static void vk_upscaling_close(void) {
 
         for (int i = 0; i < SCREEN_COUNT; ++i) {
             if (rashader_render[j][i]) {
-                rashader_render_close(rashader_render[j][i], vk_filter_chain_free);
+#ifdef __APPLE__
+                rashader_render_close(rashader_render[j][i], mtl_filter_chain_free, NULL);
+#else
+                rashader_render_close(rashader_render[j][i], vk_filter_chain_free, NULL);
+#endif
                 rashader_render[j][i] = 0;
             }
         }
@@ -2448,6 +2546,63 @@ fail:
     return reset_mode;
 }
 
+#ifdef __APPLE__
+static struct mtl_ctx_t mtl_ctx[SCREEN_COUNT];
+static int rashader_upscaling_update(int selected, int ctx_top_bot, int screen_top_bot) {
+    int i = ctx_top_bot;
+
+    int render_mode = -1;
+    bool reset_mode = 0;
+    if (selected >= 0) {
+        render_mode = selected;
+    } else {
+        reset_mode = 1;
+    }
+
+    if (
+        rashader_render[i][screen_top_bot] && (
+            rashader_render_mode[i][screen_top_bot] != render_mode ||
+            reset_mode
+        )
+    ) {
+        rashader_render_close(rashader_render[i][screen_top_bot], mtl_filter_chain_free, &mtl_ctx[i]);
+        rashader_render[i][screen_top_bot] = 0;
+    }
+
+    static libra_preset_ctx_t ctx = 0;
+    if (!reset_mode && !rashader_render[i][screen_top_bot] && render_mode >= 0) {
+        libra_error_t err = libra_preset_ctx_create(&ctx);
+        if (err) {
+            libra_error_print(err);
+            libra_error_free(&err);
+            ctx = 0;
+            goto fail;
+        }
+        err = libra_preset_ctx_set_runtime(&ctx, LIBRA_PRESET_CTX_RUNTIME_METAL);
+        if (err) {
+            libra_error_print(err);
+            libra_error_free(&err);
+            goto fail;
+        }
+
+        mtl_ctx[i].queue = vk_demo[i].mtl_queue;
+        rashader_render[i][screen_top_bot] = rashader_render_init(rashader, render_mode, &ctx, mtl_filter_chain_create, &mtl_ctx[i], mtl_filter_chain_set_param);
+        if (!rashader_render[i][screen_top_bot]) {
+            err_log("rashader_render_init failed\n");
+            goto fail;
+        }
+
+        rashader_render_mode[i][screen_top_bot] = render_mode;
+    }
+
+fail:
+    if (ctx)
+        libra_preset_ctx_free(&ctx);
+    return reset_mode;
+}
+
+#else
+
 static void *vk_filter_chain_create(libra_shader_preset_t *preset, void *i) {
     struct vulkan_demo *demo = &vk_demo[(size_t)i];
     struct filter_chain_vk_opt_t opt = {
@@ -2471,7 +2626,7 @@ static void *vk_filter_chain_create(libra_shader_preset_t *preset, void *i) {
     return out;
 }
 
-static void vk_filter_chain_free(void *fc) {
+static void vk_filter_chain_free(void *fc, void *) {
     libra_error_t err = libra_vk_filter_chain_free((libra_vk_filter_chain_t *)fc);
     if (err) {
         libra_error_print(err);
@@ -2496,7 +2651,7 @@ static int rashader_upscaling_update(int selected, int ctx_top_bot, int screen_t
             reset_mode
         )
     ) {
-        rashader_render_close(rashader_render[i][screen_top_bot], vk_filter_chain_free);
+        rashader_render_close(rashader_render[i][screen_top_bot], vk_filter_chain_free, NULL);
         rashader_render[i][screen_top_bot] = 0;
     }
 
@@ -2530,6 +2685,7 @@ fail:
         libra_preset_ctx_free(&ctx);
     return reset_mode;
 }
+#endif
 
 static void vmaAuxCleanup(void);
 void ui_renderer_vk_destroy(void) {
@@ -2585,17 +2741,23 @@ void ui_renderer_vk_destroy(void) {
 int ui_renderer_vk_init(void) {
     VkResult result;
 
-    if (volkInitialize() != VK_SUCCESS) {
-        err_log("volk initialization failed\n");
+#ifdef STATIC_MVK
+    if (!SDL_Vulkan_LoadLibrary(NULL)) {
         return -1;
     }
+#else
+    if (volkInitialize() != VK_SUCCESS) {
+        return -1;
+    }
+#endif
 
     if (!create_instance(&vk_demo[SCREEN_TOP])) {
         return -1;
     }
 
+#ifndef STATIC_MVK
     volkLoadInstance(vk_demo[SCREEN_TOP].instance);
-
+#endif
     vk_demo[SCREEN_BOT].instance = vk_demo[SCREEN_TOP].instance;
     vk_demo[SCREEN_BOT].debug_messenger = vk_demo[SCREEN_TOP].debug_messenger;
 
@@ -2772,6 +2934,9 @@ struct vk_render_src_t {
     struct vk_image_t src;
     uint32_t src_mip;
     struct vk_view_desc_t src_view;
+#ifdef __APPLE__
+    MTLTexture_id mtl;
+#endif
 };
 
 struct vk_view_fb_t {
@@ -2792,6 +2957,9 @@ struct vk_render_img_t {
     struct vk_image_t img;
     uint32_t mip;
     struct vk_view_desc_t view;
+#ifdef __APPLE__
+    MTLTexture_id mtl;
+#endif
 };
 
 static struct vk_render_img_t vk_render_upscaled[SCREEN_COUNT][SCREEN_COUNT];
@@ -2811,6 +2979,9 @@ static struct vk_draw_t {
     bool need_barrier;
     VkImageMemoryBarrier barrier;
     VkSemaphore sem, sem_in;
+#ifdef __APPLE__
+    uint64_t val, val_in;
+#endif
     VkPipelineStageFlags stages;
 } vk_draw[SCREEN_COUNT][SCREEN_COUNT];
 
@@ -2818,7 +2989,7 @@ static void vk_render_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct
 static void vk_render_dst_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_dst_t *render);
 static void vk_render_img_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_img_t *render);
 
-static bool vk_render_create(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render, int width, int height) {
+static bool vk_render_create_mtl(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render, int width, int height, __attribute__((unused)) bool mtl) {
     VkResult result;
     bool need_update_descriptor_set = false;
 
@@ -2850,6 +3021,13 @@ static bool vk_render_create(struct vulkan_demo *demo, VmaAllocator vma, struct 
     }
     if (!render->src.img) {
         VkImageCreateInfo img_info = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+#ifdef __APPLE__
+        VkExportMetalObjectCreateInfoEXT mtl_img_ex_info = { VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT };
+        mtl_img_ex_info.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_TEXTURE_BIT_EXT;
+        if (mtl) {
+            img_info.pNext = &mtl_img_ex_info;
+        }
+#endif
         img_info.imageType = VK_IMAGE_TYPE_2D;
         img_info.format = VK_FORMAT;
         img_info.extent.width = width;
@@ -2869,6 +3047,17 @@ static bool vk_render_create(struct vulkan_demo *demo, VmaAllocator vma, struct 
             return false;
         }
         render->src_mip = img_info.mipLevels;
+#ifdef __APPLE__
+        if (mtl) {
+            VkExportMetalObjectsInfoEXT mtl_ex_info = { VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECTS_INFO_EXT };
+            VkExportMetalTextureInfoEXT mtl_ex_tex_info = { VK_STRUCTURE_TYPE_EXPORT_METAL_TEXTURE_INFO_EXT };
+            mtl_ex_tex_info.image = render->src.img;
+            mtl_ex_tex_info.plane = VK_IMAGE_ASPECT_PLANE_0_BIT;
+            mtl_ex_info.pNext = &mtl_ex_tex_info;
+            vkExportMetalObjectsEXT(demo->device, &mtl_ex_info);
+            render->mtl = mtl_ex_tex_info.mtlTexture;
+        }
+#endif
     }
 
     VkImageSubresourceRange range_mip = range;
@@ -2927,6 +3116,9 @@ static bool vk_render_create(struct vulkan_demo *demo, VmaAllocator vma, struct 
     return true;
 }
 
+static bool vk_render_create(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render, int width, int height) {
+    return vk_render_create_mtl(demo, vma, render, width, height, 0);
+}
 static bool vk_render_dst_create(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_dst_t *render, VkRenderPass render_pass, int width, int height) {
     VkResult result;
 
@@ -3034,6 +3226,11 @@ static bool vk_render_img_create(struct vulkan_demo *demo, VmaAllocator vma, str
 
     if (!render->img.img) {
         VkImageCreateInfo img_info = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+#ifdef __APPLE__
+        VkExportMetalObjectCreateInfoEXT mtl_img_ex_info = { VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT };
+        mtl_img_ex_info.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_TEXTURE_BIT_EXT;
+        img_info.pNext = &mtl_img_ex_info;
+#endif
         img_info.imageType = VK_IMAGE_TYPE_2D;
         img_info.format = VK_FORMAT;
         img_info.extent.width = width;
@@ -3055,6 +3252,15 @@ static bool vk_render_img_create(struct vulkan_demo *demo, VmaAllocator vma, str
             return false;
         }
         render->mip = img_info.mipLevels;
+#ifdef __APPLE__
+        VkExportMetalObjectsInfoEXT mtl_ex_info = { VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECTS_INFO_EXT };
+        VkExportMetalTextureInfoEXT mtl_ex_tex_info = { VK_STRUCTURE_TYPE_EXPORT_METAL_TEXTURE_INFO_EXT };
+        mtl_ex_tex_info.image = render->img.img;
+        mtl_ex_tex_info.plane = VK_IMAGE_ASPECT_PLANE_0_BIT;
+        mtl_ex_info.pNext = &mtl_ex_tex_info;
+        vkExportMetalObjectsEXT(demo->device, &mtl_ex_info);
+        render->mtl = mtl_ex_tex_info.mtlTexture;
+#endif
     }
 
     VkImageSubresourceRange range_mip = range;
@@ -3291,6 +3497,13 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
         submit_info.pCommandBuffers = &command_buffer;
         submit_info.signalSemaphoreCount = 1;
         submit_info.pSignalSemaphores = &demo->upload_sem[screen_top_bot];
+#ifdef __APPLE__
+        VkTimelineSemaphoreSubmitInfo tl_info = { VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
+        tl_info.signalSemaphoreValueCount = 1;
+        uint64_t signal_val = demo->upload_val[screen_top_bot];
+        tl_info.pSignalSemaphoreValues = &signal_val;
+        submit_info.pNext = &tl_info;
+#endif
 
         result = vkQueueSubmit(demo->graphics_queue, 1, &submit_info, 0);
 
@@ -3345,7 +3558,11 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
                     .tex = in_tex,
                     .layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                     .qf = demo->indices.graphics,
-                    .semaphore = { data ? demo->upload_sem[screen_top_bot] : 0 },
+                    .semaphore = { data ? demo->upload_sem[screen_top_bot] : 0,
+#ifdef __APPLE__
+                        data ? demo->upload_val[screen_top_bot]++ : 0,
+#endif
+                    },
                 ));
 
                 pl_vulkan_release_ex(pl_vk_dev[i]->gpu, pl_vulkan_release_params(
@@ -3363,7 +3580,11 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
                     .tex = in_tex,
                     .layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                     .qf = demo->indices.graphics,
-                    .semaphore = { placebo_in_sem[i][screen_top_bot] },
+                    .semaphore = { placebo_in_sem[i][screen_top_bot],
+#ifdef __APPLE__
+                        placebo_in_val[i][screen_top_bot],
+#endif
+                    },
                 ))) {
                     goto placebo_fail;
                 }
@@ -3372,7 +3593,11 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
                     .tex = out_tex,
                     .layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                     .qf = demo->indices.graphics,
-                    .semaphore = { placebo_sem[i][screen_top_bot] },
+                    .semaphore = { placebo_sem[i][screen_top_bot],
+#ifdef __APPLE__
+                        placebo_val[i][screen_top_bot],
+#endif
+                    },
                 ))) {
                     goto placebo_fail;
                 }
@@ -3393,6 +3618,18 @@ placebo_fail:
         if (IS_RASHADER(upscaling_selected)) {
             int reset_mode = rashader_upscaling_update(RASHADER_MODE(upscaling_selected), i, screen_top_bot);
             if (rashader_render[i][screen_top_bot]) {
+#ifdef __APPLE__
+                bool fail = 1;
+                if (mtl_filter_chain_frame(
+                    rashader_render[i][screen_top_bot],
+                    &mtl_ctx[i],
+                    demo->upload_evt[screen_top_bot], demo->libra_evt[screen_top_bot],
+                    demo->upload_val[screen_top_bot]++, demo->libra_val[screen_top_bot],
+                    render->mtl, render_upscaled->mtl)
+                ) {
+                    fail = 0;
+                }
+#else
                 libra_vk_filter_chain_t *chain = rashader_render_chain(rashader_render[i][screen_top_bot]);
                 struct libra_image_vk_t image = {
                     .handle = render->src.img,
@@ -3491,7 +3728,7 @@ placebo_fail:
                     err_log("vkQueueSubmit failed: %d\n", result);
                     return;
                 }
-
+#endif
                 if (fail)
                     goto rashader_fail;
 
@@ -3524,6 +3761,9 @@ upscale_fail:
                 draw->barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 draw->need_barrier = 1;
                 draw->sem = demo->upload_sem[screen_top_bot];
+#ifdef __APPLE__
+                draw->val = demo->upload_val[screen_top_bot]++;
+#endif
                 draw->stages = VK_PIPELINE_STAGE_TRANSFER_BIT;
                 break;
 
@@ -3544,6 +3784,10 @@ upscale_fail:
                 draw->need_mips = 1;
                 draw->sem = placebo_sem[i][screen_top_bot];
                 draw->sem_in = placebo_in_sem[i][screen_top_bot];
+#ifdef __APPLE__
+                draw->val = placebo_val[i][screen_top_bot]++;
+                draw->val_in = placebo_in_val[i][screen_top_bot]++;
+#endif
                 draw->stages = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
                 draw->desc = render_upscaled->view.desc;
                 break;
@@ -3564,6 +3808,9 @@ upscale_fail:
                 draw->height = render_upscaled->height;
                 draw->need_mips = 1;
                 draw->sem = demo->libra_sem[screen_top_bot];
+#ifdef __APPLE__
+                draw->val = demo->libra_val[screen_top_bot]++;
+#endif
                 draw->stages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
                 draw->desc = render_upscaled->view.desc;
                 break;
@@ -3597,6 +3844,9 @@ void ui_renderer_vk_present(int ctx_top_bot) {
 #define SEM_COUNT_MAX (SCREEN_COUNT * 2 + 1)
     VkSemaphore sems[SEM_COUNT_MAX];
     VkPipelineStageFlags stages[SEM_COUNT_MAX];
+#ifdef __APPLE__
+    uint64_t vals[SEM_COUNT_MAX];
+#endif
     uint32_t sems_count = 0;
     struct vulkan_demo *demo = &vk_demo[i];
     bool ret;
@@ -3637,10 +3887,16 @@ void ui_renderer_vk_present(int ctx_top_bot) {
         if (draw->sem) {
             sems[sems_count] = draw->sem;
             stages[sems_count] = draw->stages;
+#ifdef __APPLE__
+            vals[sems_count] = draw->val;
+#endif
             ++sems_count;
         }
         if (draw->sem_in) {
             sems[sems_count] = draw->sem_in;
+#ifdef __APPLE__
+            vals[sems_count] = draw->val_in;
+#endif
             stages[sems_count] = draw->stages;
             ++sems_count;
         }
@@ -3702,6 +3958,7 @@ void ui_renderer_vk_present(int ctx_top_bot) {
 
     sems[sems_count] = nk_semaphore;
     stages[sems_count] = wait_stage;
+    vals[sems_count] = 0;
     ++sems_count;
 
     vkCmdEndRenderPass(command_buffer);
@@ -3721,6 +3978,16 @@ void ui_renderer_vk_present(int ctx_top_bot) {
     submit_info.pCommandBuffers = &command_buffer;
     submit_info.signalSemaphoreCount = 1;
     submit_info.pSignalSemaphores = &demo->render_finished;
+
+#ifdef __APPLE__
+    VkTimelineSemaphoreSubmitInfo tl_info = { VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
+    tl_info.waitSemaphoreValueCount = sems_count;
+    tl_info.pWaitSemaphoreValues = vals;
+    tl_info.signalSemaphoreValueCount = 1;
+    uint64_t signal_value = 0;
+    tl_info.pSignalSemaphoreValues = &signal_value;
+    submit_info.pNext = &tl_info;
+#endif
 
     result = vkQueueSubmit(demo->graphics_queue, 1, &submit_info,
                            demo->render_fence);

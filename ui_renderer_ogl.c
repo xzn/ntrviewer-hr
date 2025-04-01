@@ -512,7 +512,7 @@ static int ogl_upscaling_init(void) {
     return 0;
 }
 
-static void ogl_filter_chain_free(void *fc);
+static void ogl_filter_chain_free(void *fc, void *);
 static void ogl_upscaling_close(void) {
     for (int j = 0; j < SCREEN_COUNT; ++j) {
         SDL_GL_MakeCurrent(ogl_win[j], gl_context[j]);
@@ -526,7 +526,7 @@ static void ogl_upscaling_close(void) {
 
         for (int i = 0; i < SCREEN_COUNT; ++i) {
             if (rashader_render[j][i]) {
-                rashader_render_close(rashader_render[j][i], ogl_filter_chain_free);
+                rashader_render_close(rashader_render[j][i], ogl_filter_chain_free, NULL);
                 rashader_render[j][i] = 0;
             }
         }
@@ -863,7 +863,7 @@ static void *ogl_filter_chain_create(libra_shader_preset_t *preset, void *) {
     return out;
 }
 
-static void ogl_filter_chain_free(void *fc) {
+static void ogl_filter_chain_free(void *fc, void *) {
     libra_error_t err = libra_gl_filter_chain_free((libra_gl_filter_chain_t *)fc);
     if (err) {
         libra_error_print(err);
@@ -888,7 +888,7 @@ static int rashader_upscaling_update(int selected, int ctx_top_bot, int screen_t
             reset_mode
         )
     ) {
-        rashader_render_close(rashader_render[i][screen_top_bot], ogl_filter_chain_free);
+        rashader_render_close(rashader_render[i][screen_top_bot], ogl_filter_chain_free, NULL);
         rashader_render[i][screen_top_bot] = 0;
 
         GLint i_max;

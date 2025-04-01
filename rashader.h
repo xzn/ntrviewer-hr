@@ -5,11 +5,13 @@
 extern "C" {
 #endif
 
-#ifndef __APPLE__
 #define LIBRA_RUNTIME_VULKAN
 #ifdef _WIN32
 #define LIBRA_RUNTIME_D3D11
 #endif
+#ifdef __APPLE__
+#define LIBRA_RUNTIME_METAL
+#else
 #define LIBRA_RUNTIME_OPENGL
 #endif
 #include <librashader.h>
@@ -24,12 +26,12 @@ size_t rashader_mode_count(struct rashader_t *rashader);
 const char *rashader_mode_name(struct rashader_t *rashader, size_t index, const char *prefix);
 
 typedef void *(*PFN_filter_chain_create)(libra_shader_preset_t *, void *);
-typedef void (*PFN_filter_chain_free)(void *);
+typedef void (*PFN_filter_chain_free)(void *, void *);
 
 typedef libra_error_t (*PFN_filter_chain_set_param)(void *, const char *, float);
 struct rashader_render_t;
 struct rashader_render_t *rashader_render_init(struct rashader_t *rashader, size_t index, libra_preset_ctx_t *ctx, PFN_filter_chain_create fcc_fn, void *user, PFN_filter_chain_set_param fcp_fn);
-void rashader_render_close(struct rashader_render_t *render, PFN_filter_chain_free fcf_fn);
+void rashader_render_close(struct rashader_render_t *render, PFN_filter_chain_free fcf_fn, void *user);
 void *rashader_render_chain(struct rashader_render_t *render);
 
 #ifdef __cplusplus
