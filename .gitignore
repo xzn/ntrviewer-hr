@@ -6,6 +6,7 @@
 include/lib*.h
 lib
 ra-*
+slang-*
 placebo-*
 
 ntrviewer*
