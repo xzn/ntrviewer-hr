@@ -44,7 +44,7 @@ int ui_common_sdl_init(void) {
     SDL_SetHint(SDL_HINT_RENDER_DRIVER, "direct3d11");
     SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, "direct3d11");
 #elif !defined(__APPLE__)
-    SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland");
+    SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland,x11");
 #endif
 
     if (opt_flag_angle) {
@@ -61,7 +61,12 @@ int ui_common_sdl_init(void) {
 #ifdef _WIN32
     is_win_size_in_pixels = 1;
 #else
-    is_win_size_in_pixels = 0;
+    const char *video_driver = SDL_GetCurrentVideoDriver();
+    if (video_driver && strcmp(video_driver, "x11") == 0) {
+        is_win_size_in_pixels = 1;
+    } else {
+        is_win_size_in_pixels = 0;
+    }
 #endif
 
     return 0;

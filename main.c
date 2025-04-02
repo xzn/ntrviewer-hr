@@ -742,7 +742,10 @@ skip_evt:
                 SDL_RaiseWindow(ui_sdl_win[SCREEN_TOP]);
             }
         } else {
+            bool top_focus = SDL_GetWindowFlags(ui_sdl_win[SCREEN_TOP]) & SDL_WINDOW_INPUT_FOCUS;
             ui_view_mode_update(view_mode);
+            if (top_focus)
+                SDL_RaiseWindow(ui_sdl_win[SCREEN_TOP]);
         }
         ui_fullscreen_prev = ui_fullscreen;
     }
