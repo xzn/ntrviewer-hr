@@ -289,7 +289,7 @@ static bool create_instance(struct vulkan_demo *demo) {
     validation_layers_installed = 0;
 #endif
 
-#if 1
+#ifndef STATIC_MVK
     enabled_extension_count =
         sdl_extension_count + (validation_layers_installed ? 1 : 0);
 

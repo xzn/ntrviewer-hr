@@ -4,7 +4,7 @@ ARCH := $(shell uname -m)
 endif
 ifeq ($(OS),Darwin)
 CLANG := 1
-STATIC_MVK := 0
+# STATIC_MVK := 0
 endif
 ifeq ($(CLANG),1)
 CC := clang
