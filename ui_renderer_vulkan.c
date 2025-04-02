@@ -588,10 +588,12 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
                    device_extensions[i].extensionName) == 0) {
             dynamic_rendering = 1;
         }
+#ifdef __APPLE__
         if (strcmp(VK_EXT_METAL_OBJECTS_EXTENSION_NAME,
                    device_extensions[i].extensionName) == 0) {
             metal_objects = 1;
         }
+#endif
     }
     if (!found_khr_surface) {
         err_log("  Device doesnt support %s\n", VK_KHR_SWAPCHAIN_EXTENSION_NAME);
@@ -756,11 +758,11 @@ cleanup:
         (*extensions)[ext_i] = VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME;
         ++ext_i;
     }
+#ifdef __APPLE__
     if (metal_objects) {
         (*extensions)[ext_i] = VK_EXT_METAL_OBJECTS_EXTENSION_NAME;
         ++ext_i;
     }
-#ifdef __APPLE__
     *use_dynamic_rendering = 0 && dynamic_rendering && dyn_ren_features->dynamicRendering;
     *use_metal_objects = metal_objects;
 #else
@@ -3976,7 +3978,9 @@ void ui_renderer_vk_present(int ctx_top_bot) {
 
     sems[sems_count] = nk_semaphore;
     stages[sems_count] = wait_stage;
+#ifdef __APPLE__
     vals[sems_count] = 0;
+#endif
     ++sems_count;
 
     vkCmdEndRenderPass(command_buffer);
