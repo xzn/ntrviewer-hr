@@ -3631,9 +3631,11 @@ placebo_fail:
                     rashader_render[i][screen_top_bot],
                     &mtl_ctx[i],
                     data ? demo->upload_evt[screen_top_bot] : NULL, demo->libra_evt[screen_top_bot],
-                    data ? demo->upload_val[screen_top_bot]++ : 0, demo->libra_val[screen_top_bot],
+                    data ? demo->upload_val[screen_top_bot] : 0, demo->libra_val[screen_top_bot],
                     render->mtl, render_upscaled->mtl)
                 ) {
+                    if (data)
+                        ++demo->upload_val[screen_top_bot];
                     fail = 0;
                 }
 #else
