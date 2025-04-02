@@ -65,10 +65,11 @@ void swap_chain_support_details_free(
 }
 
 struct vulkan_demo {
+    bool rendering;
+    bool need_resize;
     SDL_Window *win;
     uint32_t win_width_pixel, win_height_pixel;
     float win_scale;
-    bool resizing;
     bool dynamic_rendering;
     bool metal_objects;
     VkPhysicalDeviceFeatures2 physical_features2;
@@ -1053,17 +1054,6 @@ static bool create_swap_chain(struct vulkan_demo *demo) {
                                                 swap_chain_support.formats_len);
     present_mode = choose_swap_present_mode(
         swap_chain_support.present_modes, swap_chain_support.present_modes_len);
-    if (present_mode != VK_PRESENT_MODE_MAILBOX_KHR) {
-        // HACK to workaround pink border on macOS
-        // https://github.com/libsdl-org/SDL/issues/7789
-#if 0
-        if (demo->resizing) {
-            present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
-        } else {
-            present_mode = VK_PRESENT_MODE_FIFO_KHR;
-        }
-#endif
-    }
     extent = choose_swap_extent(demo, &swap_chain_support.capabilities);
 
     demo->swap_chain_images_len =
@@ -2219,6 +2209,8 @@ static bool create_vulkan_demo(struct vulkan_demo *demo) {
 }
 
 static bool recreate_swap_chain(struct vulkan_demo *demo, bool nk) {
+    demo->need_resize = true;
+
     if (!destroy_swap_chain_related_resources(demo)) {
         return false;
     }
@@ -2232,6 +2224,7 @@ static bool recreate_swap_chain(struct vulkan_demo *demo, bool nk) {
                          demo->swap_chain_image_extent.width,
                          demo->swap_chain_image_extent.height);
 
+    demo->need_resize = false;
     return true;
 }
 
@@ -2851,6 +2844,7 @@ void ui_renderer_vk_main(int ctx_top_bot, view_mode_t view_mode, float bg[4]) {
     int i = ctx_top_bot;
     VkResult result;
     struct vulkan_demo *demo = &vk_demo[i];
+    demo->rendering = false;
 
     result = vkWaitForFences(demo->device, 1, &demo->render_fence, VK_TRUE,
                                 UINT64_MAX);
@@ -2867,6 +2861,7 @@ void ui_renderer_vk_main(int ctx_top_bot, view_mode_t view_mode, float bg[4]) {
     }
 
     if (
+        demo->need_resize ||
         (int)demo->swap_chain_image_extent.width != ui_win_width_drawable[i] ||
         (int)demo->swap_chain_image_extent.height != ui_win_height_drawable[i] ||
         demo->win_scale != ui_win_scale[i]
@@ -2874,12 +2869,6 @@ void ui_renderer_vk_main(int ctx_top_bot, view_mode_t view_mode, float bg[4]) {
         demo->win_width_pixel = ui_win_width_drawable[i];
         demo->win_height_pixel = ui_win_height_drawable[i];
         demo->win_scale = ui_win_scale[i];
-        demo->resizing = 1;
-        if (!recreate_swap_chain(demo, i == SCREEN_TOP)) {
-            return;
-        }
-    } else if (demo->resizing) {
-        demo->resizing = 0;
         if (!recreate_swap_chain(demo, i == SCREEN_TOP)) {
             return;
         }
@@ -2904,6 +2893,7 @@ void ui_renderer_vk_main(int ctx_top_bot, view_mode_t view_mode, float bg[4]) {
     memcpy(&demo->clear_color.color, bg, sizeof(VkClearColorValue));
 
     vk_draw_count[i] = 0;
+    demo->rendering = true;
     if (view_mode == VIEW_MODE_TOP_BOT) {
         draw_screen(&rp_buffer_ctx[SCREEN_TOP], SCREEN_HEIGHT0, SCREEN_WIDTH, SCREEN_TOP, i, view_mode, 0);
         draw_screen(&rp_buffer_ctx[SCREEN_BOT], SCREEN_HEIGHT1, SCREEN_WIDTH, SCREEN_BOT, i, view_mode, 0);
@@ -3439,13 +3429,15 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
     int i = ctx_top_bot;
     struct vulkan_demo *demo = &vk_demo[i];
     struct vk_render_src_t *render = &vk_render[i][screen_top_bot];
+    if(!demo->rendering)
+        return;
 
 #ifdef __APPLE__
     if (!vk_render_create_mtl(demo, vma[i], render, height, width, 1))
-        return;
+        goto fail;
 #else
     if (!vk_render_create(demo, vma[i], render, height, width))
-        return;
+        goto fail;
 #endif
 
     int ctx_left;
@@ -3476,9 +3468,11 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
 
     int upscaling_selected = ui_upscaling_selected;
     enum upscaling_t upscaling = UPSCALING_NONE;
-    draw->desc = render->src_view.desc;
+    draw->need_barrier = 0;
     draw->need_mips = 0;
     draw->sem_in = 0;
+    draw->sem = 0;
+    draw->desc = render->src_view.desc;
 
     struct ui_prev_dims_t *prev = &ui_prev_dims[i][screen_top_bot];
     bool need_tex_update = data || prev->upscaling_selected != upscaling_selected || prev->width != ctx_width || prev->height != ctx_height;
@@ -3496,7 +3490,7 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
 
         if (result != VK_SUCCESS) {
             err_log("vkBeginCommandBuffer failed: %d\n", result);
-            return;
+            goto fail;
         }
 
         vk_render_upload_and_gen_mip_maps(command_buffer, vma[i], render, data, height, width);
@@ -3504,7 +3498,7 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
         result = vkEndCommandBuffer(command_buffer);
         if (result != VK_SUCCESS) {
             err_log("vkEndCommandBuffer failed: %d\n", result);
-            return;
+            goto fail;
         }
 
         VkSubmitInfo submit_info;
@@ -3526,7 +3520,7 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
 
         if (result != VK_SUCCESS) {
             err_log("vkQueueSubmit failed: %d\n", result);
-            return;
+            goto fail;
         }
     }
 
@@ -3573,7 +3567,7 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
 
                 pl_vulkan_release_ex(pl_vk_dev[i]->gpu, pl_vulkan_release_params(
                     .tex = in_tex,
-                    .layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    .layout = data ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                     .qf = demo->indices.graphics,
                     .semaphore = { data ? demo->upload_sem[screen_top_bot] : 0,
 #ifdef __APPLE__
@@ -3595,7 +3589,7 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
 
                 if (!pl_vulkan_hold_ex(pl_vk_dev[i]->gpu, pl_vulkan_hold_params(
                     .tex = in_tex,
-                    .layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                     .qf = demo->indices.graphics,
                     .semaphore = { placebo_in_sem[i][screen_top_bot],
 #ifdef __APPLE__
@@ -3640,8 +3634,8 @@ placebo_fail:
                 if (mtl_filter_chain_frame(
                     rashader_render[i][screen_top_bot],
                     &mtl_ctx[i],
-                    demo->upload_evt[screen_top_bot], demo->libra_evt[screen_top_bot],
-                    demo->upload_val[screen_top_bot]++, demo->libra_val[screen_top_bot],
+                    data ? demo->upload_evt[screen_top_bot] : NULL, demo->libra_evt[screen_top_bot],
+                    data ? demo->upload_val[screen_top_bot]++ : 0, demo->libra_val[screen_top_bot],
                     render->mtl, render_upscaled->mtl)
                 ) {
                     fail = 0;
@@ -3674,7 +3668,7 @@ placebo_fail:
 
                 if (result != VK_SUCCESS) {
                     err_log("vkBeginCommandBuffer failed: %d\n", result);
-                    return;
+                    goto fail;
                 }
 
                 VkImageMemoryBarrier barrier[BARRIER_COUNT] = {};
@@ -3696,9 +3690,12 @@ placebo_fail:
                 barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
                 barrier[BARRIER_DST].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 barrier[BARRIER_DST].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, NULL, 0, NULL, BARRIER_COUNT,
-                    barrier);
+                vkCmdPipelineBarrier(command_buffer,
+                    data ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    data ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT :
+                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    0, 0, NULL, 0, NULL,
+                    data ? BARRIER_COUNT : 1, data ? barrier : &barrier[BARRIER_DST]);
 
                 bool fail = 0;
                 libra_error_t err = libra_vk_filter_chain_frame(chain, command_buffer, 1, image, out, NULL, NULL, NULL);
@@ -3708,23 +3705,20 @@ placebo_fail:
                     fail = 1;
                 }
 
-                barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                barrier[BARRIER_SRC].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
                 barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
                 barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
                 barrier[BARRIER_DST].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
                 barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-                vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, BARRIER_COUNT,
-                    barrier);
+                vkCmdPipelineBarrier(command_buffer,
+                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL,
+                    1, &barrier[BARRIER_DST]);
 
 
                 result = vkEndCommandBuffer(command_buffer);
                 if (result != VK_SUCCESS) {
                     err_log("vkEndCommandBuffer failed: %d\n", result);
-                    return;
+                    goto fail;
                 }
 
                 VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
@@ -3743,7 +3737,7 @@ placebo_fail:
 
                 if (result != VK_SUCCESS) {
                     err_log("vkQueueSubmit failed: %d\n", result);
-                    return;
+                    goto fail;
                 }
 #endif
                 if (fail)
@@ -3767,6 +3761,8 @@ upscale_fail:
         switch(upscaling) {
             default:
             case UPSCALING_NONE:
+                if (!data)
+                    break;
                 draw->barrier = (VkImageMemoryBarrier){ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
                 draw->barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
                 draw->barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -3833,8 +3829,6 @@ upscale_fail:
                 break;
         }
     } else {
-        draw->need_barrier = 0;
-        draw->sem = 0;
         if (IS_PLACEBO(prev->upscaling_selected) || IS_RASHADER(prev->upscaling_selected)) {
             draw->desc = render_upscaled->view.desc;
         }
@@ -3844,6 +3838,10 @@ upscale_fail:
     prev->upscaling_selected = upscaling_selected;
     prev->width = ctx_width;
     prev->height = ctx_height;
+    return;
+
+fail:
+    return;
 }
 
 void ui_renderer_vk_present(int ctx_top_bot) {
@@ -3868,6 +3866,9 @@ void ui_renderer_vk_present(int ctx_top_bot) {
     struct vulkan_demo *demo = &vk_demo[i];
     bool ret;
 
+    if (!demo->rendering)
+        return;
+
     if (i == SCREEN_TOP) {
         if (nk_gui_next) {
             nk_semaphore = nk_sdl_vk_render(
@@ -3887,7 +3888,7 @@ void ui_renderer_vk_present(int ctx_top_bot) {
 
     if (result != VK_SUCCESS) {
         err_log("vkBeginCommandBuffer failed: %d\n", result);
-        return;
+        goto fail;
     }
 
     for (uint32_t k = 0; k < vk_draw_count[i]; ++k) {
@@ -3983,7 +3984,7 @@ void ui_renderer_vk_present(int ctx_top_bot) {
     result = vkEndCommandBuffer(command_buffer);
     if (result != VK_SUCCESS) {
         err_log("vkEndCommandBuffer failed: %d\n", result);
-        return;
+        goto fail;
     }
 
     memset(&submit_info, 0, sizeof(VkSubmitInfo));
@@ -4011,7 +4012,7 @@ void ui_renderer_vk_present(int ctx_top_bot) {
 
     if (result != VK_SUCCESS) {
         err_log("vkQueueSubmit failed: %d\n", result);
-        return;
+        goto fail;
     }
 
     memset(&present_info, 0, sizeof(VkPresentInfoKHR));
@@ -4033,6 +4034,9 @@ void ui_renderer_vk_present(int ctx_top_bot) {
     } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         err_log("vkQueuePresentKHR failed: %d\n", result);
     }
+
+fail:
+    demo->rendering = false;
 }
 
 static struct vk_render_src_t cursor_src;

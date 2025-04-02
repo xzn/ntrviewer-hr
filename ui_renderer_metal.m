@@ -40,7 +40,8 @@ bool mtl_filter_chain_frame(struct rashader_render_t *render, void *ctx, void *u
     id<MTLSharedEvent> libra = libra_evt;
     id<MTLTexture> src_tex = src;
     id<MTLTexture> img_tex = img;
-    [cmd encodeWaitForEvent:upload value:upload_val];
+    if (upload)
+        [cmd encodeWaitForEvent:upload value:upload_val];
 
     libra_mtl_filter_chain_t *chain = rashader_render_chain(render);
     frame_mtl_opt_t opt = { .version = libra_instance_api_version() };
