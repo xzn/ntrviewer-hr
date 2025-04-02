@@ -46,8 +46,7 @@ bool mtl_filter_chain_frame(struct rashader_render_t *render, void *ctx, void *u
             [cmd encodeWaitForEvent:upload value:upload_val];
 
         libra_mtl_filter_chain_t *chain = rashader_render_chain(render);
-        frame_mtl_opt_t opt = { .version = libra_instance_api_version() };
-        libra_mtl_filter_chain_frame(chain, cmd, 1, src_tex, img_tex, NULL, NULL, &opt);
+        libra_mtl_filter_chain_frame(chain, cmd, 1, src_tex, img_tex, NULL, NULL, NULL);
 
         [cmd encodeSignalEvent:libra value:libra_val];
         [cmd commit];
