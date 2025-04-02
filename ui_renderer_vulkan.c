@@ -2856,12 +2856,6 @@ void ui_renderer_vk_main(int ctx_top_bot, view_mode_t view_mode, float bg[4]) {
         return;
     }
 
-    result = vkResetFences(demo->device, 1, &demo->render_fence);
-    if (result != VK_SUCCESS) {
-        err_log("vkResetFences failed: %d\n", result);
-        return;
-    }
-
     if (
         demo->need_resize ||
         (int)demo->swap_chain_image_extent.width != ui_win_width_drawable[i] ||
@@ -4010,6 +4004,12 @@ void ui_renderer_vk_present(int ctx_top_bot) {
     tl_info.pSignalSemaphoreValues = &signal_value;
     submit_info.pNext = &tl_info;
 #endif
+
+    result = vkResetFences(demo->device, 1, &demo->render_fence);
+    if (result != VK_SUCCESS) {
+        err_log("vkResetFences failed: %d\n", result);
+        goto fail;
+    }
 
     result = vkQueueSubmit(demo->graphics_queue, 1, &submit_info,
                            demo->render_fence);
