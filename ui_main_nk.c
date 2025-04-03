@@ -347,11 +347,13 @@ static void check_nav_property_prev(struct nk_context *ctx, const char *name, en
         if (win->property.name == hash)
         {
             set_nav_next(NK_NAV_FOCUS_NORMAL, nk_focus);
+            ui_sdl_text_input_needed = win->property.state == NK_PROPERTY_EDIT_IMPL;
         }
     }
     else if (nk_nav_focus != NK_NAV_FOCUS_NAV)
     {
         nk_nav_focus = NK_NAV_FOCUS_NONE;
+        ui_sdl_text_input_needed = 0;
     }
     ctx->input.keyboard.keys[NK_KEY_ENTER].clicked = 0;
 
@@ -676,7 +678,8 @@ void ui_main_nk(void)
             if (ip_octet != ntr_ip_octet[i])
             {
                 ntr_ip_octet[i] = ip_octet;
-                strcpy(ntr_auto_ip_list[0], "Manual");
+                if (ntr_auto_ip_list)
+                    strcpy(ntr_auto_ip_list[0], "Manual");
                 ntr_selected_ip = 0;
             }
         }

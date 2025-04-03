@@ -3085,8 +3085,8 @@ static bool vk_render_create_mtl(struct vulkan_demo *demo, VmaAllocator vma, str
     }
 
     if (need_update_descriptor_set) {
-        VkDescriptorImageInfo descriptor_image_info;
-        VkWriteDescriptorSet descriptor_write;
+        VkDescriptorImageInfo descriptor_image_info = {};
+        VkWriteDescriptorSet descriptor_write = {};
         descriptor_image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         descriptor_image_info.sampler = demo->sampler;
         descriptor_image_info.imageView = render->src_view.view;
@@ -3292,8 +3292,8 @@ static bool vk_render_img_create(struct vulkan_demo *demo, VmaAllocator vma, str
     }
 
     if (need_update_descriptor_set) {
-        VkDescriptorImageInfo descriptor_image_info;
-        VkWriteDescriptorSet descriptor_write;
+        VkDescriptorImageInfo descriptor_image_info = {};
+        VkWriteDescriptorSet descriptor_write = {};
         descriptor_image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         descriptor_image_info.sampler = demo->sampler;
         descriptor_image_info.imageView = render->view.view;

@@ -104,7 +104,9 @@ endif
 CLA_SRC := $(wildcard clarity/18px/*.png) $(wildcard clarity/24px/*.png) $(wildcard clarity/27px/*.png) $(wildcard clarity/36px/*.png)
 CLA_INC := $(CLA_SRC:.png=.h)
 
+ifneq ($(DEBUG),1)
 LDFLAGS := -s
+endif
 
 RM := rm
 

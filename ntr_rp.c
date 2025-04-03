@@ -2,6 +2,7 @@
 #include "ntr_common.h"
 #include "main.h"
 #include "ui_common_sdl.h"
+#include "ui_main_nk.h"
 #include "rp_syn.h"
 #include "ntr_jpeg_delta.h"
 
@@ -1053,6 +1054,7 @@ static void receive_from_socket()
             continue;
         }
 
+        rp_lock_wait(ui_nk_lock);
         if (ntr_ip_octet[0] == 0 &&
             ntr_ip_octet[1] == 0 &&
             ntr_ip_octet[2] == 0 &&
@@ -1064,6 +1066,7 @@ static void receive_from_socket()
             ntr_ip_octet[2] = (addr >> 8) & 0xff;
             ntr_ip_octet[3] = addr & 0xff;
         }
+        rp_lock_rel(ui_nk_lock);
 
         remote_received = 1;
 

@@ -91,8 +91,10 @@ static rp_lock_t nk_input_lock;
 static view_mode_t ui_view_mode_prev;
 static bool ui_fullscreen_prev;
 static float ui_font_scale;
+static bool ui_sdl_text_input_started;
 bool nk_gui_next;
 bool nk_input_current;
+bool ui_sdl_text_input_needed;
 bool renderer_single_thread;
 bool renderer_evt_sync;
 
@@ -719,6 +721,16 @@ skip_evt:
         }
     }
 
+    if (ui_sdl_text_input_started && !ui_sdl_text_input_needed) {
+        SDL_StopTextInput(ui_sdl_win[SCREEN_TOP]);
+        ui_sdl_text_input_started = 0;
+        // err_log("sdl text input stopped\n");
+    } else if (!ui_sdl_text_input_started && ui_sdl_text_input_needed) {
+        SDL_StartTextInput(ui_sdl_win[SCREEN_TOP]);
+        ui_sdl_text_input_started = 1;
+        // err_log("sdl text input started\n");
+    }
+
     update_game_controller();
     update_bottom_screen_cursor();
 
@@ -769,6 +781,7 @@ static void main_ntr(void) {
 #endif
 
     rp_buffer_init();
+    rp_lock_init(ui_nk_lock);
 
     ntr_config_set_default();
     ntr_detect_3ds_ip();
@@ -813,7 +826,6 @@ static void main_ntr(void) {
 
     rp_lock_init(sdl_cursors_lock);
     rp_lock_init(sdl_game_controller_lock);
-    rp_lock_init(ui_nk_lock);
     thread_t window_top_thread = 0;
     thread_t window_bot_thread = 0;
 
@@ -855,7 +867,6 @@ join_win_top:
     }
     rp_lock_close(ui_nk_lock);
     rp_lock_close(sdl_game_controller_lock);
-    rp_lock_close(sdl_cursors_lock);
 
 #ifndef _WIN32
     thread_cancel(nwm_tcp_thread);
@@ -869,6 +880,7 @@ join_menu_tcp:
     thread_join(udp_recv_thread);
 join_udp_recv:
 
+    rp_lock_close(sdl_cursors_lock);
     rp_buffer_destroy();
 
 #ifdef _WIN32
