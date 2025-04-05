@@ -16,8 +16,8 @@ enum ui_renderer_t {
     UI_RENDERER_GLES_CSC,
     UI_RENDERER_GLES,
     UI_RENDERER_GLES_ANGLE,
-    UI_RENDERER_VULKAN,
     UI_RENDERER_METAL,
+    UI_RENDERER_VULKAN,
     UI_RENDERER_SDL_HW,
     UI_RENDERER_SDL_SW,
 
@@ -83,9 +83,13 @@ UNUSED static bool is_renderer_gles_angle(void) {
     return ui_renderer == UI_RENDERER_GLES_ANGLE;
 }
 
+UNUSED static bool is_renderer_metal(void) {
+    return ui_renderer == UI_RENDERER_METAL;
+}
+
 UNUSED static bool is_renderer_vulkan(void) {
 #ifdef __APPLE__
-    return ui_renderer == UI_RENDERER_METAL;
+    return ui_renderer == UI_RENDERER_METAL || ui_renderer == UI_RENDERER_VULKAN;
 #else
     return ui_renderer == UI_RENDERER_VULKAN;
 #endif

@@ -124,10 +124,10 @@ static struct option long_options[] = {
     {opt_name_no_csc, no_argument, &opt_flag_no_csc, 1},
     {opt_name_d3d, no_argument, &opt_flag_d3d, 1},
 #endif
+    {opt_name_vulkan, no_argument, &opt_flag_vulkan, 1},
 #ifdef __APPLE__
     {opt_name_metal, no_argument, &opt_flag_metal, 1},
 #else
-    {opt_name_vulkan, no_argument, &opt_flag_vulkan, 1},
     {opt_name_ogl, no_argument, &opt_flag_ogl, 1},
     {opt_name_gles, no_argument, &opt_flag_gles, 1},
     {opt_name_angle, no_argument, &opt_flag_angle, 1},

@@ -2543,7 +2543,7 @@ fail:
 
 #ifdef __APPLE__
 static struct mtl_ctx_t mtl_ctx[SCREEN_COUNT];
-static int rashader_upscaling_update(int selected, int ctx_top_bot, int screen_top_bot) {
+static int rashader_mtl_upscaling_update(int selected, int ctx_top_bot, int screen_top_bot) {
     int i = ctx_top_bot;
 
     int render_mode = -1;
@@ -2596,7 +2596,7 @@ fail:
     return reset_mode;
 }
 
-#else
+#endif
 
 static void *vk_filter_chain_create(libra_shader_preset_t *preset, void *i) {
     struct vulkan_demo *demo = &vk_demo[(size_t)i];
@@ -2629,7 +2629,7 @@ static void vk_filter_chain_free(void *fc, void *) {
     }
 }
 
-static int rashader_upscaling_update(int selected, int ctx_top_bot, int screen_top_bot) {
+static int rashader_vk_upscaling_update(int selected, int ctx_top_bot, int screen_top_bot) {
     int i = ctx_top_bot;
 
     int render_mode = -1;
@@ -2680,7 +2680,14 @@ fail:
         libra_preset_ctx_free(&ctx);
     return reset_mode;
 }
-#endif
+
+static int rashader_upscaling_update(int selected, int ctx_top_bot, int screen_top_bot) {
+    if (!is_renderer_metal()) {
+        return rashader_vk_upscaling_update(selected, ctx_top_bot, screen_top_bot);
+    } else {
+        return rashader_mtl_upscaling_update(selected, ctx_top_bot, screen_top_bot);
+    }
+}
 
 static void vmaAuxCleanup(void);
 void ui_renderer_vk_destroy(void) {
@@ -2975,7 +2982,7 @@ static void vk_render_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct
 static void vk_render_dst_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_dst_t *render);
 static void vk_render_img_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_img_t *render);
 
-static bool vk_render_create_mtl(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render, int width, int height, __attribute__((unused)) bool mtl) {
+static bool vk_render_create_mtl(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render, int width, int height, bool mtl) {
     VkResult result;
     bool need_update_descriptor_set = false;
 
@@ -3023,11 +3030,11 @@ static bool vk_render_create_mtl(struct vulkan_demo *demo, VmaAllocator vma, str
         img_info.samples = VK_SAMPLE_COUNT_1_BIT;
         img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-#ifdef __APPLE__
-        img_info.mipLevels = 1;
-#else
-        img_info.mipLevels = floorf(log2f(MAX(img_info.extent.width, img_info.extent.height))) + 1;
-#endif
+        if (mtl) {
+            img_info.mipLevels = 1;
+        } else {
+            img_info.mipLevels = floorf(log2f(MAX(img_info.extent.width, img_info.extent.height))) + 1;
+        }
         img_info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
@@ -3625,8 +3632,11 @@ placebo_fail:
         if (IS_RASHADER(upscaling_selected)) {
             int reset_mode = rashader_upscaling_update(RASHADER_MODE(upscaling_selected), i, screen_top_bot);
             if (rashader_render[i][screen_top_bot]) {
-#ifdef __APPLE__
                 bool fail = 1;
+#ifdef __APPLE__
+                if (!is_renderer_metal()) {
+                    goto rashader_vk;
+                }
                 if (mtl_filter_chain_frame(
                     rashader_render[i][screen_top_bot],
                     &mtl_ctx[i],
@@ -3638,7 +3648,9 @@ placebo_fail:
                         ++demo->upload_val[screen_top_bot];
                     fail = 0;
                 }
-#else
+                goto rashader_done;
+rashader_vk:
+#endif
                 libra_vk_filter_chain_t *chain = rashader_render_chain(rashader_render[i][screen_top_bot]);
                 struct libra_image_vk_t image = {
                     .handle = render->src.img,
@@ -3695,7 +3707,7 @@ placebo_fail:
                     0, 0, NULL, 0, NULL,
                     data ? BARRIER_COUNT : 1, data ? barrier : &barrier[BARRIER_DST]);
 
-                bool fail = 0;
+                fail = 0;
                 libra_error_t err = libra_vk_filter_chain_frame(chain, command_buffer, 1, image, out, NULL, NULL, NULL);
                 if (err) {
                     libra_error_print(err);
@@ -3731,16 +3743,28 @@ placebo_fail:
                 submit_info.signalSemaphoreCount = 1;
                 submit_info.pSignalSemaphores = &demo->libra_sem[screen_top_bot];
 
+#ifdef __APPLE__
+                VkTimelineSemaphoreSubmitInfo tl_info = { VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
+                tl_info.waitSemaphoreValueCount = data ? 1 : 0;
+                uint64_t wait_val = demo->upload_val[screen_top_bot]++;
+                tl_info.pWaitSemaphoreValues = data ? &wait_val : 0;
+                tl_info.signalSemaphoreValueCount = 1;
+                uint64_t signal_val = demo->libra_val[screen_top_bot];
+                tl_info.pSignalSemaphoreValues = &signal_val;
+                submit_info.pNext = &tl_info;
+#endif
+
                 result = vkQueueSubmit(demo->graphics_queue, 1, &submit_info, 0);
 
                 if (result != VK_SUCCESS) {
                     err_log("vkQueueSubmit failed: %d\n", result);
                     goto fail;
                 }
-#endif
+
                 if (fail)
                     goto rashader_fail;
 
+rashader_done:
                 upscaling = UPSCALING_RASHADER;
             } else if (!reset_mode) {
 rashader_fail:
