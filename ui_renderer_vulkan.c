@@ -2682,11 +2682,15 @@ fail:
 }
 
 static int rashader_upscaling_update(int selected, int ctx_top_bot, int screen_top_bot) {
+#ifdef __APPLE__
     if (!is_renderer_metal()) {
         return rashader_vk_upscaling_update(selected, ctx_top_bot, screen_top_bot);
     } else {
         return rashader_mtl_upscaling_update(selected, ctx_top_bot, screen_top_bot);
     }
+#else
+    return rashader_vk_upscaling_update(selected, ctx_top_bot, screen_top_bot);
+#endif
 }
 
 static void vmaAuxCleanup(void);
@@ -3763,8 +3767,9 @@ rashader_vk:
 
                 if (fail)
                     goto rashader_fail;
-
+#ifdef __APPLE__
 rashader_done:
+#endif
                 upscaling = UPSCALING_RASHADER;
             } else if (!reset_mode) {
 rashader_fail:
