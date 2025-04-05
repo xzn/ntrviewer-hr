@@ -514,8 +514,8 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
                                  VkPhysicalDevicePortabilitySubsetFeaturesKHR *port_sub_features,
                                  const char ***extensions,
                                  uint32_t *num_extensions,
-                                 __attribute__((unused)) bool *use_metal_objects,
-                                 __attribute__((unused)) bool *use_dynamic_rendering) {
+                                 UNUSED bool *use_metal_objects,
+                                 UNUSED bool *use_dynamic_rendering) {
     VkResult result;
     uint32_t device_extension_count;
     uint32_t i;
@@ -2454,10 +2454,7 @@ static int vk_upscaling_init(void) {
     return 0;
 }
 
-#ifndef __APPLE__
 static void vk_filter_chain_free(void *, void *);
-#endif
-
 static void vk_upscaling_close(void) {
     for (int j = 0; j < SCREEN_COUNT; ++j) {
         pl_gpu_finish(pl_vk_dev[j]->gpu);
@@ -2476,7 +2473,7 @@ static void vk_upscaling_close(void) {
         for (int i = 0; i < SCREEN_COUNT; ++i) {
             if (rashader_render[j][i]) {
 #ifdef __APPLE__
-                rashader_render_close(rashader_render[j][i], mtl_filter_chain_free, NULL);
+                rashader_render_close(rashader_render[j][i], !is_renderer_metal() ? vk_filter_chain_free : mtl_filter_chain_free, NULL);
 #else
                 rashader_render_close(rashader_render[j][i], vk_filter_chain_free, NULL);
 #endif
@@ -2992,7 +2989,7 @@ static void vk_render_dst_destroy(struct vulkan_demo *demo, VmaAllocator vma, st
 static void vk_render_img_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_img_t *render);
 
 static int vk_render_create_mtl(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render, int width, int height,
-    __attribute__((unused)) bool mtl, bool mip
+    UNUSED bool mtl, bool mip
 ) {
     VkResult result;
     bool need_update_descriptor_set = false;
@@ -3129,7 +3126,7 @@ static int vk_render_create_mtl(struct vulkan_demo *demo, VmaAllocator vma, stru
     return ret;
 }
 
-static int vk_render_create(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render, int width, int height) {
+UNUSED static int vk_render_create(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render, int width, int height) {
     return vk_render_create_mtl(demo, vma, render, width, height, 0, 1);
 }
 static bool vk_render_dst_create(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_dst_t *render, VkRenderPass render_pass, int width, int height) {
@@ -3945,7 +3942,7 @@ void ui_renderer_vk_draw(uint8_t *data, uint8_t *data_prev, int width, int heigh
 
     int upscaling_selected = ui_upscaling_selected;
 #ifdef __APPLE__
-    int ret = vk_render_create_mtl(demo, vma[i], render, height, width, upscaling_selected == UPSCALING_DEFAULT_NONE);
+    int ret = vk_render_create_mtl(demo, vma[i], render, height, width, 1, upscaling_selected == UPSCALING_DEFAULT_NONE);
 #else
     int ret = vk_render_create(demo, vma[i], render, height, width);
 #endif
@@ -4259,8 +4256,12 @@ void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int wid
         err_log("vkWaitForFences failed: %d\n", result);
         goto fail;
     }
-
-    if (!vk_render_create(demo, vma[i], &cursor_src, width, height)) {
+#ifdef __APPLE__
+    int ret = vk_render_create_mtl(demo, vma[i], &cursor_src, width, height, 1, 0);
+#else
+    int ret = vk_render_create(demo, vma[i], &cursor_src, width, height);
+#endif
+    if (ret < 0) {
         goto fail;
     }
 
