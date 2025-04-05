@@ -44,7 +44,7 @@ else
 ifeq ($(OS),Darwin)
 LDLIBS := -Llib $(shell pkg-config sdl3 --libs)
 else
-LDLIBS := -static-libgcc -static-libstdc++ -Llib -Wl,-Bstatic -lSDL3
+LDLIBS := -static-libgcc -static-libstdc++ -Llib $(shell pkg-config sdl3 --libs) $(shell pkg-config libplacebo --libs) $(shell pkg-config lcms2 --libs) $(shell pkg-config libunwind --libs) $(shell pkg-config liblzma --libs) $(shell pkg-config shaderc --libs)
 endif
 TARGET := ntrviewer
 ifneq ($(ARCH),arm64)

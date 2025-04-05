@@ -3432,6 +3432,403 @@ static struct ui_prev_dims_t {
     int upscaling_selected, width, height;
 } ui_prev_dims[SCREEN_COUNT][SCREEN_COUNT];
 
+static int ui_renderer_vk_upscale(
+    int upscaling_selected, struct vk_render_src_t *render, bool data, struct vk_render_img_t *render_upscaled,
+    int width, int height, int screen_top_bot, int ctx_top_bot, int ctx_width, int ctx_height
+) {
+    int i = ctx_top_bot;
+    struct vulkan_demo *demo = &vk_demo[i];
+    VkImageSubresourceRange range = {};
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = 1;
+    range.layerCount = 1;
+
+    VkImageSubresourceRange range_mip = range;
+    range_mip.levelCount = render->src_mip;
+
+    enum upscaling_t upscaling = UPSCALING_NONE;
+
+    if (!vk_render_img_create(demo, vma[i], render_upscaled, ctx_width, ctx_height)) {
+        goto upscale_fail;
+    }
+
+    if (!IS_PLACEBO(upscaling_selected)) {
+        placebo_upscaling_update(-1, i, screen_top_bot);
+    }
+
+    if (!IS_RASHADER(upscaling_selected)) {
+        rashader_upscaling_update(-1, i, screen_top_bot);
+    }
+
+    pl_tex in_tex = NULL;
+    pl_tex out_tex = NULL;
+    if (IS_PLACEBO(upscaling_selected)) {
+        int reset_mode = placebo_upscaling_update(PLACEBO_MODE(upscaling_selected), i, screen_top_bot);
+        if (placebo_render[i][screen_top_bot]) {
+            struct pl_vulkan_wrap_params in_tex_pars = {};
+            in_tex_pars.image = render->src.img;
+            in_tex_pars.width = width;
+            in_tex_pars.height = height;
+            in_tex_pars.format = VK_FORMAT;
+            in_tex_pars.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            in_tex = pl_vulkan_wrap(pl_vk_dev[i]->gpu, &in_tex_pars);
+            if (!in_tex) {
+                goto placebo_fail;
+            }
+
+            struct pl_vulkan_wrap_params out_tex_pars = {};
+            out_tex_pars.image = render_upscaled->img.img;
+            out_tex_pars.width = ctx_width;
+            out_tex_pars.height = ctx_height;
+            out_tex_pars.format = VK_FORMAT;
+            out_tex_pars.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            out_tex = pl_vulkan_wrap(pl_vk_dev[i]->gpu, &out_tex_pars);
+            if (!out_tex) {
+                goto placebo_fail;
+            }
+
+            pl_vulkan_release_ex(pl_vk_dev[i]->gpu, pl_vulkan_release_params(
+                .tex = in_tex,
+                .layout = data ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                .qf = demo->indices.graphics,
+                .semaphore = { data ? demo->upload_sem[screen_top_bot] : 0,
+#ifdef __APPLE__
+                    data ? demo->upload_val[screen_top_bot]++ : 0,
+#endif
+                },
+            ));
+
+            pl_vulkan_release_ex(pl_vk_dev[i]->gpu, pl_vulkan_release_params(
+                .tex = out_tex,
+                .layout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .qf = demo->indices.graphics,
+            ));
+
+            bool ret = placebo_render_run(placebo_render[i][screen_top_bot], in_tex, out_tex, 0, 0) != NULL;
+            if (!ret) {
+                goto placebo_fail;
+            }
+
+            if (!pl_vulkan_hold_ex(pl_vk_dev[i]->gpu, pl_vulkan_hold_params(
+                .tex = in_tex,
+                .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                .qf = demo->indices.graphics,
+                .semaphore = { placebo_in_sem[i][screen_top_bot],
+#ifdef __APPLE__
+                    placebo_in_val[i][screen_top_bot],
+#endif
+                },
+            ))) {
+                goto placebo_fail;
+            }
+
+            if (!pl_vulkan_hold_ex(pl_vk_dev[i]->gpu, pl_vulkan_hold_params(
+                .tex = out_tex,
+                .layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                .qf = demo->indices.graphics,
+                .semaphore = { placebo_sem[i][screen_top_bot],
+#ifdef __APPLE__
+                    placebo_val[i][screen_top_bot],
+#endif
+                },
+            ))) {
+                goto placebo_fail;
+            }
+
+            upscaling = UPSCALING_PLACEBO;
+        } else if (!reset_mode) {
+placebo_fail:
+            err_log("placebo render failed\n");
+            upscaling_selected = UPSCALING_DEFAULT_NONE;
+        }
+    }
+
+    if (in_tex)
+        pl_tex_destroy(pl_vk_dev[i]->gpu, &in_tex);
+    if (out_tex)
+        pl_tex_destroy(pl_vk_dev[i]->gpu, &out_tex);
+
+    if (IS_RASHADER(upscaling_selected)) {
+        int reset_mode = rashader_upscaling_update(RASHADER_MODE(upscaling_selected), i, screen_top_bot);
+        if (rashader_render[i][screen_top_bot]) {
+            bool fail = 1;
+#ifdef __APPLE__
+            if (!is_renderer_metal()) {
+                goto rashader_vk;
+            }
+            if (mtl_filter_chain_frame(
+                rashader_render[i][screen_top_bot],
+                &mtl_ctx[i],
+                data ? demo->upload_evt[screen_top_bot] : NULL, demo->libra_evt[screen_top_bot],
+                data ? demo->upload_val[screen_top_bot] : 0, demo->libra_val[screen_top_bot],
+                render->mtl, render_upscaled->mtl)
+            ) {
+                if (data)
+                    ++demo->upload_val[screen_top_bot];
+                fail = 0;
+            }
+            goto rashader_done;
+rashader_vk:
+#endif
+            libra_vk_filter_chain_t *chain = rashader_render_chain(rashader_render[i][screen_top_bot]);
+            struct libra_image_vk_t image = {
+                .handle = render->src.img,
+                .format = VK_FORMAT,
+                .width = width,
+                .height = height,
+            };
+
+            struct libra_image_vk_t out = {
+                .handle = render_upscaled->img.img,
+                .format = VK_FORMAT,
+                .width = ctx_width,
+                .height = ctx_height,
+            };
+
+            VkCommandBufferBeginInfo command_buffer_begin_info;
+            memset(&command_buffer_begin_info, 0, sizeof(VkCommandBufferBeginInfo));
+            command_buffer_begin_info.sType =
+                VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            command_buffer_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+            VkCommandBuffer command_buffer = demo->libra_command_buffers[screen_top_bot][demo->image_index];
+            VkResult result;
+            result = vkBeginCommandBuffer(command_buffer, &command_buffer_begin_info);
+
+            if (result != VK_SUCCESS) {
+                err_log("vkBeginCommandBuffer failed: %d\n", result);
+                goto fail;
+            }
+
+            VkImageMemoryBarrier barrier[BARRIER_COUNT] = {};
+            barrier[BARRIER_SRC].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier[BARRIER_SRC].image = render->src.img;
+            barrier[BARRIER_SRC].subresourceRange = range_mip;
+            barrier[BARRIER_SRC].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            barrier[BARRIER_SRC].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier[BARRIER_SRC].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier[BARRIER_DST].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            barrier[BARRIER_DST].image = render_upscaled->img.img;
+            barrier[BARRIER_DST].subresourceRange = range;
+            barrier[BARRIER_DST].srcAccessMask = 0;
+            barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            barrier[BARRIER_DST].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier[BARRIER_DST].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            vkCmdPipelineBarrier(command_buffer,
+                data ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                data ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT :
+                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                0, 0, NULL, 0, NULL,
+                data ? BARRIER_COUNT : 1, data ? barrier : &barrier[BARRIER_DST]);
+
+            fail = 0;
+            libra_error_t err = libra_vk_filter_chain_frame(chain, command_buffer, 1, image, out, NULL, NULL, NULL);
+            if (err) {
+                libra_error_print(err);
+                libra_error_free(&err);
+                fail = 1;
+            }
+
+            barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier[BARRIER_DST].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            vkCmdPipelineBarrier(command_buffer,
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL,
+                1, &barrier[BARRIER_DST]);
+
+
+            result = vkEndCommandBuffer(command_buffer);
+            if (result != VK_SUCCESS) {
+                err_log("vkEndCommandBuffer failed: %d\n", result);
+                goto fail;
+            }
+
+            VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            VkSubmitInfo submit_info;
+            memset(&submit_info, 0, sizeof(VkSubmitInfo));
+            submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            submit_info.commandBufferCount = 1;
+            submit_info.pCommandBuffers = &command_buffer;
+            submit_info.waitSemaphoreCount = data ? 1 : 0;
+            submit_info.pWaitSemaphores = data ? &demo->upload_sem[screen_top_bot] : 0;
+            submit_info.pWaitDstStageMask = data ? &wait_stage : 0;
+            submit_info.signalSemaphoreCount = 1;
+            submit_info.pSignalSemaphores = &demo->libra_sem[screen_top_bot];
+
+#ifdef __APPLE__
+            VkTimelineSemaphoreSubmitInfo tl_info = { VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
+            tl_info.waitSemaphoreValueCount = data ? 1 : 0;
+            uint64_t wait_val = demo->upload_val[screen_top_bot]++;
+            tl_info.pWaitSemaphoreValues = data ? &wait_val : 0;
+            tl_info.signalSemaphoreValueCount = 1;
+            uint64_t signal_val = demo->libra_val[screen_top_bot];
+            tl_info.pSignalSemaphoreValues = &signal_val;
+            submit_info.pNext = &tl_info;
+#endif
+
+            result = vkQueueSubmit(demo->graphics_queue, 1, &submit_info, 0);
+
+            if (result != VK_SUCCESS) {
+                err_log("vkQueueSubmit failed: %d\n", result);
+                goto fail;
+            }
+
+            if (fail)
+                goto rashader_fail;
+#ifdef __APPLE__
+rashader_done:
+#endif
+            upscaling = UPSCALING_RASHADER;
+        } else if (!reset_mode) {
+rashader_fail:
+            err_log("rashader render failed\n");
+            upscaling_selected = UPSCALING_DEFAULT_NONE;
+        }
+    }
+
+upscale_fail:
+    if (upscaling_selected == UPSCALING_DEFAULT_NONE) {
+fail:
+        upscaling = UPSCALING_NONE;
+    }
+
+    struct vk_draw_t *draw = &vk_draw[i][vk_draw_count[i]];
+    switch(upscaling) {
+        default:
+        case UPSCALING_NONE:
+            if (!data)
+                break;
+            draw->barrier = (VkImageMemoryBarrier){ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+            draw->barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            draw->barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            draw->barrier.image = render->src.img;
+            draw->barrier.subresourceRange = range_mip;
+            draw->barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            draw->barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            draw->barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            draw->barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            draw->need_barrier = 1;
+            draw->sem = demo->upload_sem[screen_top_bot];
+#ifdef __APPLE__
+            draw->val = demo->upload_val[screen_top_bot]++;
+#endif
+            draw->stages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            break;
+
+        case UPSCALING_PLACEBO:
+            draw->barrier = (VkImageMemoryBarrier){ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+            draw->barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            draw->barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            draw->barrier.image = render_upscaled->img.img;
+            draw->barrier.subresourceRange = range;
+            draw->barrier.subresourceRange.levelCount = render_upscaled->mip;
+            draw->barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            draw->barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            draw->barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            draw->barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            draw->need_barrier = 1;
+            draw->width = render_upscaled->width;
+            draw->height = render_upscaled->height;
+            draw->need_mips = 1;
+            draw->sem = placebo_sem[i][screen_top_bot];
+            draw->sem_in = placebo_in_sem[i][screen_top_bot];
+#ifdef __APPLE__
+            draw->val = placebo_val[i][screen_top_bot]++;
+            draw->val_in = placebo_in_val[i][screen_top_bot]++;
+#endif
+            draw->stages = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+            draw->desc = render_upscaled->view.desc;
+            break;
+
+        case UPSCALING_RASHADER:
+            draw->barrier = (VkImageMemoryBarrier){ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+            draw->barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            draw->barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            draw->barrier.image = render_upscaled->img.img;
+            draw->barrier.subresourceRange = range;
+            draw->barrier.subresourceRange.levelCount = render_upscaled->mip;
+            draw->barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            draw->barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            draw->barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            draw->barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            draw->need_barrier = 1;
+            draw->width = render_upscaled->width;
+            draw->height = render_upscaled->height;
+            draw->need_mips = 1;
+            draw->sem = demo->libra_sem[screen_top_bot];
+#ifdef __APPLE__
+            draw->val = demo->libra_val[screen_top_bot]++;
+#endif
+            draw->stages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            draw->desc = render_upscaled->view.desc;
+            break;
+    }
+
+    return upscaling_selected;
+}
+
+static bool ui_renderer_vk_upload(struct vk_render_src_t *render, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot) {
+    int i = ctx_top_bot;
+    struct vulkan_demo *demo = &vk_demo[i];
+
+    VkCommandBufferBeginInfo command_buffer_begin_info;
+    memset(&command_buffer_begin_info, 0, sizeof(VkCommandBufferBeginInfo));
+    command_buffer_begin_info.sType =
+        VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    command_buffer_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    VkCommandBuffer command_buffer = demo->upload_command_buffers[screen_top_bot][demo->image_index];
+    VkResult result;
+    result = vkBeginCommandBuffer(command_buffer, &command_buffer_begin_info);
+
+    if (result != VK_SUCCESS) {
+        err_log("vkBeginCommandBuffer failed: %d\n", result);
+        goto fail;
+    }
+
+    vk_render_upload_and_gen_mip_maps(command_buffer, vma[i], render, data, width, height);
+
+    result = vkEndCommandBuffer(command_buffer);
+    if (result != VK_SUCCESS) {
+        err_log("vkEndCommandBuffer failed: %d\n", result);
+        goto fail;
+    }
+
+    VkSubmitInfo submit_info;
+    memset(&submit_info, 0, sizeof(VkSubmitInfo));
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &command_buffer;
+    submit_info.signalSemaphoreCount = 1;
+    submit_info.pSignalSemaphores = &demo->upload_sem[screen_top_bot];
+#ifdef __APPLE__
+    VkTimelineSemaphoreSubmitInfo tl_info = { VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
+    tl_info.signalSemaphoreValueCount = 1;
+    uint64_t signal_val = demo->upload_val[screen_top_bot];
+    tl_info.pSignalSemaphoreValues = &signal_val;
+    submit_info.pNext = &tl_info;
+#endif
+
+    result = vkQueueSubmit(demo->graphics_queue, 1, &submit_info, 0);
+
+    if (result != VK_SUCCESS) {
+        err_log("vkQueueSubmit failed: %d\n", result);
+        goto fail;
+    }
+
+    return true;
+
+fail:
+    return false;
+}
+
 void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode) {
     int i = ctx_top_bot;
     struct vulkan_demo *demo = &vk_demo[i];
@@ -3465,16 +3862,7 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
     draw->vp.minDepth = 0;
     draw->vp.maxDepth = 1;
 
-    VkImageSubresourceRange range = {};
-    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    range.levelCount = 1;
-    range.layerCount = 1;
-
-    VkImageSubresourceRange range_mip = range;
-    range_mip.levelCount = render->src_mip;
-
     int upscaling_selected = ui_upscaling_selected;
-    enum upscaling_t upscaling = UPSCALING_NONE;
     draw->need_barrier = 0;
     draw->need_mips = 0;
     draw->sem_in = 0;
@@ -3485,376 +3873,13 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
     bool need_tex_update = data || prev->upscaling_selected != upscaling_selected || prev->width != ctx_width || prev->height != ctx_height;
 
     if (data) {
-        VkCommandBufferBeginInfo command_buffer_begin_info;
-        memset(&command_buffer_begin_info, 0, sizeof(VkCommandBufferBeginInfo));
-        command_buffer_begin_info.sType =
-            VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        command_buffer_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-        VkCommandBuffer command_buffer = demo->upload_command_buffers[screen_top_bot][demo->image_index];
-        VkResult result;
-        result = vkBeginCommandBuffer(command_buffer, &command_buffer_begin_info);
-
-        if (result != VK_SUCCESS) {
-            err_log("vkBeginCommandBuffer failed: %d\n", result);
+        if (!ui_renderer_vk_upload(render, data, height, width, screen_top_bot, ctx_top_bot))
             goto fail;
-        }
-
-        vk_render_upload_and_gen_mip_maps(command_buffer, vma[i], render, data, height, width);
-
-        result = vkEndCommandBuffer(command_buffer);
-        if (result != VK_SUCCESS) {
-            err_log("vkEndCommandBuffer failed: %d\n", result);
-            goto fail;
-        }
-
-        VkSubmitInfo submit_info;
-        memset(&submit_info, 0, sizeof(VkSubmitInfo));
-        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = &command_buffer;
-        submit_info.signalSemaphoreCount = 1;
-        submit_info.pSignalSemaphores = &demo->upload_sem[screen_top_bot];
-#ifdef __APPLE__
-        VkTimelineSemaphoreSubmitInfo tl_info = { VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
-        tl_info.signalSemaphoreValueCount = 1;
-        uint64_t signal_val = demo->upload_val[screen_top_bot];
-        tl_info.pSignalSemaphoreValues = &signal_val;
-        submit_info.pNext = &tl_info;
-#endif
-
-        result = vkQueueSubmit(demo->graphics_queue, 1, &submit_info, 0);
-
-        if (result != VK_SUCCESS) {
-            err_log("vkQueueSubmit failed: %d\n", result);
-            goto fail;
-        }
     }
 
     struct vk_render_img_t *render_upscaled = &vk_render_upscaled[i][screen_top_bot];
     if (need_tex_update) {
-        if (!vk_render_img_create(demo, vma[i], render_upscaled, ctx_height, ctx_width)) {
-            goto upscale_fail;
-        }
-
-        if (!IS_PLACEBO(upscaling_selected)) {
-            placebo_upscaling_update(-1, i, screen_top_bot);
-        }
-
-        if (!IS_RASHADER(upscaling_selected)) {
-            rashader_upscaling_update(-1, i, screen_top_bot);
-        }
-
-        pl_tex in_tex = NULL;
-        pl_tex out_tex = NULL;
-        if (IS_PLACEBO(upscaling_selected)) {
-            int reset_mode = placebo_upscaling_update(PLACEBO_MODE(upscaling_selected), i, screen_top_bot);
-            if (placebo_render[i][screen_top_bot]) {
-                struct pl_vulkan_wrap_params in_tex_pars = {};
-                in_tex_pars.image = render->src.img;
-                in_tex_pars.width = height;
-                in_tex_pars.height = width;
-                in_tex_pars.format = VK_FORMAT;
-                in_tex_pars.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-                in_tex = pl_vulkan_wrap(pl_vk_dev[i]->gpu, &in_tex_pars);
-                if (!in_tex) {
-                    goto placebo_fail;
-                }
-
-                struct pl_vulkan_wrap_params out_tex_pars = {};
-                out_tex_pars.image = render_upscaled->img.img;
-                out_tex_pars.width = ctx_height;
-                out_tex_pars.height = ctx_width;
-                out_tex_pars.format = VK_FORMAT;
-                out_tex_pars.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-                out_tex = pl_vulkan_wrap(pl_vk_dev[i]->gpu, &out_tex_pars);
-                if (!out_tex) {
-                    goto placebo_fail;
-                }
-
-                pl_vulkan_release_ex(pl_vk_dev[i]->gpu, pl_vulkan_release_params(
-                    .tex = in_tex,
-                    .layout = data ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    .qf = demo->indices.graphics,
-                    .semaphore = { data ? demo->upload_sem[screen_top_bot] : 0,
-#ifdef __APPLE__
-                        data ? demo->upload_val[screen_top_bot]++ : 0,
-#endif
-                    },
-                ));
-
-                pl_vulkan_release_ex(pl_vk_dev[i]->gpu, pl_vulkan_release_params(
-                    .tex = out_tex,
-                    .layout = VK_IMAGE_LAYOUT_UNDEFINED,
-                    .qf = demo->indices.graphics,
-                ));
-
-                bool ret = placebo_render_run(placebo_render[i][screen_top_bot], in_tex, out_tex, 0, 0) != NULL;
-                if (!ret) {
-                    goto placebo_fail;
-                }
-
-                if (!pl_vulkan_hold_ex(pl_vk_dev[i]->gpu, pl_vulkan_hold_params(
-                    .tex = in_tex,
-                    .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    .qf = demo->indices.graphics,
-                    .semaphore = { placebo_in_sem[i][screen_top_bot],
-#ifdef __APPLE__
-                        placebo_in_val[i][screen_top_bot],
-#endif
-                    },
-                ))) {
-                    goto placebo_fail;
-                }
-
-                if (!pl_vulkan_hold_ex(pl_vk_dev[i]->gpu, pl_vulkan_hold_params(
-                    .tex = out_tex,
-                    .layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    .qf = demo->indices.graphics,
-                    .semaphore = { placebo_sem[i][screen_top_bot],
-#ifdef __APPLE__
-                        placebo_val[i][screen_top_bot],
-#endif
-                    },
-                ))) {
-                    goto placebo_fail;
-                }
-
-                upscaling = UPSCALING_PLACEBO;
-            } else if (!reset_mode) {
-placebo_fail:
-                err_log("placebo render failed\n");
-                ui_upscaling_selected = UPSCALING_DEFAULT_NONE;
-            }
-        }
-
-        if (in_tex)
-            pl_tex_destroy(pl_vk_dev[i]->gpu, &in_tex);
-        if (out_tex)
-            pl_tex_destroy(pl_vk_dev[i]->gpu, &out_tex);
-
-        if (IS_RASHADER(upscaling_selected)) {
-            int reset_mode = rashader_upscaling_update(RASHADER_MODE(upscaling_selected), i, screen_top_bot);
-            if (rashader_render[i][screen_top_bot]) {
-                bool fail = 1;
-#ifdef __APPLE__
-                if (!is_renderer_metal()) {
-                    goto rashader_vk;
-                }
-                if (mtl_filter_chain_frame(
-                    rashader_render[i][screen_top_bot],
-                    &mtl_ctx[i],
-                    data ? demo->upload_evt[screen_top_bot] : NULL, demo->libra_evt[screen_top_bot],
-                    data ? demo->upload_val[screen_top_bot] : 0, demo->libra_val[screen_top_bot],
-                    render->mtl, render_upscaled->mtl)
-                ) {
-                    if (data)
-                        ++demo->upload_val[screen_top_bot];
-                    fail = 0;
-                }
-                goto rashader_done;
-rashader_vk:
-#endif
-                libra_vk_filter_chain_t *chain = rashader_render_chain(rashader_render[i][screen_top_bot]);
-                struct libra_image_vk_t image = {
-                    .handle = render->src.img,
-                    .format = VK_FORMAT,
-                    .width = height,
-                    .height = width,
-                };
-
-                struct libra_image_vk_t out = {
-                    .handle = render_upscaled->img.img,
-                    .format = VK_FORMAT,
-                    .width = ctx_height,
-                    .height = ctx_width,
-                };
-
-                VkCommandBufferBeginInfo command_buffer_begin_info;
-                memset(&command_buffer_begin_info, 0, sizeof(VkCommandBufferBeginInfo));
-                command_buffer_begin_info.sType =
-                    VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-                command_buffer_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-                VkCommandBuffer command_buffer = demo->libra_command_buffers[screen_top_bot][demo->image_index];
-                VkResult result;
-                result = vkBeginCommandBuffer(command_buffer, &command_buffer_begin_info);
-
-                if (result != VK_SUCCESS) {
-                    err_log("vkBeginCommandBuffer failed: %d\n", result);
-                    goto fail;
-                }
-
-                VkImageMemoryBarrier barrier[BARRIER_COUNT] = {};
-                barrier[BARRIER_SRC].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                barrier[BARRIER_SRC].image = render->src.img;
-                barrier[BARRIER_SRC].subresourceRange = range_mip;
-                barrier[BARRIER_SRC].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-                barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                barrier[BARRIER_SRC].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                barrier[BARRIER_SRC].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                barrier[BARRIER_DST].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                barrier[BARRIER_DST].image = render_upscaled->img.img;
-                barrier[BARRIER_DST].subresourceRange = range;
-                barrier[BARRIER_DST].srcAccessMask = 0;
-                barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-                barrier[BARRIER_DST].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                barrier[BARRIER_DST].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                vkCmdPipelineBarrier(command_buffer,
-                    data ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                    data ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT :
-                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    0, 0, NULL, 0, NULL,
-                    data ? BARRIER_COUNT : 1, data ? barrier : &barrier[BARRIER_DST]);
-
-                fail = 0;
-                libra_error_t err = libra_vk_filter_chain_frame(chain, command_buffer, 1, image, out, NULL, NULL, NULL);
-                if (err) {
-                    libra_error_print(err);
-                    libra_error_free(&err);
-                    fail = 1;
-                }
-
-                barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                barrier[BARRIER_DST].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-                barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-                vkCmdPipelineBarrier(command_buffer,
-                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL,
-                    1, &barrier[BARRIER_DST]);
-
-
-                result = vkEndCommandBuffer(command_buffer);
-                if (result != VK_SUCCESS) {
-                    err_log("vkEndCommandBuffer failed: %d\n", result);
-                    goto fail;
-                }
-
-                VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-                VkSubmitInfo submit_info;
-                memset(&submit_info, 0, sizeof(VkSubmitInfo));
-                submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-                submit_info.commandBufferCount = 1;
-                submit_info.pCommandBuffers = &command_buffer;
-                submit_info.waitSemaphoreCount = data ? 1 : 0;
-                submit_info.pWaitSemaphores = data ? &demo->upload_sem[screen_top_bot] : 0;
-                submit_info.pWaitDstStageMask = data ? &wait_stage : 0;
-                submit_info.signalSemaphoreCount = 1;
-                submit_info.pSignalSemaphores = &demo->libra_sem[screen_top_bot];
-
-#ifdef __APPLE__
-                VkTimelineSemaphoreSubmitInfo tl_info = { VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
-                tl_info.waitSemaphoreValueCount = data ? 1 : 0;
-                uint64_t wait_val = demo->upload_val[screen_top_bot]++;
-                tl_info.pWaitSemaphoreValues = data ? &wait_val : 0;
-                tl_info.signalSemaphoreValueCount = 1;
-                uint64_t signal_val = demo->libra_val[screen_top_bot];
-                tl_info.pSignalSemaphoreValues = &signal_val;
-                submit_info.pNext = &tl_info;
-#endif
-
-                result = vkQueueSubmit(demo->graphics_queue, 1, &submit_info, 0);
-
-                if (result != VK_SUCCESS) {
-                    err_log("vkQueueSubmit failed: %d\n", result);
-                    goto fail;
-                }
-
-                if (fail)
-                    goto rashader_fail;
-#ifdef __APPLE__
-rashader_done:
-#endif
-                upscaling = UPSCALING_RASHADER;
-            } else if (!reset_mode) {
-rashader_fail:
-                err_log("rashader render failed\n");
-                ui_upscaling_selected = UPSCALING_DEFAULT_NONE;
-            }
-        }
-
-upscale_fail:
-        if (ui_upscaling_selected == UPSCALING_DEFAULT_NONE) {
-            upscaling = UPSCALING_NONE;
-        }
-    }
-
-    if (need_tex_update) {
-        switch(upscaling) {
-            default:
-            case UPSCALING_NONE:
-                if (!data)
-                    break;
-                draw->barrier = (VkImageMemoryBarrier){ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-                draw->barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                draw->barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                draw->barrier.image = render->src.img;
-                draw->barrier.subresourceRange = range_mip;
-                draw->barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-                draw->barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                draw->barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                draw->barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                draw->need_barrier = 1;
-                draw->sem = demo->upload_sem[screen_top_bot];
-#ifdef __APPLE__
-                draw->val = demo->upload_val[screen_top_bot]++;
-#endif
-                draw->stages = VK_PIPELINE_STAGE_TRANSFER_BIT;
-                break;
-
-            case UPSCALING_PLACEBO:
-                draw->barrier = (VkImageMemoryBarrier){ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-                draw->barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                draw->barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                draw->barrier.image = render_upscaled->img.img;
-                draw->barrier.subresourceRange = range;
-                draw->barrier.subresourceRange.levelCount = render_upscaled->mip;
-                draw->barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-                draw->barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                draw->barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                draw->barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                draw->need_barrier = 1;
-                draw->width = render_upscaled->width;
-                draw->height = render_upscaled->height;
-                draw->need_mips = 1;
-                draw->sem = placebo_sem[i][screen_top_bot];
-                draw->sem_in = placebo_in_sem[i][screen_top_bot];
-#ifdef __APPLE__
-                draw->val = placebo_val[i][screen_top_bot]++;
-                draw->val_in = placebo_in_val[i][screen_top_bot]++;
-#endif
-                draw->stages = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-                draw->desc = render_upscaled->view.desc;
-                break;
-
-            case UPSCALING_RASHADER:
-                draw->barrier = (VkImageMemoryBarrier){ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-                draw->barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                draw->barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                draw->barrier.image = render_upscaled->img.img;
-                draw->barrier.subresourceRange = range;
-                draw->barrier.subresourceRange.levelCount = render_upscaled->mip;
-                draw->barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-                draw->barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                draw->barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                draw->barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                draw->need_barrier = 1;
-                draw->width = render_upscaled->width;
-                draw->height = render_upscaled->height;
-                draw->need_mips = 1;
-                draw->sem = demo->libra_sem[screen_top_bot];
-#ifdef __APPLE__
-                draw->val = demo->libra_val[screen_top_bot]++;
-#endif
-                draw->stages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-                draw->desc = render_upscaled->view.desc;
-                break;
-        }
+        ui_upscaling_selected = ui_renderer_vk_upscale(upscaling_selected, render, data, render_upscaled, height, width, screen_top_bot, i, ctx_height, ctx_width);
     } else {
         if (IS_PLACEBO(prev->upscaling_selected) || IS_RASHADER(prev->upscaling_selected)) {
             draw->desc = render_upscaled->view.desc;
@@ -4076,6 +4101,7 @@ fail:
 
 static struct vk_render_src_t cursor_src;
 static struct vk_render_dst_t cursor_dst;
+static struct vk_render_img_t cursor_upscaled;
 
 void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale) {
     if (channels != GL_CHANNELS_N) {
@@ -4133,7 +4159,7 @@ void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int wid
     // NOTE: we are using the same fence every frame anyway so we only really need one command buffer;
     // in case we change to one fence per swap chain image, make sure to change this to use its own command buffer
     // as well.
-    VkCommandBuffer cmd = demo->command_buffers[demo->image_index];
+    VkCommandBuffer cmd = demo->upload_command_buffers[SCREEN_TOP][demo->image_index];
     VkCommandBufferBeginInfo cmd_beg_info = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
     cmd_beg_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
