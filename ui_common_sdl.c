@@ -313,7 +313,7 @@ static void draw_screen_dispatch(UNUSED struct rp_buffer_ctx_t *ctx, uint8_t *da
 #endif
     } else if (is_renderer_vulkan()) {
 #ifndef USE_SDL_RENDERER_ONLY
-        ui_renderer_vk_draw(data, width, height, screen_top_bot, ctx_top_bot, view_mode);
+        ui_renderer_vk_draw(data, ctx->data_prev, width, height, screen_top_bot, ctx_top_bot, view_mode);
 #endif
     } else if (is_renderer_sdl_renderer()) {
         ui_renderer_sdl_draw(data, width, height, screen_top_bot, ctx_top_bot, view_mode);

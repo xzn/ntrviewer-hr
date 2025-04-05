@@ -4,7 +4,9 @@ ARCH := $(shell uname -m)
 endif
 ifeq ($(OS),Darwin)
 CLANG := 1
-# STATIC_MVK := 0
+# STATIC_MVK := 1
+else
+# STATIC_SDL := 1
 endif
 ifeq ($(CLANG),1)
 CC := clang
@@ -44,7 +46,12 @@ else
 ifeq ($(OS),Darwin)
 LDLIBS := -Llib $(shell pkg-config sdl3 --libs)
 else
-LDLIBS := -static-libgcc -static-libstdc++ -Llib $(shell pkg-config sdl3 --libs) $(shell pkg-config libplacebo --libs) $(shell pkg-config lcms2 --libs) $(shell pkg-config libunwind --libs) $(shell pkg-config liblzma --libs) $(shell pkg-config shaderc --libs)
+LDLIBS := -static-libgcc -static-libstdc++ -Llib
+ifneq ($(STATIC_SDL),1)
+LDLIBS += $(shell pkg-config sdl3 --libs) $(shell pkg-config libplacebo --libs) $(shell pkg-config lcms2 --libs) $(shell pkg-config libunwind --libs) $(shell pkg-config liblzma --libs) $(shell pkg-config shaderc --libs)
+else
+LDLIBS += -static -lSDL3
+endif
 endif
 TARGET := ntrviewer
 ifneq ($(ARCH),arm64)

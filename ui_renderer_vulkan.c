@@ -2117,6 +2117,7 @@ static bool create_fence(struct vulkan_demo *demo) {
         err_log("vkCreateFence failed: %d\n", result);
         return false;
     }
+
     return true;
 }
 
@@ -2945,6 +2946,9 @@ struct vk_render_dst_t {
     struct vk_image_t dst;
     struct vk_buffer_t staging;
     struct vk_view_fb_t dst_view;
+#ifdef __APPLE__
+    MTLTexture_id mtl;
+#endif
 };
 
 static struct vk_render_src_t vk_render[SCREEN_COUNT][SCREEN_COUNT];
@@ -2975,6 +2979,7 @@ static struct vk_draw_t {
     uint32_t width, height;
     bool need_barrier;
     VkImageMemoryBarrier barrier;
+#define VK_DRAW_SEM_COUNT (2)
     VkSemaphore sem, sem_in;
 #ifdef __APPLE__
     uint64_t val, val_in;
@@ -2986,11 +2991,17 @@ static void vk_render_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct
 static void vk_render_dst_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_dst_t *render);
 static void vk_render_img_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_img_t *render);
 
-static bool vk_render_create_mtl(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render, int width, int height, bool mtl) {
+static int vk_render_create_mtl(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render, int width, int height,
+    __attribute__((unused)) bool mtl, bool mip
+) {
     VkResult result;
     bool need_update_descriptor_set = false;
+    int ret = 0;
 
-    if (width != (int)render->width || height != (int)render->height) {
+    if (width != (int)render->width || height != (int)render->height || (
+        (mip && render->src_mip == 1) ||
+        (!mip && render->src_mip != 1)
+    )) {
         vk_render_destroy(demo, vma, render);
         render->width  = 0;
         render->height = 0;
@@ -3013,7 +3024,7 @@ static bool vk_render_create_mtl(struct vulkan_demo *demo, VmaAllocator vma, str
         result = vmaCreateBuffer(vma, &buf_info, &alloc_info, &render->staging.buf, &render->staging.alloc, &render->staging.info);
         if (result != VK_SUCCESS) {
             err_log("vmaCreateBuffer staging failed: %d\n", (int)result);
-            return false;
+            return -1;
         }
     }
     if (!render->src.img) {
@@ -3034,10 +3045,10 @@ static bool vk_render_create_mtl(struct vulkan_demo *demo, VmaAllocator vma, str
         img_info.samples = VK_SAMPLE_COUNT_1_BIT;
         img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-        if (mtl) {
-            img_info.mipLevels = 1;
-        } else {
+        if (mip) {
             img_info.mipLevels = floorf(log2f(MAX(img_info.extent.width, img_info.extent.height))) + 1;
+        } else {
+            img_info.mipLevels = 1;
         }
         img_info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -3045,7 +3056,7 @@ static bool vk_render_create_mtl(struct vulkan_demo *demo, VmaAllocator vma, str
         result = vmaCreateImage(vma, &img_info, &alloc_info, &render->src.img, &render->src.alloc, &render->src.info);
         if (result != VK_SUCCESS) {
             err_log("vmaCreateImage src failed: %d\n", (int)result);
-            return false;
+            return -1;
         }
         render->src_mip = img_info.mipLevels;
 #ifdef __APPLE__
@@ -3059,6 +3070,7 @@ static bool vk_render_create_mtl(struct vulkan_demo *demo, VmaAllocator vma, str
             render->mtl = mtl_ex_tex_info.mtlTexture;
         }
 #endif
+        ret = 1;
     }
 
     VkImageSubresourceRange range_mip = range;
@@ -3077,7 +3089,7 @@ static bool vk_render_create_mtl(struct vulkan_demo *demo, VmaAllocator vma, str
         result = vkCreateImageView(demo->device, &view_info, NULL, &render->src_view.view);
         if (result != VK_SUCCESS) {
             err_log("vkCreateImageView src_view failed: %d\n", (int)result);
-            return false;
+            return -1;
         }
         need_update_descriptor_set = true;
     }
@@ -3090,7 +3102,7 @@ static bool vk_render_create_mtl(struct vulkan_demo *demo, VmaAllocator vma, str
             &render->src_view.desc);
         if (result != VK_SUCCESS) {
             err_log("vkAllocateDescriptorSets src_view failed: %d\n", result);
-            return false;
+            return -1;
         }
         need_update_descriptor_set = true;
     }
@@ -3114,11 +3126,11 @@ static bool vk_render_create_mtl(struct vulkan_demo *demo, VmaAllocator vma, str
     render->width  = width;
     render->height = height;
 
-    return true;
+    return ret;
 }
 
-static bool vk_render_create(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render, int width, int height) {
-    return vk_render_create_mtl(demo, vma, render, width, height, 0);
+static int vk_render_create(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render, int width, int height) {
+    return vk_render_create_mtl(demo, vma, render, width, height, 0, 1);
 }
 static bool vk_render_dst_create(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_dst_t *render, VkRenderPass render_pass, int width, int height) {
     VkResult result;
@@ -3151,6 +3163,11 @@ static bool vk_render_dst_create(struct vulkan_demo *demo, VmaAllocator vma, str
     }
     if (!render->dst.img) {
         VkImageCreateInfo img_info = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+#ifdef __APPLE__
+        VkExportMetalObjectCreateInfoEXT mtl_img_ex_info = { VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT };
+        mtl_img_ex_info.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_TEXTURE_BIT_EXT;
+        img_info.pNext = &mtl_img_ex_info;
+#endif
         img_info.imageType = VK_IMAGE_TYPE_2D;
         img_info.format = VK_FORMAT;
         img_info.extent.width = width;
@@ -3162,13 +3179,22 @@ static bool vk_render_dst_create(struct vulkan_demo *demo, VmaAllocator vma, str
         img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-        img_info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        img_info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
         result = vmaCreateImage(vma, &img_info, &alloc_info, &render->dst.img, &render->dst.alloc, &render->dst.info);
         if (result != VK_SUCCESS) {
             err_log("vmaCreateImage dst failed: %d\n", (int)result);
             return false;
         }
+#ifdef __APPLE__
+        VkExportMetalObjectsInfoEXT mtl_ex_info = { VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECTS_INFO_EXT };
+        VkExportMetalTextureInfoEXT mtl_ex_tex_info = { VK_STRUCTURE_TYPE_EXPORT_METAL_TEXTURE_INFO_EXT };
+        mtl_ex_tex_info.image = render->dst.img;
+        mtl_ex_tex_info.plane = VK_IMAGE_ASPECT_PLANE_0_BIT;
+        mtl_ex_info.pNext = &mtl_ex_tex_info;
+        vkExportMetalObjectsEXT(demo->device, &mtl_ex_info);
+        render->mtl = mtl_ex_tex_info.mtlTexture;
+#endif
     }
 
     if (!render->dst_view.view) {
@@ -3237,11 +3263,7 @@ static bool vk_render_img_create(struct vulkan_demo *demo, VmaAllocator vma, str
         img_info.extent.width = width;
         img_info.extent.height = height;
         img_info.extent.depth = 1;
-#ifdef __APPLE__
-        img_info.mipLevels = 1;
-#else
         img_info.mipLevels = floorf(log2f(MAX(img_info.extent.width, img_info.extent.height))) + 1;
-#endif
         img_info.arrayLayers = 1;
         img_info.samples = VK_SAMPLE_COUNT_1_BIT;
         img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -3433,8 +3455,8 @@ static struct ui_prev_dims_t {
 } ui_prev_dims[SCREEN_COUNT][SCREEN_COUNT];
 
 static int ui_renderer_vk_upscale(
-    int upscaling_selected, struct vk_render_src_t *render, bool data, struct vk_render_img_t *render_upscaled,
-    int width, int height, int screen_top_bot, int ctx_top_bot, int ctx_width, int ctx_height
+    int upscaling_selected, struct vk_render_src_t *render, bool data, struct vk_render_dst_t *render_dst, struct vk_render_img_t *render_upscaled,
+    int screen_top_bot, int ctx_top_bot
 ) {
     int i = ctx_top_bot;
     struct vulkan_demo *demo = &vk_demo[i];
@@ -3447,10 +3469,14 @@ static int ui_renderer_vk_upscale(
     range_mip.levelCount = render->src_mip;
 
     enum upscaling_t upscaling = UPSCALING_NONE;
-
-    if (!vk_render_img_create(demo, vma[i], render_upscaled, ctx_width, ctx_height)) {
-        goto upscale_fail;
-    }
+    VkImage upscaled_img = render_dst ? render_dst->dst.img : render_upscaled->img.img;
+    uint32_t upscaled_width = render_dst ? render_dst->width : render_upscaled->width;
+    uint32_t upscaled_height = render_dst ? render_dst->height : render_upscaled->height;
+    uint32_t upscaled_mip = render_dst ? 1 : render_upscaled->mip;
+    VkDescriptorSet upscaled_desc = render_dst ? 0 : render_upscaled->view.desc;
+#ifdef __APPLE__
+    MTLTexture_id upscaled_mtl = render_dst ? render_dst->mtl : render_upscaled->mtl;
+#endif
 
     if (!IS_PLACEBO(upscaling_selected)) {
         placebo_upscaling_update(-1, i, screen_top_bot);
@@ -3460,6 +3486,7 @@ static int ui_renderer_vk_upscale(
         rashader_upscaling_update(-1, i, screen_top_bot);
     }
 
+    bool src_barrier = data && !render_dst;
     pl_tex in_tex = NULL;
     pl_tex out_tex = NULL;
     if (IS_PLACEBO(upscaling_selected)) {
@@ -3467,8 +3494,8 @@ static int ui_renderer_vk_upscale(
         if (placebo_render[i][screen_top_bot]) {
             struct pl_vulkan_wrap_params in_tex_pars = {};
             in_tex_pars.image = render->src.img;
-            in_tex_pars.width = width;
-            in_tex_pars.height = height;
+            in_tex_pars.width = render->width;
+            in_tex_pars.height = render->height;
             in_tex_pars.format = VK_FORMAT;
             in_tex_pars.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
             in_tex = pl_vulkan_wrap(pl_vk_dev[i]->gpu, &in_tex_pars);
@@ -3477,9 +3504,9 @@ static int ui_renderer_vk_upscale(
             }
 
             struct pl_vulkan_wrap_params out_tex_pars = {};
-            out_tex_pars.image = render_upscaled->img.img;
-            out_tex_pars.width = ctx_width;
-            out_tex_pars.height = ctx_height;
+            out_tex_pars.image = upscaled_img;
+            out_tex_pars.width = upscaled_width;
+            out_tex_pars.height = upscaled_height;
             out_tex_pars.format = VK_FORMAT;
             out_tex_pars.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
             out_tex = pl_vulkan_wrap(pl_vk_dev[i]->gpu, &out_tex_pars);
@@ -3489,7 +3516,7 @@ static int ui_renderer_vk_upscale(
 
             pl_vulkan_release_ex(pl_vk_dev[i]->gpu, pl_vulkan_release_params(
                 .tex = in_tex,
-                .layout = data ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                .layout = src_barrier ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 .qf = demo->indices.graphics,
                 .semaphore = { data ? demo->upload_sem[screen_top_bot] : 0,
 #ifdef __APPLE__
@@ -3561,7 +3588,7 @@ placebo_fail:
                 &mtl_ctx[i],
                 data ? demo->upload_evt[screen_top_bot] : NULL, demo->libra_evt[screen_top_bot],
                 data ? demo->upload_val[screen_top_bot] : 0, demo->libra_val[screen_top_bot],
-                render->mtl, render_upscaled->mtl)
+                render->mtl, upscaled_mtl)
             ) {
                 if (data)
                     ++demo->upload_val[screen_top_bot];
@@ -3574,15 +3601,15 @@ rashader_vk:
             struct libra_image_vk_t image = {
                 .handle = render->src.img,
                 .format = VK_FORMAT,
-                .width = width,
-                .height = height,
+                .width = render->width,
+                .height = render->height,
             };
 
             struct libra_image_vk_t out = {
-                .handle = render_upscaled->img.img,
+                .handle = upscaled_img,
                 .format = VK_FORMAT,
-                .width = ctx_width,
-                .height = ctx_height,
+                .width = upscaled_width,
+                .height = upscaled_height,
             };
 
             VkCommandBufferBeginInfo command_buffer_begin_info;
@@ -3613,18 +3640,18 @@ rashader_vk:
             barrier[BARRIER_DST].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
             barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            barrier[BARRIER_DST].image = render_upscaled->img.img;
+            barrier[BARRIER_DST].image = upscaled_img;
             barrier[BARRIER_DST].subresourceRange = range;
             barrier[BARRIER_DST].srcAccessMask = 0;
             barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
             barrier[BARRIER_DST].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             barrier[BARRIER_DST].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             vkCmdPipelineBarrier(command_buffer,
-                data ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                data ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT :
+                src_barrier ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                src_barrier ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT :
                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                 0, 0, NULL, 0, NULL,
-                data ? BARRIER_COUNT : 1, data ? barrier : &barrier[BARRIER_DST]);
+                src_barrier ? BARRIER_COUNT : 1, src_barrier ? barrier : &barrier[BARRIER_DST]);
 
             fail = 0;
             libra_error_t err = libra_vk_filter_chain_frame(chain, command_buffer, 1, image, out, NULL, NULL, NULL);
@@ -3693,9 +3720,7 @@ rashader_fail:
         }
     }
 
-upscale_fail:
     if (upscaling_selected == UPSCALING_DEFAULT_NONE) {
-fail:
         upscaling = UPSCALING_NONE;
     }
 
@@ -3703,7 +3728,7 @@ fail:
     switch(upscaling) {
         default:
         case UPSCALING_NONE:
-            if (!data)
+            if (render_dst || !data)
                 break;
             draw->barrier = (VkImageMemoryBarrier){ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
             draw->barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -3726,16 +3751,16 @@ fail:
             draw->barrier = (VkImageMemoryBarrier){ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
             draw->barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             draw->barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            draw->barrier.image = render_upscaled->img.img;
+            draw->barrier.image = upscaled_img;
             draw->barrier.subresourceRange = range;
-            draw->barrier.subresourceRange.levelCount = render_upscaled->mip;
+            draw->barrier.subresourceRange.levelCount = upscaled_mip;
             draw->barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
             draw->barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
             draw->barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             draw->barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             draw->need_barrier = 1;
-            draw->width = render_upscaled->width;
-            draw->height = render_upscaled->height;
+            draw->width = upscaled_width;
+            draw->height = upscaled_height;
             draw->need_mips = 1;
             draw->sem = placebo_sem[i][screen_top_bot];
             draw->sem_in = placebo_in_sem[i][screen_top_bot];
@@ -3744,37 +3769,39 @@ fail:
             draw->val_in = placebo_in_val[i][screen_top_bot]++;
 #endif
             draw->stages = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-            draw->desc = render_upscaled->view.desc;
+            draw->desc = upscaled_desc;
             break;
 
         case UPSCALING_RASHADER:
             draw->barrier = (VkImageMemoryBarrier){ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
             draw->barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             draw->barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            draw->barrier.image = render_upscaled->img.img;
+            draw->barrier.image = upscaled_img;
             draw->barrier.subresourceRange = range;
-            draw->barrier.subresourceRange.levelCount = render_upscaled->mip;
+            draw->barrier.subresourceRange.levelCount = upscaled_mip;
             draw->barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
             draw->barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
             draw->barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             draw->barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             draw->need_barrier = 1;
-            draw->width = render_upscaled->width;
-            draw->height = render_upscaled->height;
+            draw->width = upscaled_width;
+            draw->height = upscaled_height;
             draw->need_mips = 1;
             draw->sem = demo->libra_sem[screen_top_bot];
 #ifdef __APPLE__
             draw->val = demo->libra_val[screen_top_bot]++;
 #endif
             draw->stages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            draw->desc = render_upscaled->view.desc;
+            draw->desc = upscaled_desc;
             break;
     }
 
     return upscaling_selected;
+fail:
+    return -1;
 }
 
-static bool ui_renderer_vk_upload(struct vk_render_src_t *render, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot) {
+static bool ui_renderer_vk_upload(struct vk_render_src_t *render, struct vk_render_dst_t *render_dst, VkRenderPass render_pass, uint8_t *data,int screen_top_bot, int ctx_top_bot) {
     int i = ctx_top_bot;
     struct vulkan_demo *demo = &vk_demo[i];
 
@@ -3793,7 +3820,87 @@ static bool ui_renderer_vk_upload(struct vk_render_src_t *render, uint8_t *data,
         goto fail;
     }
 
-    vk_render_upload_and_gen_mip_maps(command_buffer, vma[i], render, data, width, height);
+    vk_render_upload_and_gen_mip_maps(command_buffer, vma[i], render, data, render->width, render->height);
+
+    if (render_dst) {
+        VkImageSubresourceRange range = {};
+        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        range.levelCount = 1;
+        range.layerCount = 1;
+
+        VkImageSubresourceRange range_mip = range;
+        range_mip.levelCount = render->src_mip;
+
+        VkImageMemoryBarrier barrier[BARRIER_COUNT] = {};
+        barrier[BARRIER_SRC].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier[BARRIER_SRC].image = render->src.img;
+        barrier[BARRIER_SRC].subresourceRange = range_mip;
+        barrier[BARRIER_SRC].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barrier[BARRIER_SRC].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier[BARRIER_SRC].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier[BARRIER_DST].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        barrier[BARRIER_DST].image = render_dst->dst.img;
+        barrier[BARRIER_DST].subresourceRange = range;
+        barrier[BARRIER_DST].srcAccessMask = 0;
+        barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        barrier[BARRIER_DST].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier[BARRIER_DST].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, NULL, 0, NULL, BARRIER_COUNT,
+            barrier);
+
+        VkClearValue clear_color = {};
+        VkRenderPassBeginInfo render_pass_info = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+        render_pass_info.renderPass = render_pass;
+        render_pass_info.framebuffer = render_dst->dst_view.fb;
+        render_pass_info.renderArea.offset.x = 0;
+        render_pass_info.renderArea.offset.y = 0;
+        render_pass_info.renderArea.extent.width = render_dst->width;
+        render_pass_info.renderArea.extent.height = render_dst->height;
+        render_pass_info.clearValueCount = 1;
+        render_pass_info.pClearValues = &clear_color;
+
+        vkCmdBeginRenderPass(command_buffer, &render_pass_info,
+                            VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(
+            command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            demo->cursor_pipeline);
+        vkCmdBindDescriptorSets(
+            command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            demo->pipeline_layout, 0, 1,
+            &render->src_view.desc, 0, NULL);
+        VkViewport viewport;
+        VkRect2D scissor;
+        memset(&viewport, 0, sizeof(VkViewport));
+        memset(&scissor, 0, sizeof(VkRect2D));
+        scissor.offset.x = viewport.x = 0.0f;
+        scissor.offset.y = viewport.y = 0.0f;
+        scissor.extent.width = viewport.width = (float)render_dst->width;
+        scissor.extent.height = viewport.height = (float)render_dst->height;
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+        vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+        vkCmdDraw(command_buffer, 3, 1, 0, 0);
+        vkCmdEndRenderPass(command_buffer);
+
+        VkImageSubresourceLayers layer = {};
+        layer.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        layer.layerCount = 1;
+        VkOffset3D offset = { 0, 0, 0 };
+        VkExtent3D extent = { render_dst->width, render_dst->height, 1 };
+        VkBufferImageCopy region = {};
+        region.imageSubresource = layer;
+        region.imageOffset = offset;
+        region.imageExtent = extent;
+
+        vkCmdCopyImageToBuffer(command_buffer, render_dst->dst.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, render_dst->staging.buf, 1, &region);
+    }
 
     result = vkEndCommandBuffer(command_buffer);
     if (result != VK_SUCCESS) {
@@ -3829,20 +3936,23 @@ fail:
     return false;
 }
 
-void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode) {
+void ui_renderer_vk_draw(uint8_t *data, uint8_t *data_prev, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode) {
     int i = ctx_top_bot;
     struct vulkan_demo *demo = &vk_demo[i];
     struct vk_render_src_t *render = &vk_render[i][screen_top_bot];
     if(!demo->rendering)
         return;
 
+    int upscaling_selected = ui_upscaling_selected;
 #ifdef __APPLE__
-    if (!vk_render_create_mtl(demo, vma[i], render, height, width, 1))
-        goto fail;
+    int ret = vk_render_create_mtl(demo, vma[i], render, height, width, upscaling_selected == UPSCALING_DEFAULT_NONE);
 #else
-    if (!vk_render_create(demo, vma[i], render, height, width))
-        goto fail;
+    int ret = vk_render_create(demo, vma[i], render, height, width);
 #endif
+    if (ret < 0)
+        goto fail;
+    if (ret > 0 && !data)
+        data = data_prev;
 
     int ctx_left;
     int ctx_top;
@@ -3861,8 +3971,6 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
     draw->sc.extent.height = draw->vp.height = MAX(ctx_height, 1);
     draw->vp.minDepth = 0;
     draw->vp.maxDepth = 1;
-
-    int upscaling_selected = ui_upscaling_selected;
     draw->need_barrier = 0;
     draw->need_mips = 0;
     draw->sem_in = 0;
@@ -3873,13 +3981,18 @@ void ui_renderer_vk_draw(uint8_t *data, int width, int height, int screen_top_bo
     bool need_tex_update = data || prev->upscaling_selected != upscaling_selected || prev->width != ctx_width || prev->height != ctx_height;
 
     if (data) {
-        if (!ui_renderer_vk_upload(render, data, height, width, screen_top_bot, ctx_top_bot))
+        if (!ui_renderer_vk_upload(render, NULL, 0, data, screen_top_bot, ctx_top_bot))
             goto fail;
     }
 
     struct vk_render_img_t *render_upscaled = &vk_render_upscaled[i][screen_top_bot];
     if (need_tex_update) {
-        ui_upscaling_selected = ui_renderer_vk_upscale(upscaling_selected, render, data, render_upscaled, height, width, screen_top_bot, i, ctx_height, ctx_width);
+        if (!vk_render_img_create(demo, vma[i], render_upscaled, ctx_height, ctx_width))
+            goto fail;
+        upscaling_selected = ui_renderer_vk_upscale(upscaling_selected, render, data, NULL, render_upscaled, screen_top_bot, i);
+        if (upscaling_selected < 0)
+            goto fail;
+        ui_upscaling_selected = upscaling_selected;
     } else {
         if (IS_PLACEBO(prev->upscaling_selected) || IS_RASHADER(prev->upscaling_selected)) {
             draw->desc = render_upscaled->view.desc;
@@ -3907,8 +4020,7 @@ void ui_renderer_vk_present(int ctx_top_bot) {
     VkPipelineStageFlags wait_stage =
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSemaphore nk_semaphore = NULL;
-// see struct vk_draw_t for this number
-#define SEM_COUNT_MAX (SCREEN_COUNT * 2 + 1)
+#define SEM_COUNT_MAX (VK_DRAW_SEM_COUNT * SCREEN_COUNT + 1)
     VkSemaphore sems[SEM_COUNT_MAX];
     VkPipelineStageFlags stages[SEM_COUNT_MAX];
 #ifdef __APPLE__
@@ -4101,7 +4213,6 @@ fail:
 
 static struct vk_render_src_t cursor_src;
 static struct vk_render_dst_t cursor_dst;
-static struct vk_render_img_t cursor_upscaled;
 
 void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale) {
     if (channels != GL_CHANNELS_N) {
@@ -4110,6 +4221,7 @@ void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int wid
     bool fail = true;
 
     int i = SCREEN_TOP;
+    int screen_top_bot = SCREEN_TOP;
 
     int target_width = roundf(width * scale);
     int target_height = roundf(height * scale);
@@ -4156,109 +4268,89 @@ void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int wid
         goto fail;
     }
 
-    // NOTE: we are using the same fence every frame anyway so we only really need one command buffer;
-    // in case we change to one fence per swap chain image, make sure to change this to use its own command buffer
-    // as well.
-    VkCommandBuffer cmd = demo->upload_command_buffers[SCREEN_TOP][demo->image_index];
-    VkCommandBufferBeginInfo cmd_beg_info = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
-    cmd_beg_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    struct vk_draw_t *draw = &vk_draw[i][vk_draw_count[i]];
+    draw->desc = cursor_src.src_view.desc;
 
-    result = vkBeginCommandBuffer(cmd, &cmd_beg_info);
+    int upscaling_selected = ui_upscaling_selected;
+    if (!ui_renderer_vk_upload(&cursor_src, &cursor_dst, demo->cursor_render_pass, base2, screen_top_bot, i))
+        goto fail;
+    if (upscaling_selected == UPSCALING_DEFAULT_NONE)
+        goto no_upscale_done;
+
+    draw->sem_in = 0;
+    draw->sem = 0;
+    upscaling_selected = ui_renderer_vk_upscale(upscaling_selected, &cursor_src, true, &cursor_dst, NULL, screen_top_bot, i);
+    if (upscaling_selected < 0)
+        goto fail;
+    if (upscaling_selected == UPSCALING_DEFAULT_NONE)
+        goto no_upscale_done;
+
+    VkSemaphore sems[VK_DRAW_SEM_COUNT];
+    VkPipelineStageFlags stages[VK_DRAW_SEM_COUNT];
+#ifdef __APPLE__
+    uint64_t vals[VK_DRAW_SEM_COUNT];
+#endif
+    uint32_t sems_count = 0;
+
+    VkCommandBufferBeginInfo command_buffer_begin_info = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+    command_buffer_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VkCommandBuffer command_buffer;
+    command_buffer = demo->command_buffers[demo->image_index];
+    result = vkBeginCommandBuffer(command_buffer, &command_buffer_begin_info);
 
     if (result != VK_SUCCESS) {
         err_log("vkBeginCommandBuffer failed: %d\n", result);
         goto fail;
     }
 
-    vk_render_upload_and_gen_mip_maps(cmd, vma[i], &cursor_src, base2, width, height);
-
-    VkImageSubresourceRange range = {};
-    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    range.levelCount = 1;
-    range.layerCount = 1;
-
-    VkImageSubresourceRange range_mip = range;
-    range_mip.levelCount = cursor_src.src_mip;
-
-    VkImageMemoryBarrier barrier[BARRIER_COUNT] = {};
-    barrier[BARRIER_SRC].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier[BARRIER_SRC].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    barrier[BARRIER_SRC].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    barrier[BARRIER_SRC].image = cursor_src.src.img;
-    barrier[BARRIER_SRC].subresourceRange = range_mip;
-    barrier[BARRIER_SRC].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    barrier[BARRIER_SRC].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    barrier[BARRIER_SRC].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier[BARRIER_SRC].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier[BARRIER_DST].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier[BARRIER_DST].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier[BARRIER_DST].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    barrier[BARRIER_DST].image = cursor_dst.dst.img;
-    barrier[BARRIER_DST].subresourceRange = range;
-    barrier[BARRIER_DST].srcAccessMask = 0;
-    barrier[BARRIER_DST].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    barrier[BARRIER_DST].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier[BARRIER_DST].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, NULL, 0, NULL, BARRIER_COUNT,
-        barrier);
-
-    VkClearValue clear_color = {};
-    VkRenderPassBeginInfo render_pass_info = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-    render_pass_info.renderPass = demo->cursor_render_pass;
-    render_pass_info.framebuffer = cursor_dst.dst_view.fb;
-    render_pass_info.renderArea.offset.x = 0;
-    render_pass_info.renderArea.offset.y = 0;
-    render_pass_info.renderArea.extent.width = target_width;
-    render_pass_info.renderArea.extent.height = target_height;
-    render_pass_info.clearValueCount = 1;
-    render_pass_info.pClearValues = &clear_color;
-
-    vkCmdBeginRenderPass(cmd, &render_pass_info,
-                         VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdBindPipeline(
-        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        demo->cursor_pipeline);
-    vkCmdBindDescriptorSets(
-        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        demo->pipeline_layout, 0, 1,
-        &cursor_src.src_view.desc, 0, NULL);
-    VkViewport viewport;
-    VkRect2D scissor;
-    memset(&viewport, 0, sizeof(VkViewport));
-    memset(&scissor, 0, sizeof(VkRect2D));
-    scissor.offset.x = viewport.x = 0.0f;
-    scissor.offset.y = viewport.y = 0.0f;
-    scissor.extent.width = viewport.width = (float)target_width;
-    scissor.extent.height = viewport.height = (float)target_height;
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
-    vkCmdEndRenderPass(cmd);
+    if (draw->sem) {
+        sems[sems_count] = draw->sem;
+        stages[sems_count] = draw->stages;
+#ifdef __APPLE__
+        vals[sems_count] = draw->val;
+#endif
+        ++sems_count;
+    }
+    if (draw->sem_in) {
+        sems[sems_count] = draw->sem_in;
+#ifdef __APPLE__
+        vals[sems_count] = draw->val_in;
+#endif
+        stages[sems_count] = draw->stages;
+        ++sems_count;
+    }
 
     VkImageSubresourceLayers layer = {};
     layer.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     layer.layerCount = 1;
     VkOffset3D offset = { 0, 0, 0 };
-    VkExtent3D extent = { target_width, target_height, 1 };
+    VkExtent3D extent = { cursor_dst.width, cursor_dst.height, 1 };
     VkBufferImageCopy region = {};
     region.imageSubresource = layer;
     region.imageOffset = offset;
     region.imageExtent = extent;
 
-    vkCmdCopyImageToBuffer(cmd, cursor_dst.dst.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, cursor_dst.staging.buf, 1, &region);
+    vkCmdCopyImageToBuffer(command_buffer, cursor_dst.dst.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, cursor_dst.staging.buf, 1, &region);
 
-    result = vkEndCommandBuffer(cmd);
+    result = vkEndCommandBuffer(command_buffer);
     if (result != VK_SUCCESS) {
         err_log("vkEndCommandBuffer failed: %d\n", result);
         goto fail;
     }
 
-    VkSubmitInfo submit_info = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+    VkSubmitInfo submit_info = {VK_STRUCTURE_TYPE_SUBMIT_INFO };
+    submit_info.waitSemaphoreCount = sems_count;
+    submit_info.pWaitSemaphores = sems;
+    submit_info.pWaitDstStageMask = stages;
     submit_info.commandBufferCount = 1;
-    submit_info.pCommandBuffers = &cmd;
+    submit_info.pCommandBuffers = &command_buffer;
+
+#ifdef __APPLE__
+    VkTimelineSemaphoreSubmitInfo tl_info = { VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
+    tl_info.waitSemaphoreValueCount = sems_count;
+    tl_info.pWaitSemaphoreValues = vals;
+    submit_info.pNext = &tl_info;
+#endif
 
     result = vkResetFences(demo->device, 1, &demo->render_fence);
     if (result != VK_SUCCESS) {
@@ -4273,7 +4365,40 @@ void ui_renderer_vk_gen_cursor(stbi_t *image, const unsigned char *base, int wid
         err_log("vkQueueSubmit failed: %d\n", result);
         goto fail;
     }
+    goto done;
 
+no_upscale_done:
+    {
+        VkSubmitInfo submit_info = {VK_STRUCTURE_TYPE_SUBMIT_INFO };
+        submit_info.waitSemaphoreCount = 1;
+        submit_info.pWaitSemaphores = &demo->upload_sem[screen_top_bot];
+        VkPipelineStageFlags stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        submit_info.pWaitDstStageMask = &stage;
+
+#ifdef __APPLE__
+        VkTimelineSemaphoreSubmitInfo tl_info = { VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
+        tl_info.waitSemaphoreValueCount = 1;
+        uint64_t val = demo->upload_val[screen_top_bot]++;
+        tl_info.pWaitSemaphoreValues = &val;
+        submit_info.pNext = &tl_info;
+#endif
+
+        result = vkResetFences(demo->device, 1, &demo->render_fence);
+        if (result != VK_SUCCESS) {
+            err_log("vkResetFences failed: %d\n", result);
+            goto fail;
+        }
+
+        result = vkQueueSubmit(demo->graphics_queue, 1, &submit_info,
+                            demo->render_fence);
+
+        if (result != VK_SUCCESS) {
+            err_log("vkQueueSubmit failed: %d\n", result);
+            goto fail;
+        }
+    }
+
+done:
     result = vkWaitForFences(demo->device, 1, &demo->render_fence, VK_TRUE, UINT64_MAX);
     if (result != VK_SUCCESS) {
         err_log("vkWaitForFences failed: %d\n", result);
