@@ -10,7 +10,7 @@
         },
         {
             "name": "NNEDI3",
-            "preset": "edge-smoothing/nnedi3/nnedi3-nns64-2x-nns32-4x-nns16-8x-rgb"
+            "preset": "edge-smoothing/nnedi3/nnedi3-nns16-2x-luma"
         },
         {
             "name": "Super XBR",
