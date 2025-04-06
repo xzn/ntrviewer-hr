@@ -23,7 +23,7 @@ endif
 ifeq ($(DEBUG),1)
 CFLAGS := -Og -g
 else
-CFLAGS := -flto=auto -Ofast -fno-strict-aliasing
+CFLAGS := -flto=auto -O3 -ffast-math -fno-strict-aliasing
 CPPFLAGS += -DNDEBUG
 endif
 CFLAGS += -Wall -Wextra -MMD
@@ -195,10 +195,10 @@ jpeg_turbo/%.o: jpeg_turbo/%.c
 	nasm $< -o $@ $(NASM) -Ijpeg_turbo/simd/nasm -Ijpeg_turbo/simd
 
 placebo.o: placebo.cpp
-	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -std=c++17
+	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -std=c++17 -fno-fast-math
 
 rashader.o: rashader.cpp
-	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -std=c++17
+	$(CXX) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -std=c++17 -fno-fast-math
 
 ntrviewer.res.o: win_manifest.rc win_manifest.xml
 	windres --input $< --output $@ --output-format=coff
