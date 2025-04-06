@@ -3592,7 +3592,7 @@ placebo_fail:
                 fail = 0;
             }
             goto rashader_done;
-rashader_vk:
+rashader_vk:;
 #endif
             libra_vk_filter_chain_t *chain = rashader_render_chain(rashader_render[i][screen_top_bot]);
             struct libra_image_vk_t image = {

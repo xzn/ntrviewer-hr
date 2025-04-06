@@ -50,12 +50,17 @@ LDLIBS := -static-libgcc -static-libstdc++ -Llib
 ifneq ($(STATIC_SDL),1)
 LDLIBS += $(shell pkg-config sdl3 --libs) $(shell pkg-config libplacebo --libs) $(shell pkg-config lcms2 --libs) $(shell pkg-config libunwind --libs) $(shell pkg-config liblzma --libs) $(shell pkg-config shaderc --libs)
 else
-LDLIBS += -static -lSDL3
+LDLIBS += -Wl,-Bstatic -lSDL3
 endif
 endif
 TARGET := ntrviewer
 ifneq ($(ARCH),arm64)
-NASM := -DELF -felf64 -D__x86_64__
+NASM := -D__x86_64__
+ifeq ($(OS),Darwin)
+NASM += -fmacho64 -DDMACHO
+else
+NASM += -felf64 -DELF
+endif
 endif
 endif
 

@@ -9,17 +9,12 @@
 #include <algorithm>
 
 #include "rapidjson/document.h"
-#define PLACEBO_LOG_DIR "placebo-logs"
 #define PLACEBO_SHADER_DIR "placebo-shaders"
-#include <filesystem>
-#include <cstdio>
 
 pl_log placebo_log_create(void) {
-    std::filesystem::create_directory(PLACEBO_LOG_DIR);
     pl_log_params params = {
         .log_cb = pl_log_simple,
-        .log_priv = fopen(PLACEBO_LOG_DIR "/placebo.log", "w"),
-        .log_level = PL_LOG_INFO,
+        .log_level = PL_LOG_WARN,
     };
     return pl_log_create(PL_API_VER, &params);
 }
