@@ -36,6 +36,7 @@ int ui_ctx_width[SCREEN_COUNT], ui_ctx_height[SCREEN_COUNT];
 
 event_t update_bottom_screen_evt;
 
+static void change_working_directory_to_exe_path(void);
 int ui_common_sdl_init(void) {
     SDL_SetHint(SDL_HINT_RENDER_VSYNC, "1");
 #ifdef _WIN32
@@ -69,6 +70,7 @@ int ui_common_sdl_init(void) {
     }
 #endif
 
+    change_working_directory_to_exe_path();
     return 0;
 }
 
@@ -560,4 +562,37 @@ void generate_cursor_image(stbi_t *image, const unsigned char *base, int width, 
         ui_renderer_sdl_gen_cursor(image, base, width, height, channels, scale);
     }
     // TODO
+}
+
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
+
+static void change_working_directory_to_exe_path(void) {
+#ifdef _WIN32
+    // TODO
+#elif __APPLE__
+    uint32_t path_len = 0;
+    _NSGetExecutablePath(NULL, &path_len);
+    if (!path_len) {
+        err_log("get path len for current exe path failed.\n");
+        return;
+    }
+    char *path = malloc(path_len);
+    if (_NSGetExecutablePath(path, &path_len)) {
+        err_log("get current exe path failed.\n");
+    } else {
+        // err_log("current exe path: %s\n", path);
+        char *path_end = strrchr(path, '/');
+        if (path_end) {
+            *path_end = 0;
+            if (chdir(path)) {
+                err_log("failed to set working directory: %d\n", errno);
+            }
+        }
+    }
+    free(path);
+#else
+    // TODO
+#endif
 }

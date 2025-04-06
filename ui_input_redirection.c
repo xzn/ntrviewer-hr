@@ -584,7 +584,7 @@ static void do_ui_update_game_controllers(void) {
                 ui_controllers_names[nn] = "(Unknown)";
             }
             ui_controllers_ids[nn] = id;
-            err_log("%d %d\n", nn, id);
+            // err_log("%d %d\n", nn, id);
             ++nn;
         }
     }
