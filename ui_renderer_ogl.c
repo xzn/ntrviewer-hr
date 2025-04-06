@@ -979,6 +979,7 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width,
 
     int upscaling_selected = ui_upscaling_selected;
     bool upscaled = upscaling_selected != UPSCALING_DEFAULT_NONE;
+    bool do_upscaled = false;
 
     bool need_tex_update = ctx->upscaling_selected_prev != upscaling_selected ||
         ctx->width_prev != ctx_width || ctx->height_prev != ctx_height ||
@@ -986,7 +987,9 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width,
         ctx->view_mode_prev != view_mode;
 
     if (!data) {
-        if (upscaled) {
+        if (rashader_delay_init[i][screen_top_bot]) {
+            data = ctx->data_prev;
+        } else if (upscaled) {
             if (need_tex_update || !ctx->gl_tex_upscaled_prev[i]) {
                 data = ctx->data_prev;
             } else {
@@ -1043,7 +1046,7 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width,
                 out_tex_pars.width = ctx_height;
                 out_tex_pars.height = ctx_width;
 
-                if (ctx->width_upscaled != out_tex_pars.width || ctx->height_upscaled != out_tex_pars.height) {
+                if (ctx->width_upscaled[i] != out_tex_pars.width || ctx->height_upscaled[i] != out_tex_pars.height) {
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, out_tex_pars.texture);
                     glTexImage2D(
@@ -1051,8 +1054,8 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width,
                         out_tex_pars.width, out_tex_pars.height, 0,
                         GL_FORMAT, GL_UNSIGNED_BYTE,
                         NULL);
-                    ctx->width_upscaled = out_tex_pars.width;
-                    ctx->height_upscaled = out_tex_pars.height;
+                    ctx->width_upscaled[i] = out_tex_pars.width;
+                    ctx->height_upscaled[i] = out_tex_pars.height;
                 }
 
                 out_tex = pl_opengl_wrap(pl_ogl_dev[i]->gpu, &out_tex_pars);
@@ -1067,10 +1070,11 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width,
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, out_tex_pars.texture);
                 ctx->gl_tex_upscaled_prev[i] = out_tex_pars.texture;
+                do_upscaled = true;
             } else if (!reset_mode) {
 placebo_fail:
                 err_log("placebo render failed\n");
-                ui_upscaling_selected = UPSCALING_DEFAULT_NONE;
+                upscaling_selected = UPSCALING_DEFAULT_NONE;
             }
         }
 
@@ -1097,7 +1101,7 @@ placebo_fail:
                     .height = ctx_width,
                 };
 
-                if (ctx->width_upscaled != (int)out.width || ctx->height_upscaled != (int)out.height) {
+                if (ctx->width_upscaled[i] != (int)out.width || ctx->height_upscaled[i] != (int)out.height) {
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, out.handle);
                     glTexImage2D(
@@ -1105,8 +1109,8 @@ placebo_fail:
                         out.width, out.height, 0,
                         GL_FORMAT, GL_UNSIGNED_BYTE,
                         NULL);
-                    ctx->width_upscaled = out.width;
-                    ctx->height_upscaled = out.height;
+                    ctx->width_upscaled[i] = out.width;
+                    ctx->height_upscaled[i] = out.height;
                 }
 
                 libra_error_t err = libra_gl_filter_chain_frame(chain, 1, image, out, NULL, NULL, NULL);
@@ -1118,24 +1122,29 @@ placebo_fail:
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, out.handle);
                 ctx->gl_tex_upscaled_prev[i] = out.handle;
+                do_upscaled = true;
             } else if (!reset_mode) {
 rashader_fail:
                 err_log("rashader render failed\n");
-                ui_upscaling_selected = UPSCALING_DEFAULT_NONE;
+                upscaling_selected = UPSCALING_DEFAULT_NONE;
             }
         }
 
-        if (ui_upscaling_selected == UPSCALING_DEFAULT_NONE) {
+        if (upscaling_selected == UPSCALING_DEFAULT_NONE) {
+            ui_upscaling_selected = UPSCALING_DEFAULT_NONE;
+
             ctx->gl_tex_upscaled_prev[i] = 0;
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, ctx->gl_tex[i]);
         }
     }
 
-    if (rashader_delay_init[i][screen_top_bot]) {
-        rashader_delay_init[i][screen_top_bot] = 0;
-        if (i == SCREEN_TOP)
-            cursor_scale_prev = 0.0f;
+    if (!do_upscaled) {
+        if (rashader_delay_init[i][screen_top_bot]) {
+            rashader_delay_init[i][screen_top_bot] = 0;
+            if (i == (view_mode == VIEW_MODE_SEPARATE ? SCREEN_BOT : SCREEN_TOP))
+                cursor_scale_prev = 0.0f;
+        }
     }
 
     if (is_renderer_csc())

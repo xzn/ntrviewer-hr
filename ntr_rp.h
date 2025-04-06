@@ -51,8 +51,8 @@ struct rp_buffer_ctx_t {
     GLuint gl_tex[SCREEN_COUNT];
     GLuint gl_tex_upscaled[SCREEN_COUNT];
     GLuint gl_tex_upscaled_prev[SCREEN_COUNT]; // weak-ref
-    int width_upscaled;
-    int height_upscaled;
+    int width_upscaled[SCREEN_COUNT];
+    int height_upscaled[SCREEN_COUNT];
 
     uint8_t screen_decoded[FBI_COUNT][SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N];
 

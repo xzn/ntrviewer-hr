@@ -811,7 +811,7 @@ static bool d3d11_recreate_upscaled_resource(struct rp_buffer_ctx_t *ctx, int ct
 
     HRESULT hr;
 
-    if (ctx->width_upscaled != ctx_height || ctx->height_upscaled != ctx_width || !ctx->d3d_srv_upscaled_prev[i]) {
+    if (ctx->width_upscaled[i] != ctx_height || ctx->height_upscaled[i] != ctx_width || !ctx->d3d_srv_upscaled_prev[i]) {
         CHECK_AND_RELEASE(ctx->d3d_rtv_upscaled[i]);
         CHECK_AND_RELEASE(ctx->d3d_srv_upscaled[i]);
         CHECK_AND_RELEASE(ctx->d3d_tex_upscaled[i]);
@@ -847,8 +847,8 @@ static bool d3d11_recreate_upscaled_resource(struct rp_buffer_ctx_t *ctx, int ct
             goto fail;
         }
 
-        ctx->width_upscaled = ctx_height;
-        ctx->height_upscaled = ctx_width;
+        ctx->width_upscaled[i] = ctx_height;
+        ctx->height_upscaled[i] = ctx_width;
     }
 
     return true;
