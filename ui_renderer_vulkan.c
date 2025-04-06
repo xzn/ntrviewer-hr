@@ -289,15 +289,35 @@ static bool create_instance(struct vulkan_demo *demo) {
     validation_layers_installed = 0;
 #endif
 
-#ifndef STATIC_MVK
-    enabled_extension_count =
-        sdl_extension_count + (validation_layers_installed ? 1 : 0);
+    enabled_extension_count = 0;
+    enabled_extensions = malloc(
+        (sdl_extension_count + (validation_layers_installed ? 1 : 0)) * sizeof(char *));
 
-    enabled_extensions = malloc(enabled_extension_count * sizeof(char *));
-    memcpy(enabled_extensions, sdl_enabled_extensions, sdl_extension_count * sizeof(char *));
-
+    for (i = 0; i < sdl_extension_count; i++) {
+        int extension_missing = 1;
+        uint32_t j;
+        for (j = 0; j < available_instance_extension_count; j++) {
+            if (strcmp(sdl_enabled_extensions[i],
+                       available_instance_extensions[j].extensionName) == 0) {
+                extension_missing = 0;
+                break;
+            }
+        }
+        if (extension_missing) {
+#ifdef __APPLE__
+            if (strcmp(sdl_enabled_extensions[i],
+                VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) == 0) {
+                continue;
+            }
+#endif
+            err_log("Extension %s is missing\n", sdl_enabled_extensions[i]);
+            return ret;
+        }
+        enabled_extensions[enabled_extension_count++] =
+            sdl_enabled_extensions[i];
+    }
     if (validation_layers_installed) {
-        enabled_extensions[sdl_extension_count] =
+        enabled_extensions[enabled_extension_count++] =
             VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
     }
 
@@ -305,28 +325,6 @@ static bool create_instance(struct vulkan_demo *demo) {
     err_log("Trying to enable the following instance extensions:\n");
     for (i = 0; i < enabled_extension_count; i++) {
         err_log("%s\n", enabled_extensions[i]);
-    }
-#endif
-    for (i = 0; i < enabled_extension_count; i++) {
-        int extension_missing = 1;
-        uint32_t j;
-        for (j = 0; j < available_instance_extension_count; j++) {
-            if (strcmp(enabled_extensions[i],
-                       available_instance_extensions[j].extensionName) == 0) {
-                extension_missing = 0;
-                break;
-            }
-        }
-        if (extension_missing) {
-            err_log("Extension %s is missing\n", enabled_extensions[i]);
-            return ret;
-        }
-    }
-#else
-    enabled_extension_count = available_instance_extension_count;
-    enabled_extensions = malloc(available_instance_extension_count * sizeof(char *));
-    for (i = 0; i < available_instance_extension_count; ++i) {
-        enabled_extensions[i] = available_instance_extensions[i].extensionName;
     }
 #endif
 
@@ -2691,8 +2689,13 @@ static int rashader_upscaling_update(int selected, int ctx_top_bot, int screen_t
 #endif
 }
 
+static bool volkInited;
 static void vmaAuxCleanup(void);
 void ui_renderer_vk_destroy(void) {
+    if (!volkInited) {
+        return;
+    }
+
     ui_upscaling_filters = 0;
 
     ui_nk_ctx = NULL;
@@ -2750,11 +2753,19 @@ int ui_renderer_vk_init(void) {
         return -1;
     }
 #else
+// for debug build we are not patching install_names and rpaths for the executable,
+// so let sdl use the default library it can find instead.
+#if defined(__APPLE__) && defined(NDEBUG)
+    if (!SDL_Vulkan_LoadLibrary("libMoltenVK.dylib")) {
+        return -1;
+    }
+#endif
     if (volkInitialize() != VK_SUCCESS) {
         return -1;
     }
 #endif
 
+    volkInited = 1;
     if (!create_instance(&vk_demo[SCREEN_TOP])) {
         return -1;
     }
@@ -2843,6 +2854,7 @@ int ui_renderer_vk_init(void) {
 
 #ifdef __APPLE__
     err_log("vulkan (via moltenvk/metal)\n");
+    init_local_network_access();
 #else
     err_log("vulkan\n");
 #endif

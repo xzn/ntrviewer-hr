@@ -53,3 +53,15 @@ bool mtl_filter_chain_frame(struct rashader_render_t *render, void *ctx, void *u
     }
     return true;
 }
+
+#import <Network/Network.h>
+
+void init_local_network_access(void) {
+    @autoreleasepool {
+        nw_browse_descriptor_t desc = nw_browse_descriptor_create_bonjour_service("_http._tcp", "local.");
+        nw_parameters_t params = nw_parameters_create();
+        nw_browser_t browser = nw_browser_create(desc, params);
+        nw_browser_set_queue(browser, dispatch_get_main_queue());
+        nw_browser_start(browser);
+    }
+}
