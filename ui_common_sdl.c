@@ -37,6 +37,7 @@ int ui_ctx_width[SCREEN_COUNT], ui_ctx_height[SCREEN_COUNT];
 event_t update_bottom_screen_evt;
 
 static void change_working_directory_to_exe_path(void);
+void init_local_network_access(void);
 int ui_common_sdl_init(void) {
     SDL_SetHint(SDL_HINT_RENDER_VSYNC, "1");
 #ifdef _WIN32
@@ -71,6 +72,9 @@ int ui_common_sdl_init(void) {
 #endif
 
     change_working_directory_to_exe_path();
+#ifdef __APPLE__
+    init_local_network_access();
+#endif
     return 0;
 }
 

@@ -2854,7 +2854,6 @@ int ui_renderer_vk_init(void) {
 
 #ifdef __APPLE__
     err_log("vulkan (via moltenvk/metal)\n");
-    init_local_network_access();
 #else
     err_log("vulkan\n");
 #endif
