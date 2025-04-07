@@ -570,7 +570,31 @@ void generate_cursor_image(stbi_t *image, const unsigned char *base, int width, 
 
 static void change_working_directory_to_exe_path(void) {
 #ifdef _WIN32
-    // TODO
+    DWORD path_len = MAX_PATH;
+    LPWSTR path = NULL;
+    while (1) {
+        path = malloc(MAX_PATH * sizeof(*path));
+        DWORD ret = GetModuleFileNameW(NULL, path, path_len);
+        if (!ret) {
+            err_log("get path len for current exe path failed: %d\n", (int)GetLastError());
+            return;
+        }
+        if (ret < path_len) {
+            path_len = ret;
+            break;
+        }
+        free(path);
+        path_len *= 2;
+    }
+    // err_log("current exe path: %ls\n", path);
+    LPWSTR path_end = wcsrchr(path, L'\\');
+    if (path_end) {
+        *path_end = 0;
+        if (!SetCurrentDirectoryW(path)) {
+            err_log("failed to set working directory: %d\n", (int)GetLastError());
+        }
+    }
+    free(path);
 #elif __APPLE__
     uint32_t path_len = 0;
     _NSGetExecutablePath(NULL, &path_len);
