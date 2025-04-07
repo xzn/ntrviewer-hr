@@ -566,6 +566,8 @@ void generate_cursor_image(stbi_t *image, const unsigned char *base, int width, 
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
+#elif !defined(_WIN32)
+#include <linux/limits.h>
 #endif
 
 static void change_working_directory_to_exe_path(void) {
@@ -573,7 +575,7 @@ static void change_working_directory_to_exe_path(void) {
     DWORD path_len = MAX_PATH;
     LPWSTR path = NULL;
     while (1) {
-        path = malloc(MAX_PATH * sizeof(*path));
+        path = malloc(path_len * sizeof(*path));
         DWORD ret = GetModuleFileNameW(NULL, path, path_len);
         if (!ret) {
             err_log("get path len for current exe path failed: %d\n", (int)GetLastError());
@@ -617,6 +619,30 @@ static void change_working_directory_to_exe_path(void) {
     }
     free(path);
 #else
-    // TODO
+    size_t path_len = PATH_MAX;
+    char *path = NULL;
+    while (1) {
+        path = malloc(path_len * sizeof(*path));
+        ssize_t ret = readlink("/proc/self/exe", path, path_len);
+        if (ret < 0) {
+            err_log("get path len for current exe path failed: %d\n", errno);
+            return;
+        }
+        if ((size_t)ret < path_len) {
+            path_len = ret;
+            break;
+        }
+        free(path);
+        path_len *= 2;
+    }
+    // err_log("current exe path: %s\n", path);
+    char *path_end = strrchr(path, '/');
+    if (path_end) {
+        *path_end = 0;
+        if (chdir(path)) {
+            err_log("failed to set working directory: %d\n", errno);
+        }
+    }
+    free(path);
 #endif
 }
