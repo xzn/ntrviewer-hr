@@ -50,7 +50,7 @@ LDLIBS := -static-libgcc -static-libstdc++ -Llib
 ifneq ($(STATIC_SDL),1)
 LDLIBS += $(shell pkg-config sdl3 --libs) $(shell pkg-config libplacebo --libs) $(shell pkg-config lcms2 --libs) $(shell pkg-config libunwind --libs) $(shell pkg-config liblzma --libs) $(shell pkg-config shaderc --libs)
 else
-LDLIBS += -Wl,-Bstatic -lSDL3
+LDLIBS += -Wl,-Bstatic -lSDL3 -lshaderc_combined $(shell pkg-config spirv --libs)
 endif
 endif
 TARGET := ntrviewer
