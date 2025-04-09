@@ -2756,9 +2756,15 @@ int ui_renderer_vk_init(void) {
 // for debug build we are not patching install_names and rpaths for the executable,
 // so let sdl use the default library it can find instead.
 #if defined(__APPLE__) && defined(NDEBUG)
+#ifdef __aarch64__
+    setenv("VK_DRIVER_FILES", "arm64/MoltenVK_icd.json", 0);
+#elif defined(__x86_64__)
+    setenv("VK_DRIVER_FILES", "x86_64/MoltenVK_icd.json", 0);
+#else
     if (!SDL_Vulkan_LoadLibrary("libMoltenVK.dylib")) {
         return -1;
     }
+#endif
 #endif
     if (volkInitialize() != VK_SUCCESS) {
         return -1;
