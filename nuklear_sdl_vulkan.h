@@ -1171,21 +1171,28 @@ NK_INTERN void nk_sdl_device_upload_atlas(VkQueue graphics_queue,
 NK_INTERN void nk_sdl_destroy_render_resources(struct nk_sdl_device *dev) {
     uint32_t i;
 
-    vkDestroyPipeline(dev->logical_device, dev->pipeline, NULL);
-    vkDestroyPipelineLayout(dev->logical_device, dev->pipeline_layout, NULL);
-    vkDestroyDescriptorSetLayout(dev->logical_device,
-                                 dev->texture_descriptor_set_layout, NULL);
-    vkDestroyDescriptorSetLayout(dev->logical_device,
-                                 dev->uniform_descriptor_set_layout, NULL);
-    vkDestroyDescriptorPool(dev->logical_device, dev->descriptor_pool, NULL);
+    if (dev->pipeline)
+        vkDestroyPipeline(dev->logical_device, dev->pipeline, NULL);
+    if (dev->pipeline_layout)
+        vkDestroyPipelineLayout(dev->logical_device, dev->pipeline_layout, NULL);
+    if (dev->texture_descriptor_set_layout)
+        vkDestroyDescriptorSetLayout(dev->logical_device,
+            dev->texture_descriptor_set_layout, NULL);
+    if (dev->uniform_descriptor_set_layout)
+        vkDestroyDescriptorSetLayout(dev->logical_device,
+            dev->uniform_descriptor_set_layout, NULL);
+    if (dev->descriptor_pool)
+        vkDestroyDescriptorPool(dev->logical_device, dev->descriptor_pool, NULL);
     for (i = 0; i < dev->framebuffers_len; i++) {
-        vkDestroyFramebuffer(dev->logical_device, dev->framebuffers[i], NULL);
+        if (dev->framebuffers[i])
+            vkDestroyFramebuffer(dev->logical_device, dev->framebuffers[i], NULL);
     }
     free(dev->framebuffers);
     dev->framebuffers_len = 0;
     free(dev->texture_descriptor_sets);
     dev->texture_descriptor_sets_len = 0;
-    vkDestroyRenderPass(dev->logical_device, dev->render_pass, NULL);
+    if (dev->render_pass)
+        vkDestroyRenderPass(dev->logical_device, dev->render_pass, NULL);
 }
 #include <stdio.h>
 NK_API void nk_sdl_vk_resize(float win_scale,
@@ -1206,30 +1213,44 @@ NK_API void nk_sdl_vk_resize(float win_scale,
 NK_API void nk_sdl_vk_device_destroy(void) {
     struct nk_sdl_device *dev = &sdl.vulkan;
 
-    vkDeviceWaitIdle(dev->logical_device);
+    if (dev->logical_device) {
+        vkDeviceWaitIdle(dev->logical_device);
 
-    nk_sdl_device_clear_atlas(dev);
+        nk_sdl_device_clear_atlas(dev);
 
-    nk_sdl_destroy_render_resources(dev);
+        nk_sdl_destroy_render_resources(dev);
 
-    vkFreeCommandBuffers(dev->logical_device, dev->command_pool,
-                         dev->command_buffers_len, dev->command_buffers);
-    vkDestroyCommandPool(dev->logical_device, dev->command_pool, NULL);
-    vkDestroySemaphore(dev->logical_device, dev->render_completed, NULL);
+        if (dev->command_buffers)
+            vkFreeCommandBuffers(dev->logical_device, dev->command_pool,
+                dev->command_buffers_len, dev->command_buffers);
+        if (dev->command_pool)
+            vkDestroyCommandPool(dev->logical_device, dev->command_pool, NULL);
+        if (dev->render_completed)
+            vkDestroySemaphore(dev->logical_device, dev->render_completed, NULL);
 
-    vkUnmapMemory(dev->logical_device, dev->vertex_memory);
-    vkUnmapMemory(dev->logical_device, dev->index_memory);
-    vkUnmapMemory(dev->logical_device, dev->uniform_memory);
+        if (dev->vertex_memory) {
+            vkUnmapMemory(dev->logical_device, dev->vertex_memory);
+            vkFreeMemory(dev->logical_device, dev->vertex_memory, NULL);
+        }
+        if (dev->index_memory) {
+            vkUnmapMemory(dev->logical_device, dev->index_memory);
+            vkFreeMemory(dev->logical_device, dev->index_memory, NULL);
+        }
+        if (dev->uniform_memory) {
+            vkUnmapMemory(dev->logical_device, dev->uniform_memory);
+            vkFreeMemory(dev->logical_device, dev->uniform_memory, NULL);
+        }
 
-    vkFreeMemory(dev->logical_device, dev->vertex_memory, NULL);
-    vkFreeMemory(dev->logical_device, dev->index_memory, NULL);
-    vkFreeMemory(dev->logical_device, dev->uniform_memory, NULL);
+        if (dev->vertex_buffer)
+            vkDestroyBuffer(dev->logical_device, dev->vertex_buffer, NULL);
+        if (dev->index_buffer)
+            vkDestroyBuffer(dev->logical_device, dev->index_buffer, NULL);
+        if (dev->uniform_buffer)
+            vkDestroyBuffer(dev->logical_device, dev->uniform_buffer, NULL);
 
-    vkDestroyBuffer(dev->logical_device, dev->vertex_buffer, NULL);
-    vkDestroyBuffer(dev->logical_device, dev->index_buffer, NULL);
-    vkDestroyBuffer(dev->logical_device, dev->uniform_buffer, NULL);
-
-    vkDestroySampler(dev->logical_device, dev->sampler, NULL);
+        if (dev->sampler)
+            vkDestroySampler(dev->logical_device, dev->sampler, NULL);
+    }
 
     free(dev->command_buffers);
     nk_buffer_free(&dev->cmds);

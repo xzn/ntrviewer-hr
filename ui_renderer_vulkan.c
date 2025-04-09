@@ -2145,26 +2145,43 @@ static bool destroy_swap_chain_related_resources(struct vulkan_demo *demo) {
     uint32_t i;
     VkResult result;
 
-    result = vkQueueWaitIdle(demo->graphics_queue);
-    if (result != VK_SUCCESS) {
-        err_log("vkQueueWaitIdle failed: %d\n", result);
-        return false;
+    if (demo->graphics_queue) {
+        result = vkQueueWaitIdle(demo->graphics_queue);
+        if (result != VK_SUCCESS) {
+            err_log("vkQueueWaitIdle failed: %d\n", result);
+            return false;
+        }
     }
 
+    if (!demo->device)
+        return false;
+
     for (i = 0; i < demo->swap_chain_images_len; i++) {
-        vkDestroyFramebuffer(demo->device, demo->framebuffers[i], NULL);
-        vkDestroyImageView(demo->device, demo->overlay_image_views[i], NULL);
-        vkDestroyImage(demo->device, demo->overlay_images[i], NULL);
-        vkFreeMemory(demo->device, demo->overlay_image_memories[i], NULL);
-        vkDestroyImageView(demo->device, demo->swap_chain_image_views[i], NULL);
+        if (demo->framebuffers[i])
+            vkDestroyFramebuffer(demo->device, demo->framebuffers[i], NULL);
+        if (demo->overlay_image_views[i])
+            vkDestroyImageView(demo->device, demo->overlay_image_views[i], NULL);
+        if (demo->overlay_images[i])
+            vkDestroyImage(demo->device, demo->overlay_images[i], NULL);
+        if (demo->overlay_image_memories[i])
+            vkFreeMemory(demo->device, demo->overlay_image_memories[i], NULL);
+        if (demo->swap_chain_image_views[i])
+            vkDestroyImageView(demo->device, demo->swap_chain_image_views[i], NULL);
     }
-    vkDestroySwapchainKHR(demo->device, demo->swap_chain, NULL);
-    vkDestroyRenderPass(demo->device, demo->render_pass, NULL);
-    vkDestroyRenderPass(demo->device, demo->cursor_render_pass, NULL);
-    vkDestroyPipeline(demo->device, demo->pipeline, NULL);
-    vkDestroyPipeline(demo->device, demo->data_pipeline, NULL);
-    vkDestroyPipeline(demo->device, demo->cursor_pipeline, NULL);
-    vkDestroyPipelineLayout(demo->device, demo->pipeline_layout, NULL);
+    if (demo->swap_chain)
+        vkDestroySwapchainKHR(demo->device, demo->swap_chain, NULL);
+    if (demo->render_pass)
+        vkDestroyRenderPass(demo->device, demo->render_pass, NULL);
+    if (demo->cursor_render_pass)
+        vkDestroyRenderPass(demo->device, demo->cursor_render_pass, NULL);
+    if (demo->pipeline)
+        vkDestroyPipeline(demo->device, demo->pipeline, NULL);
+    if (demo->data_pipeline)
+        vkDestroyPipeline(demo->device, demo->data_pipeline, NULL);
+    if (demo->cursor_pipeline)
+        vkDestroyPipeline(demo->device, demo->cursor_pipeline, NULL);
+    if (demo->pipeline_layout)
+        vkDestroyPipelineLayout(demo->device, demo->pipeline_layout, NULL);
     return true;
 }
 
@@ -2251,37 +2268,55 @@ static void destroy_vulkan_demo(struct vulkan_demo *demo) {
 #ifndef NDEBUG
     err_log("cleaning up\n");
 #endif
-    result = vkDeviceWaitIdle(demo->device);
-    if (result != VK_SUCCESS) {
-        err_log("vkDeviceWaitIdle failed: %d\n", result);
+    if (demo->device) {
+        result = vkDeviceWaitIdle(demo->device);
+        if (result != VK_SUCCESS) {
+            err_log("vkDeviceWaitIdle failed: %d\n", result);
+        }
     }
 
     destroy_swap_chain_related_resources(demo);
 
-    vkFreeCommandBuffers(demo->device, demo->command_pool,
-                         demo->swap_chain_images_len, demo->command_buffers);
-    for(int i = 0; i < SCREEN_COUNT; ++i) {
-        vkFreeCommandBuffers(demo->device, demo->command_pool,
-            demo->swap_chain_images_len, demo->upload_command_buffers[i]);
-        vkFreeCommandBuffers(demo->device, demo->command_pool,
-            demo->swap_chain_images_len, demo->libra_command_buffers[i]);
-    }
-    vkDestroyCommandPool(demo->device, demo->command_pool, NULL);
-    vkDestroySampler(demo->device, demo->sampler, NULL);
-    vkDestroySemaphore(demo->device, demo->render_finished, NULL);
-    vkDestroySemaphore(demo->device, demo->image_available, NULL);
-    for (int i = 0; i < SCREEN_COUNT; ++i) {
-        vkDestroySemaphore(demo->device, demo->upload_sem[i], NULL);
-        vkDestroySemaphore(demo->device, demo->libra_sem[i], NULL);
-    }
-    vkDestroyFence(demo->device, demo->render_fence, NULL);
+    if (demo->device) {
+        if (demo->command_buffers)
+            vkFreeCommandBuffers(demo->device, demo->command_pool,
+                demo->swap_chain_images_len, demo->command_buffers);
+        for(int i = 0; i < SCREEN_COUNT; ++i) {
+            if (demo->upload_command_buffers[i])
+                vkFreeCommandBuffers(demo->device, demo->command_pool,
+                    demo->swap_chain_images_len, demo->upload_command_buffers[i]);
+            if (demo->libra_command_buffers[i])
+                vkFreeCommandBuffers(demo->device, demo->command_pool,
+                    demo->swap_chain_images_len, demo->libra_command_buffers[i]);
+        }
+        if (demo->command_pool)
+            vkDestroyCommandPool(demo->device, demo->command_pool, NULL);
+        if (demo->sampler)
+            vkDestroySampler(demo->device, demo->sampler, NULL);
+        if (demo->render_finished)
+            vkDestroySemaphore(demo->device, demo->render_finished, NULL);
+        if (demo->image_available)
+            vkDestroySemaphore(demo->device, demo->image_available, NULL);
+        for (int i = 0; i < SCREEN_COUNT; ++i) {
+            if (demo->upload_sem[i])
+                vkDestroySemaphore(demo->device, demo->upload_sem[i], NULL);
+            if (demo->libra_sem[i])
+                vkDestroySemaphore(demo->device, demo->libra_sem[i], NULL);
+        }
+        if (demo->render_fence)
+            vkDestroyFence(demo->device, demo->render_fence, NULL);
 
-    vkDestroyDescriptorSetLayout(demo->device, demo->descriptor_set_layout,
-                                 NULL);
-    vkDestroyDescriptorPool(demo->device, demo->descriptor_pool, NULL);
+        if (demo->descriptor_set_layout)
+            vkDestroyDescriptorSetLayout(demo->device, demo->descriptor_set_layout,
+                NULL);
+        if (demo->descriptor_pool)
+            vkDestroyDescriptorPool(demo->device, demo->descriptor_pool, NULL);
 
-    vkDestroyDevice(demo->device, NULL);
-    vkDestroySurfaceKHR(demo->instance, demo->surface, NULL);
+        vkDestroyDevice(demo->device, NULL);
+    }
+
+    if (demo->instance && demo->surface)
+        vkDestroySurfaceKHR(demo->instance, demo->surface, NULL);
 
     if (demo->extensions) {
         free(demo->extensions);
@@ -2334,7 +2369,9 @@ static void destroy_instance(struct vulkan_demo *demo) {
             err_log("Couldn't destroy debug messenger: %d\n", result);
         }
     }
-    vkDestroyInstance(demo->instance, NULL);
+    if (demo->instance) {
+        vkDestroyInstance(demo->instance, NULL);
+    }
 }
 
 static struct vulkan_demo vk_demo[SCREEN_COUNT];
@@ -2455,10 +2492,14 @@ static int vk_upscaling_init(void) {
 static void vk_filter_chain_free(void *, void *);
 static void vk_upscaling_close(void) {
     for (int j = 0; j < SCREEN_COUNT; ++j) {
-        pl_gpu_finish(pl_vk_dev[j]->gpu);
-        for (int i = 0; i < SCREEN_COUNT; ++i) {
-            pl_vulkan_sem_destroy(pl_vk_dev[j]->gpu, &placebo_sem[j][i]);
-            pl_vulkan_sem_destroy(pl_vk_dev[j]->gpu, &placebo_in_sem[j][i]);
+        if (pl_vk_dev[j] && pl_vk_dev[j]->gpu) {
+            pl_gpu_finish(pl_vk_dev[j]->gpu);
+            for (int i = 0; i < SCREEN_COUNT; ++i) {
+                if (placebo_sem[j][i])
+                    pl_vulkan_sem_destroy(pl_vk_dev[j]->gpu, &placebo_sem[j][i]);
+                if (placebo_in_sem[j][i])
+                    pl_vulkan_sem_destroy(pl_vk_dev[j]->gpu, &placebo_in_sem[j][i]);
+            }
         }
 
         for (int i = 0; i < SCREEN_COUNT; ++i) {
@@ -2479,9 +2520,11 @@ static void vk_upscaling_close(void) {
             }
         }
 
-        pl_vulkan_destroy(&pl_vk_dev[j]);
+        if (pl_vk_dev[j])
+            pl_vulkan_destroy(&pl_vk_dev[j]);
     }
-    placebo_log_destroy(&pl_log_dev);
+    if (pl_log_dev)
+        placebo_log_destroy(&pl_log_dev);
 
     if (placebo) {
         placebo_unload(placebo);
@@ -2732,7 +2775,8 @@ void ui_renderer_vk_destroy(void) {
     vmaAuxCleanup();
 
     for (int i = 0; i < SCREEN_COUNT; ++i)
-        vmaDestroyAllocator(vma[i]);
+        if (vma[i])
+            vmaDestroyAllocator(vma[i]);
 
     for (int i = 0; i < SCREEN_COUNT; ++i)
         destroy_vulkan_demo(&vk_demo[i]);
