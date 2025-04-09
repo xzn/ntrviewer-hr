@@ -173,13 +173,11 @@ static bool check_validation_layer_support() {
         goto cleanup;
     }
 
-#ifndef NDEBUG
-    err_log("Available vulkan layers:\n");
-#endif
+    if (is_renderer_vk_dbg)
+        err_log("Available vulkan layers:\n");
     for (i = 0; i < layer_count; i++) {
-        #ifndef NDEBUG
-        err_log("  %s\n", available_layers[i].layerName);
-#endif
+        if (is_renderer_vk_dbg)
+            err_log("%s\n", available_layers[i].layerName);
         if (strcmp(validation_layer_name, available_layers[i].layerName) == 0) {
             ret = true;
             break;
@@ -243,14 +241,12 @@ static bool create_instance(struct vulkan_demo *demo) {
 
     validation_layers_installed = check_validation_layer_support();
 
-#ifndef NDEBUG
-    if (!validation_layers_installed) {
+    if (is_renderer_vk_dbg && !validation_layers_installed) {
         err_log(
                 "Couldn't find validation layer %s. Continuing without "
                 "validation layers.\n",
                 validation_layer_name);
     }
-#endif
     result = vkEnumerateInstanceExtensionProperties(
         NULL, &available_instance_extension_count, NULL);
     if (result != VK_SUCCESS) {
@@ -271,12 +267,12 @@ static bool create_instance(struct vulkan_demo *demo) {
                 result);
         goto cleanup;
     }
-#ifndef NDEBUG
-    err_log("available instance extensions:\n");
-    for (i = 0; i < available_instance_extension_count; i++) {
-        err_log("  %s\n", available_instance_extensions[i].extensionName);
+    if (is_renderer_vk_dbg) {
+        err_log("available instance extensions:\n");
+        for (i = 0; i < available_instance_extension_count; i++) {
+            err_log("%s\n", available_instance_extensions[i].extensionName);
+        }
     }
-#endif
 
     sdl_enabled_extensions = SDL_Vulkan_GetInstanceExtensions(&sdl_extension_count);
     if (!sdl_enabled_extensions) {
@@ -285,9 +281,8 @@ static bool create_instance(struct vulkan_demo *demo) {
         goto cleanup;
     }
 
-#ifdef NDEBUG
-    validation_layers_installed = 0;
-#endif
+    if (!is_renderer_vk_dbg)
+        validation_layers_installed = 0;
 
     enabled_extension_count = 0;
     enabled_extensions = malloc(
@@ -321,12 +316,12 @@ static bool create_instance(struct vulkan_demo *demo) {
             VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
     }
 
-#ifndef NDEBUG
-    err_log("Trying to enable the following instance extensions:\n");
-    for (i = 0; i < enabled_extension_count; i++) {
-        err_log("%s\n", enabled_extensions[i]);
+    if (is_renderer_vk_dbg) {
+        err_log("Trying to enable the following instance extensions:\n");
+        for (i = 0; i < enabled_extension_count; i++) {
+            err_log("%s\n", enabled_extensions[i]);
+        }
     }
-#endif
 
     memset(&app_info, 0, sizeof(VkApplicationInfo));
     app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -529,9 +524,8 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
     VkPhysicalDeviceProperties device_properties;
     vkGetPhysicalDeviceProperties(physical_device, &device_properties);
 
-#ifndef NDEBUG
-    err_log("Probing physical device %s\n", device_properties.deviceName);
-#endif
+    if (is_renderer_vk_dbg)
+        err_log("Probing physical device %s\n", device_properties.deviceName);
 
     *extensions = NULL;
     *num_extensions = 0;
@@ -562,14 +556,13 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
         goto cleanup;
     }
 
-#ifndef NDEBUG
-    err_log("  Supported device extensions:\n");
-#endif
+    if (is_renderer_vk_dbg)
+        err_log("Supported device extensions:\n");
 
     for (i = 0; i < device_extension_count; i++) {
-#ifndef NDEBUG
-        err_log("    %s\n", device_extensions[i].extensionName);
-#endif
+        if (is_renderer_vk_dbg)
+            err_log("%s\n", device_extensions[i].extensionName);
+
         if (strcmp(VK_KHR_SWAPCHAIN_EXTENSION_NAME,
                    device_extensions[i].extensionName) == 0) {
             found_khr_surface = 1;
@@ -594,14 +587,14 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
 #endif
     }
     if (!found_khr_surface) {
-        err_log("  Device doesnt support %s\n", VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+        err_log("Device doesnt support %s\n", VK_KHR_SWAPCHAIN_EXTENSION_NAME);
         goto cleanup;
     }
     if (!find_queue_families(physical_device, surface, indices)) {
         goto cleanup;
     }
     if (indices->graphics < 0 || indices->present < 0) {
-        err_log("  Device is missing graphics and/or present support. graphics: "
+        err_log("Device is missing graphics and/or present support. graphics: "
                "%d, present: %d\n",
                indices->graphics, indices->present);
         goto cleanup;
@@ -613,12 +606,12 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
     }
 
     if (swap_chain_support.formats_len == 0) {
-        err_log(" Device doesn't support any swap chain formats\n");
+        err_log("Device doesn't support any swap chain formats\n");
         goto cleanup;
     }
 
     if (swap_chain_support.present_modes_len == 0) {
-        err_log(" Device doesn't support any swap chain present modes\n");
+        err_log("Device doesn't support any swap chain present modes\n");
         goto cleanup;
     }
     ret = PHY_DEV_YES;
@@ -663,7 +656,7 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
 
     for (int i = 0; i < features_count; ++i) {
         if (features_required[i] && !features_avail[i]) {
-            err_log(" Device doesn't support required feature for libplacebo: %d\n", i);
+            err_log("Device doesn't support required feature for libplacebo: %d\n", i);
             goto cleanup;
         }
         if (0 && features_avail[i]) {
@@ -701,7 +694,7 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
  \
     for (int i = 0; i < features_count; ++i) { \
         if (features_required && features_required[i] && !features_avail[i]) { \
-            err_log(" Device doesn't support required " n " feature for libplacebo: %d\n", i); \
+            err_log("Device doesn't support required " n " feature for libplacebo: %d\n", i); \
             goto cleanup; \
         } \
         if (0 && features_avail[i]) { \
@@ -723,9 +716,8 @@ static enum PHY_DEV is_suitable_physical_device(VkPhysicalDevice physical_device
     for (int i = 0; i < pl_vulkan_num_recommended_extensions; ++i) {
         for (int j = 0; j < (int)device_extension_count; j++) {
             if (strcmp(pl_vulkan_recommended_extensions[i], device_extensions[j].extensionName) == 0) {
-#ifndef NDEBUG
-                err_log("%s available for libplacebo\n", pl_vulkan_recommended_extensions[i]);
-#endif
+                if (is_renderer_vk_dbg)
+                    err_log("%s available for libplacebo\n", pl_vulkan_recommended_extensions[i]);
 #ifdef VK_EXT_full_screen_exclusive
                 if (strcmp(pl_vulkan_recommended_extensions[i], VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME) == 0) {
                     continue;
@@ -833,11 +825,10 @@ static bool create_physical_device(struct vulkan_demo *demo) {
             &demo->port_sub_features,
             &extensions, &num_extensions, &metal_objects, &dynamic_rendering);
         if (phy_dev_ret > phy_dev) {
-#ifndef NDEBUG
-            err_log("  Selecting this device for rendering. Queue families: "
-                   "graphics: %d, present: %d!\n",
-                   indices.graphics, indices.present);
-#endif
+            if (is_renderer_vk_dbg)
+                err_log("Selecting this device for rendering. Queue families: "
+                    "graphics: %d, present: %d.\n",
+                    indices.graphics, indices.present);
             if (demo->extensions) {
                 free(demo->extensions);
             }
@@ -850,9 +841,8 @@ static bool create_physical_device(struct vulkan_demo *demo) {
             phy_dev = phy_dev_ret;
         }
         if (phy_dev == PHY_DEV_PLACEBO) {
-#ifndef NDEBUG
-            err_log("libplacebo available with the selected physical device.\n");
-#endif
+            if (is_renderer_vk_dbg)
+                err_log("libplacebo available with the selected physical device.\n");
             break;
         }
     }
@@ -2265,9 +2255,8 @@ static VkResult destroy_debug_utils_messenger_ext(
 static void destroy_vulkan_demo(struct vulkan_demo *demo) {
     VkResult result;
 
-#ifndef NDEBUG
-    err_log("cleaning up\n");
-#endif
+    if (is_renderer_vk_dbg)
+        err_log("cleaning up\n");
     if (demo->device) {
         result = vkDeviceWaitIdle(demo->device);
         if (result != VK_SUCCESS) {
@@ -2770,7 +2759,12 @@ void ui_renderer_vk_destroy(void) {
 
     vk_upscaling_close();
 
-    nk_sdl_vk_shutdown();
+    sdl_reset_wminfo();
+
+    if (nk_ctx) {
+        nk_sdl_vk_shutdown();
+        nk_ctx = NULL;
+    }
 
     vmaAuxCleanup();
 

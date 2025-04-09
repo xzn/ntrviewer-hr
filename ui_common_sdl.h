@@ -25,6 +25,7 @@ enum ui_renderer_t {
 };
 
 extern int is_renderer_ogl_dbg;
+extern int is_renderer_vk_dbg;
 
 extern enum ui_renderer_t ui_renderer;
 extern SDL_Window *ui_sdl_win[SCREEN_COUNT];

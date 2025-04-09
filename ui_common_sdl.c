@@ -10,6 +10,7 @@
 
 bool is_win_size_in_pixels;
 int is_renderer_ogl_dbg;
+int is_renderer_vk_dbg;
 
 enum ui_renderer_t ui_renderer;
 SDL_Window *ui_sdl_win[SCREEN_COUNT];
