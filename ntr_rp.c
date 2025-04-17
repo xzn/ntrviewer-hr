@@ -1277,5 +1277,6 @@ void input_redirection_send_frame(input_redirection_frame_t *frame) {
     if (sendto(ir_socket, (const char *)frame, sizeof(input_redirection_frame_t), 0, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         err_log("sendto error: %d\n", socket_errno());
         closesocket(ir_socket);
+        ir_socket = INVALID_SOCKET;
     }
 }
