@@ -348,9 +348,7 @@ static LRESULT CALLBACK main_window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPA
         case WM_LBUTTONDBLCLK: {
             int x = (short)LOWORD(lparam);
             int y = (short)HIWORD(lparam);
-            x = x / ui_win_scale[i];
-            y = y / ui_win_scale[i];
-            handled_lparam = MAKELPARAM(x, y);
+            handled_lparam = MAKELPARAM(x / ui_win_scale[i], y / ui_win_scale[i]);
 
             SDL_Event event = {};
             switch (msg) {
