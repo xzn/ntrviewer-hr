@@ -99,4 +99,6 @@ void ntr_try_auto_select_adapter(void);
 void ntr_detect_3ds_ip(void);
 void ntr_get_adapter_list(void);
 
+extern nk_bool ntr_stats_overlay;
+
 #endif

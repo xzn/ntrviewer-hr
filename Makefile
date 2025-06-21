@@ -107,7 +107,7 @@ endif
 endif
 endif
 
-GL_OBJ += libSTB_image.o libNK_SDL_renderer.o ui_common_sdl.o ui_renderer_sdl.o ui_main_nk.o ui_input_redirection.o ntr_common.o ntr_hb.o ntr_rp.o ntr_jpeg_delta.o
+GL_OBJ += libSTB_image.o libNK_SDL_renderer.o ui_common_sdl.o ui_renderer_sdl.o ui_main_nk.o ui_input_redirection.o ntr_common.o ntr_hb.o ntr_rp.o ntr_jpeg_delta.o ntr_stats_overlay.o
 ifeq ($(OS),Windows_NT)
 GL_OBJ += ntrviewer.res.o
 endif

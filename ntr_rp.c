@@ -1,5 +1,6 @@
 #include "ntr_rp.h"
 #include "ntr_common.h"
+#include "ntr_stats_overlay.h"
 #include "main.h"
 #include "ui_common_sdl.h"
 #include "ui_main_nk.h"
@@ -68,8 +69,9 @@ static uint8_t recv_last_packet_id[SCREEN_COUNT];
 
 static u8 kcp_recv_w[RP_KCP_WORK_COUNT];
 
+#define RP_KCP_PACKET_SIZE (RP_PACKET_SIZE - sizeof(IUINT16) - sizeof(u16))
 static struct kcp_recv_t {
-    u8 buf[RP_MAX_PACKET_COUNT][RP_PACKET_SIZE - sizeof(IUINT16) - sizeof(u16)];
+    u8 buf[RP_MAX_PACKET_COUNT][RP_KCP_PACKET_SIZE];
     u8 count; // packet count including term
     u16 term_size; // term packet size
 } kcp_recv[RP_KCP_WORK_COUNT][RP_WORK_COUNT][RP_CORE_COUNT_MAX];
@@ -381,7 +383,7 @@ static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, stru
         uint8_t *out_t = out + t * info->v_adjusted * height_per_mcu_row;
         int res;
 
-        int size = (recv->count - 1) * (RP_PACKET_SIZE - sizeof(IUINT16) - sizeof(u16)) + recv->term_size;
+        int size = (recv->count - 1) * RP_KCP_PACKET_SIZE + recv->term_size;
         // total_size += size;
         if ((res = decode_jpeg_delta(
             out_t,
@@ -470,7 +472,7 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
             }
             else
             {
-                ptr = copy_with_escape(ptr, recv->buf[i], RP_PACKET_SIZE - sizeof(IUINT16) - sizeof(u16));
+                ptr = copy_with_escape(ptr, recv->buf[i], RP_KCP_PACKET_SIZE);
             }
         }
         *ptr = 0xff;
@@ -568,6 +570,22 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
         if (ptr->is_kcp)
         {
             // err_log("%d %d\n", ptr->kcp_w, ptr->kcp_queue_w);
+
+            int in_size = 0;
+            int q = 0;
+            {
+                int w = ptr->kcp_w;
+                int queue_w = ptr->kcp_queue_w;
+                struct kcp_recv_t *recvs = kcp_recv[w][queue_w];
+                struct kcp_recv_info_t *info = &kcp_recv_info[w][queue_w];
+
+                for (int t = 0; t < info->core_count; ++t) {
+                    struct kcp_recv_t *recv = &recvs[t];
+                    in_size += (recv->count - 1) * RP_KCP_PACKET_SIZE + recv->term_size;
+                }
+                q = info->jpeg_quality;
+            }
+
             if ((ret = handle_decode_kcp(out, ptr->kcp_w, ptr->kcp_queue_w)) != 0)
             {
                 err_log("kcp recv decode error: %d\n", ret);
@@ -580,6 +598,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
             else
             {
                 // err_log("%d\n", kcp_recv_info[ptr->kcp_w][ptr->kcp_queue_w].term_count);
+                stats_overlay_0(out, top_bot, in_size, q);
                 handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay, sync_ctx);
             }
         }
@@ -594,6 +613,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                 }
                 else
                 {
+                    stats_overlay_0(out, top_bot, ptr->in_size, -1);
                     handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay, sync_ctx);
                     __atomic_add_fetch(&frame_fully_received_tracker, 1, __ATOMIC_RELAXED);
                 }
@@ -779,7 +799,7 @@ static int handle_recv_kcp(uint8_t *buf, int size)
                 (int)kcp_recv_info[w][queue_w].term_sizes[kcp_recv_info[w][queue_w].last_term]);
             return -9;
         }
-        if (size != RP_PACKET_SIZE - sizeof(IUINT16) - sizeof(u16)) {
+        if (size != RP_KCP_PACKET_SIZE) {
             return -2;
         }
         struct kcp_recv_t *recv = &kcp_recv[w][queue_w][t];

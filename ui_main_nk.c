@@ -898,7 +898,7 @@ void ui_main_nk(void)
     if (focus_window)
         nk_window_set_focus(ctx, remote_play_wnd);
 
-    if (nk_begin(ctx, debug_msg_wnd, nk_rect(625, 10, 150, 250),
+    if (nk_begin(ctx, debug_msg_wnd, nk_rect(625, 10, 150, 150),
                  NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE) &&
         show_window)
     {
@@ -931,6 +931,10 @@ void ui_main_nk(void)
                 nwm_work_state = CONNECTION_STATE_DISCONNECTING;
             }
         }
+
+        nk_layout_row_dynamic(ctx, 30, 2);
+        nk_label(ctx, "Stats", NK_TEXT_CENTERED);
+        nk_checkbox_label(ctx, "", &ntr_stats_overlay);
     }
     nk_end(ctx);
     nk_window_show(ctx, debug_msg_wnd, show_window);
