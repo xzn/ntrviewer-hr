@@ -2,6 +2,8 @@ Viewer for wireless screen casting from New 3DS/New 2DS to PC (Windows/Linux/mac
 
 See https://wiki.hacks.guide/wiki/3DS:Wireless_streaming for more info on setup and instructions.
 
+Intended for use with [NTR-HR](https://github.com/xzn/ntr-hr).
+
 ## Guide for settings
 
 Default should work fine for most scenarios. You can customize them as needed.
