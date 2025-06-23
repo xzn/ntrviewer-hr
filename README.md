@@ -4,6 +4,8 @@ See https://wiki.hacks.guide/wiki/3DS:Wireless_streaming for more info on setup 
 
 ## Guide for settings
 
+Default should work fine for most scenarios. You can customize them as needed.
+
 | Setting | Instruction |
 | --- | --- |
 | View Mode | Choose the screens to display, and whether to display them in separate windows. |
@@ -58,3 +60,9 @@ See https://wiki.hacks.guide/wiki/3DS:Wireless_streaming for more info on setup 
 If you have any furthur questions, feel free to post in discussion at https://github.com/xzn/ntrviewer-hr/discussions
 
 For bugs and other issues you can open an issue at https://github.com/xzn/ntrviewer-hr/issues
+
+## License and credits
+
+This project is licensed under MIT license. See LICENSE file for more info.
+
+Third party code are licensed under various licenses. See individual files and license files in the subfolders for detail.
