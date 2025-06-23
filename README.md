@@ -42,7 +42,17 @@ Default should work fine for most scenarios. You can customize them as needed.
 
 ### Are only **New 3DS/New 2DS** supported?
 
-- Old (original) 3DS are not supported. Neither are 2DS.
+- Old (original) 3DS are **NOT** supported. Neither are 2DS.
+
+### Anyway to stream DS games, DSiWare, and GBA games?
+
+- This will **NOT** be supported, as 3DS' CPU run in a compatibility mode that loses all the normal 3DS computing power.
+
+### How to fix Pokemon games hanging when loading a save when Remote Play is enabled?
+
+- Enabling Input Redirection or Debugger in Luma3DS/Rosalina on your 3DS is the recommended method.
+
+- Alternatively use NFC patch in NTR-HR menu if you are using that. The caveat is that this will disable Reliable Stream.
 
 ## Additional info
 
