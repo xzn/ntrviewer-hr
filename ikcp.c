@@ -1,14 +1,10 @@
-//=====================================================================
-//
-// KCP - A Better ARQ Protocol Implementation
-// skywind3000 (at) gmail.com, 2010-2011
-//
-// Features:
-// + Average RTT reduce 30% - 40% vs traditional ARQ like tcp.
-// + Maximum RTT reduce three times vs tcp.
-// + Lightweight, distributed as a single source file.
-//
-//=====================================================================
+// Receiving end of the Reliable Stream protocol
+// Based on ideas from skywind3000 kcp but redesigned and reimplemented from scratch
+// Under MIT license (see end of file)
+
+// Allows one way communication only
+// Only tested for use in NTRViewer-HR
+
 #include "ikcp.h"
 
 #include <stddef.h>
@@ -724,3 +720,25 @@ int ikcp_setmtu(ikcpcb *kcp, int mtu)
 }
 
 IUINT16 kcp_input_fec_count, kcp_input_fid_count, kcp_recv_pid_count, kcp_input_pid_count;
+
+// MIT License
+
+// Copyright (c) 2025
+
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.

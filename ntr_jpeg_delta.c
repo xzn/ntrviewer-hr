@@ -1,3 +1,6 @@
+// Modified from libjpeg-turbo
+// See jpeg_turbo/LICENSE.md for license
+
 #include "ntr_jpeg_delta.h"
 
 #include <stdlib.h>

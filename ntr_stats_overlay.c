@@ -1,3 +1,6 @@
+// Modified from https://github.com/44670/ntr_overlay_samples for use in NTRViewer-HR
+// Under MIT license (see end of file)
+
 #include "const.h"
 #include "main.h"
 #include "ntr_common.h"
@@ -244,3 +247,25 @@ void stats_overlay_0(uint8_t *out, int top_bot, uint32_t size, int q) {
 
     drawOverlayOnScreenMode0(out, GL_CHANNELS_N * SCREEN_WIDTH, top_bot == 0 ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1, buf);
 }
+
+// MIT License
+
+// Copyright (c) 2025
+
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
