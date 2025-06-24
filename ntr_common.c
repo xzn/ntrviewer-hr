@@ -603,7 +603,7 @@ fail_fork:
 fail:
     rp_lock_wait(ui_nk_lock);
     get_ntr_detect_3ds_ip();
-    ntr_try_auto_select_adapter();
+    ntr_get_adapter_list();
     rp_lock_rel(ui_nk_lock);
 
     __atomic_clear(&detecting_3ds, __ATOMIC_RELAXED);

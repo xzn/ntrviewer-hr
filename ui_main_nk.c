@@ -681,6 +681,7 @@ void ui_main_nk(void)
                 if (ntr_auto_ip_list)
                     strcpy(ntr_auto_ip_list[0], "Manual");
                 ntr_selected_ip = 0;
+                ntr_get_adapter_list();
                 if (menu_work_state == CONNECTION_STATE_CONNECTED)
                 {
                     menu_work_state = CONNECTION_STATE_DISCONNECTING;
@@ -693,15 +694,15 @@ void ui_main_nk(void)
         button_ret = do_nav_button_next(ctx, NK_FOCUS_IP_AUTO_DETECT);
         if (nk_button_label(ctx, "Auto-Detect") || button_ret)
         {
+            set_nav_button_prev(NK_FOCUS_IP_AUTO_DETECT);
             if (menu_work_state == CONNECTION_STATE_CONNECTED)
             {
                 menu_work_state = CONNECTION_STATE_DISCONNECTING;
             }
             ntr_detect_3ds_ip();
 #ifndef __APPLE__
-            ntr_try_auto_select_adapter();
+            ntr_get_adapter_list();
 #endif
-            set_nav_button_prev(NK_FOCUS_IP_AUTO_DETECT);
         }
         check_nav_button_prev(ctx);
         selected = ntr_selected_ip;
@@ -723,7 +724,7 @@ void ui_main_nk(void)
                 {
                     menu_work_state = CONNECTION_STATE_DISCONNECTING;
                 }
-                ntr_try_auto_select_adapter();
+                ntr_get_adapter_list();
             }
         }
 
@@ -812,8 +813,8 @@ void ui_main_nk(void)
         button_ret = do_nav_button_next(ctx, NK_FOCUS_DEFAULT);
         if (nk_button_label(ctx, "Default") || button_ret)
         {
-            ntr_config_set_default();
             set_nav_button_prev(NK_FOCUS_DEFAULT);
+            ntr_config_set_default();
         }
         check_nav_button_prev(ctx);
 
