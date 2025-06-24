@@ -17,7 +17,7 @@ Default should work fine for most scenarios. You can customize them as needed.
 | Viewer Port | For use with multiple 3DS devices streaming at once to the same PC. Each should have a different port. Otherwise leave at default. |
 | Prioritize Top Screen | See Priority Screen Factor |
 | Priority Screen Factor | Prioritized screen will have frame rate multiple of the other screen at specified factor. If factor is **0**, only the prioritized screen is streamed. |
-| JPEG Quality | Picture quality for the stream. Should be **95** or lower for decent frame rate. Below **55** the picture quatity notably suffers. |
+| JPEG Quality | Picture quality for the stream. Should be **95** or lower for decent frame rate. Below **55** the picture quality notably suffers. |
 | Bandwidth Limit | Caps streaming bandwidth to specified number. Lower value can help with congestion and lag but will result in lower frame rate. |
 | Reliable Stream | **Off** for the original protocol, minimum latency. **On** for the alternative protocol that attempts to reduce dropped frames. **On + Delta** for alternative encoding that in most cases improves picture quality for the same bandwidth. *Only effective with latest NTR-HR.* |
 | **Default** | Reset viewer settings. |
