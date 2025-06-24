@@ -640,6 +640,7 @@ static void change_working_directory_to_exe_path(void) {
         free(path);
         path_len *= 2;
     }
+    path[path_len] = 0;
     // err_log("current exe path: %s\n", path);
     char *path_end = strrchr(path, '/');
     if (path_end) {
