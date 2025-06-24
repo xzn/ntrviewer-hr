@@ -48,9 +48,9 @@ LDLIBS := -Llib $(shell pkg-config sdl3 --libs)
 else
 LDLIBS := -static-libgcc -static-libstdc++ -Llib
 ifneq ($(STATIC_SDL),1)
-LDLIBS += $(shell pkg-config sdl3 --libs) $(shell pkg-config libplacebo --libs) $(shell pkg-config lcms2 --libs) $(shell pkg-config libunwind --libs) $(shell pkg-config liblzma --libs) $(shell pkg-config shaderc --libs)
+LDLIBS += $(shell pkg-config sdl3 --libs) $(shell pkg-config libplacebo --libs) $(shell pkg-config lcms2 --libs) $(shell pkg-config libunwind --libs) $(shell pkg-config liblzma --libs)
 else
-LDLIBS += -Wl,-Bstatic -lSDL3 -lshaderc_combined $(shell pkg-config spirv --libs)
+LDLIBS += -Wl,-Bstatic -lSDL3
 endif
 endif
 TARGET := ntrviewer
@@ -103,6 +103,14 @@ ifneq ($(LITE),1)
 LDLIBS += -lshaderc_combined -lglslang -lMachineIndependent -lOSDependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -llcms2 -ld3dcompiler -ld3d11 -ldxgi -ldwmapi -lpathcch -lbcrypt -lruntimeobject -lntdll
 ifeq ($(DEBUG),1)
 LDLIBS += -lpropsys -luserenv -ldxcompiler
+endif
+endif
+else
+ifneq ($(OS),Darwin)
+ifneq ($(STATIC_SDL),1)
+LDLIBS += $(shell pkg-config shaderc --libs)
+else
+LDLIBS += -lshaderc_combined $(shell pkg-config spirv --libs)
 endif
 endif
 endif
