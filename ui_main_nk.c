@@ -693,6 +693,10 @@ void ui_main_nk(void)
         button_ret = do_nav_button_next(ctx, NK_FOCUS_IP_AUTO_DETECT);
         if (nk_button_label(ctx, "Auto-Detect") || button_ret)
         {
+            if (menu_work_state == CONNECTION_STATE_CONNECTED)
+            {
+                menu_work_state = CONNECTION_STATE_DISCONNECTING;
+            }
             ntr_detect_3ds_ip();
 #ifndef __APPLE__
             ntr_try_auto_select_adapter();
