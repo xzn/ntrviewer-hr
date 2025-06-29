@@ -103,6 +103,7 @@ LDLIBS += -lshaderc_combined -lglslang -lMachineIndependent -lOSDependent -lGene
 ifeq ($(DEBUG),1)
 LDLIBS += -lpropsys -luserenv -ldxcompiler
 endif
+LDLIBS += -lrashader
 endif
 else
 ifneq ($(LITE),1)
