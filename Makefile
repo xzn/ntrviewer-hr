@@ -75,7 +75,6 @@ LDLIBS += -Wl,-framework,CoreFoundation -Wl,-framework,Network
 else
 LDLIBS += -lplacebo
 endif
-LDLIBS += -lrashader
 else
 CPPFLAGS += -DUSE_SDL_RENDERER_ONLY
 endif
@@ -106,12 +105,15 @@ LDLIBS += -lpropsys -luserenv -ldxcompiler
 endif
 endif
 else
+ifneq ($(LITE),1)
 ifneq ($(OS),Darwin)
 ifneq ($(STATIC_SDL),1)
 LDLIBS += $(shell pkg-config shaderc --libs)
 else
 LDLIBS += -lshaderc_combined $(shell pkg-config spirv --libs)
 endif
+endif
+LDLIBS += -lrashader
 endif
 endif
 
