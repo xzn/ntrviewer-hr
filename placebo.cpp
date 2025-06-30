@@ -14,7 +14,7 @@
 pl_log placebo_log_create(void) {
     pl_log_params params = {
         .log_cb = pl_log_simple,
-        .log_level = PL_LOG_WARN,
+        .log_level = PL_LOG_ERR,
     };
     return pl_log_create(PL_API_VER, &params);
 }
