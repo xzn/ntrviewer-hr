@@ -99,11 +99,10 @@ endif
 ifeq ($(OS),Windows_NT)
 LDLIBS += -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8 -lws2_32 -liphlpapi
 ifneq ($(LITE),1)
-LDLIBS += -lshaderc_combined -lglslang -lMachineIndependent -lOSDependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -llcms2 -ld3dcompiler -ld3d11 -ldxgi -ldwmapi -lpathcch -lbcrypt -lruntimeobject -lntdll
+LDLIBS += -lshaderc_combined -lrashader -llcms2 -ld3dcompiler -ld3d11 -ldxgi -ldwmapi -lpathcch -lbcrypt -lruntimeobject -lntdll
 ifeq ($(DEBUG),1)
 LDLIBS += -lpropsys -luserenv -ldxcompiler
 endif
-LDLIBS += -lrashader
 endif
 else
 ifneq ($(LITE),1)
