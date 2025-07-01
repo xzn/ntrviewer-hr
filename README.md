@@ -69,7 +69,7 @@ Default should work fine for most scenarios. You can customize them as needed.
 
 ## Feedback
 
-If you have any furthur questions, feel free to post in discussion at https://github.com/xzn/ntrviewer-hr/discussions
+If you have any further questions, feel free to post in discussion at https://github.com/xzn/ntrviewer-hr/discussions
 
 For bugs and other issues you can open an issue at https://github.com/xzn/ntrviewer-hr/issues
 
