@@ -324,6 +324,9 @@ void generate_cursors_images(view_mode_t vm) {
     float scale_x = (float)ctx_width / SCREEN_HEIGHT1;
     float scale_y = (float)ctx_height / SCREEN_WIDTH;
     float scale = (scale_x + scale_y) / 2;
+    if (is_cursor_size_in_pixels) {
+        scale *= ui_win_scale[i];
+    }
     scale = MAX(scale, 1.0);
     if (scale == cursor_scale_prev) {
         return;

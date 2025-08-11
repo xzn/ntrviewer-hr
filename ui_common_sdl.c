@@ -9,6 +9,7 @@
 #include <math.h>
 
 bool is_win_size_in_pixels;
+bool is_cursor_size_in_pixels;
 int is_renderer_ogl_dbg;
 int is_renderer_vk_dbg;
 
@@ -63,6 +64,7 @@ int ui_common_sdl_init(void) {
 
 #ifdef _WIN32
     is_win_size_in_pixels = 1;
+    is_cursor_size_in_pixels = 1;
 #else
     const char *video_driver = SDL_GetCurrentVideoDriver();
     if (video_driver && strcmp(video_driver, "x11") == 0) {
@@ -70,6 +72,7 @@ int ui_common_sdl_init(void) {
     } else {
         is_win_size_in_pixels = 0;
     }
+    is_cursor_size_in_pixels = 0;
 #endif
 
     change_working_directory_to_exe_path();

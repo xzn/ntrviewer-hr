@@ -7,6 +7,7 @@
 #include "nuklear/nuklear.h"
 
 extern bool is_win_size_in_pixels;
+extern bool is_cursor_size_in_pixels;
 
 enum ui_renderer_t {
     UI_RENDERER_D3D11_CSC,
