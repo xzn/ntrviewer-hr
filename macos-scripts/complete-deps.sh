@@ -14,7 +14,7 @@ process () {
         LIB="${BASH_REMATCH[1]}.dylib"
     fi
     DST="$ARCH/$LIB"
-    if [[ "$SRC" =~ ^/opt/.* || "$SRC" =~ ^/Users/.* ]]; then
+    if [[ "$SRC" =~ ^/opt/homebrew/lib/.* || "$SRC" =~ ^/usr/local/opt/.* || "$SRC" =~ ^/Users/.* ]]; then
         echo Third-party "$SRC"
         if [ ! -f "$DST" ]; then
             cp "$SRC" "$DST"
@@ -27,7 +27,7 @@ process () {
             codesign -s "-" "$DST"
         fi
         install_name_tool -change "$SRC" "@rpath/$LIB" "$1"
-    elif [[ "$SRC" =~ ^/System/.* || "$SRC" =~ ^/usr/.* ]]; then
+    elif [[ "$SRC" =~ ^/System/.* || "$SRC" =~ ^/usr/lib/.* ]]; then
         echo System "$SRC"
     else
         echo Unknown "$SRC"
@@ -55,7 +55,11 @@ mkdir -p "$ARCH"
 codesign --remove-signature "$BIN"
 codesign -s "-" "$BIN"
 ( pre_process $BIN )
-install_name_tool -rpath /opt/homebrew/lib @executable_path/$ARCH "$BIN"
+if [[ "$ARCH" == "arm64" ]]; then
+    install_name_tool -rpath /opt/homebrew/lib @executable_path/$ARCH "$BIN"
+else
+    install_name_tool -rpath /usr/local/opt @executable_path/$ARCH "$BIN"
+fi
 codesign --remove-signature "$BIN"
 codesign -s "-" "$BIN"
 
