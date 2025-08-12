@@ -463,15 +463,17 @@ void update_bottom_screen_cursor(void) {
         sdl_set_bottom_screen_cursor(reset);
 }
 
-const input_redirection_frame_t input_redirection_frame_default = {
-    .hidPad = 0xfff,
-    .touchScreenState = 0x2000000,
-    .circlePadState = 0x7ff7ff,
-    .cppState = 0x80800081,
-    .interfaceButtons = 0,
-};
+#define input_redirection_frame_default_init { \
+    .hidPad = 0xfff, \
+    .touchScreenState = 0x2000000, \
+    .circlePadState = 0x7ff7ff, \
+    .cppState = 0x80800081, \
+    .interfaceButtons = 0, \
+}
 
-input_redirection_frame_t input_redirection_frame = input_redirection_frame_default;
+const input_redirection_frame_t input_redirection_frame_default = input_redirection_frame_default_init;
+
+input_redirection_frame_t input_redirection_frame = input_redirection_frame_default_init;
 static void sdl_set_touch_screen_coord(SDL_Point *point) {
     uint32_t x = MIN(MAX(0, point->x), TOUCH_SCREEN_COORD_RANGE * SCREEN_HEIGHT1) / SCREEN_HEIGHT1;
     uint32_t y = MIN(MAX(0, point->y), TOUCH_SCREEN_COORD_RANGE * SCREEN_WIDTH) / SCREEN_WIDTH;
