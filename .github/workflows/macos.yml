@@ -15,7 +15,7 @@ jobs:
         id: artifact-name
         run: |
           RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w rashader.yml --json databaseId -q '.[0].databaseId')
-          gh run download $RUN -n rashader -D rashader
+          gh run download --repo ${{ github.repository }} $RUN -n rashader -D rashader
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Compile NTRViewer-HR
