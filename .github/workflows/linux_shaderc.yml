@@ -15,7 +15,7 @@ jobs:
       - name: Install prereq
         run: |
           apt update
-          apt install -y --fix-missing git curl gcc g++ clang cmake ninja-build python3 wget
+          apt install -y --fix-missing git curl cmake clang ninja-build python3 wget build-essential checkinstall zlib1g-dev libssl-dev
       - uses: actions/checkout@v5
         with:
           repository: google/shaderc
@@ -24,6 +24,14 @@ jobs:
           submodules: recursive
       - name: Compile shaderc
         run: |
+          wget -nv https://github.com/Kitware/CMake/releases/download/v4.1.0/cmake-4.1.0-linux-x86_64.sh
+          chmod +x cmake-4.1.0-linux-x86_64.sh
+          mkdir cmake
+          ./cmake-4.1.0-linux-x86_64.sh --prefix=$PWD/cmake <<EOF
+          y
+          n
+          EOF
+          export PATH=$PWD/cmake/bin:$PATH
           wget -nv https://static.crates.io/crates/glslang-sys/glslang-sys-0.7.0%2B1062752.crate
           tar -xvf glslang-sys-0.7.0+1062752.crate
           cd shaderc
