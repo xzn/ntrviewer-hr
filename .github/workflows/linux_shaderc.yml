@@ -12,7 +12,6 @@ jobs:
           repository: google/shaderc
           path: shaderc
           ref: v2025.3
-          submodules: recursive
       - name: Compile shaderc
         run: |
           apt update
@@ -20,6 +19,7 @@ jobs:
           wget -nv https://static.crates.io/crates/glslang-sys/glslang-sys-0.7.0%2B1062752.crate
           tar -xvf glslang-sys-0.7.0+1062752.crate
           cd shaderc
+          git submodule update --init --recursive
           ./utils/git-sync-deps
           rm -rf third_party/glslang/
           cp -r ../glslang-sys-0.7.0+1062752/native/glslang third_party/
