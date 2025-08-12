@@ -91,9 +91,9 @@ GL_OBJ += libGLAD_WGL.o libNK_D3D11.o ui_renderer_d3d11.o ui_compositor_csc.o
 LDLIBS += -lshlwapi -lmincore
 endif
 GL_OBJ += libNK_SDL_Vulkan.o ui_renderer_vulkan.o vk_mem_alloc.o
-endif
 ifneq ($(STATIC_MVK),1)
 GL_OBJ += libvolk.o
+endif
 endif
 
 ifeq ($(OS),Windows_NT)

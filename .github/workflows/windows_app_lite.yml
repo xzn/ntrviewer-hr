@@ -11,11 +11,12 @@ jobs:
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
-          path-type: inherit
+          path-type: minimal
           update: true
           install: |
             zip
             mingw-w64-x86_64-sdl3
+            mingw-w64-x86_64-gcc
       - uses: actions/checkout@v5
         with:
           path: ntrviewer-hr
