@@ -16,6 +16,7 @@ jobs:
           apt update
           apt install -y --fix-missing curl
           curl https://sh.rustup.rs -sSf | sh -s -- -y
+          source "$HOME/.cargo/env"
           rustup toolchain install nightly-2025-08-08
           rustup default nightly-2025-08-08
           pushd librashader/librashader-capi
