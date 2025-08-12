@@ -19,9 +19,7 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
-      - uses: actions/checkout@v5
-        with:
-          path: ntrviewer-hr
+            mingw-w64-x86_64-python
       - uses: actions/checkout@v5
         with:
           repository: google/shaderc
@@ -30,7 +28,7 @@ jobs:
           submodules: recursive
       - name: Compile shaderc
         run: |
-          wget https://static.crates.io/crates/glslang-sys/glslang-sys-0.7.0%2B1062752.crate
+          wget -nv https://static.crates.io/crates/glslang-sys/glslang-sys-0.7.0%2B1062752.crate
           tar -xvf glslang-sys-0.7.0+1062752.crate
           pushd shaderc
           ./utils/git-sync-deps
