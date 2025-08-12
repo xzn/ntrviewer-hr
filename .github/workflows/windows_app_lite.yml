@@ -19,6 +19,7 @@ jobs:
             vim
             mingw-w64-x86_64-sdl3
             mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-nasm
       - uses: actions/checkout@v5
         with:
           path: ntrviewer-hr
