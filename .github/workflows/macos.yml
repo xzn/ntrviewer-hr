@@ -15,6 +15,7 @@ jobs:
         id: artifact-name
         run: |
           ARTIFACT_NAME=$(gh run list --repo ${{ github.repository }} -L 1 -w rashader.yml --json databaseId -q '.[0].databaseId')
+          echo $ARTIFACT_NAME
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -23,8 +24,7 @@ jobs:
           name: rashader
           path: rashader
           github-token: ${{ secrets.GH_PAT }}
-          repository: ${{ github.repository }}
-          run-id: ${{ steps.artifact-name.outputs.ARTIFACT_NAME }}
+          run-id: 16898942496
       - name: Compile NTRViewer-HR
         run: |
           ntrviewer-hr/macos-scripts/install-reqs.sh
