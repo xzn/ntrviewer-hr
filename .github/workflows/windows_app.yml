@@ -22,6 +22,7 @@ jobs:
             mingw-w64-x86_64-vulkan-headers
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-github-cli
       - uses: actions/checkout@v5
         with:
           path: ntrviewer-hr
