@@ -1,0 +1,25 @@
+on:
+  workflow_dispatch:
+
+jobs:
+  build-rashader:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: ntrviewer-hr
+      - uses: actions/checkout@v5
+        with:
+          repository: xzn/librashader
+          path: librashader
+      - name: Compile NTRViewer-HR
+        run: |
+          ntrviewer-hr/macos-scripts/compile-rashader.sh
+          mkdir -p rashader/include
+          ln -s ../../librashader/include/librashader.h rashader/include/librashader.h
+          mkdir rashader/lib
+          ln -s ../../librashader/target/optimized/liblibrashader_capi.dylib rashader/lib/librashader.dylib
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rashader
+          path: rashader

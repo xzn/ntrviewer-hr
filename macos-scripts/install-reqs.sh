@@ -3,16 +3,7 @@
 set -ex
 
 brew update
-brew install sdl3 libplacebo wget rustup
-
-rustup toolchain install nightly-2025-08-08
-rustup default nightly-2025-08-08
-pushd librashader/librashader-capi
-cargo build --profile optimized --no-default-features --features runtime-vulkan,runtime-metal
-popd
-ln -s ../../librashader/include/librashader.h ntrviewer-hr/include/librashader.h
-mkdir ntrviewer-hr/lib
-ln -s ../../librashader/target/optimized/liblibrashader_capi.dylib ntrviewer-hr/lib/librashader.dylib
+brew install sdl3 libplacebo
 
 wget -nv https://sdk.lunarg.com/sdk/download/$VULKAN_VERSION/mac/vulkansdk-macos-$VULKAN_VERSION.zip
 unzip vulkansdk-macos-$VULKAN_VERSION.zip
