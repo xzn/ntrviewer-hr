@@ -28,5 +28,5 @@ jobs:
           ./utils/git-sync-deps
       - uses: actions/upload-artifact@v4
         with:
-          name: window-shaderc
-          path: window-shaderc
+          name: windows-shaderc
+          path: windows-shaderc

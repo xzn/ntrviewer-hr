@@ -22,16 +22,16 @@ jobs:
           path: librashader
       - name: Compile librashader
         run: |
-          rustup toolchain install nightly-2025-08-08
-          rustup default nightly-2025-08-08
+          rustup toolchain install nightly-2025-08-08-gnu
+          rustup default nightly-2025-08-08-gnu
           pushd librashader/librashader-capi
           cargo build --profile optimized --no-default-features --features runtime-opengl,runtime-d3d11,runtime-vulkan
           popd
-          mkdir -p window-rashader/include
-          ln -s ../../librashader/include/librashader.h window-rashader/include/librashader.h
-          mkdir window-rashader/lib
-          ln -s ../../librashader/target/optimized/liblibrashader_capi.a window-rashader/lib/librashader.a
+          mkdir -p windows-rashader/include
+          ln -s ../../librashader/include/librashader.h windows-rashader/include/librashader.h
+          mkdir windows-rashader/lib
+          ln -s ../../librashader/target/optimized/liblibrashader_capi.a windows-rashader/lib/librashader.a
       - uses: actions/upload-artifact@v4
         with:
-          name: window-rashader
-          path: window-rashader
+          name: windows-rashader
+          path: windows-rashader
