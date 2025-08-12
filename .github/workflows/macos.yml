@@ -23,8 +23,7 @@ jobs:
         with:
           name: rashader
           path: rashader
-          github-token: ${{ secrets.GH_PAT }}
-          run-id: 16898942496
+          run-id: ${{ steps.artifact-name.outputs.ARTIFACT_NAME }}
       - name: Compile NTRViewer-HR
         run: |
           ntrviewer-hr/macos-scripts/install-reqs.sh
