@@ -1,0 +1,29 @@
+on:
+  workflow_dispatch:
+
+jobs:
+  build-macos-rashader:
+    runs-on: window-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: ntrviewer-hr
+      - uses: actions/checkout@v5
+        with:
+          repository: xzn/librashader
+          path: librashader
+      - name: Compile librashader
+        run: |
+          rustup toolchain install nightly-2025-08-08
+          rustup default nightly-2025-08-08
+          pushd librashader/librashader-capi
+          cargo build --profile optimized --no-default-features --features runtime-opengl,runtime-d3d11,runtime-vulkan
+          popd
+          mkdir -p window-rashader/include
+          ln -s ../../librashader/include/librashader.h window-rashader/include/librashader.h
+          mkdir window-rashader/lib
+          ln -s ../../librashader/target/optimized/liblibrashader_capi.a window-rashader/lib/librashader.a
+      - uses: actions/upload-artifact@v4
+        with:
+          name: window-rashader
+          path: window-rashader

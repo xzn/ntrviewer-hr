@@ -12,7 +12,7 @@ jobs:
         with:
           repository: xzn/librashader
           path: librashader
-      - name: Compile NTRViewer-HR
+      - name: Compile librashader
         run: |
           ntrviewer-hr/macos-scripts/compile-rashader.sh
           mkdir -p macos-rashader-intel/include
