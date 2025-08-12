@@ -15,7 +15,7 @@ jobs:
       - name: Compile shaderc
         run: |
           apt update
-          apt install -y --fix-missing curl gcc g++ clang cmake ninja-build python3 wget
+          apt install -y --fix-missing git curl gcc g++ clang cmake ninja-build python3 wget
           wget -nv https://static.crates.io/crates/glslang-sys/glslang-sys-0.7.0%2B1062752.crate
           tar -xvf glslang-sys-0.7.0+1062752.crate
           cd shaderc
