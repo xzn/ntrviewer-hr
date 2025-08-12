@@ -1,0 +1,74 @@
+on:
+  workflow_dispatch:
+
+jobs:
+  build-linux-app:
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
+    steps:
+      - name: Install prereq
+        run: |
+          apt update
+          apt install -y --fix-missing git curl cmake clang ninja-build meson python3 wget build-essential checkinstall zlib1g-dev libssl-dev gh vim nasm
+      - uses: actions/checkout@v5
+        with:
+          path: ntrviewer-hr
+      - name: Get artifact
+        id: artifact-name
+        run: |
+          RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w linux_sdl.yml --json databaseId -q '.[0].databaseId')
+          gh run download --repo ${{ github.repository }} $RUN -n linux-sdl -D linux-sdl
+          RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w linux_shaderc.yml --json databaseId -q '.[0].databaseId')
+          gh run download --repo ${{ github.repository }} $RUN -n linux-shaderc -D linux-shaderc
+          RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w linux_placebo.yml --json databaseId -q '.[0].databaseId')
+          gh run download --repo ${{ github.repository }} $RUN -n linux-placebo -D linux-placebo
+          RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w linux_rashader.yml --json databaseId -q '.[0].databaseId')
+          gh run download --repo ${{ github.repository }} $RUN -n linux-rashader -D linux-rashader
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v5
+        with:
+          repository: bloc97/Anime4K
+          path: Anime4K
+      - uses: actions/checkout@v5
+        with:
+          repository: libretro/slang-shaders
+          path: slang-shaders
+      - name: Compile NTRViewer-HR
+        run: |
+          ln -s ../../linux-sdl/include/SDL3 ntrviewer-hr/include/SDL3
+          ln -s ../../linux-shaderc/include/glslang ntrviewer-hr/include/glslang
+          ln -s ../../linux-shaderc/include/spirv-tools ntrviewer-hr/include/spirv-tools
+          ln -s ../../linux-shaderc/include/shaderc ntrviewer-hr/include/shaderc
+          ln -s ../../linux-placebo/include/libplacebo ntrviewer-hr/include/libplacebo
+          ln -s ../../linux-rashader/include/librashader.h  ntrviewer-hr/include/librashader.h
+          mkdir ntrviewer-hr/lib
+          ln -s ../../linux-sdl/lib/libSDL3.a ntrviewer-hr/lib/libSDL3.a
+          ln -s ../../linux-shaderc/lib/libshaderc_combined.a ntrviewer-hr/lib/libshaderc_combined.a
+          ln -s ../../linux-placebo/lib/x86_64-linux-gnu/libplacebo.a ntrviewer-hr/lib/libplacebo.a
+          ln -s ../../linux-rashader/lib/librashader.a ntrviewer-hr/lib/librashader.a
+          git clone https://github.com/KhronosGroup/Vulkan-Headers.git
+          cd Vulkan-Headers
+          cmake -S . -B build/
+          cmake --install build --prefix build/install
+          cd ..
+          ln -s ../../Vulkan-Headers/build/install/include/vulkan ntrviewer-hr/include/vulkan
+          ln -s ../../Vulkan-Headers/build/install/include/vk_video ntrviewer-hr/include/vk_video
+          cd ntrviewer-hr
+          make -j$(nproc) STATIC_SDL=1
+          cd ..
+          mkdir NTRViewer-HR-Linux-x64
+          cp ntrviewer-hr/ntrviewer NTRViewer-HR-Linux-x64/
+          cp ntrviewer-hr/ntrviewer-x11.sh NTRViewer-HR-Linux-x64/
+          cp ntrviewer-hr/rashader.json NTRViewer-HR-Linux-x64
+          cp ntrviewer-hr/placebo.json NTRViewer-HR-Linux-x64
+          mkdir -p NTRViewer-HR-Linux-x64/placebo-shaders/Anime4K
+          cp -R Anime4K/glsl/* NTRViewer-HR-Linux-x64/placebo-shaders/Anime4K/
+          mkdir -p NTRViewer-HR-Linux-x64/slang-shaders
+          cp -R slang-shaders/{anti-aliasing,edge-smoothing,interpolation,pixel-art-scaling,stock.slang} NTRViewer-HR-Linux-x64/slang-shaders/
+          tar -czvf NTRViewer-HR-Linux-x64.tar.gz NTRViewer-HR-Linux-x64/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NTRViewer-HR-Linux-x64.tar.gz
+          path: NTRViewer-HR-Linux-x64.tar.gz

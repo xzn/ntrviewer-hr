@@ -110,7 +110,8 @@ ifneq ($(OS),Darwin)
 ifneq ($(STATIC_SDL),1)
 LDLIBS += $(shell pkg-config shaderc --libs)
 else
-LDLIBS += -lshaderc_combined -lglslang -lMachineIndependent -lOSDependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools
+LDLIBS += -lshaderc_combined
+# LDLIBS += -lglslang -lMachineIndependent -lOSDependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools
 endif
 endif
 LDLIBS += -lrashader

@@ -2,7 +2,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-linux-app:
+  build-linux-app-lite:
     runs-on: ubuntu-latest
     container:
       image: debian:bookworm-slim
