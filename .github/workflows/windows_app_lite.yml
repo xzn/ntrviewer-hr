@@ -1,0 +1,32 @@
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows-app:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          update: true
+          install: |
+            zip
+            mingw-w64-x86_64-sdl3
+      - uses: actions/checkout@v5
+        with:
+          path: ntrviewer-hr
+      - name: Compile NTRViewer-HR
+        run: |
+          pushd ntrviewer-hr
+          make -j$(nproc) LITE=1
+          popd
+          cp ntrviewer-hr/ntrviewer.exe .
+          zip NTRViewer-HR-Lite-Win-x64.zip ntrviewer.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NTRViewer-HR-Lite-Win-x64.zip
+          path: NTRViewer-HR-Lite-Win-x64.zip

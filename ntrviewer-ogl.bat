@@ -1,0 +1,1 @@
+ntrviewer.exe --ogl

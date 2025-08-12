@@ -1,0 +1,62 @@
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows-app:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          update: true
+          install: |
+            zip
+            mingw-w64-x86_64-sdl3
+            mingw-w64-x86_64-libplacebo
+      - uses: actions/checkout@v5
+        with:
+          path: ntrviewer-hr
+      - name: Get artifact
+        id: artifact-name
+        run: |
+          RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w windows_rashader.yml --json databaseId -q '.[0].databaseId')
+          gh run download --repo ${{ github.repository }} $RUN -n windows-rashader -D windows-rashader
+          RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w windows_shaderc.yml --json databaseId -q '.[0].databaseId')
+          gh run download --repo ${{ github.repository }} $RUN -n windows-shaderc -D windows-shaderc
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v5
+        with:
+          repository: bloc97/Anime4K
+          path: Anime4K
+      - uses: actions/checkout@v5
+        with:
+          repository: libretro/slang-shaders
+          path: slang-shaders
+      - name: Compile NTRViewer-HR
+        run: |
+          ln -s ../../windows-rashader/include/librashader.h ntrviewer-hr/include/librashader.h
+          mkdir ntrviewer-hr/lib
+          ln -s ../../windows-rashader/lib/librashader.a ntrviewer-hr/lib/librashader.a
+          ln -s ../../windows-shaderc/libshaderc_combined.a ntrviewer-hr/lib/libshaderc_combined.a
+          pushd ntrviewer-hr
+          make -j$(nproc)
+          popd
+          mkdir NTRViewer-HR-Win-x64
+          cp ntrviewer-hr/ntrviewer.exe NTRViewer-HR-Win-x64
+          cp ntrviewer-hr/ntrviewer-ogl.bat NTRViewer-HR-Win-x64
+          cp ntrviewer-hr/rashader.json NTRViewer-HR-Win-x64
+          cp ntrviewer-hr/placebo.json NTRViewer-HR-Win-x64
+          mkdir -p NTRViewer-HR-Win-x64/placebo-shaders/Anime4K
+          cp -R Anime4K/glsl/* NTRViewer-HR-Win-x64/placebo-shaders/Anime4K/
+          mkdir -p NTRViewer-HR-Win-x64/slang-shaders
+          cp -R slang-shaders/{anti-aliasing,edge-smoothing,interpolation,pixel-art-scaling,stock.slang} NTRViewer-HR-Win-x64/slang-shaders/
+          zip -r NTRViewer-HR-Win-x64.zip NTRViewer-HR-Win-x64/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NTRViewer-HR-Win-x64.zip
+          path: NTRViewer-HR-Win-x64.zip
