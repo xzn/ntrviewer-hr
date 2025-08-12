@@ -15,11 +15,11 @@ jobs:
           update: true
           install: |
             zip
+            make
             mingw-w64-x86_64-sdl3
             mingw-w64-x86_64-libplacebo
             mingw-w64-x86_64-vulkan-headers
             mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-make
       - uses: actions/checkout@v5
         with:
           path: ntrviewer-hr
