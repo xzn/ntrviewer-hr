@@ -12,10 +12,14 @@ jobs:
       - uses: actions/checkout@v5
         with:
           path: ntrviewer-hr
+      - uses: actions/checkout@v5
+        with:
+          repository: xzn/librashader
+          path: librashader
       - name: Compile NTRViewer-HR
         run: |
+          ntrviewer-hr/macos-scripts/install-reqs.sh
           pushd ntrviewer-hr
-          ./macos-scripts/install-reqs.sh
           make -j$(nproc)
           popd
       - name: Package NTRViewer-HR
@@ -36,10 +40,14 @@ jobs:
       - uses: actions/checkout@v5
         with:
           path: ntrviewer-hr
+      - uses: actions/checkout@v5
+        with:
+          repository: xzn/librashader
+          path: librashader
       - name: Compile NTRViewer-HR
         run: |
+          ntrviewer-hr/macos-scripts/install-reqs.sh
           pushd ntrviewer-hr
-          ./macos-scripts/install-reqs.sh
           make -j$(nproc)
           popd
       - name: Package NTRViewer-HR
