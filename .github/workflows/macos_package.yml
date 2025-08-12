@@ -30,21 +30,25 @@ jobs:
           run-id: macos-intel.yml
       - name: Package NTRViewer-HR
         run: |
+          cargo install --git https://github.com/indygreg/apple-platform-rs --branch main --bin rcodesign apple-codesign
           mkdir NTRViewer-HR-macOS-Universal
           pushd NTRViewer-HR-macOS-Universal
           cp ../ntrviewer-hr/macos-scripts/ntrviewer .
           chmod 755 ntrviewer
-          mkdir -p NTRViewer-HR/Contents/MacOS
-          cp ../ntrviewer-hr/macos-scripts/Info.plist NTRViewer-HR/Contents
-          lipo -create ../pkg/ntrviewer ../pkg-intel/ntrviewer -output NTRViewer-HR/Contents/MacOS/ntrviewer
-          cp ../ntrviewer-hr/rashader.json NTRViewer-HR/Contents/MacOS
-          cp ../ntrviewer-hr/placebo.json NTRViewer-HR/Contents/MacOS
-          cp -R ../pkg/arm64 NTRViewer-HR/Contents/MacOS/
-          cp -R ../pkg-intel/x86_64 NTRViewer-HR/Contents/MacOS/
-          mkdir -p NTRViewer-HR/Contents/MacOS/placebo-shaders/Anime4K
-          cp -R ../Anime4K/glsl/* NTRViewer-HR/Contents/MacOS/placebo-shaders/Anime4K/
-          mkdir -p NTRViewer-HR/Contents/MacOS/slang-shaders
-          cp -R ../slang-shaders/{anti-aliasing,edge-smoothing,interpolation,pixel-art-scaling,stock.slang} NTRViewer-HR/Contents/MacOS/slang-shaders/
+          mkdir -p NTRViewer-HR.app/Contents/MacOS
+          cp ../ntrviewer-hr/macos-scripts/Info.plist NTRViewer-HR.app/Contents
+          lipo -create ../macos/ntrviewer ../macos-intel/ntrviewer -output NTRViewer-HR.app/Contents/MacOS/ntrviewer
+          cp -R ../macos/arm64 NTRViewer-HR.app/Contents/MacOS/
+          cp -R ../macos-intel/x86_64 NTRViewer-HR.app/Contents/MacOS/
+          echo password > ../cert.pass
+          rcodesign generate-self-signed-certificate --person-name "JS Deck" --country-name "CA" --validity-days 7300 --p12-file ../cert.p12 --p12-password ../cert.pass
+          rcodesign sign -p12-file ../cert.p12 --p12-password ../cert.pass --code-signature-flags runtime NTRViewer-HR.app
+          cp ../ntrviewer-hr/rashader.json NTRViewer-HR.app/Contents/MacOS
+          cp ../ntrviewer-hr/placebo.json NTRViewer-HR.app/Contents/MacOS
+          mkdir -p NTRViewer-HR.app/Contents/MacOS/placebo-shaders/Anime4K
+          cp -R ../Anime4K/glsl/* NTRViewer-HR.app/Contents/MacOS/placebo-shaders/Anime4K/
+          mkdir -p NTRViewer-HR.app/Contents/MacOS/slang-shaders
+          cp -R ../slang-shaders/{anti-aliasing,edge-smoothing,interpolation,pixel-art-scaling,stock.slang} NTRViewer-HR.app/Contents/MacOS/slang-shaders/
           popd
           ntrviewer-hr/macos-scripts/compress.sh
       - uses: actions/upload-artifact@v4

@@ -11,18 +11,21 @@ jobs:
       - uses: actions/checkout@v5
         with:
           path: ntrviewer-hr
-      - uses: actions/download-artifact@v5
-        with:
-          name: rashader-intel
-          path: rashader-intel
-          github-token: ${{ secrets.GH_PAT }}
-          run-id: rashader_intel.yml
+      - name: Get artifact
+        id: artifact-name
+        run: |
+          RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w rashader-intel.yml --json databaseId -q '.[0].databaseId')
+          gh run download --repo ${{ github.repository }} $RUN -n rashader-intel -D rashader-intel
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Compile NTRViewer-HR
         run: |
           ntrviewer-hr/macos-scripts/install-reqs.sh
           ln -s ../../rashader-intel/include/librashader.h ntrviewer-hr/include/librashader.h
           mkdir ntrviewer-hr/lib
-          ln -s ../../rashader-intel/target/optimized/liblibrashader_capi.dylib ntrviewer-hr/lib/librashader.dylib
+          ln -s ../../rashader-intel/lib/librashader.dylib ntrviewer-hr/lib/librashader.dylib
+          mkdir -p librashader/target/optimized/deps
+          ln -s ../../../../rashader-intel/lib/librashader.dylib librashader/target/optimized/deps/liblibrashader_capi.dylib
           pushd ntrviewer-hr
           make -j$(sysctl -n hw.logicalcpu)
           popd

@@ -18,13 +18,13 @@ process () {
         echo Third-party "$SRC"
         if [ ! -f "$DST" ]; then
             cp "$SRC" "$DST"
+            chmod 644 "$DST"
             codesign --remove-signature "$DST"
             codesign -s "-" "$DST"
             ( pre_process $DST )
             install_name_tool -id "@rpath/$LIB" "$DST"
             codesign --remove-signature "$DST"
             codesign -s "-" "$DST"
-            chmod 644 "$DST"
         fi
         install_name_tool -change "$SRC" "@rpath/$LIB" "$1"
     elif [[ "$SRC" =~ ^/System/.* || "$SRC" =~ ^/usr/.* ]]; then
