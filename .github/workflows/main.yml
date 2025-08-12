@@ -7,6 +7,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          path: ntrviewer-hr
       - name: Compile NTRViewer-HR
         run: |
           pushd ntrviewer-hr
@@ -29,6 +31,8 @@ jobs:
     runs-on: macos-13
     steps:
       - uses: actions/checkout@v5
+        with:
+          path: ntrviewer-hr
       - name: Compile NTRViewer-HR
         run: |
           pushd ntrviewer-hr
@@ -52,12 +56,16 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          path: ntrviewer-hr
       - uses: actions/checkout@v5
         with:
-          repository: "bloc97/Anime4K"
+          repository: bloc97/Anime4K
+          path: Anime4K
       - uses: actions/checkout@v5
         with:
-          repository: "libretro/slang-shaders"
+          repository: libretro/slang-shaders
+          path: slang-shaders
       - uses: actions/download-artifact@v5
         with:
           name: macos
