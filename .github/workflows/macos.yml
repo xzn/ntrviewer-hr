@@ -19,9 +19,9 @@ jobs:
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
-          name: rashader
+          name: rashader.zip
           path: rashader
           run-id: ${{ steps.artifact-name.outputs.ARTIFACT_NAME }}
       - name: Compile NTRViewer-HR
