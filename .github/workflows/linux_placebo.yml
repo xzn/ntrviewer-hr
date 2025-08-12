@@ -22,6 +22,8 @@ jobs:
         run: |
           RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w linux_shaderc.yml --json databaseId -q '.[0].databaseId')
           gh run download --repo ${{ github.repository }} $RUN -n linux-shaderc -D linux-shaderc
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Compile placebo
         run: |
           cd libplacebo
