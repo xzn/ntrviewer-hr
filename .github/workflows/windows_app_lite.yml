@@ -16,6 +16,7 @@ jobs:
           install: |
             zip
             make
+            vim
             mingw-w64-x86_64-sdl3
             mingw-w64-x86_64-gcc
       - uses: actions/checkout@v5
