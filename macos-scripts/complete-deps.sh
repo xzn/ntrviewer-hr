@@ -19,12 +19,9 @@ process () {
         if [ ! -f "$DST" ]; then
             cp "$SRC" "$DST"
             chmod 644 "$DST"
-            codesign --remove-signature "$DST"
-            codesign -s "-" "$DST"
             ( pre_process $DST )
             install_name_tool -id "@rpath/$LIB" "$DST"
-            codesign --remove-signature "$DST"
-            codesign -s "-" "$DST"
+            codesign -s "-" -f "$DST"
         fi
         install_name_tool -change "$SRC" "@rpath/$LIB" "$1"
     elif [[ "$SRC" =~ ^/System/.* || "$SRC" =~ ^/usr/lib/.* ]]; then
@@ -52,16 +49,13 @@ rm -f "$BIN"
 cp "$BIN_DIR/$BIN" "$BIN"
 rm -rf "$ARCH"
 mkdir -p "$ARCH"
-codesign --remove-signature "$BIN"
-codesign -s "-" "$BIN"
 ( pre_process $BIN )
 if [[ "$ARCH" == "arm64" ]]; then
     install_name_tool -rpath /opt/homebrew/lib @executable_path/$ARCH "$BIN"
 else
     install_name_tool -rpath /usr/local/lib @executable_path/$ARCH "$BIN"
 fi
-codesign --remove-signature "$BIN"
-codesign -s "-" "$BIN"
+codesign -s "-" -f "$BIN"
 
 ICD=MoltenVK_icd.json
 cp ~/VulkanSDK/$VULKAN_VERSION/macOS/share/vulkan/icd.d/$ICD $ARCH
