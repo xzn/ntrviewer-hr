@@ -14,7 +14,7 @@ jobs:
       - name: Compile librashader
         run: |
           apt update
-          apt install -y --fix-missing curl gcc
+          apt install -y --fix-missing curl gcc g++ clang
           curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain none
           . "$HOME/.cargo/env"
           rustup toolchain install nightly-2025-08-08
