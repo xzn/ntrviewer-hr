@@ -58,7 +58,7 @@ codesign -s "-" "$BIN"
 if [[ "$ARCH" == "arm64" ]]; then
     install_name_tool -rpath /opt/homebrew/lib @executable_path/$ARCH "$BIN"
 else
-    install_name_tool -rpath /usr/local/opt @executable_path/$ARCH "$BIN"
+    install_name_tool -rpath /usr/local/lib @executable_path/$ARCH "$BIN"
 fi
 codesign --remove-signature "$BIN"
 codesign -s "-" "$BIN"
