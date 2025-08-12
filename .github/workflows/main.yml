@@ -20,7 +20,6 @@ jobs:
         run: |
           ntrviewer-hr/macos-scripts/install-reqs.sh
           pushd ntrviewer-hr
-          ls -la include
           make -j$(nproc)
           popd
       - name: Package NTRViewer-HR
