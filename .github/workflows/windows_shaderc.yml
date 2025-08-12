@@ -32,7 +32,7 @@ jobs:
           pushd shaderc
           ./utils/git-sync-deps
           rm -rf third_party/glslang/
-          cp -r glslang-sys-0.7.0+1062752/native/glslang third_party/
+          cp -r ../glslang-sys-0.7.0+1062752/native/glslang third_party/
           cmake -GNinja -DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX=../install -DCMAKE_BUILD_TYPE=Release -DSHADERC_SKIP_TESTS=ON -DSHADERC_SKIP_EXAMPLES=ON -DENABLE_GLSLANG_BINARIES=OFF -DENABLE_HLSL=ON -DENABLE_OPT=ON .
           ninja
           ninja install
