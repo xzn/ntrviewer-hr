@@ -15,6 +15,8 @@ jobs:
         id: artifact-name
         run: |
           echo "ARTIFACT_NAME=$(gh run list --limit 1 --workflow rashader.yml)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/download-artifact@v5
         with:
           name: rashader
