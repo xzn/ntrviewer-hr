@@ -1,0 +1,29 @@
+on:
+  workflow_dispatch:
+
+jobs:
+  build-linux-rashader:
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: xzn/librashader
+          path: librashader
+      - name: Compile librashader
+        run: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y
+          rustup toolchain install nightly-2025-08-08
+          rustup default nightly-2025-08-08
+          pushd librashader/librashader-capi
+          cargo build --profile optimized --no-default-features --features runtime-opengl,runtime-d3d11,runtime-vulkan
+          popd
+          mkdir -p linux-rashader/include
+          ln -s ../../librashader/include/librashader.h linux-rashader/include/librashader.h
+          mkdir linux-rashader/lib
+          ln -s ../../librashader/target/optimized/liblibrashader_capi.a linux-rashader/lib/librashader.a
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-rashader
+          path: linux-rashader
