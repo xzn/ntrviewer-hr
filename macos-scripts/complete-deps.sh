@@ -14,7 +14,7 @@ process () {
         LIB="${BASH_REMATCH[1]}.dylib"
     fi
     DST="$ARCH/$LIB"
-    if [[ "$SRC" =~ ^/opt/homebrew/lib/.* || "$SRC" =~ ^/usr/local/opt/.* || "$SRC" =~ ^/Users/.* ]]; then
+    if [[ "$SRC" =~ ^/opt/homebrew/opt/.* || "$SRC" =~ ^/usr/local/opt/.* || "$SRC" =~ ^/Users/.* ]]; then
         echo Third-party "$SRC"
         if [ ! -f "$DST" ]; then
             cp "$SRC" "$DST"
