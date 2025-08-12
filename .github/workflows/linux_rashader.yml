@@ -13,6 +13,8 @@ jobs:
           path: librashader
       - name: Compile librashader
         run: |
+          sudo apt update
+          sudo apt install -y --fix-missing curl
           curl https://sh.rustup.rs -sSf | sh -s -- -y
           rustup toolchain install nightly-2025-08-08
           rustup default nightly-2025-08-08
