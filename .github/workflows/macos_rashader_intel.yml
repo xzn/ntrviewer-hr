@@ -2,7 +2,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-rashader-intel:
+  build-macos-rashader-intel:
     runs-on: macos-13
     steps:
       - uses: actions/checkout@v5
@@ -15,11 +15,11 @@ jobs:
       - name: Compile NTRViewer-HR
         run: |
           ntrviewer-hr/macos-scripts/compile-rashader.sh
-          mkdir -p rashader-intel/include
-          ln -s ../../librashader/include/librashader.h rashader-intel/include/librashader.h
-          mkdir rashader-intel/lib
-          ln -s ../../librashader/target/optimized/liblibrashader_capi.dylib rashader-intel/lib/librashader.dylib
+          mkdir -p macos-rashader-intel/include
+          ln -s ../../librashader/include/librashader.h macos-rashader-intel/include/librashader.h
+          mkdir macos-rashader-intel/lib
+          ln -s ../../librashader/target/optimized/liblibrashader_capi.dylib macos-rashader-intel/lib/librashader.dylib
       - uses: actions/upload-artifact@v4
         with:
-          name: rashader-intel
-          path: rashader-intel
+          name: macos-rashader-intel
+          path: macos-rashader-intel

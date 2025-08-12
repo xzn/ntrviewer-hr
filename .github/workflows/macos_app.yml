@@ -5,7 +5,7 @@ env:
   VULKAN_VERSION: 1.4.321.0
 
 jobs:
-  build-macos:
+  build-macos-app:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -14,28 +14,28 @@ jobs:
       - name: Get artifact
         id: artifact-name
         run: |
-          RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w rashader.yml --json databaseId -q '.[0].databaseId')
-          gh run download --repo ${{ github.repository }} $RUN -n rashader -D rashader
+          RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w macos_rashader.yml --json databaseId -q '.[0].databaseId')
+          gh run download --repo ${{ github.repository }} $RUN -n macos-rashader -D macos-rashader
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Compile NTRViewer-HR
         run: |
           ntrviewer-hr/macos-scripts/install-reqs.sh
-          ln -s ../../rashader/include/librashader.h ntrviewer-hr/include/librashader.h
+          ln -s ../../macos-rashader/include/librashader.h ntrviewer-hr/include/librashader.h
           mkdir ntrviewer-hr/lib
-          ln -s ../../rashader/lib/librashader.dylib ntrviewer-hr/lib/librashader.dylib
+          ln -s ../../macos-rashader/lib/librashader.dylib ntrviewer-hr/lib/librashader.dylib
           mkdir -p librashader/target/optimized/deps
-          ln -s ../../../../rashader/lib/librashader.dylib librashader/target/optimized/deps/liblibrashader_capi.dylib
+          ln -s ../../../../macos-rashader/lib/librashader.dylib librashader/target/optimized/deps/liblibrashader_capi.dylib
           pushd ntrviewer-hr
           make -j$(sysctl -n hw.logicalcpu)
           popd
       - name: Package NTRViewer-HR
         run: |
-          mkdir macos
-          pushd macos
+          mkdir macos-app
+          pushd macos-app
           ../ntrviewer-hr/macos-scripts/complete-deps.sh
           popd
       - uses: actions/upload-artifact@v4
         with:
-          name: macos
-          path: macos
+          name: macos-app
+          path: macos-app
