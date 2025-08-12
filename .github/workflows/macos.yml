@@ -14,10 +14,7 @@ jobs:
       - name: Get artifact
         id: artifact-name
         run: |
-          gh run list --repo ${{ github.repository }}
-          cd ntrviewer-hr
-          gh run list
-          ARTIFACT_NAME=$(gh run list --repo ${{ github.repository }} -L 1 -w .github/workflows/rashader.yml)
+          ARTIFACT_NAME=$(gh run list --repo ${{ github.repository }} -L 1 -w rashader.yml --json databaseId -q '.[0].databaseId')
           echo $ARTIFACT_NAME
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
         env:
