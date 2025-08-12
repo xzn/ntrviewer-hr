@@ -69,6 +69,6 @@ BAK=.bak
 sed -i $BAK 's/..\/..\/..\/lib/./g' $ARCH/$ICD
 rm $ARCH/$ICD$BAK
 MVK=libMoltenVK.dylib
-cp "~/VulkanSDK/$VULKAN_VERSION/macOS/lib/$MVK" "$ARCH"
+cp ~/VulkanSDK/$VULKAN_VERSION/macOS/lib/$MVK "$ARCH"
 lipo "$ARCH/$MVK" -extract "$ARCH" -output "$ARCH/$MVK"
 chmod 644 "$ARCH/$MVK"
