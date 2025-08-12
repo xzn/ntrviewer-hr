@@ -19,7 +19,7 @@ jobs:
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v4
         with:
           name: rashader
           path: rashader
