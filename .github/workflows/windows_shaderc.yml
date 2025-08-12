@@ -11,11 +11,14 @@ jobs:
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
-          path-type: inherit
+          path-type: minimal
           update: true
           install: |
             wget
             git
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
       - uses: actions/checkout@v5
         with:
           path: ntrviewer-hr
