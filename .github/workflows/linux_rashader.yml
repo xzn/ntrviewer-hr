@@ -19,9 +19,9 @@ jobs:
           . "$HOME/.cargo/env"
           rustup toolchain install nightly-2025-08-08
           rustup default nightly-2025-08-08
-          pushd librashader/librashader-capi
+          cd librashader/librashader-capi
           cargo build --profile optimized --no-default-features --features runtime-opengl,runtime-d3d11,runtime-vulkan
-          popd
+          cd ../..
           mkdir -p linux-rashader/include
           ln -s ../../librashader/include/librashader.h linux-rashader/include/librashader.h
           mkdir linux-rashader/lib
