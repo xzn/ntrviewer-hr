@@ -66,7 +66,11 @@ jobs:
           mkdir -p NTRViewer-HR-Linux-x64/placebo-shaders/Anime4K
           cp -R Anime4K/glsl/* NTRViewer-HR-Linux-x64/placebo-shaders/Anime4K/
           mkdir -p NTRViewer-HR-Linux-x64/slang-shaders
-          cp -R slang-shaders/{anti-aliasing,edge-smoothing,interpolation,pixel-art-scaling,stock.slang} NTRViewer-HR-Linux-x64/slang-shaders/
+          cp -R slang-shaders/anti-aliasing NTRViewer-HR-Linux-x64/slang-shaders/
+          cp -R slang-shaders/edge-smoothing NTRViewer-HR-Linux-x64/slang-shaders/
+          cp -R slang-shaders/interpolation NTRViewer-HR-Linux-x64/slang-shaders/
+          cp -R slang-shaders/pixel-art-scaling NTRViewer-HR-Linux-x64/slang-shaders/
+          cp -R slang-shaders/stock.slang NTRViewer-HR-Linux-x64/slang-shaders/
           tar -czvf NTRViewer-HR-Linux-x64.tar.gz NTRViewer-HR-Linux-x64/*
       - uses: actions/upload-artifact@v4
         with:
