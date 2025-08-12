@@ -13,7 +13,6 @@ jobs:
           msystem: MINGW64
           path-type: inherit
           update: true
-    steps:
       - uses: actions/checkout@v5
         with:
           path: ntrviewer-hr
