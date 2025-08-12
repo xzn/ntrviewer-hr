@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>NTRViewer-HR</string>
+    <key>CFBundleExecutable</key>
+    <string>ntrviewer</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.example.xzn.NTRViewer-HR</string>
+    <key>CFBundleVersion</key>
+    <string>0.3.5.2</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Discover and connect to 3DS devices for remote play and input redirection.</string>
+</dict>
+</plist>
