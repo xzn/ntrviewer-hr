@@ -1,0 +1,33 @@
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows-shaderc:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          update: true
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: ntrviewer-hr
+      - uses: actions/checkout@v5
+        with:
+          repository: google/shaderc
+          path: shaderc
+          ref: v2023.7
+          submodules: recursive
+      - name: Compile shaderc
+        run: |
+          cd shaderc
+          ./utils/git-sync-deps
+      - uses: actions/upload-artifact@v4
+        with:
+          name: window-shaderc
+          path: window-shaderc

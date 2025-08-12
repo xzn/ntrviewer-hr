@@ -3,7 +3,16 @@ on:
 
 jobs:
   build-windows-rashader:
-    runs-on: window-latest
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          update: true
     steps:
       - uses: actions/checkout@v5
         with:
