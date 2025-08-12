@@ -48,7 +48,7 @@ pre_process () {
 }
 
 echo Binary "$BIN" on "$ARCH"
-rm "$BIN"
+rm -f "$BIN"
 cp "$BIN_DIR/$BIN" "$BIN"
 rm -rf "$ARCH"
 mkdir -p "$ARCH"
