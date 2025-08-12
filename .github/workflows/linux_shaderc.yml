@@ -1,0 +1,33 @@
+on:
+  workflow_dispatch:
+
+jobs:
+  build-linux-shaderc:
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: google/shaderc
+          path: shaderc
+          ref: v2025.3
+          submodules: recursive
+      - name: Compile shaderc
+        run: |
+          apt update
+          apt install -y --fix-missing curl gcc g++ clang cmake ninja-build python3 wget
+          wget -nv https://static.crates.io/crates/glslang-sys/glslang-sys-0.7.0%2B1062752.crate
+          tar -xvf glslang-sys-0.7.0+1062752.crate
+          cd shaderc
+          ./utils/git-sync-deps
+          rm -rf third_party/glslang/
+          cp -r ../glslang-sys-0.7.0+1062752/native/glslang third_party/
+          cmake -GNinja -DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX=../linux-shaderc -DCMAKE_BUILD_TYPE=Release -DSHADERC_SKIP_TESTS=ON -DSHADERC_SKIP_EXAMPLES=ON -DENABLE_GLSLANG_BINARIES=OFF -DENABLE_HLSL=ON -DENABLE_OPT=ON .
+          ninja
+          ninja install
+          cd ..
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-shaderc
+          path: linux-shaderc
