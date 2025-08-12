@@ -2,7 +2,7 @@
 
 set -ex
 
-BIN_DIR=..
+BIN_DIR=../ntrviewer-hr
 BIN=ntrviewer
 ARCH=$(uname -m)
 

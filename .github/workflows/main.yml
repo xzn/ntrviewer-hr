@@ -26,7 +26,6 @@ jobs:
         run: |
           mkdir pkg
           pushd pkg
-          cp ../ntrviewer-hr/ntrviewer .
           ../ntrviewer-hr/macos-scripts/complete-deps.sh
           popd
       - uses: actions/upload-artifact@v4
