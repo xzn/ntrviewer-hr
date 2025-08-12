@@ -2,6 +2,9 @@ name: main
 on:
   workflow_dispatch:
 
+env:
+  VULKAN_VERSION: 1.4.321.0
+
 jobs:
   build-macos:
     runs-on: macos-latest
