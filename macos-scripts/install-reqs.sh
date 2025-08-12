@@ -4,6 +4,7 @@ brew update
 brew install sdl3 libplacebo wget rustup
 
 rustup toolchain install nightly-2025-08-08
+rustup default nightly-2025-08-08
 pushd librashader
 cargo run -p librashader-build-script -- --profile optimized
 popd
