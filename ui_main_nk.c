@@ -16,6 +16,7 @@ rp_lock_t ui_nk_lock;
 static struct nk_style nk_style_current;
 
 #include "nuklear_sdl_renderer.h"
+#ifndef USE_SDL_RENDERER_ONLY
 #include "nuklear_sdl_vulkan.h"
 #ifndef __APPLE__
 #include "nuklear_sdl_gl3.h"
@@ -24,6 +25,7 @@ static struct nk_style nk_style_current;
 #ifdef _WIN32
 #include "nuklear_d3d11.h"
 #include "ui_compositor_csc.h"
+#endif
 #endif
 
 #include <limits.h>
