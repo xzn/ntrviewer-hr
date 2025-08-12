@@ -7,11 +7,6 @@ jobs:
     container:
       image: debian:bookworm-slim
     steps:
-      - uses: actions/checkout@v5
-        with:
-          repository: google/shaderc
-          path: shaderc
-          ref: v2025.3
       - name: Install prereq
         run: |
           apt update
@@ -27,11 +22,11 @@ jobs:
           wget -nv https://github.com/Kitware/CMake/releases/download/v4.1.0/cmake-4.1.0-linux-x86_64.sh
           chmod +x cmake-4.1.0-linux-x86_64.sh
           mkdir cmake
-          ./cmake-4.1.0-linux-x86_64.sh --prefix=$PWD/cmake <<EOF
+          ./cmake-4.1.0-linux-x86_64.sh --prefix=$(realpath ./cmake) <<EOF
           y
           n
           EOF
-          export PATH=$PWD/cmake/bin:$PATH
+          export PATH=$(realpath ./cmake/bin):$PATH
           wget -nv https://static.crates.io/crates/glslang-sys/glslang-sys-0.7.0%2B1062752.crate
           tar -xvf glslang-sys-0.7.0+1062752.crate
           cd shaderc
