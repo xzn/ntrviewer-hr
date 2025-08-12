@@ -43,6 +43,7 @@ jobs:
           mkdir ntrviewer-hr/lib
           ln -s ../../windows-rashader/lib/librashader.a ntrviewer-hr/lib/librashader.a
           ln -s ../../windows-shaderc/libshaderc_combined.a ntrviewer-hr/lib/libshaderc_combined.a
+          ln -s "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x64\dxcompiler.lib" ntrviewer-hr/lib/dxcompiler.lib
           pushd ntrviewer-hr
           make -j$(nproc)
           popd
