@@ -20,7 +20,7 @@ jobs:
           rustup toolchain install nightly-2025-08-08
           rustup default nightly-2025-08-08
           cd librashader/librashader-capi
-          cargo build --profile optimized --no-default-features --features runtime-opengl,runtime-d3d11,runtime-vulkan
+          cargo build --profile optimized --no-default-features --features runtime-opengl,runtime-vulkan
           cd ../..
           mkdir -p linux-rashader/include
           ln -s ../../librashader/include/librashader.h linux-rashader/include/librashader.h

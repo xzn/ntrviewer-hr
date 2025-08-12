@@ -1,0 +1,29 @@
+on:
+  workflow_dispatch:
+
+jobs:
+  build-linux-sdl:
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
+    steps:
+      - name: Install prereq
+        run: |
+          apt update
+          apt install -y --fix-missing git curl cmake clang ninja-build meson python3 wget build-essential checkinstall zlib1g-dev libssl-dev pkg-config gh libvulkan-dev libopengl-dev libsdl2-dev libpipewire-0.3-dev
+      - uses: actions/checkout@v5
+        with:
+          repository: libsdl-org/SDL
+          path: SDL
+          ref: release-3.2.20
+      - name: Compile sdl
+        run: |
+          cd SDL
+          cmake -B build -DCMAKE_INSTALL_PREFIX=$(realpath ../linux-sdl) -DBUILD_SHARED_LIBS=Off
+          cmake --build build
+          cmake --install build
+          cd ..
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-sdl
+          path: linux-sdl
