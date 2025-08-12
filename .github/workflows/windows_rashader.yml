@@ -2,7 +2,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-macos-rashader:
+  build-windows-rashader:
     runs-on: window-latest
     steps:
       - uses: actions/checkout@v5
