@@ -14,16 +14,10 @@ jobs:
       - name: Get artifact
         id: artifact-name
         run: |
-          ARTIFACT_NAME=$(gh run list --repo ${{ github.repository }} -L 1 -w rashader.yml --json databaseId -q '.[0].databaseId')
-          echo $ARTIFACT_NAME
-          echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+          RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w rashader.yml --json databaseId -q '.[0].databaseId')
+          gh run download $RUN -n <rashader -D rashader
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/download-artifact@v5
-        with:
-          name: rashader.zip
-          path: rashader
-          run-id: ${{ steps.artifact-name.outputs.ARTIFACT_NAME }}
       - name: Compile NTRViewer-HR
         run: |
           ntrviewer-hr/macos-scripts/install-reqs.sh
