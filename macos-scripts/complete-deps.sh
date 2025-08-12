@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -ex
+
 BIN_DIR=..
 BIN=ntrviewer
 ARCH=$(uname -m)
