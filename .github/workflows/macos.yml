@@ -23,7 +23,7 @@ jobs:
           ntrviewer-hr/macos-scripts/install-reqs.sh
           ln -s ../../rashader/include/librashader.h ntrviewer-hr/include/librashader.h
           mkdir ntrviewer-hr/lib
-          ln -s ../../rashader/target/optimized/liblibrashader_capi.dylib ntrviewer-hr/lib/librashader.dylib
+          ln -s ../../rashader/lib/librashader.dylib ntrviewer-hr/lib/librashader.dylib
           pushd ntrviewer-hr
           make -j$(sysctl -n hw.logicalcpu)
           popd
