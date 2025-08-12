@@ -14,7 +14,9 @@ jobs:
       - name: Get artifact
         id: artifact-name
         run: |
-          echo "ARTIFACT_NAME=$(gh run list --repo ${{ github.repository }} --limit 1 --workflow rashader.yml)" >> "$GITHUB_OUTPUT"
+          ARTIFACT_NAME=$(gh run list --repo ${{ github.repository }} --limit 1 --workflow rashader.yml)
+          echo $ARTIFACT_NAME
+          echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/download-artifact@v5
