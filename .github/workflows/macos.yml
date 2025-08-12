@@ -11,12 +11,16 @@ jobs:
       - uses: actions/checkout@v5
         with:
           path: ntrviewer-hr
+      - name: Get artifact
+        id: artifact-name
+        run: |
+          echo "ARTIFACT_NAME=$(gh run list --limit 1 --workflow rashader.yml)" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v5
         with:
           name: rashader
           path: rashader
           github-token: ${{ secrets.GH_PAT }}
-          run-id: rashader.yml
+          run-id: ${{ steps.artifact-name.outputs.ARTIFACT_NAME }}
       - name: Compile NTRViewer-HR
         run: |
           ntrviewer-hr/macos-scripts/install-reqs.sh
