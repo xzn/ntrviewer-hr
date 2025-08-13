@@ -67,6 +67,15 @@ Default should work fine for most scenarios. You can customize them as needed.
 - **Reliable Stream** will be displayed if Reliable Stream is On.
 - **Reliable Stream + Delta** will be displayed if On + Delta is enabled and supported.
 
+### macOS quarantine bypass
+
+- Run `xattr -r -d com.apple.quarantine NTRViewer-HR-macOS-Universal.zip` on the file downloaded.
+
+### Additional filters options
+
+- Selected shaders were downloaded from https://github.com/libretro/slang-shaders, where you can find more.
+- Manually edit the `rashader.json` file to make option appear within the application. Similarly for placebo shaders with `placebo.json`.
+
 ## Feedback
 
 If you have any further questions, feel free to post in discussion at https://github.com/xzn/ntrviewer-hr/discussions
