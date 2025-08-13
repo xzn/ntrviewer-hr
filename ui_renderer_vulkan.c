@@ -956,7 +956,7 @@ static VkSurfaceFormatKHR choose_swap_surface_format(
     VkSurfaceFormatKHR *available_formats,
     uint32_t available_formats_len
 ) {
-    VkSurfaceFormatKHR undefined_format = {VK_FORMAT_B8G8R8A8_UNORM,
+    VkSurfaceFormatKHR undefined_format = {VK_FORMAT_R8G8B8A8_UNORM,
                                            VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
     uint32_t i;
     if (available_formats_len == 1 &&
@@ -965,7 +965,7 @@ static VkSurfaceFormatKHR choose_swap_surface_format(
     }
 
     for (i = 0; i < available_formats_len; i++) {
-        if (available_formats[i].format == VK_FORMAT_B8G8R8A8_UNORM &&
+        if (available_formats[i].format == VK_FORMAT_R8G8B8A8_UNORM &&
             available_formats[i].colorSpace ==
                 VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
             return available_formats[i];

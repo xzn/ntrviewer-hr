@@ -991,17 +991,10 @@ static void ycc_rgb_convert(
     JSAMPLE y = in[0];
     JSAMPLE cb = in[1];
     JSAMPLE cr = in[2];
-#ifdef __APPLE__
-#define R_I 2
-#define G_I 1
-#define B_I 0
-#define A_I 3
-#else
 #define R_I 0
 #define G_I 1
 #define B_I 2
 #define A_I 3
-#endif
     /* Range-limiting is essential due to noise introduced by DCT losses. */
     out[R_I] = range_limit_i(y + 1.40200f * (cr - 128.0f));
     out[G_I] = range_limit_i(y - 0.34414f * (cb - 128.0f) - 0.71414f * (cr - 128.0f));

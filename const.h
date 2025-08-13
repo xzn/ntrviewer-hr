@@ -192,21 +192,12 @@ enum frame_buffer_status_t
 
 #define RGB_CHANNELS_N 3
 #define GL_CHANNELS_N 4
-#ifdef __APPLE__
-#define TJ_FORMAT TJPF_BGRA
-#define SDL_FORMAT SDL_PIXELFORMAT_BGRA32
-#define D3D_FORMAT DXGI_FORMAT_B8G8R8A8_UNORM
-#define VK_FORMAT VK_FORMAT_B8G8R8A8_UNORM
-#define GL_INT_FORMAT GL_BGRA8
-#define GL_FORMAT GL_BGRA
-#else
 #define TJ_FORMAT TJPF_RGBA
 #define SDL_FORMAT SDL_PIXELFORMAT_RGBA32
 #define D3D_FORMAT DXGI_FORMAT_R8G8B8A8_UNORM
 #define VK_FORMAT VK_FORMAT_R8G8B8A8_UNORM
 #define GL_INT_FORMAT GL_RGBA8
 #define GL_FORMAT GL_RGBA
-#endif
 
 #define ui_font_scale_step_factor (32.0f)
 #define ui_font_scale_epsilon (1.0f / ui_font_scale_step_factor)
