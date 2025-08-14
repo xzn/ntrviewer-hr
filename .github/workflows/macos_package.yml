@@ -14,7 +14,7 @@ jobs:
           path: Anime4K
       - uses: actions/checkout@v5
         with:
-          repository: libretro/slang-shaders
+          repository: xzn/slang-shaders
           path: slang-shaders
       - name: Get artifact
         id: artifact-name
