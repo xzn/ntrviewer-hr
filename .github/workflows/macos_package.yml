@@ -24,15 +24,14 @@ jobs:
           RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w macos_app_intel.yml --json databaseId -q '.[0].databaseId')
           gh run download --repo ${{ github.repository }} $RUN -n macos-app-intel -D macos-app-intel
           RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w macos_rcodesign.yml --json databaseId -q '.[0].databaseId')
-          gh run download --repo ${{ github.repository }} $RUN -n rcodesign -D rcodesign
+          gh run download --repo ${{ github.repository }} $RUN -n rcodesign -D .
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Package NTRViewer-HR
         run: |
           mkdir cargo-bin
           mv rcodesign cargo-bin/
-          export PATH=$(realpath $(PWD)/cargo-bin):$PATH
-          echo $PATH
+          export PATH=$(PWD)/cargo-bin:$PATH
           ntrviewer-hr/macos-scripts/package.sh
       - uses: actions/upload-artifact@v4
         with:
