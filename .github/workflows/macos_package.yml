@@ -30,8 +30,9 @@ jobs:
       - name: Package NTRViewer-HR
         run: |
           mkdir cargo-bin
-          mv rcodesign cargo-bin
-          export PATH=$(PWD)/cargo-bin:$PATH
+          mv rcodesign cargo-bin/
+          export PATH=$(realpath $(PWD)/cargo-bin):$PATH
+          echo $PATH
           ntrviewer-hr/macos-scripts/package.sh
       - uses: actions/upload-artifact@v4
         with:
