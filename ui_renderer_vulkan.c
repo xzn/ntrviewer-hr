@@ -956,7 +956,7 @@ static VkSurfaceFormatKHR choose_swap_surface_format(
     VkSurfaceFormatKHR *available_formats,
     uint32_t available_formats_len
 ) {
-    VkSurfaceFormatKHR undefined_format = {VK_FORMAT_R8G8B8A8_UNORM,
+    VkSurfaceFormatKHR undefined_format = {VK_FORMAT_B8G8R8A8_UNORM,
                                            VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
     uint32_t i;
     if (available_formats_len == 1 &&
@@ -965,7 +965,7 @@ static VkSurfaceFormatKHR choose_swap_surface_format(
     }
 
     for (i = 0; i < available_formats_len; i++) {
-        if (available_formats[i].format == VK_FORMAT_R8G8B8A8_UNORM &&
+        if (available_formats[i].format == VK_FORMAT_B8G8R8A8_UNORM &&
             available_formats[i].colorSpace ==
                 VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
             return available_formats[i];
@@ -977,7 +977,8 @@ static VkSurfaceFormatKHR choose_swap_surface_format(
 
 static VkPresentModeKHR choose_swap_present_mode(
     VkPresentModeKHR *available_present_modes,
-    uint32_t available_present_modes_len
+    uint32_t available_present_modes_len,
+    UNUSED bool is_fullscreen
 ) {
     uint32_t i;
     for (i = 0; i < available_present_modes_len; i++) {
@@ -990,9 +991,11 @@ static VkPresentModeKHR choose_swap_present_mode(
         }
     }
 #ifdef __APPLE__
-    for (i = 0; i < available_present_modes_len; i++) {
-        if (available_present_modes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR) {
-            return available_present_modes[i];
+    if (!is_fullscreen) {
+        for (i = 0; i < available_present_modes_len; i++) {
+            if (available_present_modes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR) {
+                return available_present_modes[i];
+            }
         }
     }
 #endif
@@ -1032,6 +1035,7 @@ static bool create_swap_chain(struct vulkan_demo *demo) {
     VkSwapchainCreateInfoKHR create_info;
     uint32_t queue_family_indices[2];
     bool ret = false;
+    bool is_fullscreen = (SDL_GetWindowFlags(demo->win) & SDL_WINDOW_FULLSCREEN) != 0;
 
     queue_family_indices[0] = (uint32_t)demo->indices.graphics;
     queue_family_indices[1] = (uint32_t)demo->indices.present;
@@ -1043,7 +1047,9 @@ static bool create_swap_chain(struct vulkan_demo *demo) {
     surface_format = choose_swap_surface_format(swap_chain_support.formats,
                                                 swap_chain_support.formats_len);
     present_mode = choose_swap_present_mode(
-        swap_chain_support.present_modes, swap_chain_support.present_modes_len);
+        swap_chain_support.present_modes,
+        swap_chain_support.present_modes_len,
+        is_fullscreen);
     extent = choose_swap_extent(demo, &swap_chain_support.capabilities);
 
     demo->swap_chain_images_len =
