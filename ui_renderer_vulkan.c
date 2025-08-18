@@ -1420,7 +1420,7 @@ static bool create_descriptor_pool(struct vulkan_demo *demo) {
 
     memset(&pool_size, 0, sizeof(VkDescriptorPoolSize));
     pool_size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    pool_size.descriptorCount = demo->swap_chain_images_len;
+    pool_size.descriptorCount = demo->swap_chain_images_len + VK_VIEW_DESC_COUNT_MAX;
 
     memset(&pool_info, 0, sizeof(VkDescriptorPoolCreateInfo));
     pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
