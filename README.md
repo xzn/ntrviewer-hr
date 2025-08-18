@@ -71,10 +71,14 @@ Default should work fine for most scenarios. You can customize them as needed.
 
 - Run `xattr -r -d com.apple.quarantine NTRViewer-HR-macOS-Universal.zip` on the file downloaded.
 
+### Asahi Linux port publish
+
+- This applies to other arm64 based Linux distro as well. When using muvm/fex to run the application, you will need to publish the viewer's port, e.g.: `muvm -p 8001/udp FEXInterpreter $(realpath ./ntrviewer)`
+
 ### Additional filters options
 
 - Selected shaders were downloaded from https://github.com/libretro/slang-shaders, where you can find more.
-- Manually edit the `rashader.json` file to make option appear within the application. Similarly for placebo shaders with `placebo.json`.
+- Manually edit the `rashader.json` file to make options appear within the application. Similarly for placebo shaders with `placebo.json`.
 
 ## Feedback
 
