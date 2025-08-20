@@ -67,6 +67,8 @@ static uint8_t recv_last_packet_id[SCREEN_COUNT];
 #define RP_KCP_HDR_SIZE_NBITS (11)
 #define RP_KCP_HDR_RC_NBITS (5)
 
+#define RP_KCP_EXHDR_EVEN_ODD_NBITS (1)
+
 #define RP_DQ_HDR_QUALITY_NBITS (5)
 
 static u8 kcp_recv_w[RP_KCP_WORK_COUNT];
@@ -84,6 +86,7 @@ static struct kcp_recv_info_t {
     u16 jpeg_quality;
     u8 chroma_ss;
     u8 downsample;
+    u8 even_odd;
     u8 core_count;
     u8 v_adjusted;
     u8 v_last_adjusted;
@@ -280,6 +283,7 @@ static int downsample_height(int downsample, int is_top) {
     switch (downsample) {
         case 3:
             return (is_top ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1) / 2;
+        case 2:
         default:
             return is_top ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1;
     }
@@ -288,7 +292,28 @@ static int downsample_height(int downsample, int is_top) {
 static int downsample_width(int downsample) {
     switch (downsample) {
         case 3:
+        case 2:
             return SCREEN_WIDTH / 2;
+        default:
+            return SCREEN_WIDTH;
+    }
+}
+
+static int downsample_display_height(int downsample, int is_top) {
+    switch (downsample) {
+        case 3:
+            return (is_top ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1) / 2;
+        case 2:
+        default:
+            return is_top ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1;
+    }
+}
+
+static int downsample_display_width(int downsample) {
+    switch (downsample) {
+        case 3:
+            return SCREEN_WIDTH / 2;
+        case 2:
         default:
             return SCREEN_WIDTH;
     }
@@ -570,9 +595,32 @@ static void handle_decode_frame_screen(struct rp_buffer_ctx_t *ctx, int top_bot,
     }
 }
 
+#define SCREEN_PROCESS_WORK_COUNT (2)
+uint8_t screen_processing[SCREEN_COUNT][SCREEN_PROCESS_WORK_COUNT][SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N];
+
+static void screen_process(uint8_t *curr, uint8_t *prev, uint8_t *out, bool even_odd, int width, int height) {
+    if (even_odd) {
+        uint8_t *swap = curr;
+        curr = prev;
+        prev = swap;
+    }
+    int pitch = width * GL_CHANNELS_N;
+    for (int y = 0; y < height; ++y) {
+        if (y % 2 == 0) {
+            memcpy(out + pitch * y, curr + pitch * (y / 2), pitch);
+        } else {
+            memcpy(out + pitch * y, prev + pitch * (y / 2), pitch);
+        }
+    }
+}
+
 static thread_ret_t jpeg_decode_thread_func(void *e)
 {
     reset_jpeg_delta();
+
+    int screen_processing_work_index[SCREEN_COUNT] = { 0 };
+    memset(screen_processing, 0, sizeof(screen_processing));
+
     while (program_running && !kcp_restart) {
         struct jpeg_decode_info_t *ptr;
         while (1)
@@ -611,6 +659,8 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
             int in_size = 0;
             int q = 0;
             int width = 0, height = 0;
+            int downsample = 0;
+            int even_odd = 0;
             {
                 int w = ptr->kcp_w;
                 int queue_w = ptr->kcp_queue_w;
@@ -623,11 +673,21 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                 }
                 q = info->jpeg_quality;
 
-                width = downsample_width(info->downsample);
-                height = downsample_height(info->downsample, info->is_top);
+                width = downsample_display_width(info->downsample);
+                height = downsample_display_height(info->downsample, info->is_top);
+                downsample = info->downsample;
+                even_odd = info->even_odd;
             }
 
-            if ((ret = handle_decode_kcp(out, ptr->kcp_w, ptr->kcp_queue_w)) != 0)
+            bool need_processing = downsample == 2;
+            uint8_t *processing = out;
+
+            int *processing_index = &screen_processing_work_index[top_bot];
+            if (need_processing) {
+                processing = screen_processing[top_bot][*processing_index];
+            }
+
+            if ((ret = handle_decode_kcp(processing, ptr->kcp_w, ptr->kcp_queue_w)) != 0)
             {
                 err_log("kcp recv decode error: %d\n", ret);
                 kcp_restart = 1;
@@ -641,6 +701,17 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                 // err_log("%d\n", kcp_recv_info[ptr->kcp_w][ptr->kcp_queue_w].term_count);
                 dims->width = width;
                 dims->height = height;
+
+                if (need_processing) {
+                    int prev_index = *processing_index + SCREEN_PROCESS_WORK_COUNT - 1;
+                    prev_index %= SCREEN_PROCESS_WORK_COUNT;
+
+                    screen_process(processing, screen_processing[top_bot][prev_index], out, even_odd, width, height);
+
+                    ++*processing_index;
+                    *processing_index %= SCREEN_PROCESS_WORK_COUNT;
+                }
+
                 stats_overlay_0(out, top_bot, in_size, q, width, height);
                 handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay, sync_ctx);
             }
@@ -873,6 +944,22 @@ static int handle_recv_kcp(uint8_t *buf, int size)
 
             // err_log("w %d quality %d cores %d top %d\n", (int)w, (int)jpeg_quality, (int)core_count, (int)is_top);
 
+            const u16 EX_HDR_BIT = 15;
+            _Static_assert(RP_KCP_HDR_QUALITY_NBITS + RP_KCP_HDR_T_NBITS + 1 + RP_KCP_HDR_CHROMASS_NBITS + 1 + RP_KCP_HDR_DOWNSAMPLE_NBITS <= EX_HDR_BIT);
+            bool ex_hdr = (hdr >> EX_HDR_BIT) & 1;
+
+            bool even_odd = false;
+            if (ex_hdr) {
+                if (size < (int)sizeof(u16)) {
+                    return -3;
+                }
+                hdr = *(u16 *)buf;
+                buf += sizeof(u16);
+                size -= sizeof(u16);
+
+                even_odd = hdr & ((1 << RP_KCP_EXHDR_EVEN_ODD_NBITS) - 1);
+            }
+
             if (core_count == 0) {
                 // ignore core_count == 0 for future extension
                 return 0;
@@ -887,6 +974,7 @@ static int handle_recv_kcp(uint8_t *buf, int size)
             info->is_top = top_bot == SCREEN_TOP;
             info->chroma_ss = chroma_ss;
             info->downsample = downsample;
+            info->even_odd = even_odd;
             info->delta_prog = delta_prog;
 
             for (int t = 0; t < core_count; ++t) {
