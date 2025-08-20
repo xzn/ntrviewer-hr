@@ -81,6 +81,7 @@ typedef JCOEF *JCOEFPTR;
 
 #define D_MAX_BLOCKS_IN_MCU (6)
 struct jpeg_shared_t {
+    int width, height;
     int h_samp_factor;
     int v_samp_factor;
     int rows_in_mcus;
@@ -1012,7 +1013,7 @@ static int consume_data(struct jpeg_shared_t *shared)
     JSAMPLE working[DCTSIZE * RP_MAX_SAMP_FACTOR][DCTSIZE * RP_MAX_SAMP_FACTOR][RP_NUM_JPEG_COMP];
 
     /* Loop to process one whole iMCU row */
-    int mcu_cols = SCREEN_WIDTH / shared->h_samp_factor / DCTSIZE;
+    int mcu_cols = div_round_up(shared->width, shared->h_samp_factor * DCTSIZE);
     int16_t *prev = shared->prev[shared->is_top];
     for (yoffset = 0; yoffset < shared->rows_in_mcus;
          yoffset++) {
@@ -1047,10 +1048,10 @@ static int consume_data(struct jpeg_shared_t *shared)
                     }
                 }
 
-                int b = yoffset * SCREEN_WIDTH * shared->v_samp_factor * DCTSIZE * GL_CHANNELS_N + MCU_col_num * shared->h_samp_factor * DCTSIZE * GL_CHANNELS_N;
+                int b = yoffset * shared->width * shared->v_samp_factor * DCTSIZE * GL_CHANNELS_N + MCU_col_num * shared->h_samp_factor * DCTSIZE * GL_CHANNELS_N;
                 for (int j = 0; j < DCTSIZE * shared->v_samp_factor; ++j) {
                     for (int i = 0; i < DCTSIZE * shared->h_samp_factor; ++i) {
-                        int a = b + j * SCREEN_WIDTH * GL_CHANNELS_N + i * GL_CHANNELS_N;
+                        int a = b + j * shared->width * GL_CHANNELS_N + i * GL_CHANNELS_N;
                         ycc_rgb_convert(&shared->out[a], working[j][i]);
                     }
                 }
@@ -1249,10 +1250,12 @@ static void init_prev_shifts(struct jpeg_shared_t *shared) {
 }
 
 static struct jpeg_shared_t jpeg_shared;
-int decode_jpeg_delta(uint8_t *out, const uint8_t *in, int in_size, int rows_in_mcus, int l_h_samp, int l_v_samp, int quality, boolean is_top, int mcu_row) {
+int decode_jpeg_delta(uint8_t *out, const uint8_t *in, int in_size, int rows_in_mcus, int l_h_samp, int l_v_samp, int quality, boolean is_top, int mcu_row, int width, int height) {
     // err_log("size %d, quality %d\n", in_size, quality);
     struct jpeg_shared_t *shared = &jpeg_shared;
     shared->out = out;
+    shared->width = width;
+    shared->height = height;
     shared->h_samp_factor = l_h_samp;
     shared->v_samp_factor = l_v_samp;
     shared->rows_in_mcus = rows_in_mcus;

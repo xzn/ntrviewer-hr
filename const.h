@@ -175,6 +175,10 @@ enum frame_buffer_status_t
     FBS_UPDATED_2,
 };
 
+UNUSED static int div_round_up(int a, int b) {
+    return (a + b - 1) / b;
+}
+
 #include <SDL3/SDL.h>
 #define SDL_WIN_FLAGS_DEFAULT (SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN)
 #define WIN_TITLE "NTRViewer-HR"

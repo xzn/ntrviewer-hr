@@ -109,7 +109,7 @@ static void ovDrawTranspartBlackRect(u8 *addr, u32 stride, int r, int c, int h, 
 {
     int posC;
     for (posC = c; posC < c + w; posC++) {
-        u8 *sp = (u8 *)(addr + stride * posC + SCREEN_WIDTH * 4 - 4 * (r + h));
+        u8 *sp = (u8 *)(addr + stride * posC + stride / GL_CHANNELS_N * 4 - 4 * (r + h));
         u8 *spEnd = sp + 4 * h;
         while (sp < spEnd)
         {
@@ -123,7 +123,7 @@ static void ovDrawTranspartBlackRect(u8 *addr, u32 stride, int r, int c, int h, 
 
 static void ovDrawPixel(u8 *addr, u32 stride, int posR, int posC, u8 r, u8 g, u8 b)
 {
-    u8 *sp = (u8 *)(addr + stride * posC + SCREEN_WIDTH * 4 - 4 * posR - 4);
+    u8 *sp = (u8 *)(addr + stride * posC + stride / GL_CHANNELS_N * 4 - 4 * posR - 4);
     sp[0] = r;
     sp[1] = g;
     sp[2] = b;
@@ -170,7 +170,7 @@ static void ovDrawChar(u8 *addr, u32 stride, u8 letter, int y, int x, u8 r, u8 g
 static void ovDrawString(u8 *addr, u32 stride, u32 scrnWidth, int posR, int posC, u32 r, u32 g, u32 b, const char *buf)
 {
     while (*buf) {
-        if ((posR + CHAR_HEIGHT >= (int)SCREEN_WIDTH) || (posC + CHAR_WIDTH >= (int)scrnWidth))
+        if ((posR + CHAR_HEIGHT >= (int)stride / GL_CHANNELS_N) || (posC + CHAR_WIDTH >= (int)scrnWidth))
             return;
         ovDrawChar(addr, stride, (u8)*buf, posR, posC, r, g, b);
         buf++;
@@ -210,7 +210,7 @@ static uint32_t frame_ticks[SCREEN_COUNT];
 
 #define PARTS(n) (u32)((n) / 1000), (s32)(imaxabs((intmax_t)n) % 1000)
 
-void stats_overlay_0(uint8_t *out, int top_bot, uint32_t size, int q) {
+void stats_overlay_0(uint8_t *out, int top_bot, uint32_t size, int q, int width, int height) {
     if (top_bot < 0 || top_bot >= SCREEN_COUNT) {
         return;
     }
@@ -245,7 +245,7 @@ void stats_overlay_0(uint8_t *out, int top_bot, uint32_t size, int q) {
         snprintf(buf, STATS_OVERLAY_TEXT_BUF_SIZE, "%4"PRIu32".%03"PRId32" %8"PRIu32" %4"PRIu32, PARTS(size), frame_time, (u32)q);
     }
 
-    drawOverlayOnScreenMode0(out, GL_CHANNELS_N * SCREEN_WIDTH, top_bot == 0 ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1, buf);
+    drawOverlayOnScreenMode0(out, GL_CHANNELS_N * width, height, buf);
 }
 
 // MIT License

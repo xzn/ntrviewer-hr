@@ -1,4 +1,5 @@
 #include "ntr_rp.h"
+#include "const.h"
 #include "ntr_common.h"
 #include "ntr_stats_overlay.h"
 #include "main.h"
@@ -398,15 +399,18 @@ static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, stru
     int max_h_samp_fact = info->chroma_ss == 2 ? 1 : 2;
     int max_v_samp_fact = info->chroma_ss == 0 ? 2 : 1;
 
+    int width = downsample_width(info->downsample);
+    int height = downsample_height(info->downsample, info->is_top);
+
     // int total_size = 0;
     for (int t = 0; t < info->core_count; ++t)
     {
         struct kcp_recv_t *recv = &recvs[t];
         int rows_in_mcus = t == info->core_count - 1 ? info->v_last_adjusted : info->v_adjusted;
         if (info->core_count == 1) {
-            rows_in_mcus = (info->is_top ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1) / JPEG_DCTSIZE / max_v_samp_fact;
+            rows_in_mcus = div_round_up(height, JPEG_DCTSIZE * max_v_samp_fact);
         }
-        int height_per_mcu_row = SCREEN_WIDTH * GL_CHANNELS_N * JPEG_DCTSIZE * max_v_samp_fact;
+        int height_per_mcu_row = width * GL_CHANNELS_N * JPEG_DCTSIZE * max_v_samp_fact;
         uint8_t *out_t = out + t * info->v_adjusted * height_per_mcu_row;
         int res;
 
@@ -416,7 +420,8 @@ static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, stru
             out_t,
             &recv->buf[0][0], size,
             rows_in_mcus,
-            max_h_samp_fact, max_v_samp_fact, info->jpeg_quality, info->is_top, t * info->v_adjusted
+            max_h_samp_fact, max_v_samp_fact, info->jpeg_quality, info->is_top, t * info->v_adjusted,
+            width, height
         )) < 0) {
             err_log("decode_jpeg_delta: %d\n", res);
             break;
@@ -428,10 +433,6 @@ static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, stru
     memset(info, 0, sizeof(struct kcp_recv_info_t));
 
     return 0;
-}
-
-static int div_round_up(int a, int b) {
-    return (a + b - 1) / b;
 }
 
 static int handle_decode_kcp(uint8_t *out, int w, int queue_w) {
@@ -637,7 +638,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                 // err_log("%d\n", kcp_recv_info[ptr->kcp_w][ptr->kcp_queue_w].term_count);
                 dims->width = width;
                 dims->height = height;
-                stats_overlay_0(out, top_bot, in_size, q);
+                stats_overlay_0(out, top_bot, in_size, q, width, height);
                 handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay, sync_ctx);
             }
         }
@@ -652,7 +653,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                 }
                 else
                 {
-                    stats_overlay_0(out, top_bot, ptr->in_size, -1);
+                    stats_overlay_0(out, top_bot, ptr->in_size, -1, SCREEN_WIDTH, ptr->is_kcp ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1);
                     handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay, sync_ctx);
                     __atomic_add_fetch(&frame_fully_received_tracker, 1, __ATOMIC_RELAXED);
                 }
