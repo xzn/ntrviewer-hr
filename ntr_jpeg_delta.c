@@ -1052,6 +1052,14 @@ static int consume_data(struct jpeg_shared_t *shared)
                 for (int j = 0; j < DCTSIZE * shared->v_samp_factor; ++j) {
                     for (int i = 0; i < DCTSIZE * shared->h_samp_factor; ++i) {
                         int a = b + j * shared->width * GL_CHANNELS_N + i * GL_CHANNELS_N;
+
+                        if ((int)MCU_col_num * shared->h_samp_factor * DCTSIZE + i >= shared->width) {
+                            continue;
+                        }
+                        if ((int)yoffset * shared->v_samp_factor * DCTSIZE + j >= shared->height) {
+                            continue;
+                        }
+
                         ycc_rgb_convert(&shared->out[a], working[j][i]);
                     }
                 }

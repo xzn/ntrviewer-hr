@@ -416,12 +416,15 @@ static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, stru
 
         int size = (recv->count - 1) * RP_KCP_PACKET_SIZE + recv->term_size;
         // total_size += size;
+        int part_height = t == info->core_count - 1 ?
+            height - info->v_adjusted * (info->core_count - 1) * JPEG_DCTSIZE * max_v_samp_fact :
+            rows_in_mcus * JPEG_DCTSIZE * max_v_samp_fact;
         if ((res = decode_jpeg_delta(
             out_t,
             &recv->buf[0][0], size,
             rows_in_mcus,
             max_h_samp_fact, max_v_samp_fact, info->jpeg_quality, info->is_top, t * info->v_adjusted,
-            width, height
+            width, part_height
         )) < 0) {
             err_log("decode_jpeg_delta: %d\n", res);
             break;
