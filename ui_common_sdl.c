@@ -355,6 +355,13 @@ int draw_screen(struct rp_buffer_ctx_t *ctx, int width, int height, int screen_t
 
     uint8_t *data = ctx->screen_decoded[index_display];
     ctx->data_prev = data;
+    struct rp_dims *dims = &ctx->dims_decoded[index_display];
+    if (dims->width) {
+        height = dims->width;
+    }
+    if (dims->height) {
+        width = dims->height;
+    }
     if (status >= FBS_UPDATED)
     {
         __atomic_add_fetch(&frame_rate_displayed_tracker[screen_top_bot], 1, __ATOMIC_RELAXED);

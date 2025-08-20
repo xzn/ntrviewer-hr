@@ -62,6 +62,7 @@ static uint8_t recv_last_packet_id[SCREEN_COUNT];
 #define RP_KCP_HDR_T_NBITS (2)
 #define RP_KCP_HDR_QUALITY_NBITS (7)
 #define RP_KCP_HDR_CHROMASS_NBITS (2)
+#define RP_KCP_HDR_DOWNSAMPLE_NBITS (2)
 #define RP_KCP_HDR_SIZE_NBITS (11)
 #define RP_KCP_HDR_RC_NBITS (5)
 
@@ -81,6 +82,7 @@ static struct kcp_recv_info_t {
     bool delta_prog;
     u16 jpeg_quality;
     u8 chroma_ss;
+    u8 downsample;
     u8 core_count;
     u8 v_adjusted;
     u8 v_last_adjusted;
@@ -270,74 +272,99 @@ static u16 jpeg_header_top_quality_kcp;
 static u16 jpeg_header_bot_quality_kcp;
 static u16 jpeg_header_top_chroma_ss_kcp;
 static u16 jpeg_header_bot_chroma_ss_kcp;
-static int set_decode_quality_kcp(bool is_top, int quality, int chroma_ss, int rc)
-{
-  u16 *hdr_quality = is_top ? &jpeg_header_top_quality_kcp : &jpeg_header_bot_quality_kcp;
-  u16 *hdr_chroma_ss = is_top ? &jpeg_header_top_chroma_ss_kcp : &jpeg_header_bot_chroma_ss_kcp;
+static u16 jpeg_header_top_downsample_kcp;
+static u16 jpeg_header_bot_downsample_kcp;
 
-  // No need to check for rc as we change restart interval manually later
-  if (*hdr_quality != quality || *hdr_chroma_ss != chroma_ss) {
-    tjhandle tjInst = tj3Init(TJINIT_COMPRESS);
-    if (!tjInst) {
-      return -1;
+static int downsample_height(int downsample, int is_top) {
+    switch (downsample) {
+        case 3:
+            return (is_top ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1) / 2;
+        default:
+            return is_top ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1;
     }
-    int ret = 0;
+}
 
-    ret = tj3Set(tjInst, TJPARAM_NOREALLOC, 1);
-    if (ret < 0) {
-      ret = ret * 0x10 - 2;
-      goto final;
+static int downsample_width(int downsample) {
+    switch (downsample) {
+        case 3:
+            return SCREEN_WIDTH / 2;
+        default:
+            return SCREEN_WIDTH;
     }
+}
 
-    ret = tj3Set(tjInst, TJPARAM_RESTARTROWS, rc);
-    if (ret < 0) {
-      ret = ret * 0x10 - 5;
-      goto final;
-    }
+static int set_decode_quality_kcp(bool is_top, int quality, int chroma_ss, int downsample, int rc) {
+    u16 *hdr_quality = is_top ? &jpeg_header_top_quality_kcp : &jpeg_header_bot_quality_kcp;
+    u16 *hdr_chroma_ss = is_top ? &jpeg_header_top_chroma_ss_kcp : &jpeg_header_bot_chroma_ss_kcp;
+    u16 *hdr_downsample = is_top ? &jpeg_header_top_downsample_kcp : &jpeg_header_bot_downsample_kcp;
 
-    ret = tj3Set(tjInst, TJPARAM_QUALITY, quality);
-    if (ret < 0) {
-      ret = ret * 0x10 - 6;
-      goto final;
-    }
+    // No need to check for rc as we change restart interval manually later
+    if (*hdr_quality != quality || *hdr_chroma_ss != chroma_ss || *hdr_downsample != downsample) {
+        tjhandle tjInst = tj3Init(TJINIT_COMPRESS);
+        if (!tjInst) {
+            return -1;
+        }
+        int ret = 0;
 
-    enum TJSAMP tjsamp = chroma_ss == 2 ? TJSAMP_444 : chroma_ss == 1 ? TJSAMP_422 : TJSAMP_420;
-    ret = tj3Set(tjInst, TJPARAM_SUBSAMP, tjsamp);
-    if (ret < 0) {
-      ret = ret * 0x10 - 7;
-      goto final;
-    }
+        ret = tj3Set(tjInst, TJPARAM_NOREALLOC, 1);
+        if (ret < 0) {
+            ret = ret * 0x10 - 2;
+            goto final;
+        }
 
-    size_t size = is_top ? sizeof(jpeg_header_top_buffer_kcp) : sizeof(jpeg_header_bot_buffer_kcp);
-    size_t buf_size = tj3JPEGBufSize(SCREEN_WIDTH, is_top ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1, tjsamp);
-    if (size < buf_size) {
-      err_log("buf size %d size %d\n", (int)buf_size, (int)size);
-      ret = -3;
-      goto final;
-    }
+        ret = tj3Set(tjInst, TJPARAM_RESTARTROWS, rc);
+        if (ret < 0) {
+            ret = ret * 0x10 - 5;
+            goto final;
+        }
 
-    unsigned char *jpeg_buf = is_top ? jpeg_header_top_buffer_kcp : jpeg_header_bot_buffer_kcp;
+        ret = tj3Set(tjInst, TJPARAM_QUALITY, quality);
+        if (ret < 0) {
+            ret = ret * 0x10 - 6;
+            goto final;
+        }
 
-    ret = tj3Compress8(tjInst, jpeg_header_empty_src_kcp, SCREEN_WIDTH, 0, is_top ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1, TJPF_RGB,
-      &jpeg_buf,
-      &size);
+        enum TJSAMP tjsamp = chroma_ss == 2 ? TJSAMP_444 : chroma_ss == 1 ? TJSAMP_422 : TJSAMP_420;
+        ret = tj3Set(tjInst, TJPARAM_SUBSAMP, tjsamp);
+        if (ret < 0) {
+            ret = ret * 0x10 - 7;
+            goto final;
+        }
 
-    if (ret < 0) {
-      err_log("tj3Compress8 error (%d): %s\n", tj3GetErrorCode(tjInst), tj3GetErrorStr(tjInst));
-      ret = ret * 0x10 - 4;
-      goto final;
-    }
+        int width = downsample_width(downsample);
+        int height = downsample_height(downsample, is_top);
 
-    ret = 0;
-    *hdr_quality = quality;
-    *hdr_chroma_ss = chroma_ss;
+        size_t size = is_top ? sizeof(jpeg_header_top_buffer_kcp) : sizeof(jpeg_header_bot_buffer_kcp);
+        size_t buf_size = tj3JPEGBufSize(width, height, tjsamp);
+        if (size < buf_size) {
+            err_log("buf size %d size %d\n", (int)buf_size, (int)size);
+            ret = -3;
+            goto final;
+        }
+
+        unsigned char *jpeg_buf = is_top ? jpeg_header_top_buffer_kcp : jpeg_header_bot_buffer_kcp;
+
+        ret = tj3Compress8(tjInst, jpeg_header_empty_src_kcp, width, 0, height, TJPF_RGB,
+            &jpeg_buf,
+            &size);
+
+        if (ret < 0) {
+            err_log("tj3Compress8 error (%d): %s\n", tj3GetErrorCode(tjInst), tj3GetErrorStr(tjInst));
+            ret = ret * 0x10 - 4;
+            goto final;
+        }
+
+        ret = 0;
+        *hdr_quality = quality;
+        *hdr_chroma_ss = chroma_ss;
+        *hdr_downsample = downsample;
 
 final:
-    tj3Destroy(tjInst);
-    return ret;
-  }
+        tj3Destroy(tjInst);
+        return ret;
+    }
 
-  return 0;
+    return 0;
 }
 
 static uint8_t *copy_with_escape(uint8_t *out, const uint8_t *in, int size)
@@ -403,8 +430,11 @@ static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, stru
     return 0;
 }
 
-static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
-{
+static int div_round_up(int a, int b) {
+    return (a + b - 1) / b;
+}
+
+static int handle_decode_kcp(uint8_t *out, int w, int queue_w) {
     struct kcp_recv_t *recvs = kcp_recv[w][queue_w];
     struct kcp_recv_info_t *info = &kcp_recv_info[w][queue_w];
 
@@ -415,7 +445,7 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
     kcp_dq = 0;
 
     int ret;
-    if ((ret = set_decode_quality_kcp(info->is_top, info->jpeg_quality, info->chroma_ss, info->v_adjusted)) < 0)
+    if ((ret = set_decode_quality_kcp(info->is_top, info->jpeg_quality, info->chroma_ss, info->downsample, info->v_adjusted)) < 0)
     {
         return ret * 0x100 - 1;
     }
@@ -435,7 +465,7 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
                     {
                         return -6;
                     }
-                    *(u16 *)&jpeg_header[i + 4] = htons(info->v_adjusted * (SCREEN_WIDTH / (JPEG_DCTSIZE * (info->chroma_ss == 2 ? 1 : 2))));
+                    *(u16 *)&jpeg_header[i + 4] = htons(info->v_adjusted * div_round_up(downsample_width(info->downsample), (JPEG_DCTSIZE * (info->chroma_ss == 2 ? 1 : 2))));
                 }
                 else if (jpeg_header[i + 1] == 0xda)
                 {
@@ -488,7 +518,7 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
         ++ptr;
     }
 
-    if (handle_decode(out, jpeg_buffer_kcp, ptr - jpeg_buffer_kcp, info->is_top ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1, SCREEN_WIDTH) != 0)
+    if (handle_decode(out, jpeg_buffer_kcp, ptr - jpeg_buffer_kcp, downsample_height(info->downsample, info->is_top), downsample_width(info->downsample)) != 0)
     {
         return -3;
     }
@@ -562,6 +592,9 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
         struct rp_buffer_ctx_t *ctx = &rp_buffer_ctx[top_bot];
         int index = ctx->index_decode;
         uint8_t *out = ctx->screen_decoded[index];
+        struct rp_dims *dims = &ctx->dims_decoded[index];
+        dims->width = 0;
+        dims->height = 0;
 
         view_mode_t view_mode = __atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED);
         struct rp_buffer_ctx_t *sync_ctx = view_mode == VIEW_MODE_TOP_BOT && !is_renderer_csc() ? &rp_buffer_ctx[SCREEN_TOP] : NULL;
@@ -573,6 +606,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
 
             int in_size = 0;
             int q = 0;
+            int width = 0, height = 0;
             {
                 int w = ptr->kcp_w;
                 int queue_w = ptr->kcp_queue_w;
@@ -584,6 +618,9 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                     in_size += (recv->count - 1) * RP_KCP_PACKET_SIZE + recv->term_size;
                 }
                 q = info->jpeg_quality;
+
+                width = downsample_width(info->downsample);
+                height = downsample_height(info->downsample, info->is_top);
             }
 
             if ((ret = handle_decode_kcp(out, ptr->kcp_w, ptr->kcp_queue_w)) != 0)
@@ -598,6 +635,8 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
             else
             {
                 // err_log("%d\n", kcp_recv_info[ptr->kcp_w][ptr->kcp_queue_w].term_count);
+                dims->width = width;
+                dims->height = height;
                 stats_overlay_0(out, top_bot, in_size, q);
                 handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay, sync_ctx);
             }
@@ -769,9 +808,9 @@ static int handle_recv(uint8_t *buf, int size)
     return 0;
 }
 
-static int jpeg_get_v_total(int chroma_ss, bool top_bot) {
+static int jpeg_get_v_total(int chroma_ss, int downsample, bool is_top) {
     int h = JPEG_DCTSIZE * (chroma_ss == 0 ? 2 : 1);
-    int h_total = top_bot ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1;
+    int h_total = downsample_height(downsample, is_top);
     return h_total / h;
 }
 
@@ -826,6 +865,7 @@ static int handle_recv_kcp(uint8_t *buf, int size)
             bool top_bot = (hdr >> (RP_KCP_HDR_QUALITY_NBITS + RP_KCP_HDR_T_NBITS)) & ((1 << 1) - 1);
             u16 chroma_ss = (hdr >> (RP_KCP_HDR_QUALITY_NBITS + RP_KCP_HDR_T_NBITS + 1)) & ((1 << RP_KCP_HDR_CHROMASS_NBITS) - 1);
             bool delta_prog = (hdr >> (RP_KCP_HDR_QUALITY_NBITS + RP_KCP_HDR_T_NBITS + 1 + RP_KCP_HDR_CHROMASS_NBITS)) & ((1 << 1) - 1);
+            u16 downsample = (hdr >> (RP_KCP_HDR_QUALITY_NBITS + RP_KCP_HDR_T_NBITS + 1 + RP_KCP_HDR_CHROMASS_NBITS + 1)) & ((1 << RP_KCP_HDR_DOWNSAMPLE_NBITS) - 1);
 
             // err_log("w %d quality %d cores %d top %d\n", (int)w, (int)jpeg_quality, (int)core_count, (int)is_top);
 
@@ -842,6 +882,7 @@ static int handle_recv_kcp(uint8_t *buf, int size)
             info->core_count = core_count;
             info->is_top = top_bot == SCREEN_TOP;
             info->chroma_ss = chroma_ss;
+            info->downsample = downsample;
             info->delta_prog = delta_prog;
 
             for (int t = 0; t < core_count; ++t) {
@@ -866,7 +907,7 @@ static int handle_recv_kcp(uint8_t *buf, int size)
                 } else {
                     // HACK kind of, I didn't count the bits correctly so now I have to do this dumb thing
                     // to get chroma subsampling working with reliable stream.
-                    int v_total = jpeg_get_v_total(info->chroma_ss, info->is_top);
+                    int v_total = jpeg_get_v_total(info->chroma_ss, info->downsample, info->is_top);
                     if (info->core_count == 1) {
                         if (v_adjusted == (v_total & ((1 << RP_KCP_HDR_RC_NBITS) - 1))) {
                             v_adjusted = v_total;

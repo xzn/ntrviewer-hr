@@ -38,6 +38,10 @@ extern atomic_bool kcp_restart;
 #include <d3d11.h>
 #endif
 
+struct rp_dims {
+    int width, height;
+};
+
 struct rp_buffer_ctx_t {
 #ifdef _WIN32
     ID3D11Texture2D *d3d_tex[SCREEN_COUNT];
@@ -55,6 +59,7 @@ struct rp_buffer_ctx_t {
     int height_upscaled[SCREEN_COUNT];
 
     uint8_t screen_decoded[FBI_COUNT][SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N];
+    struct rp_dims dims_decoded[FBI_COUNT];
 
     rp_lock_t status_lock;
     enum frame_buffer_status_t status;
