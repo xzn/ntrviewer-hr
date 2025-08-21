@@ -433,7 +433,7 @@ static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, stru
         struct kcp_recv_t *recv = &recvs[t];
         int rows_in_mcus = t == info->core_count - 1 ? info->v_last_adjusted : info->v_adjusted;
         if (info->core_count == 1) {
-            rows_in_mcus = div_round_up(height, JPEG_DCTSIZE * max_v_samp_fact);
+            rows_in_mcus = DIV_ROUND_UP(height, JPEG_DCTSIZE * max_v_samp_fact);
         }
         int height_per_mcu_row = width * GL_CHANNELS_N * JPEG_DCTSIZE * max_v_samp_fact;
         uint8_t *out_t = out + t * info->v_adjusted * height_per_mcu_row;
@@ -449,7 +449,7 @@ static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, stru
             &recv->buf[0][0], size,
             rows_in_mcus,
             max_h_samp_fact, max_v_samp_fact, info->jpeg_quality, info->is_top, t * info->v_adjusted,
-            width, part_height
+            width, part_height, info->even_odd
         )) < 0) {
             err_log("decode_jpeg_delta: %d\n", res);
             break;
@@ -494,7 +494,7 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w) {
                     {
                         return -6;
                     }
-                    *(u16 *)&jpeg_header[i + 4] = htons(info->v_adjusted * div_round_up(downsample_width(info->downsample), (JPEG_DCTSIZE * (info->chroma_ss == 2 ? 1 : 2))));
+                    *(u16 *)&jpeg_header[i + 4] = htons(info->v_adjusted * DIV_ROUND_UP(downsample_width(info->downsample), (JPEG_DCTSIZE * (info->chroma_ss == 2 ? 1 : 2))));
                 }
                 else if (jpeg_header[i + 1] == 0xda)
                 {

@@ -175,9 +175,9 @@ enum frame_buffer_status_t
     FBS_UPDATED_2,
 };
 
-UNUSED static int div_round_up(int a, int b) {
-    return (a + b - 1) / b;
-}
+#define DIV_ROUND_UP(a, b) (((a) + (b) - 1) / (b))
+
+#define ROUND_UP(a, b) (DIV_ROUND_UP(a, b) * b)
 
 #include <SDL3/SDL.h>
 #define SDL_WIN_FLAGS_DEFAULT (SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN)
