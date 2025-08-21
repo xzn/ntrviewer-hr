@@ -606,10 +606,11 @@ static void screen_process(uint8_t *curr, uint8_t *prev, uint8_t *out, bool even
     }
     int pitch = width * GL_CHANNELS_N;
     for (int y = 0; y < height; ++y) {
-        if (y % 2 == 0) {
-            memcpy(out + pitch * y, curr + pitch * (y / 2), pitch);
-        } else {
-            memcpy(out + pitch * y, prev + pitch * (y / 2), pitch);
+        for (int x = 0; x < width; ++x) {
+            int src_index = y * pitch / 2 + x / 2 * GL_CHANNELS_N;
+            int dst_index = y * pitch + x * GL_CHANNELS_N;
+            uint8_t *src = x % 2 == 0 ? curr : prev;
+            *(uint32_t *)&out[dst_index] = *(uint32_t *)&src[src_index];
         }
     }
 }
