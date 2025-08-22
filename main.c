@@ -806,6 +806,7 @@ static void main_ntr(void) {
     thread_t menu_tcp_thread;
     struct tcp_thread_arg menu_tcp_thread_arg = {
         &menu_work_state,
+        &menu_work_req_state,
         &menu_remote_play,
         8000,
     };
@@ -818,6 +819,7 @@ static void main_ntr(void) {
     thread_t nwm_tcp_thread;
     struct tcp_thread_arg nwm_tcp_thread_arg = {
         &nwm_work_state,
+        &nwm_work_req_state,
         NULL,
         5000 + 0x1a,
     };

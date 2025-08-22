@@ -19,11 +19,9 @@ struct tcp_packet_hdr {
     uint32_t data_len;
 };
 
-atomic_int menu_work_state;
-atomic_int nwm_work_state;
+atomic_int menu_work_state, nwm_work_state;
+atomic_int menu_work_req_state, nwm_work_req_state;
 atomic_bool menu_remote_play;
-
-enum connection_state_t menu_connection, nwm_connection;
 
 static int socket_close(SOCKET sock)
 {
@@ -31,7 +29,7 @@ static int socket_close(SOCKET sock)
 
     status = shutdown(sock, SD_BOTH);
     if (status != 0) {
-        err_log("socket shudown failed: %d\n", socket_errno());
+        err_log("socket shutdown failed: %d\n", socket_errno());
     }
     status = closesocket(sock);
 
@@ -189,28 +187,27 @@ thread_ret_t tcp_thread_func(void *arg)
 {
     struct tcp_thread_arg *t = (struct tcp_thread_arg *)arg;
 
-#define RESET_SOCKET(ts, ws) do { \
+#define RESET_SOCKET() do { \
     socket_close(sockfd); \
     sockfd = INVALID_SOCKET; \
-    ts = 0; \
-    ws = CONNECTION_STATE_DISCONNECTED; \
+    *(t->work_state) = CONNECTION_STATE_DISCONNECTED; \
+    *(t->work_req_state) = CONNECTION_REQ_STATE_NONE; \
     if (t->remote_play) { \
         *(t->remote_play) = 0; \
     } \
     err_log("disconnected\n"); \
 } while (0)
 
-    int tcp_status = 0;
     SOCKET sockfd = INVALID_SOCKET;
     int packet_seq = 0;
     while (program_running)
     {
-        if (!tcp_status && *(t->work_state) == CONNECTION_STATE_CONNECTING)
+        if (*(t->work_state) == CONNECTION_STATE_DISCONNECTED && *(t->work_req_state) == CONNECTION_REQ_STATE_CONNECTING)
         {
+            *(t->work_req_state) = CONNECTION_REQ_STATE_NONE;
             sockfd = tcp_connect(t->port);
             if (!socket_valid(sockfd))
             {
-                *(t->work_state) = CONNECTION_STATE_DISCONNECTED;
                 if (t->remote_play)
                 {
                     *(t->remote_play) = 0;
@@ -219,15 +216,15 @@ thread_ret_t tcp_thread_func(void *arg)
             }
 
             packet_seq = 0;
-            tcp_status = 1;
             *(t->work_state) = CONNECTION_STATE_CONNECTED;
         }
-        else if (tcp_status && *(t->work_state) == CONNECTION_STATE_DISCONNECTING)
+        else if (*(t->work_state) == CONNECTION_STATE_CONNECTED)
         {
-            RESET_SOCKET(tcp_status, *(t->work_state));
-        }
-        else if (tcp_status)
-        {
+            if (*(t->work_req_state) == CONNECTION_REQ_STATE_DISCONNECTING) {
+                RESET_SOCKET();
+                continue;
+            }
+
             Sleep(HEART_BEAT_EVERY_MS);
 
             struct tcp_packet_hdr header = {0};
@@ -238,7 +235,7 @@ thread_ret_t tcp_thread_func(void *arg)
             {
                 if (program_running)
                     err_log("tcp recv error: %d\n", socket_errno());
-                RESET_SOCKET(tcp_status, *(t->work_state));
+                RESET_SOCKET();
                 continue;
             }
             if (ret)
@@ -247,7 +244,7 @@ thread_ret_t tcp_thread_func(void *arg)
                 {
                     if (program_running)
                         err_log("broken protocol\n");
-                    RESET_SOCKET(tcp_status, *(t->work_state));
+                    RESET_SOCKET();
                     continue;
                 }
                 if (header.cmd == 0)
@@ -261,7 +258,7 @@ thread_ret_t tcp_thread_func(void *arg)
                             if (program_running)
                                 err_log("heart beat recv error: %d\n", socket_errno());
                             free(buf);
-                            RESET_SOCKET(tcp_status, *(t->work_state));
+                            RESET_SOCKET();
                             continue;
                         }
                         if (ret)
@@ -281,7 +278,7 @@ thread_ret_t tcp_thread_func(void *arg)
                         if (program_running)
                             err_log("tcp recv error: %d\n", socket_errno());
                         free(buf);
-                        RESET_SOCKET(tcp_status, *(t->work_state));
+                        RESET_SOCKET();
                         continue;
                     }
                     free(buf);
@@ -293,7 +290,8 @@ thread_ret_t tcp_thread_func(void *arg)
             {
                 if (program_running)
                     err_log("heart beat send failed: %d\n", socket_errno());
-                RESET_SOCKET(tcp_status, *(t->work_state));
+                RESET_SOCKET();
+                continue;
             }
             ++packet_seq;
 
@@ -318,7 +316,8 @@ thread_ret_t tcp_thread_func(void *arg)
                 {
                     if (program_running)
                         err_log("remote play send failed: %d\n", socket_errno());
-                    RESET_SOCKET(tcp_status, *(t->work_state));
+                    RESET_SOCKET();
+                    continue;
                 }
                 ++packet_seq;
             }

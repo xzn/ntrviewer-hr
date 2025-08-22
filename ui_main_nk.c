@@ -157,10 +157,16 @@ static const char *const background_wnd = "Background";
 
 static const char *connection_msg[CONNECTION_STATE_COUNT] = {
     "+",
-    "...",
     "-",
+};
+
+static const char *connection_req_msg[CONNECTION_REQ_STATE_COUNT] = {
+    "...",
     ".",
 };
+
+static enum connection_state_t menu_connection, nwm_connection;
+static enum connection_req_state_t menu_connection_req, nwm_connection_req;
 
 // HACK
 // Try to get Nuklear to accept keyboard navigation
@@ -686,7 +692,7 @@ void ui_main_nk(void)
                 ntr_get_adapter_list();
                 if (menu_work_state == CONNECTION_STATE_CONNECTED)
                 {
-                    menu_work_state = CONNECTION_STATE_DISCONNECTING;
+                    menu_work_req_state = CONNECTION_REQ_STATE_DISCONNECTING;
                 }
             }
         }
@@ -699,7 +705,7 @@ void ui_main_nk(void)
             set_nav_button_prev(NK_FOCUS_IP_AUTO_DETECT);
             if (menu_work_state == CONNECTION_STATE_CONNECTED)
             {
-                menu_work_state = CONNECTION_STATE_DISCONNECTING;
+                menu_work_req_state = CONNECTION_REQ_STATE_DISCONNECTING;
             }
             ntr_detect_3ds_ip();
 #ifndef __APPLE__
@@ -724,7 +730,7 @@ void ui_main_nk(void)
                 memcpy(ntr_ip_octet, ntr_auto_ip_octet_list[ntr_selected_ip], 4);
                 if (menu_work_state == CONNECTION_STATE_CONNECTED)
                 {
-                    menu_work_state = CONNECTION_STATE_DISCONNECTING;
+                    menu_work_req_state = CONNECTION_REQ_STATE_DISCONNECTING;
                 }
                 ntr_get_adapter_list();
             }
@@ -827,7 +833,7 @@ void ui_main_nk(void)
             menu_remote_play = 1;
             if (menu_work_state == CONNECTION_STATE_DISCONNECTED)
             {
-                menu_work_state = CONNECTION_STATE_CONNECTING;
+                menu_work_req_state = CONNECTION_REQ_STATE_CONNECTING;
             }
             kcp_restart = 1;
         }
@@ -912,30 +918,32 @@ void ui_main_nk(void)
         nk_layout_row_dynamic(ctx, 30, 2);
         nk_label(ctx, "Menu", NK_TEXT_CENTERED);
         menu_connection = menu_work_state;
-        if (nk_button_label(ctx, connection_msg[menu_connection]))
+        menu_connection_req = menu_work_req_state;
+        if (nk_button_label(ctx, menu_connection_req ? connection_req_msg[menu_connection_req] : connection_msg[menu_connection]))
         {
-            if (menu_work_state == CONNECTION_STATE_DISCONNECTED)
+            if (menu_connection == CONNECTION_STATE_DISCONNECTED)
             {
-                menu_work_state = CONNECTION_STATE_CONNECTING;
+                menu_work_req_state = CONNECTION_REQ_STATE_CONNECTING;
             }
-            else if (menu_work_state == CONNECTION_STATE_CONNECTED)
+            else if (menu_connection == CONNECTION_STATE_CONNECTED)
             {
-                menu_work_state = CONNECTION_STATE_DISCONNECTING;
+                menu_work_req_state = CONNECTION_REQ_STATE_DISCONNECTING;
             }
         }
 
         nk_layout_row_dynamic(ctx, 30, 2);
         nk_label(ctx, "NWM", NK_TEXT_CENTERED);
         nwm_connection = nwm_work_state;
-        if (nk_button_label(ctx, connection_msg[nwm_connection]))
+        nwm_connection_req = nwm_work_req_state;
+        if (nk_button_label(ctx, nwm_connection_req ? connection_req_msg[nwm_work_req_state] : connection_msg[nwm_connection]))
         {
-            if (nwm_work_state == CONNECTION_STATE_DISCONNECTED)
+            if (nwm_connection == CONNECTION_STATE_DISCONNECTED)
             {
-                nwm_work_state = CONNECTION_STATE_CONNECTING;
+                nwm_work_req_state = CONNECTION_REQ_STATE_CONNECTING;
             }
-            else if (nwm_work_state == CONNECTION_STATE_CONNECTED)
+            else if (nwm_connection == CONNECTION_STATE_CONNECTED)
             {
-                nwm_work_state = CONNECTION_STATE_DISCONNECTING;
+                nwm_work_req_state = CONNECTION_REQ_STATE_DISCONNECTING;
             }
         }
 
