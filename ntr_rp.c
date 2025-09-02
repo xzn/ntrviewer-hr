@@ -621,7 +621,6 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
 {
     reset_jpeg_delta();
 
-    int screen_processing_work_index[SCREEN_COUNT] = { 0 };
     memset(screen_processing, 0, sizeof(screen_processing));
 
     while (program_running && !kcp_restart) {
@@ -685,9 +684,9 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
             bool need_processing = downsample == 2;
             uint8_t *processing = out;
 
-            int *processing_index = &screen_processing_work_index[top_bot];
+            int processing_index = even_odd ? 0 : 1;
             if (need_processing) {
-                processing = screen_processing[top_bot][*processing_index];
+                processing = screen_processing[top_bot][processing_index];
             }
 
             if ((ret = handle_decode_kcp(processing, ptr->kcp_w, ptr->kcp_queue_w)) != 0)
@@ -706,13 +705,8 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                 dims->height = height;
 
                 if (need_processing) {
-                    int prev_index = *processing_index + SCREEN_PROCESS_WORK_COUNT - 1;
-                    prev_index %= SCREEN_PROCESS_WORK_COUNT;
-
+                    int prev_index = even_odd ? 1 : 0;
                     screen_process(processing, screen_processing[top_bot][prev_index], out, even_odd, width, height);
-
-                    ++*processing_index;
-                    *processing_index %= SCREEN_PROCESS_WORK_COUNT;
                 }
 
                 stats_overlay_0(out, top_bot, in_size, q, width, height);
@@ -729,9 +723,9 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                 bool need_processing = ptr->downsample == 2;
                 uint8_t *processing = out;
 
-                int *processing_index = &screen_processing_work_index[top_bot];
+                int processing_index = ptr->even_odd ? 0 : 1;
                 if (need_processing) {
-                    processing = screen_processing[top_bot][*processing_index];
+                    processing = screen_processing[top_bot][processing_index];
                 }
 
                 if (handle_decode(processing, ptr->in, ptr->in_size, height, width) != 0)
@@ -745,13 +739,8 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                     dims->height = downsample_display_height(ptr->downsample, top_bot == SCREEN_TOP);
 
                     if (need_processing) {
-                        int prev_index = *processing_index + SCREEN_PROCESS_WORK_COUNT - 1;
-                        prev_index %= SCREEN_PROCESS_WORK_COUNT;
-
+                        int prev_index = ptr->even_odd ? 1 : 0;
                         screen_process(processing, screen_processing[top_bot][prev_index], out, ptr->even_odd, dims->width, dims->height);
-
-                        ++*processing_index;
-                        *processing_index %= SCREEN_PROCESS_WORK_COUNT;
                     }
 
                     stats_overlay_0(out, top_bot, ptr->in_size, -1, SCREEN_WIDTH, ptr->is_kcp ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1);
