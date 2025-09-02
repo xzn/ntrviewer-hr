@@ -37,7 +37,7 @@ static int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
 #define RP_PACKET_SIZE 1448
 #define RP_DATA_HDR_SIZE (4)
 #define RP_PACKET_DATA_SIZE (RP_PACKET_SIZE - RP_DATA_HDR_SIZE)
-#define RP_DATA_HDR_ID_SIZE (2)
+#define RP_DATA_HDR_ID_SIZE (3)
 
 #define RP_MAX_PACKET_COUNT (240)
 
@@ -157,6 +157,8 @@ struct jpeg_decode_info_t {
             uint8_t *in;
             bool not_queued;
             uint8_t frame_id;
+            uint8_t downsample;
+            uint8_t even_odd;
         };
 
         struct {
@@ -247,11 +249,11 @@ static int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
         goto final;
     }
 
-    if (
-        h != tj3Get(tjInstance, TJPARAM_JPEGWIDTH) ||
-        w != tj3Get(tjInstance, TJPARAM_JPEGHEIGHT))
+    int width = tj3Get(tjInstance, TJPARAM_JPEGWIDTH);
+    int height = tj3Get(tjInstance, TJPARAM_JPEGHEIGHT);
+    if (h != width || w != height)
     {
-        err_log("jpeg unexpected dimensions\n");
+        err_log("jpeg unexpected dimensions: %d %d\n", height, width);
         goto final;
     }
 
@@ -721,13 +723,37 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
         {
             if (ptr->in)
             {
-                if (handle_decode(out, ptr->in, ptr->in_size, top_bot == SCREEN_TOP ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1, SCREEN_WIDTH) != 0)
+                int width = downsample_width(ptr->downsample);
+                int height = downsample_height(ptr->downsample, top_bot == SCREEN_TOP);
+
+                bool need_processing = ptr->downsample == 2;
+                uint8_t *processing = out;
+
+                int *processing_index = &screen_processing_work_index[top_bot];
+                if (need_processing) {
+                    processing = screen_processing[top_bot][*processing_index];
+                }
+
+                if (handle_decode(processing, ptr->in, ptr->in_size, height, width) != 0)
                 {
                     err_log("recv decode error\n");
                     __atomic_add_fetch(&frame_lost_tracker, 1, __ATOMIC_RELAXED);
                 }
                 else
                 {
+                    dims->width = downsample_display_width(ptr->downsample);
+                    dims->height = downsample_display_height(ptr->downsample, top_bot == SCREEN_TOP);
+
+                    if (need_processing) {
+                        int prev_index = *processing_index + SCREEN_PROCESS_WORK_COUNT - 1;
+                        prev_index %= SCREEN_PROCESS_WORK_COUNT;
+
+                        screen_process(processing, screen_processing[top_bot][prev_index], out, ptr->even_odd, dims->width, dims->height);
+
+                        ++*processing_index;
+                        *processing_index %= SCREEN_PROCESS_WORK_COUNT;
+                    }
+
                     stats_overlay_0(out, top_bot, ptr->in_size, -1, SCREEN_WIDTH, ptr->is_kcp ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1);
                     handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay, sync_ctx);
                     __atomic_add_fetch(&frame_fully_received_tracker, 1, __ATOMIC_RELAXED);
@@ -746,6 +772,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
     return 0;
 }
 
+#define RP_HDR_DOWNSAMPLE_MASK (0xc)
 static int handle_recv(uint8_t *buf, int size)
 {
     if (size < RP_DATA_HDR_SIZE)
@@ -759,7 +786,7 @@ static int handle_recv(uint8_t *buf, int size)
 
     // err_log("%d %d %d %d (%d)\n", hdr[0], hdr[1], hdr[2], hdr[3], size);
 
-    if (hdr[2] != 2)
+    if ((hdr[2] & ~RP_HDR_DOWNSAMPLE_MASK) != 2)
     {
         err_log("recv invalid header\n");
         return 0;
@@ -875,6 +902,8 @@ static int handle_recv(uint8_t *buf, int size)
             .in_delay = recv_delay_between_packets[work],
             .in = recv_buf[work],
             .frame_id = recv_hdr[work][0],
+            .downsample = (recv_hdr[work][2] & RP_HDR_DOWNSAMPLE_MASK) >> 2,
+            .even_odd = recv_hdr[work][0] % 2,
             .in_size = recv_end_size[work],
         };
         if (queue_decode(work) != 0)
@@ -1117,7 +1146,7 @@ static void socket_reply(void)
 
 static int test_kcp_magic(int magic)
 {
-    return !((magic & (~0x00001100 & 0x0000ff00)) == 0 && (magic & 0x00ff0000) == 0x00020000);
+    return !((magic & (~0x00001100 & 0x0000ff00)) == 0 && (magic & 0x00f30000) == 0x00020000);
 }
 
 static void socket_action(int ret)
