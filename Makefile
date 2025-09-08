@@ -46,10 +46,11 @@ else
 ifeq ($(OS),Darwin)
 LDLIBS := -Llib $(shell pkg-config sdl3 --libs)
 else
-LDLIBS := -static-libgcc -static-libstdc++ -Llib
+LDLIBS := -Llib
 ifneq ($(STATIC_SDL),1)
 LDLIBS += $(shell pkg-config sdl3 --libs) $(shell pkg-config libplacebo --libs) $(shell pkg-config lcms2 --libs) $(shell pkg-config libunwind --libs) $(shell pkg-config liblzma --libs)
 else
+# LDLIBS += -static-libgcc -static-libstdc++
 LDLIBS += -Wl,-Bstatic -lSDL3
 endif
 endif
