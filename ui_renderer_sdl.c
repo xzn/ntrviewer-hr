@@ -242,9 +242,10 @@ void ui_renderer_sdl_draw(uint8_t *data, int width, int height, int screen_top_b
 
     draw_screen_get_dims_lite(screen_top_bot, i, view_mode, width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
 
-    SDL_FRect rect = { ctx_left, ctx_top + ctx_height, ctx_height, ctx_width };
+    SDL_FRect srcrect = { 0, 0, height, width };
+    SDL_FRect dstrect = { ctx_left, ctx_top + ctx_height, ctx_height, ctx_width };
     SDL_FPoint center = { 0, 0 };
-    SDL_RenderTextureRotated(sdl_renderer[i], tex, NULL, &rect, -90, &center, SDL_FLIP_NONE);
+    SDL_RenderTextureRotated(sdl_renderer[i], tex, &srcrect, &dstrect, -90, &center, SDL_FLIP_NONE);
 }
 
 void ui_renderer_sdl_present(int ctx_top_bot) {
@@ -284,6 +285,16 @@ void ui_renderer_sdl_gen_cursor(stbi_t *image, const unsigned char *base, int wi
 
     if (!SDL_SetRenderTarget(sdl_renderer[i], target)) {
         err_log("SDL_SetRenderTarget failed: %s\n", SDL_GetError());
+        goto final_target;
+    }
+
+    if (!SDL_SetRenderDrawColor(sdl_renderer[i], 0, 0, 0, 0)) {
+        err_log("SDL_SetRenderDrawColor failed: %s\n", SDL_GetError());
+        goto final_target;
+    }
+
+    if (!SDL_RenderClear(sdl_renderer[i])) {
+        err_log("SDL_RenderClear failed: %s\n", SDL_GetError());
         goto final_target;
     }
 

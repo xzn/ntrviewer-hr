@@ -379,8 +379,8 @@ static int d3d11_init(void) {
             }
 
             D3D11_TEXTURE2D_DESC tex_desc = {};
-            tex_desc.Width = 240;
-            tex_desc.Height = i == SCREEN_TOP ? 400 : 320;
+            tex_desc.Width = SCREEN_WIDTH;
+            tex_desc.Height = i == SCREEN_TOP ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1;
             tex_desc.MipLevels = 1;
             tex_desc.ArraySize = 1;
             tex_desc.Format = D3D_FORMAT;
