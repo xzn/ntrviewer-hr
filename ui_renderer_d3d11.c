@@ -284,7 +284,7 @@ static int d3d11_texs_update(struct rp_buffer_ctx_t *ctx, int ctx_top_bot, int w
     tex_desc.MiscFlags = 0;
     tex_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
-    hr = ID3D11Device_CreateTexture2D(d3d11device[i], &tex_desc, NULL, &ctx->d3d_tex[i]);
+    HRESULT hr = ID3D11Device_CreateTexture2D(d3d11device[i], &tex_desc, NULL, &ctx->d3d_tex[i]);
     if (hr) {
         err_log("CreateTexture2D failed: %d\n", (int)hr);
         return -1;
@@ -893,7 +893,7 @@ void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int widt
     int i = ctx_top_bot;
     int p = win_shared ? screen_top_bot : i;
 
-    if (d3d11_texs_update(screen_top_bot, ctx_top_bot, height, width) != 0) {
+    if (d3d11_texs_update(ctx, i, height, width) != 0) {
         return;
     }
 
