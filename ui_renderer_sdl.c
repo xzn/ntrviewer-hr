@@ -10,21 +10,35 @@
 SDL_Renderer *sdl_renderer[SCREEN_COUNT];
 
 static SDL_Window *sdl_win[SCREEN_COUNT];
+static struct rp_dims sdl_tex_dims[SCREEN_COUNT][SCREEN_COUNT];
 static SDL_Texture *sdl_texture[SCREEN_COUNT][SCREEN_COUNT];
 static struct nk_context *nk_ctx;
 
-static int sdl_texture_init(void) {
-    for (int j = 0; j < SCREEN_COUNT; ++j) {
-        for (int i = 0; i < SCREEN_COUNT; ++i) {
-            sdl_texture[j][i] = SDL_CreateTexture(sdl_renderer[j], SDL_FORMAT, SDL_TEXTUREACCESS_STREAMING, SCREEN_WIDTH, i == SCREEN_TOP ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1);
-            if (!sdl_texture[j][i]) {
-                err_log("SDL_CreateTexture: %s\n", SDL_GetError());
-                return -1;
-            }
-        }
+static SDL_Texture *sdl_texture_update(int screen_top_bot, int ctx_top_bot, int width, int height) {
+    int j = screen_top_bot;
+    int i = ctx_top_bot;
+
+    if (sdl_tex_dims[j][i].width == width && sdl_tex_dims[j][i].height == height) {
+        return sdl_texture[j][i];
     }
 
-    return 0;
+    sdl_tex_dims[j][i].width = sdl_tex_dims[j][i].height = 0;
+
+    if (sdl_texture[j][i]) {
+        SDL_DestroyTexture(sdl_texture[j][i]);
+        sdl_texture[j][i] = NULL;
+    }
+
+    sdl_texture[j][i] = SDL_CreateTexture(sdl_renderer[i], SDL_FORMAT, SDL_TEXTUREACCESS_STREAMING, width, height);
+    if (!sdl_texture[j][i]) {
+        err_log("SDL_CreateTexture: %s\n", SDL_GetError());
+        return NULL;
+    }
+
+    sdl_tex_dims[j][i].width = width;
+    sdl_tex_dims[j][i].height = height;
+
+    return sdl_texture[j][i];
 }
 
 static void sdl_texture_destroy(void) {
@@ -130,10 +144,6 @@ static int sdl_renderer_init(void) {
         }
     }
 
-    if (sdl_texture_init()) {
-        return -1;
-    }
-
     nk_ctx = nk_sdl_renderer_init(sdl_win[SCREEN_TOP], sdl_renderer[SCREEN_TOP]);
     if (!nk_ctx)
         return -1;
@@ -216,7 +226,10 @@ void ui_renderer_sdl_main(int ctx_top_bot, view_mode_t view_mode, float bg[GL_CH
 
 void ui_renderer_sdl_draw(uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode) {
     int i = ctx_top_bot;
-    SDL_Texture *tex = sdl_texture[i][screen_top_bot];
+    SDL_Texture *tex = sdl_texture_update(screen_top_bot, i, height, width);
+    if (!tex) {
+        return;
+    }
 
     if (data) {
         void *pixels;

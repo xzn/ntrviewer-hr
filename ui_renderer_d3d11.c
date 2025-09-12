@@ -267,6 +267,8 @@ static int d3d11_texs_update(struct rp_buffer_ctx_t *ctx, int ctx_top_bot, int w
         return 0;
     }
 
+    ctx->d3d_tex_dims[i].width = ctx->d3d_tex_dims[i].height = 0;
+
     CHECK_AND_RELEASE(ctx->d3d_tex_staging[i]);
     CHECK_AND_RELEASE(ctx->d3d_srv[i]);
     CHECK_AND_RELEASE(ctx->d3d_tex[i]);
