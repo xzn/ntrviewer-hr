@@ -44,6 +44,7 @@ struct rp_dims {
 
 struct rp_buffer_ctx_t {
 #ifdef _WIN32
+    struct rp_dims d3d_tex_dims[SCREEN_COUNT];
     ID3D11Texture2D *d3d_tex[SCREEN_COUNT];
     ID3D11ShaderResourceView *d3d_srv[SCREEN_COUNT];
     ID3D11Texture2D *d3d_tex_staging[SCREEN_COUNT];

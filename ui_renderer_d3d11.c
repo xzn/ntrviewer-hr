@@ -260,6 +260,56 @@ static ID3D11PixelShader *load_ps(ID3D11Device *dev, const char *src)
     return ps;
 }
 
+static int d3d11_texs_update(struct rp_buffer_ctx_t *ctx, int ctx_top_bot, int width, int height) {
+    int i = ctx_top_bot;
+
+    if (ctx->d3d_tex_dims[i].width == width && ctx->d3d_tex_dims[i].height == height) {
+        return 0;
+    }
+
+    CHECK_AND_RELEASE(ctx->d3d_tex_staging[i]);
+    CHECK_AND_RELEASE(ctx->d3d_srv[i]);
+    CHECK_AND_RELEASE(ctx->d3d_tex[i]);
+
+    D3D11_TEXTURE2D_DESC tex_desc = {};
+    tex_desc.Width = width;
+    tex_desc.Height = height;
+    tex_desc.MipLevels = 1;
+    tex_desc.ArraySize = 1;
+    tex_desc.Format = D3D_FORMAT;
+    tex_desc.SampleDesc.Count = 1;
+    tex_desc.SampleDesc.Quality = 0;
+    tex_desc.Usage = D3D11_USAGE_DYNAMIC;
+    tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    tex_desc.MiscFlags = 0;
+    tex_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+    hr = ID3D11Device_CreateTexture2D(d3d11device[i], &tex_desc, NULL, &ctx->d3d_tex[i]);
+    if (hr) {
+        err_log("CreateTexture2D failed: %d\n", (int)hr);
+        return -1;
+    }
+
+    hr = ID3D11Device_CreateShaderResourceView(d3d11device[i], (ID3D11Resource *)ctx->d3d_tex[i], NULL, &ctx->d3d_srv[i]);
+    if (hr) {
+        err_log("CreateShaderResourceView failed: %d\n", (int)hr);
+        return -1;
+    }
+
+    tex_desc.Usage = D3D11_USAGE_DEFAULT;
+    tex_desc.CPUAccessFlags = 0;
+    hr = ID3D11Device_CreateTexture2D(d3d11device[i], &tex_desc, NULL, &ctx->d3d_tex_staging[i]);
+    if (hr) {
+        err_log("CreateTexture2D failed: %d\n", (int)hr);
+        return -1;
+    }
+
+    ctx->d3d_tex_dims[i].width = width;
+    ctx->d3d_tex_dims[i].height = height;
+
+    return 0;
+}
+
 static int d3d11_init(void) {
     for (int j = 0; j < SCREEN_COUNT; ++j) {
         HRESULT hr;
@@ -375,39 +425,6 @@ static int d3d11_init(void) {
             hr = ID3D11Device_CreateBuffer(d3d11device[j], &child_vb_desc, NULL, &d3d_child_vb[j][i]);
             if (hr) {
                 err_log("CreateBuffer failed: %d\n", (int)hr);
-                return -1;
-            }
-
-            D3D11_TEXTURE2D_DESC tex_desc = {};
-            tex_desc.Width = SCREEN_WIDTH;
-            tex_desc.Height = i == SCREEN_TOP ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1;
-            tex_desc.MipLevels = 1;
-            tex_desc.ArraySize = 1;
-            tex_desc.Format = D3D_FORMAT;
-            tex_desc.SampleDesc.Count = 1;
-            tex_desc.SampleDesc.Quality = 0;
-            tex_desc.Usage = D3D11_USAGE_DYNAMIC;
-            tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-            tex_desc.MiscFlags = 0;
-            tex_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-
-            hr = ID3D11Device_CreateTexture2D(d3d11device[j], &tex_desc, NULL, &rp_buffer_ctx[i].d3d_tex[j]);
-            if (hr) {
-                err_log("CreateTexture2D failed: %d\n", (int)hr);
-                return -1;
-            }
-
-            hr = ID3D11Device_CreateShaderResourceView(d3d11device[j], (ID3D11Resource *)rp_buffer_ctx[i].d3d_tex[j], NULL, &rp_buffer_ctx[i].d3d_srv[j]);
-            if (hr) {
-                err_log("CreateShaderResourceView failed: %d\n", (int)hr);
-                return -1;
-            }
-
-            tex_desc.Usage = D3D11_USAGE_DEFAULT;
-            tex_desc.CPUAccessFlags = 0;
-            hr = ID3D11Device_CreateTexture2D(d3d11device[j], &tex_desc, NULL, &rp_buffer_ctx[i].d3d_tex_staging[j]);
-            if (hr) {
-                err_log("CreateTexture2D failed: %d\n", (int)hr);
                 return -1;
             }
         }
@@ -873,13 +890,12 @@ void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int widt
         {{ctx_right_f, ctx_top_f}, {1.0f, 1.0f}},
     };
 
-    if (width != (screen_top_bot == SCREEN_TOP ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1) || height != SCREEN_WIDTH) {
-        err_log("Invalid size\n");
-        return;
-    }
-
     int i = ctx_top_bot;
     int p = win_shared ? screen_top_bot : i;
+
+    if (d3d11_texs_update(screen_top_bot, ctx_top_bot, height, width) != 0) {
+        return;
+    }
 
     int upscaling_selected = ui_upscaling_selected;
     bool upscaled = upscaling_selected != UPSCALING_DEFAULT_NONE;
