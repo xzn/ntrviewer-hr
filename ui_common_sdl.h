@@ -117,6 +117,18 @@ void ui_windows_titles_update(void);
 struct rp_buffer_ctx_t;
 int draw_screen(struct rp_buffer_ctx_t *ctx, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, bool win_shared);
 
+void draw_screen_get_blur_dims_lite(
+    int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int width, int height,
+    int *out_left,
+    int *out_top,
+    int *out_width,
+    int *out_height,
+    int *out_ctx_left,
+    int *out_ctx_top,
+    int *out_ctx_width,
+    int *out_ctx_height
+);
+
 void draw_screen_get_dims_lite(
     int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int width, int height,
     int *out_ctx_left,

@@ -416,6 +416,59 @@ void sdl_reset_wminfo(void) {
 #endif
 }
 
+void draw_screen_get_blur_dims_lite(
+    int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int in_width, int in_height,
+    int *out_left,
+    int *out_top,
+    int *out_width,
+    int *out_height,
+    int *out_ctx_left,
+    int *out_ctx_top,
+    int *out_ctx_width,
+    int *out_ctx_height
+) {
+    int left;
+    int top;
+    int width;
+    int height;
+    int ctx_left;
+    int ctx_top;
+    int ctx_width;
+    int ctx_height;
+
+    int i = ctx_top_bot;
+
+    ctx_height = view_mode == VIEW_MODE_TOP_BOT ? (double)ui_win_height[i] / 2 : ui_win_height[i];
+    ctx_width = ui_win_width[i];
+    if ((double)ctx_width / in_width * in_height > ctx_height) {
+        width = in_width;
+        height = (double)width / ctx_width * ctx_height;
+        left = 0;
+        top = ((double)in_height - height) / 2;
+    } else {
+        height = in_height;
+        width = (double)height / ctx_height * ctx_width;
+        top = 0;
+        left = ((double)in_width - width) / 2;
+    }
+
+    ctx_left = 0;
+    if (view_mode == VIEW_MODE_TOP_BOT && screen_top_bot != SCREEN_TOP) {
+        ctx_top = (double)ui_win_height[i] / 2;
+    } else {
+        ctx_top = 0;
+    }
+
+    *out_left = left;
+    *out_top = top;
+    *out_width = width;
+    *out_height = height;
+    *out_ctx_left = ctx_left;
+    *out_ctx_top = ctx_top;
+    *out_ctx_width = ctx_width;
+    *out_ctx_height = ctx_height;
+}
+
 void draw_screen_get_dims_lite(
     int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int width, int height,
     int *out_ctx_left,
