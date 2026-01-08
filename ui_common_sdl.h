@@ -29,6 +29,8 @@ extern int is_renderer_ogl_dbg;
 extern int is_renderer_vk_dbg;
 
 extern enum ui_renderer_t ui_renderer;
+extern int ui_blur_radius;
+extern int ui_blur_iter;
 extern SDL_Window *ui_sdl_win[SCREEN_COUNT];
 extern struct nk_context *ui_nk_ctx;
 typedef enum {

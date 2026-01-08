@@ -252,14 +252,14 @@ enum ui_sdl_blur_pass {
 };
 
 static uint8_t sdl_data_blur[SCREEN_COUNT][SCREEN_COUNT][BLUR_PASS_COUNT][SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N];
-#define KERNEL_I_MIN (-2)
-#define KERNEL_I_MAX (2)
-#define KERNEL_COUNT (KERNEL_I_MAX - KERNEL_I_MIN + 1)
-static const uint8_t KERNEL[] = { 1, 2 ,3, 2, 1};
-_Static_assert(sizeof(KERNEL) / sizeof(*KERNEL) == KERNEL_COUNT);
 
+#if 0
 static void sdl_data_do_blur(uint8_t *data, uint8_t (*data_blur)[SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N], int width, int height) {
     uint8_t *blur = data_blur[BLUR_H];
+    const int KERNEL_I_MIN = -(ui_blur_radius - 1);
+    const int KERNEL_I_MAX = ui_blur_radius - 1;
+    const int KERNEL_MAX = ui_blur_radius;
+
     for (int y = 0; y < height; ++y) {
         uint8_t *data_y = data + y * width * GL_CHANNELS_N;
         uint8_t *blur_y = blur + y * width * GL_CHANNELS_N;
@@ -274,7 +274,7 @@ static void sdl_data_do_blur(uint8_t *data, uint8_t (*data_blur)[SCREEN_HEIGHT0 
                 int acc = 0;
                 for (int xx = x_min; xx <= x_max; ++xx) {
                     int ii = xx - x;
-                    int mul = KERNEL[ii - KERNEL_I_MIN];
+                    int mul = KERNEL_MAX - abs(ii);
                     count += mul;
                     acc += mul * data_x[c + ii * GL_CHANNELS_N];
                 }
@@ -298,7 +298,7 @@ static void sdl_data_do_blur(uint8_t *data, uint8_t (*data_blur)[SCREEN_HEIGHT0 
                 int acc = 0;
                 for (int yy = y_min; yy <= y_max; ++yy) {
                     int ii = yy - y;
-                    int mul = KERNEL[ii - KERNEL_I_MIN];
+                    int mul = KERNEL_MAX - abs(ii);
                     count += mul;
                     acc += mul * data_x[c + ii * width * GL_CHANNELS_N];
                 }
@@ -307,8 +307,93 @@ static void sdl_data_do_blur(uint8_t *data, uint8_t (*data_blur)[SCREEN_HEIGHT0 
         }
     }
 }
+#endif
 
-void ui_renderer_sdl_draw(uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode) {
+static void sdl_data_do_blur1(uint8_t *data, uint8_t (*data_blur)[SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N], int width, int height) {
+    uint8_t *blur = data_blur[BLUR_H];
+    const int KERNEL_I_MIN = -(ui_blur_radius - 1);
+    const int KERNEL_I_MAX = ui_blur_radius - 1;
+
+    for (int y = 0; y < height; ++y) {
+        uint8_t *data_y = data + y * width * GL_CHANNELS_N;
+        uint8_t *blur_y = blur + y * width * GL_CHANNELS_N;
+
+        int acc[RGB_CHANNELS_N] = {};
+        int count = 0;
+        for (int x = KERNEL_I_MIN; x < width; ++x) {
+            int x_prev = x + KERNEL_I_MIN - 1;
+            int x_next = x + KERNEL_I_MAX;
+
+            if (x_next < width) {
+                uint8_t *data_x = data_y + x_next * GL_CHANNELS_N;
+                for (int c = 0; c < RGB_CHANNELS_N; ++c) {
+                    acc[c] += data_x[c];
+                }
+            } else {
+                --count;
+            }
+            if (x_prev >= 0) {
+                uint8_t *data_x = data_y + x_prev * GL_CHANNELS_N;
+                for (int c = 0; c < RGB_CHANNELS_N; ++c) {
+                    acc[c] -= data_x[c];
+                }
+            } else {
+                ++count;
+            }
+
+            if (x >= 0) {
+                uint8_t *blur_x = blur_y + x * GL_CHANNELS_N;
+                for (int c = 0; c < RGB_CHANNELS_N; ++c) {
+                    blur_x[c] = acc[c] / count;
+                }
+                blur_x[GL_CHANNELS_N - 1] = 255;
+            }
+        }
+    }
+    data = blur;
+    blur = data_blur[BLUR_V];
+    for (int x = 0; x < width; ++x) {
+        uint8_t *data_x = data + x * GL_CHANNELS_N;
+        uint8_t *blur_x = blur + x * GL_CHANNELS_N;
+
+        int acc[RGB_CHANNELS_N] = {};
+        int count = 0;
+        for (int y = KERNEL_I_MIN; y < height; ++y) {
+            int y_prev = y + KERNEL_I_MIN - 1;
+            int y_next = y + KERNEL_I_MAX;
+
+            if (y_next < height) {
+                uint8_t *data_y = data_x + y_next * width * GL_CHANNELS_N;
+                for (int c = 0; c < RGB_CHANNELS_N; ++c) {
+                    acc[c] += data_y[c];
+                }
+            } else {
+                --count;
+            }
+            if (y_prev >= 0) {
+                uint8_t *data_y = data_x + y_prev * width * GL_CHANNELS_N;
+                for (int c = 0; c < RGB_CHANNELS_N; ++c) {
+                    acc[c] -= data_y[c];
+                }
+            } else {
+                ++count;
+            }
+
+            if (y >= 0) {
+                uint8_t *blur_y = blur_x + y * width * GL_CHANNELS_N;
+                for (int c = 0; c < RGB_CHANNELS_N; ++c) {
+                    blur_y[c] = acc[c] / count;
+                }
+                blur_y[GL_CHANNELS_N - 1] = 255;
+            }
+        }
+    }
+}
+
+static int sdl_has_data[SCREEN_COUNT][SCREEN_COUNT];
+static int sdl_has_blur[SCREEN_COUNT][SCREEN_COUNT];
+
+void ui_renderer_sdl_draw(uint8_t *data, uint8_t *data_prev, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode) {
     int i = ctx_top_bot;
     SDL_Texture *tex_blur;
     SDL_Texture *tex = sdl_texture_update(screen_top_bot, i, height, width, &tex_blur);
@@ -316,10 +401,19 @@ void ui_renderer_sdl_draw(uint8_t *data, int width, int height, int screen_top_b
         return;
     }
 
-    if (data) {
-        uint8_t (*data_blur)[SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N] = sdl_data_blur[screen_top_bot][i];
-        sdl_data_do_blur(data, data_blur, height, width);
+    int ctx_left;
+    int ctx_top;
+    int ctx_width;
+    int ctx_height;
+    draw_screen_get_dims_lite(screen_top_bot, i, view_mode, width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
+    int need_blur = ctx_left || ctx_top;
 
+    if (!sdl_has_data[screen_top_bot][i]) {
+        data = data ? data : data_prev;
+    }
+
+    const int bpp = GL_CHANNELS_N;
+    if (data) {
         void *pixels;
         int pitch;
         if (!SDL_LockTexture(tex, NULL, &pixels, &pitch)) {
@@ -327,45 +421,62 @@ void ui_renderer_sdl_draw(uint8_t *data, int width, int height, int screen_top_b
             return;
         }
         uint8_t *dst = pixels;
-        const int bpp = GL_CHANNELS_N;
         for (int x = 0; x < width; ++x) {
             memcpy(dst + x * pitch, data + x * height * bpp, height * bpp);
         }
         SDL_UnlockTexture(tex);
 
+        sdl_has_data[screen_top_bot][i] = true;
+        sdl_has_blur[screen_top_bot][i] = false;
+    }
+
+    need_blur = need_blur && !sdl_has_blur[screen_top_bot][i];
+    if (need_blur) {
+        uint8_t (*data_blur)[SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N] = sdl_data_blur[screen_top_bot][i];
+#if 0
+        sdl_data_do_blur(data, data_blur, height, width);
+        sdl_data_do_blur(data_blur[BLUR_OUT], data_blur, height, width);
+#endif
+        sdl_data_do_blur1(data ? data : data_prev, data_blur, height, width);
+        for (int b = 0; b < ui_blur_iter; ++b)
+            sdl_data_do_blur1(data_blur[BLUR_OUT], data_blur, height, width);
+
+        void *pixels;
+        int pitch;
         if (!SDL_LockTexture(tex_blur, NULL, &pixels, &pitch)) {
             err_log("SDL_LockTexture: %s\n", SDL_GetError());
             return;
         }
-        dst = pixels;
+        uint8_t *dst = pixels;
         for (int x = 0; x < width; ++x) {
             memcpy(dst + x * pitch, data_blur[BLUR_OUT] + x * height * bpp, height * bpp);
         }
         SDL_UnlockTexture(tex_blur);
     }
 
-    int in_left;
-    int in_top;
-    int in_width;
-    int in_height;
-    int ctx_left;
-    int ctx_top;
-    int ctx_width;
-    int ctx_height;
-
-    draw_screen_get_blur_dims_lite(screen_top_bot, i, view_mode, width, height,
-        &in_left, &in_top, &in_width, &in_height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
-
-    SDL_FRect srcrect = { in_top, in_left, in_height, in_width };
-    SDL_FRect dstrect = { ctx_left, ctx_top + ctx_height, ctx_height, ctx_width };
+    SDL_FRect srcrect;
+    SDL_FRect dstrect;
     SDL_FPoint center = { 0, 0 };
-    SDL_RenderTextureRotated(sdl_renderer[i], tex_blur, &srcrect, &dstrect, -90, &center, SDL_FLIP_NONE);
 
-    draw_screen_get_dims_lite(screen_top_bot, i, view_mode, width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
+    if (need_blur) {
+        int blur_left;
+        int blur_top;
+        int blur_width;
+        int blur_height;
+        int blur_ctx_left;
+        int blur_ctx_top;
+        int blur_ctx_width;
+        int blur_ctx_height;
+        draw_screen_get_blur_dims_lite(screen_top_bot, i, view_mode, width, height,
+            &blur_left, &blur_top, &blur_width, &blur_height, &blur_ctx_left, &blur_ctx_top, &blur_ctx_width, &blur_ctx_height);
+
+        srcrect = (SDL_FRect){ blur_top, blur_left, blur_height, blur_width };
+        dstrect = (SDL_FRect){ blur_ctx_left, blur_ctx_top + blur_ctx_height, blur_ctx_height, blur_ctx_width };
+        SDL_RenderTextureRotated(sdl_renderer[i], tex_blur, &srcrect, &dstrect, -90, &center, SDL_FLIP_NONE);
+    }
 
     srcrect = (SDL_FRect){ 0, 0, height, width };
     dstrect = (SDL_FRect){ ctx_left, ctx_top + ctx_height, ctx_height, ctx_width };
-    center = (SDL_FPoint){ 0, 0 };
     SDL_RenderTextureRotated(sdl_renderer[i], tex, &srcrect, &dstrect, -90, &center, SDL_FLIP_NONE);
 }
 

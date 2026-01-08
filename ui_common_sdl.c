@@ -14,6 +14,8 @@ int is_renderer_ogl_dbg;
 int is_renderer_vk_dbg;
 
 enum ui_renderer_t ui_renderer;
+int ui_blur_radius = 7;
+int ui_blur_iter = 3;
 SDL_Window *ui_sdl_win[SCREEN_COUNT];
 struct nk_context *ui_nk_ctx;
 view_mode_t ui_view_mode;
@@ -326,7 +328,7 @@ static void draw_screen_dispatch(UNUSED struct rp_buffer_ctx_t *ctx, uint8_t *da
         ui_renderer_vk_draw(data, ctx->data_prev, width, height, screen_top_bot, ctx_top_bot, view_mode);
 #endif
     } else if (is_renderer_sdl_renderer()) {
-        ui_renderer_sdl_draw(data, width, height, screen_top_bot, ctx_top_bot, view_mode);
+        ui_renderer_sdl_draw(data, ctx->data_prev, width, height, screen_top_bot, ctx_top_bot, view_mode);
     }
     // TODO
 }
