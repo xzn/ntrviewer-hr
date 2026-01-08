@@ -216,6 +216,7 @@ nk_d3d11_resize(ID3D11DeviceContext *context, int width, int height, float scale
 NK_API int
 nk_d3d11_handle_event(HWND wnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
+    static int insert_toggle = 0;
     switch (msg)
     {
     case WM_KEYDOWN:
@@ -291,6 +292,34 @@ nk_d3d11_handle_event(HWND wnd, UINT msg, WPARAM wparam, LPARAM lparam)
             nk_input_key(&d3d11.ctx, NK_KEY_SCROLL_UP, down);
             return 1;
 
+        case VK_ESCAPE:
+            nk_input_key(&d3d11.ctx, NK_KEY_TEXT_RESET_MODE, down);
+            return 1;
+
+        case VK_INSERT:
+        /* Only switch on release to avoid repeat issues
+         * kind of confusing since we have to negate it but we're already
+         * hacking it since Nuklear treats them as two separate keys rather
+         * than a single toggle state */
+            if (!down) {
+                insert_toggle = !insert_toggle;
+                if (insert_toggle) {
+                    nk_input_key(&d3d11.ctx, NK_KEY_TEXT_INSERT_MODE, !down);
+                    /* nk_input_key(&d3d11.ctx, NK_KEY_TEXT_REPLACE_MODE, down); */
+                } else {
+                    nk_input_key(&d3d11.ctx, NK_KEY_TEXT_REPLACE_MODE, !down);
+                    /* nk_input_key(&d3d11.ctx, NK_KEY_TEXT_INSERT_MODE, down); */
+                }
+            }
+            return 1;
+
+        case 'A':
+            if (ctrl) {
+                nk_input_key(&d3d11.ctx, NK_KEY_TEXT_SELECT_ALL, down);
+                return 1;
+            }
+            break;
+
         case 'B':
             if (ctrl) {
                 nk_input_key(&d3d11.ctx, NK_KEY_TEXT_LINE_START, down);
@@ -336,13 +365,6 @@ nk_d3d11_handle_event(HWND wnd, UINT msg, WPARAM wparam, LPARAM lparam)
         case 'R':
             if (ctrl) {
                 nk_input_key(&d3d11.ctx, NK_KEY_TEXT_REDO, down);
-                return 1;
-            }
-            break;
-
-        case 'A':
-            if(ctrl) {
-                nk_input_key(&d3d11.ctx, NK_KEY_TEXT_SELECT_ALL, down);
                 return 1;
             }
             break;

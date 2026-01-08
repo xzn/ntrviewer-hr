@@ -1303,8 +1303,9 @@ NK_API void nk_sdl_vk_handle_grab(void) {
 
 NK_API int nk_sdl_vk_handle_event(SDL_Event *evt) {
     struct nk_context *ctx = &sdl.ctx;
-    int ctrl_down = SDL_GetModState() & (SDL_KMOD_LCTRL | SDL_KMOD_RCTRL);
     float scale = is_win_size_in_pixels ? 1 / sdl.scale : 1;
+    int ctrl_down = SDL_GetModState() & SDL_KMOD_CTRL;
+    static int insert_toggle = 0;
 
     switch (evt->type) {
     case SDL_EVENT_KEY_UP: /* KEYUP & KEYDOWN share same routine */
@@ -1373,6 +1374,17 @@ NK_API int nk_sdl_vk_handle_event(SDL_Event *evt) {
         case SDLK_DOWN:
             nk_input_key(ctx, NK_KEY_DOWN, down);
             break;
+        case SDLK_ESCAPE:
+            nk_input_key(ctx, NK_KEY_TEXT_RESET_MODE, down);
+            break;
+        case SDLK_INSERT:
+            if (down) insert_toggle = !insert_toggle;
+            if (insert_toggle) {
+                nk_input_key(ctx, NK_KEY_TEXT_INSERT_MODE, down);
+            } else {
+                nk_input_key(ctx, NK_KEY_TEXT_REPLACE_MODE, down);
+            }
+            break;
         case SDLK_A:
             if(ctrl_down)
                 nk_input_key(ctx,NK_KEY_TEXT_SELECT_ALL, down);
@@ -1432,7 +1444,7 @@ NK_API int nk_sdl_vk_handle_event(SDL_Event *evt) {
     }
 
     case SDL_EVENT_MOUSE_WHEEL:
-        nk_input_scroll(ctx, nk_vec2((float)evt->wheel.x, (float)evt->wheel.y));
+        nk_input_scroll(ctx, nk_vec2(evt->wheel.x, evt->wheel.y));
         return 1;
     }
     return 0;
