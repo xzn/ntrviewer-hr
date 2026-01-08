@@ -431,8 +431,6 @@ mouse_button:
 }
 #endif
 
-struct nk_color nk_window_bgcolor = { 28, 48, 62, 255 };
-
 #ifndef _WIN32
 static bool sdl_win_resize_evt_watcher(void *, SDL_Event *event) {
     if (

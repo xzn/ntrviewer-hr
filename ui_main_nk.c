@@ -86,6 +86,8 @@ void nk_font_stash_end(void) {
     }
 }
 
+struct nk_color nk_window_bgcolor;
+
 void nk_backend_font_init(void)
 {
     /* Load Fonts: if none of these are loaded a default font will be used  */
@@ -100,10 +102,15 @@ void nk_backend_font_init(void)
         // nk_style_set_font(ui_nk_ctx, &roboto->handle);
     }
 
+    set_style(ui_nk_ctx, THEME_BLACK);
     // set_style(ui_nk_ctx, THEME_WHITE);
     // set_style(ui_nk_ctx, THEME_RED);
     // set_style(ui_nk_ctx, THEME_BLUE);
-    set_style(ui_nk_ctx, THEME_DARK);
+    // set_style(ui_nk_ctx, THEME_DARK);
+
+    ui_nk_ctx->style.checkbox.cursor_normal.data.color =
+        ui_nk_ctx->style.checkbox.cursor_hover.data.color =
+        ui_nk_ctx->style.text.color;
 
     web_colors_init(ui_nk_ctx);
     web_colors_add(ui_nk_ctx);
@@ -497,8 +504,8 @@ static void do_nav_checkbox_next(struct nk_context *ctx, enum NK_FOCUS nk_focus,
     bool ret = false;
     if (nk_focus_current == nk_focus && nk_nav_focus != NK_NAV_FOCUS_NONE)
     {
-        ctx->style.checkbox.cursor_hover.data.color = ctx->style.text.color;
-        ctx->style.checkbox.cursor_normal.data.color = ctx->style.text.color;
+        // ctx->style.checkbox.cursor_hover.data.color = ctx->style.text.color;
+        // ctx->style.checkbox.cursor_normal.data.color = ctx->style.text.color;
         ctx->style.checkbox.border = 1.0f;
         ctx->style.checkbox.border_color = ctx->style.text.color;
         if (__atomic_load_n(&nk_nav_cmd, __ATOMIC_RELAXED) == NK_NAV_CONFIRM)
@@ -524,8 +531,8 @@ static void check_nav_checkbox_prev(struct nk_context *ctx, enum NK_FOCUS nk_foc
 {
     ctx->style.checkbox.border_color = nk_style_current.checkbox.border_color;
     ctx->style.checkbox.border = nk_style_current.checkbox.border;
-    ctx->style.checkbox.cursor_normal.data.color = nk_style_current.checkbox.cursor_normal.data.color;
-    ctx->style.checkbox.cursor_hover.data.color = nk_style_current.checkbox.cursor_hover.data.color;
+    // ctx->style.checkbox.cursor_normal.data.color = nk_style_current.checkbox.cursor_normal.data.color;
+    // ctx->style.checkbox.cursor_hover.data.color = nk_style_current.checkbox.cursor_hover.data.color;
 
     if (nk_nav_checkbox_val_current != val)
     {
