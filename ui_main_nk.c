@@ -162,15 +162,18 @@ static const char *const remote_play_wnd = "Remote Play";
 static const char *const debug_msg_wnd = "Debug";
 static const char *const background_wnd = "Background";
 
-static const char *connection_msg[CONNECTION_STATE_COUNT] = {
+static const char *connection_msg[] = {
     "+",
     "-",
 };
+_Static_assert(sizeof(connection_msg) / sizeof(*connection_msg) == CONNECTION_STATE_COUNT);
 
-static const char *connection_req_msg[CONNECTION_REQ_STATE_COUNT] = {
-    "...",
+static const char *connection_req_msg[] = {
     ".",
+    "...",
+    "...",
 };
+_Static_assert(sizeof(connection_req_msg) / sizeof(*connection_req_msg) == CONNECTION_REQ_STATE_COUNT);
 
 static enum connection_state_t menu_connection, nwm_connection;
 static enum connection_req_state_t menu_connection_req, nwm_connection_req;
