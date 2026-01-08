@@ -56,16 +56,17 @@ static int sdl_renderer_init(void) {
     bool renderer_hw = is_renderer_sdl_hw();
     const char *renderer_name = SDL_getenv(SDL_HINT_RENDER_DRIVER);
 
-    int renderer_index = -1;
+    const char *driver_name = NULL;
     for (int i = 0; i < SCREEN_COUNT; ++i) {
-        int num_renderer = SDL_GetNumRenderDrivers();
-        if (num_renderer < 0) {
-            err_log("SDL_GetNumRenderDrivers: %s\n", SDL_GetError());
-            return -1;
-        }
-
-        const char *driver_name = NULL;
         if (i == SCREEN_TOP) {
+            int renderer_index = -1;
+
+            int num_renderer = SDL_GetNumRenderDrivers();
+            if (num_renderer < 0) {
+                err_log("SDL_GetNumRenderDrivers: %s\n", SDL_GetError());
+                return -1;
+            }
+
             if (renderer_name) {
                 for (int j = 0; j < num_renderer; ++j) {
                     if (!(driver_name = SDL_GetRenderDriver(j))) {

@@ -673,9 +673,9 @@ static void ogl_renderer_destroy(void) {
 
     if (nk_ctx) {
         if (is_renderer_gles()) {
-            nk_sdl_gl3_shutdown();
-        } else {
             nk_sdl_gles2_shutdown();
+        } else {
+            nk_sdl_gl3_shutdown();
         }
         nk_ctx = 0;
     }

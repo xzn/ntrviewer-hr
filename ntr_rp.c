@@ -116,6 +116,7 @@ void rp_buffer_init(void) {
   for (int i = 0; i < SCREEN_COUNT; ++i) {
         struct rp_buffer_ctx_t *ctx = &rp_buffer_ctx[i];
         rp_lock_init(ctx->status_lock);
+        ctx->status = FBS_NOT_AVAIL;
         ctx->index_display_2 = FBI_DISPLAY_2;
         ctx->index_display = FBI_DISPLAY;
         ctx->index_ready_display_2 = FBI_READY_DISPLAY_2;

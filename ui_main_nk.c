@@ -188,7 +188,6 @@ static nk_hash nk_hash_from_name(const char *name, struct nk_window *win)
 }
 
 NK_LIB char *nk_itoa(char *s, long n);
-extern int NK_PROPERTY_EDIT_IMPL;
 static void focus_next_property(struct nk_context *ctx, const char *name, int val)
 {
     struct nk_window *win = ctx->current;
@@ -198,7 +197,7 @@ static void focus_next_property(struct nk_context *ctx, const char *name, int va
     nk_itoa(win->property.buffer, val);
     win->property.length = nk_strlen(win->property.buffer);
     win->property.cursor = 0;
-    win->property.state = NK_PROPERTY_EDIT_IMPL;
+    win->property.state = NK_PROPERTY_EDIT;
     win->property.name = hash;
     win->property.select_start = 0;
     win->property.select_end = win->property.length;
@@ -208,7 +207,7 @@ static void cancel_next_property(struct nk_context *ctx)
 {
     struct nk_window *win = ctx->current;
 
-    if (win->property.active && win->property.state == NK_PROPERTY_EDIT_IMPL)
+    if (win->property.active && win->property.state == NK_PROPERTY_EDIT)
     {
         win->property.active = 0;
         win->property.buffer[0] = 0;
@@ -355,7 +354,7 @@ static void check_nav_property_prev(struct nk_context *ctx, const char *name, en
         if (win->property.name == hash)
         {
             set_nav_next(NK_NAV_FOCUS_NORMAL, nk_focus);
-            ui_sdl_text_input_needed = win->property.state == NK_PROPERTY_EDIT_IMPL;
+            ui_sdl_text_input_needed = win->property.state == NK_PROPERTY_EDIT;
         }
     }
     else if (nk_nav_focus != NK_NAV_FOCUS_NAV)
@@ -636,6 +635,7 @@ void ui_main_nk(void)
     {
         rp_lock_wait(ui_nk_lock);
 
+        const char *combo_items_null = NULL;
         int combo_width = nk_window_get_width(ctx) / 2.0f - 15.0f;
         combo_width = MAX(combo_width, 285);
 
@@ -664,7 +664,10 @@ void ui_main_nk(void)
             nk_label(ctx, "Upscaling Filter", NK_TEXT_CENTERED);
             selected = ui_upscaling_selected;
             do_nav_combobox_next(ctx, NK_FOCUS_UPSCALING_FILTER, &selected, &ui_upscaling_selected, ui_upscaling_filter_count);
-            nk_combobox(ctx, ui_upscaling_filter_options, ui_upscaling_filter_count, &selected, 30, combo_size);
+            if (ui_upscaling_filter_options)
+                nk_combobox(ctx, ui_upscaling_filter_options, ui_upscaling_filter_count, &selected, 30, combo_size);
+            else
+                nk_combobox(ctx, &combo_items_null, 0, &selected, 30, combo_size);;
             check_nav_combobox_prev(ctx, &selected);
             if (selected != ui_upscaling_selected) {
                 set_nav_combobox_prev(NK_FOCUS_UPSCALING_FILTER);
@@ -715,7 +718,6 @@ void ui_main_nk(void)
         check_nav_button_prev(ctx);
         selected = ntr_selected_ip;
         do_nav_combobox_next(ctx, NK_FOCUS_IP_COMBO, &selected, &ntr_selected_ip, ntr_auto_ip_count);
-        const char *combo_items_null;
         if (ntr_auto_ip_list)
             nk_combobox(ctx, (const char **)ntr_auto_ip_list, ntr_auto_ip_count, &selected, 30, combo_size);
         else
@@ -843,7 +845,10 @@ void ui_main_nk(void)
         nk_label(ctx, "Input Redirection", NK_TEXT_CENTERED);
         selected = ui_controller_selected;
         do_nav_combobox_next(ctx, NK_FOCUS_INPUT_REDIRECTION, &selected, &ui_controller_selected, ui_num_controllers);
-        nk_combobox(ctx, ui_controllers_names, ui_num_controllers, &selected, 30, combo_size);
+        if (ui_controllers_names)
+            nk_combobox(ctx, ui_controllers_names, ui_num_controllers, &selected, 30, combo_size);
+        else
+            nk_combobox(ctx, &combo_items_null, 0, &selected, 30, combo_size);
         check_nav_combobox_prev(ctx, &selected);
         if (selected != ui_controller_selected)
         {

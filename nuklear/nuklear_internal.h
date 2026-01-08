@@ -137,9 +137,11 @@ NK_LIB int nk_to_upper(int c);
 NK_LIB int nk_to_lower(int c);
 
 #ifndef NK_MEMCPY
+#define NK_MEMCPY nk_memcopy
 NK_LIB void* nk_memcopy(void *dst, const void *src, nk_size n);
 #endif
 #ifndef NK_MEMSET
+#define NK_MEMSET nk_memset
 NK_LIB void nk_memset(void *ptr, int c0, nk_size size);
 #endif
 NK_LIB void nk_zero(void *ptr, nk_size size);
@@ -362,7 +364,6 @@ NK_LIB void nk_property(struct nk_context *ctx, const char *name, struct nk_prop
  */
 #ifndef NK_NO_STB_TRUETYPE_IMPLEMENTATION
 #define STB_TRUETYPE_IMPLEMENTATION
-#endif /* NK_NO_STB_TRUETYPE_IMPLEMENTATION */
 
 /* Allow consumer to define own STBTT_malloc/STBTT_free, and use the font atlas' allocator otherwise */
 #ifndef STBTT_malloc
@@ -381,6 +382,7 @@ nk_stbtt_free(void *ptr, void *user_data) {
 #define STBTT_malloc(x,u)  nk_stbtt_malloc(x,u)
 #define STBTT_free(x,u)    nk_stbtt_free(x,u)
 
+#endif /* NK_NO_STB_TRUETYPE_IMPLEMENTATION */
 #endif /* STBTT_malloc */
 
 #endif /* NK_INCLUDE_FONT_BAKING */

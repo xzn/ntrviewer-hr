@@ -23,7 +23,7 @@ endif
 ifeq ($(DEBUG),1)
 CFLAGS := -Og -g
 else
-CFLAGS := -flto=auto -O3 -ffast-math -fno-strict-aliasing
+CFLAGS := -flto=auto -O3 -fno-strict-aliasing
 CPPFLAGS += -DNDEBUG
 endif
 CFLAGS += -Wall -Wextra -MMD

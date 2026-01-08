@@ -6,23 +6,13 @@
 #ifndef NK_NUKLEAR_H_
 #define NK_NUKLEAR_H_
 
-#include <string.h>
-
-#define NK_INCLUDE_FIXED_TYPES
-#define NK_INCLUDE_STANDARD_IO
-#define NK_INCLUDE_STANDARD_VARARGS
-#define NK_INCLUDE_STANDARD_BOOL
-#define NK_INCLUDE_DEFAULT_ALLOCATOR
-#define NK_INCLUDE_VERTEX_BUFFER_OUTPUT
 #define NK_INCLUDE_FONT_BAKING
 #define NK_INCLUDE_DEFAULT_FONT
-
+#define NK_INCLUDE_DEFAULT_ALLOCATOR
+#define NK_INCLUDE_VERTEX_BUFFER_OUTPUT
 #define NK_NO_STB_RECT_PACK_IMPLEMENTATION
 #define NK_NO_STB_TRUETYPE_IMPLEMENTATION
-
-#define NK_ASSERT NK_UNUSED
-#define NK_MEMCPY memcpy
-#define NK_MEMSET memset
+#undef NDEBUG
 
 #ifdef __cplusplus
 extern "C" {
@@ -4753,6 +4743,7 @@ NK_API nk_bool nk_input_is_mouse_click_down_in_rect(const struct nk_input *i, en
 NK_API nk_bool nk_input_any_mouse_click_in_rect(const struct nk_input*, struct nk_rect);
 NK_API nk_bool nk_input_is_mouse_prev_hovering_rect(const struct nk_input*, struct nk_rect);
 NK_API nk_bool nk_input_is_mouse_hovering_rect(const struct nk_input*, struct nk_rect);
+NK_API nk_bool nk_input_is_mouse_moved(const struct nk_input*);
 NK_API nk_bool nk_input_mouse_clicked(const struct nk_input*, enum nk_buttons, struct nk_rect);
 NK_API nk_bool nk_input_is_mouse_down(const struct nk_input*, enum nk_buttons);
 NK_API nk_bool nk_input_is_mouse_pressed(const struct nk_input*, enum nk_buttons);
@@ -5939,6 +5930,6 @@ template<typename T> struct nk_alignof{struct Big {T x; char c;}; enum {
 #define NK_CONTAINER_OF(ptr,type,member)\
     (type*)((void*)((char*)(1 ? (ptr): &((type*)0)->member) - NK_OFFSETOF(type, member)))
 
-
+#include "nuklear_internal.h"
 
 #endif /* NK_NUKLEAR_H_ */
