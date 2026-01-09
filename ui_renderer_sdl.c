@@ -1,6 +1,7 @@
 #include "main.h"
 #include "ui_common_sdl.h"
 #include "ui_renderer_sdl.h"
+#include "ui_main_nk.h"
 
 #include "const.h"
 
@@ -189,6 +190,18 @@ static void sdl_renderer_destroy(void) {
     }
 }
 
+enum {
+    UPSCALING_LINEAR,
+    UPSCALING_PIXEL,
+    UPSCALING_COUNT,
+};
+
+static const char *upscaling_options[] = {
+    "Linear",
+    "Pixel Art",
+};
+_Static_assert(sizeof(upscaling_options) / sizeof(*upscaling_options) == UPSCALING_COUNT);
+
 int ui_renderer_sdl_init(void) {
     if (sdl_win_init(sdl_win, 0)) {
         return -1;
@@ -209,6 +222,9 @@ int ui_renderer_sdl_init(void) {
         return -1;
     }
 
+    ui_upscaling_filter_count = UPSCALING_COUNT;
+    ui_upscaling_filter_options = upscaling_options;
+
     ui_nk_ctx = nk_ctx;
 
     return 0;
@@ -216,6 +232,9 @@ int ui_renderer_sdl_init(void) {
 
 void ui_renderer_sdl_destroy(void) {
     ui_nk_ctx = NULL;
+
+    ui_upscaling_filter_options = NULL;
+    ui_upscaling_filter_count = 0;
 
     sdl_renderer_destroy();
 
@@ -406,7 +425,7 @@ void ui_renderer_sdl_draw(uint8_t *data, uint8_t *data_prev, int width, int heig
     int ctx_width;
     int ctx_height;
     draw_screen_get_dims_lite(screen_top_bot, i, view_mode, width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
-    int need_blur = ctx_left || ctx_top;
+    int need_blur = ui_blur_iter && (ctx_left || ctx_top);
 
     if (!sdl_has_data[screen_top_bot][i]) {
         data = data ? data : data_prev;
@@ -477,6 +496,7 @@ void ui_renderer_sdl_draw(uint8_t *data, uint8_t *data_prev, int width, int heig
 
     srcrect = (SDL_FRect){ 0, 0, height, width };
     dstrect = (SDL_FRect){ ctx_left, ctx_top + ctx_height, ctx_height, ctx_width };
+    SDL_SetTextureScaleMode(tex, ui_upscaling_selected == UPSCALING_PIXEL ? SDL_SCALEMODE_PIXELART : SDL_SCALEMODE_LINEAR);
     SDL_RenderTextureRotated(sdl_renderer[i], tex, &srcrect, &dstrect, -90, &center, SDL_FLIP_NONE);
 }
 

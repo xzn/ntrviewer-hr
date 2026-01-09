@@ -14,8 +14,8 @@ int is_renderer_ogl_dbg;
 int is_renderer_vk_dbg;
 
 enum ui_renderer_t ui_renderer;
-int ui_blur_radius = 7;
-int ui_blur_iter = 3;
+int ui_blur_radius = 15;
+int ui_blur_iter = 1;
 SDL_Window *ui_sdl_win[SCREEN_COUNT];
 struct nk_context *ui_nk_ctx;
 view_mode_t ui_view_mode;

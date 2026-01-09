@@ -657,16 +657,12 @@ static int ogl_renderer_init(void) {
     if (ogl_upscaling_init())
         return -1;
 
-    ui_upscaling_filters = 1;
-
     err_log("%s %s\n", is_renderer_ogl() ? "ogl" : is_renderer_gles_angle() ? "angle" : "gles", is_renderer_csc() ? "composition swapchain" : "");
 
     return 0;
 }
 
 static void ogl_renderer_destroy(void) {
-    ui_upscaling_filters = 0;
-
     ogl_upscaling_close();
 
     ogl_res_destroy();

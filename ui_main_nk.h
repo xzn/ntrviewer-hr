@@ -18,7 +18,6 @@ extern rp_lock_t ui_nk_lock;
 
 extern atomic_bool ui_hide_nk_windows;
 void ui_set_hide_nk_windows(bool hide);
-extern bool ui_upscaling_filters;
 
 extern int ui_upscaling_selected;
 extern const char **ui_upscaling_filter_options;

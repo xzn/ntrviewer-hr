@@ -2811,8 +2811,6 @@ void ui_renderer_vk_destroy(void) {
         return;
     }
 
-    ui_upscaling_filters = 0;
-
     ui_nk_ctx = NULL;
 
     for (int i = 0; i < SCREEN_COUNT; ++i) {
@@ -2977,7 +2975,6 @@ int ui_renderer_vk_init(void) {
     if (vk_upscaling_init()) {
         return -1;
     }
-    ui_upscaling_filters = 1;
 
 #ifdef __APPLE__
     err_log("vulkan (via moltenvk/metal)\n");

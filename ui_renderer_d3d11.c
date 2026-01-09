@@ -521,16 +521,12 @@ static int d3d11_renderer_init(void) {
     if (d3d11_upscaling_init())
         return -1;
 
-    ui_upscaling_filters = 1;
-
     err_log("d3d11 %s\n", is_renderer_csc() ? "composition swapchain" : "");
 
     return 0;
 }
 
 static void d3d11_renderer_destroy(void) {
-    ui_upscaling_filters = 0;
-
     d3d11_upscaling_close();
 
     d3d11_close();

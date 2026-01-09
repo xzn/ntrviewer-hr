@@ -119,7 +119,6 @@ void nk_backend_font_init(void)
 }
 
 atomic_bool ui_hide_nk_windows;
-bool ui_upscaling_filters;
 
 int ui_upscaling_selected;
 const char **ui_upscaling_filter_options;
@@ -147,6 +146,8 @@ static enum NK_FOCUS {
     NK_FOCUS_INPUT_REDIRECTION,
     NK_FOCUS_INPUT_SWAP_FACE,
     NK_FOCUS_INPUT_CURSOR_SIZE,
+    NK_FOCUS_BORDER_ITER,
+    NK_FOCUS_BORDER_RADIUS,
     NK_FOCUS_COUNT,
     NK_FOCUS_MIN = 0,
     NK_FOCUS_MAX = NK_FOCUS_COUNT - 1,
@@ -255,9 +256,6 @@ static enum nk_nav_t do_nav_next(enum NK_FOCUS nk_focus)
                     nk_focus_current = NK_FOCUS_MAX;
                 else
                     --nk_focus_current;
-
-                if (!ui_upscaling_filters && nk_focus_current == NK_FOCUS_UPSCALING_FILTER)
-                    --nk_focus_current;
             }
             nk_nav_focus = NK_NAV_FOCUS_NAV;
             break;
@@ -267,9 +265,6 @@ static enum nk_nav_t do_nav_next(enum NK_FOCUS nk_focus)
                 if (nk_focus_current >= NK_FOCUS_MAX)
                     nk_focus_current = NK_FOCUS_MIN;
                 else
-                    ++nk_focus_current;
-
-                if (!ui_upscaling_filters && nk_focus_current == NK_FOCUS_UPSCALING_FILTER)
                     ++nk_focus_current;
             }
             nk_nav_focus = NK_NAV_FOCUS_NAV;
@@ -639,7 +634,7 @@ void ui_main_nk(void)
         nk_window_show(ctx, remote_play_wnd, 1);
         window_closed = 0;
     }
-    if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 600, 585),
+    if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 600, 650),
                  NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_TITLE | NK_WINDOW_CLOSABLE) &&
         show_window)
     {
@@ -658,8 +653,9 @@ void ui_main_nk(void)
             "Separate Windows",
             "Top Only",
             "Bottom Only"};
-        do_nav_combobox_next(ctx, NK_FOCUS_VIEW_MODE, &selected, (int *)&ui_view_mode, sizeof(view_mode_options) / sizeof(*view_mode_options));
-        nk_combobox(ctx, view_mode_options, sizeof(view_mode_options) / sizeof(*view_mode_options), &selected, 30, combo_size);
+        int combo_count = sizeof(view_mode_options) / sizeof(*view_mode_options);
+        do_nav_combobox_next(ctx, NK_FOCUS_VIEW_MODE, &selected, (int *)&ui_view_mode, combo_count);
+        nk_combobox(ctx, view_mode_options, combo_count, &selected, 30, combo_size);
         check_nav_combobox_prev(ctx, &selected);
         if (selected != (int)ui_view_mode)
         {
@@ -668,24 +664,22 @@ void ui_main_nk(void)
             ui_fullscreen = 0;
         }
 
-        if (ui_upscaling_filters) {
-            nk_draw_push_color_inline(ctx, NK_COLOR_INLINE_TAG);
-            nk_layout_row_dynamic(ctx, 30, 2);
-            nk_label(ctx, "Upscaling Filter", NK_TEXT_CENTERED);
-            selected = ui_upscaling_selected;
-            do_nav_combobox_next(ctx, NK_FOCUS_UPSCALING_FILTER, &selected, &ui_upscaling_selected, ui_upscaling_filter_count);
-            if (ui_upscaling_filter_options)
-                nk_combobox(ctx, ui_upscaling_filter_options, ui_upscaling_filter_count, &selected, 30, combo_size);
-            else
-                nk_combobox(ctx, &combo_items_null, 0, &selected, 30, combo_size);;
-            check_nav_combobox_prev(ctx, &selected);
-            if (selected != ui_upscaling_selected) {
-                set_nav_combobox_prev(NK_FOCUS_UPSCALING_FILTER);
-                ui_upscaling_selected = selected;
-                cursor_scale_prev = 0.0f;
-            }
-            nk_draw_pop_color_inline(ctx);
+        nk_draw_push_color_inline(ctx, NK_COLOR_INLINE_TAG);
+        nk_layout_row_dynamic(ctx, 30, 2);
+        nk_label(ctx, "Upscaling Filter", NK_TEXT_CENTERED);
+        selected = ui_upscaling_selected;
+        do_nav_combobox_next(ctx, NK_FOCUS_UPSCALING_FILTER, &selected, &ui_upscaling_selected, ui_upscaling_filter_options ? ui_upscaling_filter_count : 0);
+        if (ui_upscaling_filter_options)
+            nk_combobox(ctx, ui_upscaling_filter_options, ui_upscaling_filter_count, &selected, 30, combo_size);
+        else
+            nk_combobox(ctx, &combo_items_null, 0, &selected, 30, combo_size);;
+        check_nav_combobox_prev(ctx, &selected);
+        if (selected != ui_upscaling_selected) {
+            set_nav_combobox_prev(NK_FOCUS_UPSCALING_FILTER);
+            ui_upscaling_selected = selected;
+            cursor_scale_prev = 0.0f;
         }
+        nk_draw_pop_color_inline(ctx);
 
         nk_layout_row_dynamic(ctx, 30, 5);
         nk_label(ctx, "3DS IP", NK_TEXT_CENTERED);
@@ -727,7 +721,7 @@ void ui_main_nk(void)
         }
         check_nav_button_prev(ctx);
         selected = ntr_selected_ip;
-        do_nav_combobox_next(ctx, NK_FOCUS_IP_COMBO, &selected, &ntr_selected_ip, ntr_auto_ip_count);
+        do_nav_combobox_next(ctx, NK_FOCUS_IP_COMBO, &selected, &ntr_selected_ip, ntr_auto_ip_list ? ntr_auto_ip_count : 0);
         if (ntr_auto_ip_list)
             nk_combobox(ctx, (const char **)ntr_auto_ip_list, ntr_auto_ip_count, &selected, 30, combo_size);
         else
@@ -751,7 +745,7 @@ void ui_main_nk(void)
         nk_layout_row_dynamic(ctx, 30, 2);
         nk_label(ctx, "Viewer IP", NK_TEXT_CENTERED);
         selected = ntr_selected_adapter;
-        do_nav_combobox_next(ctx, NK_FOCUS_VIEWER_IP, &selected, &ntr_selected_adapter, ntr_adapter_count);
+        do_nav_combobox_next(ctx, NK_FOCUS_VIEWER_IP, &selected, &ntr_selected_adapter, ntr_adapter_list ? ntr_adapter_count : 0);
         if (ntr_adapter_list)
             nk_combobox(ctx, (const char **)ntr_adapter_list, ntr_adapter_count, &selected, 30, combo_size);
         else
@@ -820,8 +814,9 @@ void ui_main_nk(void)
             "On",
             "On + Delta",
         };
-        do_nav_combobox_next(ctx, NK_FOCUS_RELIABLE_STREAM, &selected, &ntr_rp_config.kcp_mode, sizeof(reliable_stream_options) / sizeof(*reliable_stream_options));
-        nk_combobox(ctx, reliable_stream_options, sizeof(reliable_stream_options) / sizeof(*reliable_stream_options), &selected, 30, combo_size);
+        combo_count = sizeof(reliable_stream_options) / sizeof(*reliable_stream_options);
+        do_nav_combobox_next(ctx, NK_FOCUS_RELIABLE_STREAM, &selected, &ntr_rp_config.kcp_mode, combo_count);
+        nk_combobox(ctx, reliable_stream_options, combo_count, &selected, 30, combo_size);
         check_nav_combobox_prev(ctx, &selected);
         if (selected != (int)ntr_rp_config.kcp_mode)
         {
@@ -854,7 +849,7 @@ void ui_main_nk(void)
         nk_layout_row_dynamic(ctx, 30, 2);
         nk_label(ctx, "Input Redirection", NK_TEXT_CENTERED);
         selected = ui_controller_selected;
-        do_nav_combobox_next(ctx, NK_FOCUS_INPUT_REDIRECTION, &selected, &ui_controller_selected, ui_num_controllers);
+        do_nav_combobox_next(ctx, NK_FOCUS_INPUT_REDIRECTION, &selected, &ui_controller_selected, ui_controllers_names ? ui_num_controllers : 0);
         if (ui_controllers_names)
             nk_combobox(ctx, ui_controllers_names, ui_num_controllers, &selected, 30, combo_size);
         else
@@ -885,14 +880,41 @@ void ui_main_nk(void)
             "Large",
             "Extra Large",
         };
-        do_nav_combobox_next(ctx, NK_FOCUS_INPUT_CURSOR_SIZE, &selected, &sdl_bottom_screen_cursor_size, ui_num_controllers);
-        nk_combobox(ctx, cursor_size_options, sizeof(cursor_size_options) / sizeof(*cursor_size_options), &selected, 30, combo_size);
+        combo_count = sizeof(cursor_size_options) / sizeof(*cursor_size_options);
+        do_nav_combobox_next(ctx, NK_FOCUS_INPUT_CURSOR_SIZE, &selected, &sdl_bottom_screen_cursor_size, combo_count);
+        nk_combobox(ctx, cursor_size_options, combo_count, &selected, 30, combo_size);
         check_nav_combobox_prev(ctx, &selected);
         if (selected != sdl_bottom_screen_cursor_size)
         {
             set_nav_combobox_prev(NK_FOCUS_INPUT_CURSOR_SIZE);
             sdl_bottom_screen_cursor_size = selected;
         }
+
+        nk_layout_row_dynamic(ctx, 30, 2);
+        nk_label(ctx, "Ambience Quality", NK_TEXT_CENTERED);
+        selected = ui_blur_iter;
+        const char *blue_iter_options[] = {
+            "Off",
+            "1",
+            "2",
+            "3",
+        };
+        combo_count = sizeof(blue_iter_options) / sizeof(*blue_iter_options);
+        do_nav_combobox_next(ctx, NK_FOCUS_BORDER_ITER, &selected, &ui_blur_iter, combo_count);
+        nk_combobox(ctx, blue_iter_options, combo_count, &selected, 30, combo_size);
+        check_nav_combobox_prev(ctx, &selected);
+        if (selected != ui_blur_iter)
+        {
+            set_nav_combobox_prev(NK_FOCUS_BORDER_ITER);
+            ui_blur_iter = selected;
+        }
+
+        nk_layout_row_dynamic(ctx, 30, 2);
+        snprintf(msg_buf, sizeof(msg_buf), "Ambience Blur %d", ui_blur_radius);
+        nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+        do_nav_slider_next(ctx, NK_FOCUS_BORDER_RADIUS, &ui_blur_radius);
+        nk_slider_int(ctx, 3, &ui_blur_radius, 15, 1);
+        check_nav_slider_prev(ctx, NK_FOCUS_BORDER_RADIUS, ui_blur_radius);
 
         nk_layout_row_dynamic(ctx, 30, 1);
         nk_label(ctx, "Press \"F\" to toggle fullscreen.", NK_TEXT_CENTERED);
