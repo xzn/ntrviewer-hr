@@ -211,7 +211,7 @@ thread_ret_t tcp_thread_func(void *arg)
         uint32_t ip_octet;
 
         rp_lock_wait(ui_nk_lock);
-        ip_octet_incoming = ntr_auto_reconnect ? *(uint32_t *)ntr_ip_octet_incoming : 0;
+        ip_octet_incoming = t->remote_play && ntr_auto_reconnect ? *(uint32_t *)ntr_ip_octet_incoming : 0;
         ip_octet = *(uint32_t *)ntr_ip_octet;
         rp_lock_rel(ui_nk_lock);
 

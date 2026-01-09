@@ -1030,7 +1030,6 @@ void ui_main_nk(void)
             else if (nwm_connection == CONNECTION_STATE_CONNECTED)
             {
                 nwm_work_req_state = CONNECTION_REQ_STATE_DISCONNECTING;
-                ntr_auto_reconnect = nk_false;
             }
         }
 
