@@ -1228,17 +1228,10 @@ static void receive_from_socket()
         }
 
         rp_lock_wait(ui_nk_lock);
-        if (ntr_ip_octet[0] == 0 &&
-            ntr_ip_octet[1] == 0 &&
-            ntr_ip_octet[2] == 0 &&
-            ntr_ip_octet[3] == 0)
-        {
-            uint32_t addr = ntohl(remote_addr.sin_addr.s_addr);
-            ntr_ip_octet[0] = (addr >> 24) & 0xff;
-            ntr_ip_octet[1] = (addr >> 16) & 0xff;
-            ntr_ip_octet[2] = (addr >> 8) & 0xff;
-            ntr_ip_octet[3] = addr & 0xff;
-        }
+        uint32_t addr = ntohl(remote_addr.sin_addr.s_addr);
+        *(uint32_t *)ntr_ip_octet_incoming = __builtin_bswap32(addr);
+        if (*(uint32_t *)ntr_ip_octet)
+            *(uint32_t *)ntr_ip_octet = *(uint32_t *)ntr_ip_octet_incoming;
         rp_lock_rel(ui_nk_lock);
 
         remote_received = 1;
@@ -1250,6 +1243,8 @@ static void receive_from_socket()
 static void receive_from_socket_loop(void) {
     while (program_running && !ntr_rp_port_changed)
     {
+        if (kcp)
+            ikcp_release(kcp);
         kcp = ikcp_create(kcp_cid, 0);
         if (!kcp)
         {
@@ -1258,8 +1253,6 @@ static void receive_from_socket_loop(void) {
             continue;
         }
         kcp_init(kcp);
-
-        remote_received = 0;
 
         for (int i = 0; i < SCREEN_COUNT; ++i)
         {
@@ -1338,6 +1331,12 @@ static void receive_from_socket_loop(void) {
         receive_from_socket();
         // Sleep(SOCKET_RESET_INTERVAL_MS);
 
+        remote_received = 0;
+
+        rp_lock_wait(ui_nk_lock);
+        *(uint32_t *)ntr_ip_octet_incoming = 0;
+        rp_lock_rel(ui_nk_lock);
+
 #ifdef _WIN32
         thread_set_cancel(jpeg_decode_thread_e);
         thread_join(jpeg_decode_thread);
@@ -1346,12 +1345,6 @@ static void receive_from_socket_loop(void) {
         thread_cancel(jpeg_decode_thread);
         thread_join(jpeg_decode_thread);
 #endif
-
-        if (kcp)
-        {
-            ikcp_release(kcp);
-            kcp = 0;
-        }
     }
 }
 
@@ -1425,6 +1418,13 @@ thread_ret_t udp_recv_thread_func(void *) {
 socket_final:
         closesocket(s);
     }
+
+    if (kcp)
+    {
+        ikcp_release(kcp);
+        kcp = 0;
+    }
+
     return 0;
 }
 

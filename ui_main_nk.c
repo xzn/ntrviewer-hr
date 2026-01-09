@@ -684,7 +684,7 @@ void ui_main_nk(void)
         nk_layout_row_dynamic(ctx, 30, 5);
         nk_label(ctx, "3DS IP", NK_TEXT_CENTERED);
 
-        for (int i = 0; i < 4; ++i)
+        for (int i = 0; i < NTR_IP_OCTET_SIZE; ++i)
         {
             int ip_octet = ntr_ip_octet[i];
             do_nav_property_next(ctx, nk_property_name, NK_FOCUS_IP_OCTET_0 + i, ip_octet);
@@ -733,7 +733,7 @@ void ui_main_nk(void)
             ntr_selected_ip = selected;
             if (ntr_selected_ip)
             {
-                memcpy(ntr_ip_octet, ntr_auto_ip_octet_list[ntr_selected_ip], 4);
+                memcpy(ntr_ip_octet, ntr_auto_ip_octet_list[ntr_selected_ip], NTR_IP_OCTET_SIZE);
                 if (menu_work_state == CONNECTION_STATE_CONNECTED)
                 {
                     menu_work_req_state = CONNECTION_REQ_STATE_DISCONNECTING;

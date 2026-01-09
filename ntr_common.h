@@ -54,7 +54,11 @@ UNUSED static bool socket_poll(SOCKET s)
     return false;
 }
 
-extern atomic_uint_fast8_t ntr_ip_octet[4];
+#define NTR_IP_OCTET_SIZE (4)
+#define NTR_MAC_SIZE (6)
+
+extern atomic_uint_fast8_t ntr_ip_octet[NTR_IP_OCTET_SIZE];
+extern atomic_uint_fast8_t ntr_ip_octet_incoming[NTR_IP_OCTET_SIZE];
 
 extern int ntr_rp_port;
 extern atomic_int ntr_rp_port_bound;

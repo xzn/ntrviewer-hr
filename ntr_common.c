@@ -3,9 +3,6 @@
 
 #include <stdlib.h>
 
-#define NTR_IP_OCTET_SIZE (4)
-#define NTR_MAC_SIZE (6)
-
 #ifdef _WIN32
 int socket_startup(void) {
     WSADATA wsa_data;
@@ -211,13 +208,33 @@ fail:
 }
 
 atomic_uint_fast8_t ntr_ip_octet[NTR_IP_OCTET_SIZE];
+atomic_uint_fast8_t ntr_ip_octet_incoming[NTR_IP_OCTET_SIZE];
+
+static bool ntr_get_auto_ip_from_ip_octet(uint32_t a) {
+    for (int i = 0; i < ntr_auto_ip_count; ++i) {
+        uint32_t b = *(uint32_t *)ntr_auto_ip_octet_list[i];
+        if (a == b) {
+            ntr_selected_ip = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+static uint32_t ntr_get_identical_bits_prefix(uint32_t a, uint32_t b) {
+    return ~__builtin_bswap32(a ^ b);
+}
 
 void ntr_try_auto_select_adapter(void) {
+    uint32_t incoming = *(uint32_t *)ntr_ip_octet_incoming;
+    if (incoming && ntr_get_auto_ip_from_ip_octet(incoming))
+        *(uint32_t *)ntr_ip_octet = incoming;
+
     ntr_selected_adapter = 0;
     uint32_t count = 0;
     for (int i = NTR_ADAPTER_PRE_COUNT; i < ntr_adapter_count - NTR_ADAPTER_POST_COUNT; ++i) {
-        uint32_t bits = __builtin_bswap32(*(uint32_t *)ntr_ip_octet & *(uint32_t *)ntr_adapter_octet_list[i]);
-        if (/*(int)bits < 0 && */bits > count) {
+        uint32_t bits = ntr_get_identical_bits_prefix(*(uint32_t *)ntr_ip_octet, *(uint32_t *)ntr_adapter_octet_list[i]);
+        if (bits > count) {
             count = bits;
             ntr_selected_adapter = i;
         }
