@@ -666,6 +666,47 @@ void ui_main_nk(void)
         if (selected != (int)ui_view_mode)
         {
             set_nav_combobox_prev(NK_FOCUS_VIEW_MODE);
+            switch ((view_mode_t)selected) {
+                case VIEW_MODE_TOP_BOT:
+                case VIEW_MODE_SEPARATE:
+                    if (!ntr_rp_config.screen_priority_factor) {
+                        if (ntr_screen_priority_factor_prev) {
+                            ntr_rp_config.top_screen_priority = ntr_top_screen_priority_prev;
+                            ntr_rp_config.screen_priority_factor = ntr_screen_priority_factor_prev;
+                            ntr_screen_priority_factor_prev = 0;
+                        } else {
+                            ntr_rp_config.top_screen_priority = true;
+                            ntr_rp_config.screen_priority_factor = NTR_SCREEN_PRIORITY_FACTOR_DEFAULT;
+                        }
+                    }
+                    break;
+                case VIEW_MODE_TOP:
+                    if (ntr_rp_config.screen_priority_factor || !ntr_rp_config.top_screen_priority) {
+                        if (!ntr_screen_priority_factor_prev) {
+                            ntr_top_screen_priority_prev = ntr_rp_config.top_screen_priority;
+                            ntr_screen_priority_factor_prev = ntr_rp_config.screen_priority_factor;
+                            if (!ntr_screen_priority_factor_prev)
+                                ntr_screen_priority_factor_prev = NTR_SCREEN_PRIORITY_FACTOR_DEFAULT;
+                        }
+
+                        ntr_rp_config.top_screen_priority = true;
+                        ntr_rp_config.screen_priority_factor = 0;
+                    }
+                    break;
+                case VIEW_MODE_BOT:
+                    if (ntr_rp_config.screen_priority_factor || ntr_rp_config.top_screen_priority) {
+                        if (!ntr_screen_priority_factor_prev) {
+                            ntr_top_screen_priority_prev = ntr_rp_config.top_screen_priority;
+                            ntr_screen_priority_factor_prev = ntr_rp_config.screen_priority_factor;
+                            if (!ntr_screen_priority_factor_prev)
+                                ntr_screen_priority_factor_prev = NTR_SCREEN_PRIORITY_FACTOR_DEFAULT;
+                        }
+
+                        ntr_rp_config.top_screen_priority = false;
+                        ntr_rp_config.screen_priority_factor = 0;
+                    }
+                    break;
+            }
             ui_view_mode = selected;
             ui_fullscreen = 0;
         }
@@ -678,7 +719,7 @@ void ui_main_nk(void)
         if (ui_upscaling_filter_options)
             nk_combobox(ctx, ui_upscaling_filter_options, ui_upscaling_filter_count, &selected, 30, combo_size);
         else
-            nk_combobox(ctx, &combo_items_null, 0, &selected, 30, combo_size);;
+            nk_combobox(ctx, &combo_items_null, 0, &selected, 30, combo_size);
         check_nav_combobox_prev(ctx, &selected);
         if (selected != ui_upscaling_selected) {
             set_nav_combobox_prev(NK_FOCUS_UPSCALING_FILTER);

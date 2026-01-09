@@ -348,6 +348,23 @@ thread_ret_t tcp_thread_func(void *arg)
                     continue;
                 }
                 ++packet_seq;
+
+                rp_lock_wait(ui_nk_lock);
+                switch (ui_view_mode) {
+                    case VIEW_MODE_TOP:
+                    case VIEW_MODE_BOT:
+                        if (rp_config_last.screen_priority_factor) {
+                            ui_view_mode = VIEW_MODE_TOP_BOT;
+                        }
+                        // fall-through
+                    case VIEW_MODE_TOP_BOT:
+                    case VIEW_MODE_SEPARATE:
+                        if (!rp_config_last.screen_priority_factor) {
+                            ui_view_mode = rp_config_last.top_screen_priority ? VIEW_MODE_TOP : VIEW_MODE_BOT;
+                        }
+                        break;
+                }
+                rp_lock_rel(ui_nk_lock);
             }
         }
         else

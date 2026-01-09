@@ -339,7 +339,7 @@ static bool create_instance(struct vulkan_demo *demo) {
 #ifdef __APPLE__
     create_info.flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
     VkExportMetalObjectCreateInfoEXT metal_info_queue = { VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT };
-    metal_info_queue.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_COMMAND_QUEUE_BIT_EXT;;
+    metal_info_queue.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_COMMAND_QUEUE_BIT_EXT;
     create_info.pNext = &metal_info_queue;
 #endif
     if (validation_layers_installed) {

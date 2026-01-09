@@ -27,12 +27,14 @@ struct ntr_rp_config_t ntr_rp_config;
 void ntr_config_set_default(void) {
     ntr_rp_config = (struct ntr_rp_config_t){
         .top_screen_priority = 1,
-        .screen_priority_factor = 2,
+        .screen_priority_factor = NTR_SCREEN_PRIORITY_FACTOR_DEFAULT,
         .jpeg_quality = 75,
         .bandwidth_limit = 16,
         .kcp_mode = 2,
     };
 }
+bool ntr_top_screen_priority_prev;
+int ntr_screen_priority_factor_prev;
 
 char **ntr_auto_ip_list;
 uint8_t **ntr_auto_ip_octet_list;

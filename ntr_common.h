@@ -75,6 +75,10 @@ struct ntr_rp_config_t {
 extern struct ntr_rp_config_t ntr_rp_config;
 void ntr_config_set_default(void);
 
+#define NTR_SCREEN_PRIORITY_FACTOR_DEFAULT (2)
+extern bool ntr_top_screen_priority_prev;
+extern int ntr_screen_priority_factor_prev;
+
 extern char **ntr_auto_ip_list;
 extern uint8_t **ntr_auto_ip_octet_list;
 extern int ntr_auto_ip_count;
