@@ -640,7 +640,7 @@ void ui_main_nk(void)
         nk_window_show(ctx, remote_play_wnd, 1);
         window_closed = 0;
     }
-    if (nk_begin(ctx, remote_play_wnd, nk_rect(25, 10, 600, 650),
+    if (nk_begin(ctx, remote_play_wnd, nk_rect(10, 10, 600, 650),
                  NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_TITLE | NK_WINDOW_CLOSABLE) &&
         show_window)
     {
@@ -653,7 +653,7 @@ void ui_main_nk(void)
         nk_layout_row_dynamic(ctx, 30, 2);
         nk_label(ctx, "View Mode", NK_TEXT_CENTERED);
         int selected = ui_view_mode;
-        struct nk_vec2 combo_size = {combo_width, 200};
+        struct nk_vec2 combo_size = {combo_width, 250};
         const char *view_mode_options[] = {
             "Top and Bottom",
             "Separate Windows",
@@ -996,7 +996,7 @@ void ui_main_nk(void)
     if (focus_window)
         nk_window_set_focus(ctx, remote_play_wnd);
 
-    if (nk_begin(ctx, debug_msg_wnd, nk_rect(625, 10, 175, 275),
+    if (nk_begin(ctx, debug_msg_wnd, nk_rect(615, 10, 175, 275),
                  NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE) &&
         show_window)
     {
