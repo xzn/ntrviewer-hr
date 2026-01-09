@@ -1230,7 +1230,7 @@ static void receive_from_socket()
         rp_lock_wait(ui_nk_lock);
         uint32_t addr = ntohl(remote_addr.sin_addr.s_addr);
         *(uint32_t *)ntr_ip_octet_incoming = __builtin_bswap32(addr);
-        if (*(uint32_t *)ntr_ip_octet)
+        if (!*(uint32_t *)ntr_ip_octet)
             *(uint32_t *)ntr_ip_octet = *(uint32_t *)ntr_ip_octet_incoming;
         rp_lock_rel(ui_nk_lock);
 

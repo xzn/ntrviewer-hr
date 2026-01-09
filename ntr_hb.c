@@ -36,7 +36,7 @@ static int socket_close(SOCKET sock)
     return status;
 }
 
-static SOCKET tcp_connect(int port)
+static SOCKET tcp_connect(int port, uint32_t addr)
 {
     struct sockaddr_in servaddr = {0};
     SOCKET sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -58,16 +58,11 @@ static SOCKET tcp_connect(int port)
     snprintf(
         ip_addr_buf, sizeof(ip_addr_buf),
         "%d.%d.%d.%d",
-        (int)ntr_ip_octet[0],
-        (int)ntr_ip_octet[1],
-        (int)ntr_ip_octet[2],
-        (int)ntr_ip_octet[3]);
-    uint32_t addr =
-        (ntr_ip_octet[0] << 24) |
-        (ntr_ip_octet[1] << 16) |
-        (ntr_ip_octet[2] << 8) |
-        ntr_ip_octet[3];
-    servaddr.sin_addr.s_addr = htonl(addr);
+        (int)((uint8_t *)&addr)[0],
+        (int)((uint8_t *)&addr)[1],
+        (int)((uint8_t *)&addr)[2],
+        (int)((uint8_t *)&addr)[3]);
+    servaddr.sin_addr.s_addr = htonl(__builtin_bswap32(addr));
     servaddr.sin_port = htons(port);
 
     err_log("connecting to %s:%d ...\n", ip_addr_buf, port);
@@ -183,6 +178,13 @@ static int tcp_send_packet_header(SOCKET s, uint32_t seq, uint32_t type, uint32_
     return tcp_send(s, buf, size);
 }
 
+static bool rp_send_need_update;
+static uint32_t rp_send_last_us;
+static struct ntr_rp_config_t rp_config_last;
+static int rp_port_last;
+
+#include "ui_main_nk.h"
+
 thread_ret_t tcp_thread_func(void *arg)
 {
     struct tcp_thread_arg *t = (struct tcp_thread_arg *)arg;
@@ -202,10 +204,21 @@ thread_ret_t tcp_thread_func(void *arg)
     int packet_seq = 0;
     while (program_running)
     {
-        if (*(t->work_state) == CONNECTION_STATE_DISCONNECTED && *(t->work_req_state) == CONNECTION_REQ_STATE_CONNECTING)
+        rp_lock_wait(ui_nk_lock);
+        uint32_t ip_octet_incoming = *(uint32_t *)ntr_ip_octet_incoming;
+        uint32_t ip_octet = *(uint32_t *)ntr_ip_octet;
+        rp_lock_rel(ui_nk_lock);
+
+        if (
+            *(t->work_state) == CONNECTION_STATE_DISCONNECTED &&
+            (
+                *(t->work_req_state) == CONNECTION_REQ_STATE_CONNECTING ||
+                (ip_octet_incoming && ip_octet_incoming == ip_octet)
+            )
+        )
         {
             *(t->work_req_state) = CONNECTION_REQ_STATE_NONE;
-            sockfd = tcp_connect(t->port);
+            sockfd = tcp_connect(t->port, ip_octet);
             if (!socket_valid(sockfd))
             {
                 if (t->remote_play)
@@ -295,18 +308,33 @@ thread_ret_t tcp_thread_func(void *arg)
             }
             ++packet_seq;
 
-            if (t->remote_play && *(t->remote_play))
+            const uint32_t rp_send_next_us = iclock();
+            const bool rp_send_update =
+                memcmp(&rp_config_last, &ntr_rp_config, sizeof(struct ntr_rp_config_t)) ||
+                rp_port_last != ntr_rp_port_bound;
+            rp_send_need_update = rp_send_need_update || rp_send_update;
+            const bool rp_send_wait_timeout = (int32_t)(rp_send_next_us - rp_send_last_us) > 1000000;
+            if (t->remote_play && (*(t->remote_play) || rp_send_update || rp_send_wait_timeout))
             {
+                if (!*(t->remote_play)) {
+                    rp_send_last_us = rp_send_next_us;
+                    memcpy(&rp_config_last, &ntr_rp_config, sizeof(struct ntr_rp_config_t));
+                    rp_port_last = ntr_rp_port_bound;
+                    if (!rp_send_wait_timeout || !rp_send_need_update)
+                        continue;
+                    rp_send_need_update = false;
+                }
+
                 *(t->remote_play) = 0;
 
                 uint32_t args[] = {
-                    ((uint32_t)ntr_rp_config.top_screen_priority << 8) | (uint32_t)ntr_rp_config.screen_priority_factor,
-                    (uint32_t)ntr_rp_config.jpeg_quality,
-                    (uint32_t)ntr_rp_config.bandwidth_limit * 128 * 1024,
+                    ((uint32_t)rp_config_last.top_screen_priority << 8) | (uint32_t)rp_config_last.screen_priority_factor,
+                    (uint32_t)rp_config_last.jpeg_quality,
+                    (uint32_t)rp_config_last.bandwidth_limit * 128 * 1024,
                     1404036572 /* guarding magic */,
-                    (uint32_t)ntr_rp_port_bound |
-                        (ntr_rp_config.kcp_mode ? (uint32_t)(1 << 30) : (uint32_t)0) |
-                        (ntr_rp_config.kcp_mode == 2 ? (uint32_t)(1 << 31) : (uint32_t)0)};
+                    (uint32_t)rp_port_last |
+                        (rp_config_last.kcp_mode ? (uint32_t)(1 << 30) : (uint32_t)0) |
+                        (rp_config_last.kcp_mode == 2 ? (uint32_t)(1 << 31) : (uint32_t)0)};
 
                 ret = tcp_send_packet_header(
                     sockfd, packet_seq, 0, 901,
