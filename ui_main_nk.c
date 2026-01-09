@@ -996,7 +996,7 @@ void ui_main_nk(void)
     if (focus_window)
         nk_window_set_focus(ctx, remote_play_wnd);
 
-    if (nk_begin(ctx, debug_msg_wnd, nk_rect(625, 10, 150, 150),
+    if (nk_begin(ctx, debug_msg_wnd, nk_rect(625, 10, 175, 225),
                  NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE) &&
         show_window)
     {
@@ -1013,6 +1013,7 @@ void ui_main_nk(void)
             else if (menu_connection == CONNECTION_STATE_CONNECTED)
             {
                 menu_work_req_state = CONNECTION_REQ_STATE_DISCONNECTING;
+                ntr_auto_connect = nk_false;
             }
         }
 
@@ -1029,12 +1030,24 @@ void ui_main_nk(void)
             else if (nwm_connection == CONNECTION_STATE_CONNECTED)
             {
                 nwm_work_req_state = CONNECTION_REQ_STATE_DISCONNECTING;
+                ntr_auto_connect = nk_false;
             }
         }
 
-        nk_layout_row_dynamic(ctx, 30, 2);
-        nk_label(ctx, "Stats", NK_TEXT_CENTERED);
-        nk_checkbox_label(ctx, "", &ntr_stats_overlay);
+        nk_layout_row_dynamic(ctx, 30, 1);
+        nk_checkbox_label(ctx, "Stats", &ntr_stats_overlay);
+
+        nk_layout_row_dynamic(ctx, 30, 1);
+        nk_checkbox_label(ctx, "Auto-Connect", &ntr_auto_connect);
+        if (!ntr_auto_connect) {
+            ntr_auto_update_params = nk_false;
+        }
+
+        nk_layout_row_dynamic(ctx, 30, 1);
+        nk_checkbox_label(ctx, "Auto-Update Params", &ntr_auto_update_params);
+        if (ntr_auto_update_params) {
+            ntr_auto_connect = nk_true;
+        }
     }
     nk_end(ctx);
     nk_window_show(ctx, debug_msg_wnd, show_window);

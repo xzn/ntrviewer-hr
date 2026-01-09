@@ -185,6 +185,9 @@ static int rp_port_last;
 
 #include "ui_main_nk.h"
 
+nk_bool ntr_auto_connect = nk_true;
+nk_bool ntr_auto_update_params = nk_true;
+
 thread_ret_t tcp_thread_func(void *arg)
 {
     struct tcp_thread_arg *t = (struct tcp_thread_arg *)arg;
@@ -204,9 +207,12 @@ thread_ret_t tcp_thread_func(void *arg)
     int packet_seq = 0;
     while (program_running)
     {
+        uint32_t ip_octet_incoming;
+        uint32_t ip_octet;
+
         rp_lock_wait(ui_nk_lock);
-        uint32_t ip_octet_incoming = *(uint32_t *)ntr_ip_octet_incoming;
-        uint32_t ip_octet = *(uint32_t *)ntr_ip_octet;
+        ip_octet_incoming = ntr_auto_connect ? *(uint32_t *)ntr_ip_octet_incoming : 0;
+        ip_octet = *(uint32_t *)ntr_ip_octet;
         rp_lock_rel(ui_nk_lock);
 
         if (
@@ -320,7 +326,7 @@ thread_ret_t tcp_thread_func(void *arg)
                     rp_send_last_us = rp_send_next_us;
                     memcpy(&rp_config_last, &ntr_rp_config, sizeof(struct ntr_rp_config_t));
                     rp_port_last = ntr_rp_port_bound;
-                    if (!rp_send_wait_timeout || !rp_send_need_update)
+                    if (!rp_send_wait_timeout || !rp_send_need_update || !ntr_auto_update_params)
                         continue;
                     rp_send_need_update = false;
                 }
