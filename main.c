@@ -661,28 +661,35 @@ static void main_loop(void) {
                         goto skip_evt;
                     }
                     break;
-                case SDL_EVENT_KEY_DOWN:
+                case SDL_EVENT_KEY_UP:
+                case SDL_EVENT_KEY_DOWN: {
+                    int down = evt.type == SDL_EVENT_KEY_DOWN;
                     if (evt.key.windowID != ui_sdl_win_id[SCREEN_TOP]) {
                         goto skip_evt;
                     }
                     switch (evt.key.key) {
                         case SDLK_TAB: {
-                            int shift_down = SDL_GetModState() & (SDL_KMOD_LSHIFT | SDL_KMOD_RSHIFT);
-                            __atomic_store_n(&nk_nav_cmd, shift_down ? NK_NAV_PREVIOUS : NK_NAV_NEXT, __ATOMIC_RELAXED);
+                            if (down) {
+                                int shift_down = SDL_GetModState() & SDL_KMOD_SHIFT;
+                                __atomic_store_n(&nk_nav_cmd, shift_down ? NK_NAV_PREVIOUS : NK_NAV_NEXT, __ATOMIC_RELAXED);
+                            }
                             goto skip_evt;
                         }
 
                         case SDLK_SPACE:
                         case SDLK_RETURN:
                         case SDLK_KP_ENTER:
-                            __atomic_store_n(&nk_nav_cmd, NK_NAV_CONFIRM, __ATOMIC_RELAXED);
+                            if (down)
+                                __atomic_store_n(&nk_nav_cmd, NK_NAV_CONFIRM, __ATOMIC_RELAXED);
                             goto skip_evt;
 
                         case SDLK_ESCAPE:
-                            __atomic_store_n(&nk_nav_cmd, NK_NAV_CANCEL, __ATOMIC_RELAXED);
+                            if (down)
+                                __atomic_store_n(&nk_nav_cmd, NK_NAV_CANCEL, __ATOMIC_RELAXED);
                             goto skip_evt;
                     }
                     break;
+                }
             }
 
             if (!is_renderer_d3d11()) {
@@ -723,14 +730,16 @@ skip_evt:
         }
     }
 
-    if (ui_sdl_text_input_started && !ui_sdl_text_input_needed) {
-        SDL_StopTextInput(ui_sdl_win[SCREEN_TOP]);
-        ui_sdl_text_input_started = 0;
-        // err_log("sdl text input stopped\n");
-    } else if (!ui_sdl_text_input_started && ui_sdl_text_input_needed) {
-        SDL_StartTextInput(ui_sdl_win[SCREEN_TOP]);
-        ui_sdl_text_input_started = 1;
-        // err_log("sdl text input started\n");
+    if (!SDL_GetKeyboardState(NULL)[SDL_SCANCODE_TAB]) {
+        if (ui_sdl_text_input_started && !ui_sdl_text_input_needed) {
+            SDL_StopTextInput(ui_sdl_win[SCREEN_TOP]);
+            ui_sdl_text_input_started = 0;
+            err_log("sdl text input stopped\n");
+        } else if (!ui_sdl_text_input_started && ui_sdl_text_input_needed) {
+            SDL_StartTextInput(ui_sdl_win[SCREEN_TOP]);
+            ui_sdl_text_input_started = 1;
+            err_log("sdl text input started\n");
+        }
     }
 
     update_game_controller();

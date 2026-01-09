@@ -212,6 +212,8 @@ static void focus_next_property(struct nk_context *ctx, const char *name, int va
     win->property.name = hash;
     win->property.select_start = 0;
     win->property.select_end = win->property.length;
+
+    ui_sdl_text_input_needed = 1;
 }
 
 static void cancel_next_property(struct nk_context *ctx)
@@ -229,11 +231,15 @@ static void cancel_next_property(struct nk_context *ctx)
         win->property.select_start = 0;
         win->property.select_end = 0;
     }
+
+    ui_sdl_text_input_needed = 0;
 }
 
 static void confirm_next_property(struct nk_context *ctx)
 {
     nk_input_key(ctx, NK_KEY_ENTER, nk_true);
+
+    ui_sdl_text_input_needed = 0;
 }
 
 static nk_bool check_next_property(struct nk_context *ctx, const char *name)
@@ -359,13 +365,13 @@ static void check_nav_property_prev(struct nk_context *ctx, const char *name, en
         if (win->property.name == hash)
         {
             set_nav_next(NK_NAV_FOCUS_NORMAL, nk_focus);
-            ui_sdl_text_input_needed = win->property.state == NK_PROPERTY_EDIT;
+            if (win->property.state == NK_PROPERTY_EDIT)
+                ui_sdl_text_input_needed = 1;
         }
     }
     else if (nk_nav_focus != NK_NAV_FOCUS_NAV)
     {
         nk_nav_focus = NK_NAV_FOCUS_NONE;
-        ui_sdl_text_input_needed = 0;
     }
     ctx->input.keyboard.keys[NK_KEY_ENTER].clicked = 0;
 
