@@ -836,6 +836,19 @@ static void main_ntr(void) {
         program_running = false;
         goto join_nwm_tcp;
     }
+    thread_t nwm_o3ds_tcp_thread;
+    struct tcp_thread_arg nwm_o3ds_tcp_thread_arg = {
+        &nwm_o3ds_work_state,
+        &nwm_o3ds_work_req_state,
+        NULL,
+        5000 + 0x19,
+    };
+    if ((ret = thread_create(nwm_o3ds_tcp_thread, tcp_thread_func, &nwm_o3ds_tcp_thread_arg)))
+    {
+        err_log("nwm_o3ds_tcp_thread create failed\n");
+        program_running = false;
+        goto join_nwm_o3ds_tcp;
+    }
 
     rp_lock_init(sdl_cursors_lock);
     rp_lock_init(sdl_game_controller_lock);
@@ -886,6 +899,8 @@ join_win_top:
     thread_cancel(menu_tcp_thread);
     thread_cancel(udp_recv_thread);
 #endif
+    thread_join(nwm_o3ds_tcp_thread);
+join_nwm_o3ds_tcp:
     thread_join(nwm_tcp_thread);
 join_nwm_tcp:
     thread_join(menu_tcp_thread);

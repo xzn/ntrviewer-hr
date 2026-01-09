@@ -11,8 +11,8 @@ struct tcp_thread_arg {
     short port;
 };
 
-extern atomic_int menu_work_state, nwm_work_state;
-extern atomic_int menu_work_req_state, nwm_work_req_state;
+extern atomic_int menu_work_state, nwm_work_state, nwm_o3ds_work_state;
+extern atomic_int menu_work_req_state, nwm_work_req_state, nwm_o3ds_work_req_state;
 extern atomic_bool menu_remote_play;
 
 enum connection_state_t

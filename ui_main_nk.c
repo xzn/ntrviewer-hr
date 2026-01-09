@@ -176,8 +176,8 @@ static const char *connection_req_msg[] = {
 };
 _Static_assert(sizeof(connection_req_msg) / sizeof(*connection_req_msg) == CONNECTION_REQ_STATE_COUNT);
 
-static enum connection_state_t menu_connection, nwm_connection;
-static enum connection_req_state_t menu_connection_req, nwm_connection_req;
+static enum connection_state_t menu_connection, nwm_connection, nwm_o3ds_connection;
+static enum connection_req_state_t menu_connection_req, nwm_connection_req, nwm_o3ds_connection_req;
 
 // HACK
 // Try to get Nuklear to accept keyboard navigation
@@ -996,7 +996,7 @@ void ui_main_nk(void)
     if (focus_window)
         nk_window_set_focus(ctx, remote_play_wnd);
 
-    if (nk_begin(ctx, debug_msg_wnd, nk_rect(625, 10, 175, 225),
+    if (nk_begin(ctx, debug_msg_wnd, nk_rect(625, 10, 175, 275),
                  NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE) &&
         show_window)
     {
@@ -1030,6 +1030,22 @@ void ui_main_nk(void)
             else if (nwm_connection == CONNECTION_STATE_CONNECTED)
             {
                 nwm_work_req_state = CONNECTION_REQ_STATE_DISCONNECTING;
+            }
+        }
+
+        nk_layout_row_dynamic(ctx, 30, 2);
+        nk_label(ctx, "NWM O3DS", NK_TEXT_CENTERED);
+        nwm_o3ds_connection = nwm_o3ds_work_state;
+        nwm_o3ds_connection_req = nwm_o3ds_work_req_state;
+        if (nk_button_label(ctx, nwm_o3ds_connection_req ? connection_req_msg[nwm_o3ds_work_req_state] : connection_msg[nwm_o3ds_connection]))
+        {
+            if (nwm_o3ds_connection == CONNECTION_STATE_DISCONNECTED)
+            {
+                nwm_o3ds_work_req_state = CONNECTION_REQ_STATE_CONNECTING;
+            }
+            else if (nwm_o3ds_connection == CONNECTION_STATE_CONNECTED)
+            {
+                nwm_o3ds_work_req_state = CONNECTION_REQ_STATE_DISCONNECTING;
             }
         }
 

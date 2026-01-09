@@ -19,8 +19,8 @@ struct tcp_packet_hdr {
     uint32_t data_len;
 };
 
-atomic_int menu_work_state, nwm_work_state;
-atomic_int menu_work_req_state, nwm_work_req_state;
+atomic_int menu_work_state, nwm_work_state, nwm_o3ds_work_state;
+atomic_int menu_work_req_state, nwm_work_req_state, nwm_o3ds_work_req_state;
 atomic_bool menu_remote_play;
 
 static int socket_close(SOCKET sock)
