@@ -108,7 +108,7 @@ void ntr_detect_3ds_ip(void);
 void ntr_get_adapter_list(void);
 
 extern nk_bool ntr_stats_overlay;
-extern nk_bool ntr_auto_connect;
+extern nk_bool ntr_auto_reconnect;
 extern nk_bool ntr_auto_update_params;
 
 #endif

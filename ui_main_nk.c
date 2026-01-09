@@ -1013,7 +1013,7 @@ void ui_main_nk(void)
             else if (menu_connection == CONNECTION_STATE_CONNECTED)
             {
                 menu_work_req_state = CONNECTION_REQ_STATE_DISCONNECTING;
-                ntr_auto_connect = nk_false;
+                ntr_auto_reconnect = nk_false;
             }
         }
 
@@ -1030,7 +1030,7 @@ void ui_main_nk(void)
             else if (nwm_connection == CONNECTION_STATE_CONNECTED)
             {
                 nwm_work_req_state = CONNECTION_REQ_STATE_DISCONNECTING;
-                ntr_auto_connect = nk_false;
+                ntr_auto_reconnect = nk_false;
             }
         }
 
@@ -1038,15 +1038,15 @@ void ui_main_nk(void)
         nk_checkbox_label(ctx, "Stats", &ntr_stats_overlay);
 
         nk_layout_row_dynamic(ctx, 30, 1);
-        nk_checkbox_label(ctx, "Auto-Connect", &ntr_auto_connect);
-        if (!ntr_auto_connect) {
+        nk_checkbox_label(ctx, "Auto-Reconnect", &ntr_auto_reconnect);
+        if (!ntr_auto_reconnect) {
             ntr_auto_update_params = nk_false;
         }
 
         nk_layout_row_dynamic(ctx, 30, 1);
         nk_checkbox_label(ctx, "Auto-Update Params", &ntr_auto_update_params);
         if (ntr_auto_update_params) {
-            ntr_auto_connect = nk_true;
+            ntr_auto_reconnect = nk_true;
         }
     }
     nk_end(ctx);

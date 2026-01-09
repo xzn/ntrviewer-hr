@@ -185,7 +185,7 @@ static int rp_port_last;
 
 #include "ui_main_nk.h"
 
-nk_bool ntr_auto_connect = nk_true;
+nk_bool ntr_auto_reconnect = nk_true;
 nk_bool ntr_auto_update_params = nk_true;
 
 thread_ret_t tcp_thread_func(void *arg)
@@ -211,7 +211,7 @@ thread_ret_t tcp_thread_func(void *arg)
         uint32_t ip_octet;
 
         rp_lock_wait(ui_nk_lock);
-        ip_octet_incoming = ntr_auto_connect ? *(uint32_t *)ntr_ip_octet_incoming : 0;
+        ip_octet_incoming = ntr_auto_reconnect ? *(uint32_t *)ntr_ip_octet_incoming : 0;
         ip_octet = *(uint32_t *)ntr_ip_octet;
         rp_lock_rel(ui_nk_lock);
 
