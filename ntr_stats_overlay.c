@@ -139,8 +139,8 @@ static void ovDrawRect(u8 *addr, u32 stride, int posR, int posC, int h, int w, u
     }
 }
 
-#define CHAR_WIDTH (8)
-#define CHAR_HEIGHT (8)
+#define CHAR_DISP_WIDTH (8)
+#define CHAR_DISP_HEIGHT (8)
 
 static void ovDrawChar(u8 *addr, u32 stride, u8 letter, int y, int x, u8 r, u8 g, u8 b)
 {
@@ -154,12 +154,12 @@ static void ovDrawChar(u8 *addr, u32 stride, u8 letter, int y, int x, u8 r, u8 g
         letter = '.';
     }
 
-    c = (letter - 32) * CHAR_HEIGHT;
+    c = (letter - 32) * CHAR_DISP_HEIGHT;
 
-    for (i = 0; i < CHAR_HEIGHT; i++) {
+    for (i = 0; i < CHAR_DISP_HEIGHT; i++) {
         mask = 0b10000000;
         l = font[i + c];
-        for (k = 0; k < CHAR_WIDTH; k++) {
+        for (k = 0; k < CHAR_DISP_WIDTH; k++) {
             if ((mask >> k) & l) {
                 ovDrawPixel(addr, stride, i + y, k + x, r, g, b);
             }
@@ -170,11 +170,11 @@ static void ovDrawChar(u8 *addr, u32 stride, u8 letter, int y, int x, u8 r, u8 g
 static void ovDrawString(u8 *addr, u32 stride, u32 scrnWidth, int posR, int posC, u32 r, u32 g, u32 b, const char *buf)
 {
     while (*buf) {
-        if ((posR + CHAR_HEIGHT >= (int)stride / GL_CHANNELS_N) || (posC + CHAR_WIDTH >= (int)scrnWidth))
+        if ((posR + CHAR_DISP_HEIGHT >= (int)stride / GL_CHANNELS_N) || (posC + CHAR_DISP_WIDTH >= (int)scrnWidth))
             return;
         ovDrawChar(addr, stride, (u8)*buf, posR, posC, r, g, b);
         buf++;
-        posC += CHAR_WIDTH;
+        posC += CHAR_DISP_WIDTH;
     }
 }
 
@@ -192,7 +192,7 @@ static struct ov_color_t {
 };
 
 static void drawOverlayOnScreenMode0(u8 *addr, u32 stride, u32 scrnWidth, const char *buf) {
-    ovDrawTranspartBlackRect(addr, stride, ROW_START, COL_START, CHAR_HEIGHT + ROW_MARGIN * 2, strlen(buf) * CHAR_WIDTH + COL_MARGIN * 2, 1);
+    ovDrawTranspartBlackRect(addr, stride, ROW_START, COL_START, CHAR_DISP_HEIGHT + ROW_MARGIN * 2, strlen(buf) * CHAR_DISP_WIDTH + COL_MARGIN * 2, 1);
     ovDrawString(addr, stride, scrnWidth, ROW_START + ROW_MARGIN, COL_START + COL_MARGIN, text_color_info.r, text_color_info.g, text_color_info.b, buf);
 }
 
