@@ -179,7 +179,7 @@ static const char *d3d_vs_src =
     "}\n";
 #define d3d_ui_ps_src_0 \
     " if (any(color != float4(0.0, 0.0, 0.0, 0.0)))\n" \
-    "  color = float4(color.rgb * (15.0 / 16.0), 15.0 / 16.0);\n"
+    "  color = float4(color.rgb * (7.0 / 8.0), 7.0 / 8.0);\n"
 #define d3d_ps_src_use_0(src_0) \
     "SamplerState my_samp: register(s0);\n" \
     "Texture2D my_tex: register(t0);\n" \

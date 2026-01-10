@@ -102,6 +102,7 @@ void nk_backend_font_init(void)
         // nk_style_set_font(ui_nk_ctx, &roboto->handle);
     }
 
+    nk_default_color_style[NK_COLOR_WINDOW].a = 255 * 7 / 8;
     set_style(ui_nk_ctx, THEME_BLACK);
     // set_style(ui_nk_ctx, THEME_WHITE);
     // set_style(ui_nk_ctx, THEME_RED);

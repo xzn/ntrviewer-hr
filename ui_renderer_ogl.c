@@ -52,7 +52,7 @@ static GLuint gl_fbo_sc[SCREEN_COUNT];
 
 #define fs_ui_str_0 \
     " if (color != vec4(0.0))\n" \
-    "  color = vec4(color.rgb * (15.0 / 16.0), 15.0 / 16.0);\n"
+    "  color = vec4(color.rgb * (7.0 / 8.0), 7.0 / 8.0);\n"
 
 #define fs_str_use_0(str_0) \
     "varying vec2 v_texCoord;\n" \
@@ -556,22 +556,6 @@ static void ogl_upscaling_close(void) {
 }
 
 static int ogl_renderer_init(void) {
-    if (is_renderer_gles()) {
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-    } else {
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-        // SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-        // SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
-    }
-    if (is_renderer_ogl_dbg) {
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_DEBUG_FLAG);
-    }
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-
     gl_context[SCREEN_TOP] = SDL_GL_CreateContext(ogl_win[SCREEN_TOP]);
     if (!gl_context[SCREEN_TOP]) {
         err_log("SDL_GL_CreateContext: %s\n", SDL_GetError());
@@ -626,6 +610,7 @@ static int ogl_renderer_init(void) {
         glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
         glDebugMessageCallback(on_gl_error, NULL);
     }
+    glDisable(GL_FRAMEBUFFER_SRGB);
 
     err_log("ogl version string: %s\n", glGetString(GL_VERSION));
     glGetIntegerv(GL_MAJOR_VERSION, &ogl_version_major);
@@ -650,6 +635,7 @@ static int ogl_renderer_init(void) {
         return -1;
     }
     SDL_GL_SetSwapInterval(1);
+    glDisable(GL_FRAMEBUFFER_SRGB);
 
     if (ogl_res_init())
         return -1;
@@ -693,6 +679,23 @@ static void ogl_renderer_destroy(void) {
 }
 
 int ui_renderer_ogl_init(void) {
+    if (is_renderer_gles()) {
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+    } else {
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+        // SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+        // SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
+    }
+    if (is_renderer_ogl_dbg) {
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_DEBUG_FLAG);
+    }
+    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    SDL_GL_SetAttribute(SDL_GL_FRAMEBUFFER_SRGB_CAPABLE, 1);
+
     if (sdl_win_init(ogl_win, SDL_WINDOW_OPENGL)) {
         return -1;
     }

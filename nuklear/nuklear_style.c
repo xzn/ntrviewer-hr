@@ -41,8 +41,7 @@ NK_API void nk_style_default(struct nk_context *ctx){nk_style_from_table(ctx, 0)
     NK_COLOR(NK_COLOR_KNOB_CURSOR_HOVER,        120,120,120,255) \
     NK_COLOR(NK_COLOR_KNOB_CURSOR_ACTIVE,       150,150,150,255)
 
-NK_GLOBAL const struct nk_color
-nk_default_color_style[NK_COLOR_COUNT] = {
+struct nk_color nk_default_color_style[NK_COLOR_COUNT] = {
 #define NK_COLOR(a,b,c,d,e) {b,c,d,e},
     NK_COLOR_MAP(NK_COLOR)
 #undef NK_COLOR
