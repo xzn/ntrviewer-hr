@@ -98,13 +98,14 @@ endif
 endif
 
 ifeq ($(OS),Windows_NT)
-LDLIBS += -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8 -lws2_32 -liphlpapi
+LDLIBS += -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8 -lws2_32 -liphlpapi
 ifneq ($(LITE),1)
 LDLIBS += -lshaderc_combined -lrashader -llcms2 -ld3dcompiler -ld3d11 -ldxgi -ldwmapi -lpathcch -lbcrypt -lruntimeobject -lntdll
 ifeq ($(DEBUG),1)
 LDLIBS += -lpropsys -luserenv -ldxcompiler
 endif
 endif
+LDLIBS += -loleaut32
 else
 ifneq ($(LITE),1)
 ifneq ($(OS),Darwin)
