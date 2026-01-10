@@ -447,7 +447,8 @@ void update_bottom_screen_cursor(void) {
 
     float x, y;
     UNUSED Uint32 state = SDL_GetMouseState(&x, &y);
-    float scale = is_win_size_in_pixels ? 1 / ui_nk_scale : 1;
+    view_mode_t vm = __atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED);
+    float scale = is_win_size_in_pixels ? 1 / ui_win_scale[sdl_get_bottom_screen_ctx(vm)] : 1;
     SDL_Point point;
     int i;
     for (i = 0; i < SCREEN_COUNT; ++i) {
@@ -482,7 +483,7 @@ static void sdl_set_touch_screen_coord(SDL_Point *point) {
 
 bool sdl_process_bottom_screen_event(SDL_Event *evt) {
     view_mode_t vm = __atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED);
-    float scale = is_win_size_in_pixels ? 1 / ui_nk_scale : 1;
+    float scale = is_win_size_in_pixels ? 1 / ui_win_scale[sdl_get_bottom_screen_ctx(vm)] : 1;
     switch (evt->type) {
         case SDL_EVENT_MOUSE_MOTION: {
             SDL_Point point;
