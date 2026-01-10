@@ -218,8 +218,6 @@ int ui_renderer_sdl_init(void) {
     for (int i = 0; i < SCREEN_COUNT; ++i)
         ui_sdl_win[i] = sdl_win[i];
 
-    sdl_set_wminfo();
-
     for (int i = 0; i < SCREEN_COUNT; ++i) {
         ui_win_width_drawable[i] = 1;
         ui_win_height_drawable[i] = 1;
@@ -229,6 +227,8 @@ int ui_renderer_sdl_init(void) {
     if (sdl_renderer_init()) {
         return -1;
     }
+
+    sdl_set_wminfo();
 
     ui_upscaling_filter_count = UPSCALING_COUNT;
     ui_upscaling_filter_options = upscaling_options;
@@ -244,9 +244,9 @@ void ui_renderer_sdl_destroy(void) {
     ui_upscaling_filter_options = NULL;
     ui_upscaling_filter_count = 0;
 
-    sdl_renderer_destroy();
-
     sdl_reset_wminfo();
+
+    sdl_renderer_destroy();
 
     for (int i = 0; i < SCREEN_COUNT; ++i)
         ui_sdl_win[i] = NULL;

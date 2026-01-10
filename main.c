@@ -286,8 +286,16 @@ static void parse_args(int argc, char **argv)
 }
 
 #ifdef _WIN32
+static HWND wndproc_hwnd[SCREEN_COUNT];
 static LRESULT CALLBACK main_window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
-    int i = GetWindowLongPtrA(hwnd, GWLP_USERDATA);
+    int i = 0;
+    for (; i < SCREEN_COUNT; ++i)
+        if (wndproc_hwnd[i] == hwnd)
+            break;
+    if (i == SCREEN_COUNT) {
+        err_log("Unknown hwnd: %p\n", hwnd);
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
 
     bool need_handle_input = 0;
     UNUSED LPARAM handled_lparam = lparam;
@@ -931,7 +939,7 @@ static void main_windows(void) {
     HBRUSH bg_brush = CreateSolidBrush(
         RGB(nk_window_bgcolor.r, nk_window_bgcolor.g, nk_window_bgcolor.b));
     for (int i = 0; i < SCREEN_COUNT; ++i) {
-        SetWindowLongPtrA(ui_hwnd[i], GWLP_USERDATA, i);
+        wndproc_hwnd[i] = ui_hwnd[i];
         ui_sdl_wnd_proc[i] = GetWindowLongPtrA(ui_hwnd[i], GWLP_WNDPROC);
         SetWindowLongPtrA(ui_hwnd[i], GWLP_WNDPROC, (LONG_PTR)main_window_proc);
         SetClassLongPtr(ui_hwnd[i], GCLP_HBRBACKGROUND, (LONG_PTR)bg_brush);

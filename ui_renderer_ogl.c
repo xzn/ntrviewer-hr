@@ -711,8 +711,6 @@ int ui_renderer_ogl_init(void) {
             ui_sdl_win[i] = ogl_win[i];
     }
 
-    sdl_set_wminfo();
-
     for (int i = 0; i < SCREEN_COUNT; ++i) {
         ui_win_width_drawable[i] = 1;
         ui_win_height_drawable[i] = 1;
@@ -723,6 +721,8 @@ int ui_renderer_ogl_init(void) {
         return -1;
     }
 
+    sdl_set_wminfo();
+
     ui_nk_ctx = nk_ctx;
 
     return 0;
@@ -731,9 +731,9 @@ int ui_renderer_ogl_init(void) {
 void ui_renderer_ogl_destroy(void) {
     ui_nk_ctx = NULL;
 
-    ogl_renderer_destroy();
-
     sdl_reset_wminfo();
+
+    ogl_renderer_destroy();
 
     for (int i = 0; i < SCREEN_COUNT; ++i)
         ui_sdl_win[i] = NULL;
