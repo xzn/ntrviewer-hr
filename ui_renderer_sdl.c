@@ -94,10 +94,7 @@ static int sdl_renderer_init(void) {
                         continue;
                     }
 
-// D3D12 would crash when using multiple windows
 #define TRY_CREATE_RENDERER() ({ \
-    if (strcmp(driver_name, "direct3d12") == 0) \
-        continue; \
     sdl_renderer[i] = SDL_CreateRenderer(sdl_win[i], driver_name); \
     if (!sdl_renderer[i]) { \
         err_log("SDL_CreateRenderer: %s\n", SDL_GetError()); \
@@ -160,6 +157,14 @@ static int sdl_renderer_init(void) {
 
         SDL_SetRenderVSync(sdl_renderer[i], 1);
 
+        if (SDL_strstr(driver_name, "opengl")) {
+            void (*p_glDisable)(GLenum cap) = (void (*)(GLenum cap))SDL_GL_GetProcAddress("glDisable");
+            if (p_glDisable)
+                p_glDisable(GL_FRAMEBUFFER_SRGB);
+            else
+                err_log("SDL_GL_GetProcAddress glDisable failed\n");
+        }
+
         if (i == SCREEN_TOP) {
             err_log("%s %s\n", driver_name ? driver_name : "", renderer_single_thread ? "single thread" : renderer_evt_sync ? "evt sync" : "");
         }
@@ -203,6 +208,9 @@ static const char *upscaling_options[] = {
 _Static_assert(sizeof(upscaling_options) / sizeof(*upscaling_options) == UPSCALING_COUNT);
 
 int ui_renderer_sdl_init(void) {
+    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    SDL_GL_SetAttribute(SDL_GL_FRAMEBUFFER_SRGB_CAPABLE, 1);
+
     if (sdl_win_init(sdl_win, 0)) {
         return -1;
     }
