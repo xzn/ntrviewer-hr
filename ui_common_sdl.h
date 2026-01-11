@@ -140,16 +140,12 @@ void draw_screen_get_dims_lite(
     int *out_ctx_height
 );
 
-void draw_screen_get_blur_dims(
-    int screen_top_bot, int ctx_top_bot, int win_shared, view_mode_t view_mode, int width, int height,
-    double *out_ctx_left_f,
-    double *out_ctx_top_f,
-    double *out_ctx_right_f,
-    double *out_ctx_bot_f,
-    double *out_left_f,
-    double *out_top_f,
-    double *out_right_f,
-    double *out_bot_f
+void draw_screen_get_dims_win_shared(
+    int screen_top_bot, int ctx_top_bot, int width, int height,
+    int *out_ctx_left,
+    int *out_ctx_top,
+    int *out_ctx_width,
+    int *out_ctx_height
 );
 
 void draw_screen_get_dims(

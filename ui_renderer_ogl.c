@@ -22,14 +22,8 @@ static struct nk_context *nk_ctx;
 SDL_GLContext gl_context[SCREEN_COUNT];
 static int ogl_version_major, ogl_version_minor;
 static bool gl_use_vao;
-
-static GLuint gl_vao[SCREEN_COUNT][SCREEN_COUNT];
-static GLuint gl_vbo[SCREEN_COUNT][SCREEN_COUNT];
-static GLuint gl_ebo[SCREEN_COUNT];
-
+static GLuint gl_vao[SCREEN_COUNT];
 static GLuint gl_vao_fbo;
-static GLuint gl_vbo_fbo;
-static GLuint gl_ebo_fbo;
 
 #ifdef _WIN32
 static HWND ogl_hwnd[SCREEN_COUNT];
@@ -41,13 +35,28 @@ static GLuint gl_fbo_sc[SCREEN_COUNT];
 #define GLES_GLSL_VERSION "#version 100\n" "precision highp float;\n"
 #define OGL_GLSL_VERSION "#version 110\n"
 #define vs_str \
-    "attribute vec4 a_position;\n" \
-    "attribute vec2 a_texCoord;\n" \
+    "attribute float a_index;\n" \
     "varying vec2 v_texCoord;\n" \
     "void main()\n" \
     "{\n" \
-    " gl_Position = a_position;\n" \
-    " v_texCoord = a_texCoord;\n" \
+    " v_texCoord = vec2(a_index == 1.0, a_index == 2.0) * 2.0;\n" \
+    " gl_Position = vec4(v_texCoord * 2.0 + -1.0, 0.0, 1.0);\n" \
+    "}\n"
+#define vs_data_str \
+    "attribute float a_index;\n" \
+    "varying vec2 v_texCoord;\n" \
+    "void main()\n" \
+    "{\n" \
+    " v_texCoord = vec2(a_index == 1.0, a_index == 2.0) * 2.0;\n" \
+    " gl_Position = vec4(v_texCoord.yx * 2.0 + -1.0, 0.0, 1.0);\n" \
+    "}\n"
+#define vs_data_csc_str \
+    "attribute float a_index;\n" \
+    "varying vec2 v_texCoord;\n" \
+    "void main()\n" \
+    "{\n" \
+    " v_texCoord = vec2(a_index == 1.0, a_index == 2.0) * 2.0;\n" \
+    " gl_Position = vec4(v_texCoord.yx * vec2(2.0, -2.0) + vec2(-1.0, 1.0), 0.0, 1.0);\n" \
     "}\n"
 
 #define fs_ui_str_0 \
@@ -67,42 +76,42 @@ static GLuint gl_fbo_sc[SCREEN_COUNT];
 #define fs_str fs_str_use_0("")
 #define fs_ui_str fs_str_use_0(fs_ui_str_0)
 
-static GLfloat fbo_vertices_pos[4][3] = {
-    {-1.f, -1.f, 0.0f}, // Position 1
-    {-1.f, 1.f, 0.0f},  // Position 0
-    {1.f, -1.f, 0.0f},  // Position 2
-    {1.f, 1.f, 0.0f},   // Position 3
-};
+#define OGL_GLSL3_VERSION "#version 130\n"
+#define vs3_str \
+    "out vec2 v_texCoord;\n" \
+    "void main()\n" \
+    "{\n" \
+    " v_texCoord = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);\n" \
+    " gl_Position = vec4(v_texCoord * 2.0f + -1.0f, 0.0f, 1.0f);\n" \
+    "}\n"
+#define vs3_data_str \
+    "out vec2 v_texCoord;\n" \
+    "void main()\n" \
+    "{\n" \
+    " v_texCoord = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);\n" \
+    " gl_Position = vec4(v_texCoord.yx * 2.0f - 1.0f, 0.0f, 1.0f);\n" \
+    "}\n"
+#define vs3_data_csc_str \
+    "out vec2 v_texCoord;\n" \
+    "void main()\n" \
+    "{\n" \
+    " v_texCoord = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);\n" \
+    " gl_Position = vec4(v_texCoord.yx * vec2(2.0f, -2.0f) + vec2(-1.0f, 1.0f), 0.0f, 1.0f);\n" \
+    "}\n"
 
-static GLfloat fbo_vertices_tex_coord[4][2] = {
-    {0.0f, 0.0f}, // TexCoord 2
-    {0.0f, 1.0f}, // TexCoord 1
-    {1.0f, 0.0f}, // TexCoord 0
-    {1.0f, 1.0f}, // TexCoord 3
-};
-static GLushort fbo_indices[] =
-    {0, 1, 2, 1, 2, 3};
+#define fs3_str_use_0(str_0) \
+    "in vec2 v_texCoord;\n" \
+    "uniform sampler2D s_texture;\n" \
+    "out vec4 fragColor;\n" \
+    "void main()\n" \
+    "{\n" \
+    " vec4 color = texture2D(s_texture, v_texCoord);\n" \
+    str_0 \
+    " fragColor = color;\n" \
+    "}\n"
 
-static GLfloat vertices_pos[4][3] = {
-    { 1.0f, -1.0f, 0.0f },  // Position 2
-    { -1.0f, -1.0f, 0.0f }, // Position 1
-    { -1.0f, 1.0f, 0.0f },  // Position 0
-    { 1.0f, 1.0f, 0.0f },   // Position 3
-};
-
-static GLfloat vertices_tex_coord[4][2] = {
-    {1.0f, 0.0f}, // TexCoord 2
-    {0.0f, 0.0f}, // TexCoord 1
-    {0.0f, 1.0f}, // TexCoord 0
-    {1.0f, 1.0f}, // TexCoord 3
-};
-static GLushort indices[] =
-    {0, 1, 2, 0, 2, 3};
-
-struct vao_vertice_t {
-    GLfloat pos[3];
-    GLfloat tex_coord[2];
-};
+#define fs3_str fs3_str_use_0("")
+#define fs3_ui_str fs3_str_use_0(fs_ui_str_0)
 
 static GLuint load_shader(GLenum type, const char *shaderSrc)
 {
@@ -205,13 +214,20 @@ end:
 }
 
 GLuint gl_program[SCREEN_COUNT];
+GLuint gl_csc_program[SCREEN_COUNT];
+GLuint gl_cursor_program;
 GLuint gl_ui_program;
-GLint gl_position_loc[SCREEN_COUNT];
-GLint gl_tex_coord_loc[SCREEN_COUNT];
+
+GLint gl_index_loc[SCREEN_COUNT];
 GLint gl_sampler_loc[SCREEN_COUNT];
 
-GLint gl_fbo_position_loc;
-GLint gl_fbo_tex_coord_loc;
+GLint gl_csc_index_loc[SCREEN_COUNT];
+GLint gl_csc_sampler_loc[SCREEN_COUNT];
+
+GLuint gl_cursor_index_loc;
+GLuint gl_cursor_sampler_loc;
+
+GLint gl_fbo_index_loc;
 GLint gl_fbo_sampler_loc;
 
 static void on_gl_error(
@@ -241,62 +257,37 @@ static int ogl_res_init(void) {
         if (j == SCREEN_TOP) {
             if (is_renderer_gles()) {
                 gl_ui_program = Load_program(GLES_GLSL_VERSION vs_str, GLES_GLSL_VERSION fs_ui_str);
+                gl_fbo_index_loc = glGetAttribLocation(gl_ui_program, "a_index");
             } else {
-                gl_ui_program = Load_program(OGL_GLSL_VERSION vs_str, OGL_GLSL_VERSION fs_ui_str);
+                gl_ui_program = Load_program(OGL_GLSL3_VERSION vs3_str, OGL_GLSL3_VERSION fs3_ui_str);
             }
-            gl_fbo_position_loc = glGetAttribLocation(gl_ui_program, "a_position");
-            gl_fbo_tex_coord_loc = glGetAttribLocation(gl_ui_program, "a_texCoord");
             gl_fbo_sampler_loc = glGetUniformLocation(gl_ui_program, "s_texture");
+
+            if (is_renderer_gles()) {
+                gl_cursor_program = Load_program(GLES_GLSL_VERSION vs_str, GLES_GLSL_VERSION fs_str);
+                gl_cursor_index_loc = glGetAttribLocation(gl_cursor_program, "a_index");
+            } else {
+                gl_cursor_program = Load_program(OGL_GLSL3_VERSION vs3_str, OGL_GLSL3_VERSION fs3_str);
+            }
+            gl_cursor_sampler_loc = glGetUniformLocation(gl_cursor_program, "s_texture");
         }
+
         if (is_renderer_gles()) {
-            gl_program[j] = Load_program(GLES_GLSL_VERSION vs_str, GLES_GLSL_VERSION fs_str);
+            gl_program[j] = Load_program(GLES_GLSL_VERSION vs_data_str, GLES_GLSL_VERSION fs_str);
+            gl_index_loc[j] = glGetAttribLocation(gl_program[j], "a_index");
+            gl_csc_program[j] = Load_program(GLES_GLSL_VERSION vs_data_csc_str, GLES_GLSL_VERSION fs_str);
+            gl_csc_index_loc[j] = glGetAttribLocation(gl_csc_program[j], "a_index");
         } else {
-            gl_program[j] = Load_program(OGL_GLSL_VERSION vs_str, OGL_GLSL_VERSION fs_str);
+            gl_program[j] = Load_program(OGL_GLSL3_VERSION vs3_data_str, OGL_GLSL3_VERSION fs3_str);
+            gl_csc_program[j] = Load_program(OGL_GLSL3_VERSION vs3_data_csc_str, OGL_GLSL3_VERSION fs3_str);
         }
-        gl_position_loc[j] = glGetAttribLocation(gl_program[j], "a_position");
-        gl_tex_coord_loc[j] = glGetAttribLocation(gl_program[j], "a_texCoord");
         gl_sampler_loc[j] = glGetUniformLocation(gl_program[j], "s_texture");
+        gl_csc_sampler_loc[j] = glGetUniformLocation(gl_csc_program[j], "s_texture");
 
         if (gl_use_vao) {
-            for (int i = 0; i < SCREEN_COUNT; ++i) {
-                glGenVertexArrays(1, &gl_vao[j][i]);
-                glGenBuffers(1, &gl_vbo[j][i]);
-            }
-            glGenBuffers(1, &gl_ebo[j]);
-
-            for (int i = 0; i < SCREEN_COUNT; ++i) {
-                glBindVertexArray(gl_vao[j][i]);
-                glBindBuffer(GL_ARRAY_BUFFER, gl_vbo[j][i]);
-                glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_ebo[j]);
-                if (i == SCREEN_TOP)
-                    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
-                glEnableVertexAttribArray(gl_position_loc[j]);
-                glEnableVertexAttribArray(gl_tex_coord_loc[j]);
-                glVertexAttribPointer(gl_position_loc[j], 3, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, pos));
-                glVertexAttribPointer(gl_tex_coord_loc[j], 2, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, tex_coord));
-            }
-
-            if (j == SCREEN_TOP) {
+            glGenVertexArrays(1, &gl_vao[j]);
+            if (j == SCREEN_TOP)
                 glGenVertexArrays(1, &gl_vao_fbo);
-                glGenBuffers(1, &gl_vbo_fbo);
-                glGenBuffers(1, &gl_ebo_fbo);
-
-                glBindVertexArray(gl_vao_fbo);
-                glBindBuffer(GL_ARRAY_BUFFER, gl_vbo_fbo);
-                struct vao_vertice_t fbo_vertices[4];
-                for (int i = 0; i < 4; ++i) {
-                    memcpy(fbo_vertices[i].pos, fbo_vertices_pos[i], sizeof(fbo_vertices[i].pos));
-                    memcpy(fbo_vertices[i].tex_coord, fbo_vertices_tex_coord[i], sizeof(fbo_vertices[i].tex_coord));
-                }
-                glBufferData(GL_ARRAY_BUFFER, sizeof(fbo_vertices), fbo_vertices, GL_STATIC_DRAW);
-                glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_ebo_fbo);
-                glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(fbo_indices), fbo_indices, GL_STATIC_DRAW);
-
-                glEnableVertexAttribArray(gl_fbo_position_loc);
-                glEnableVertexAttribArray(gl_fbo_tex_coord_loc);
-                glVertexAttribPointer(gl_fbo_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, pos));
-                glVertexAttribPointer(gl_fbo_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, tex_coord));
-            }
         }
     }
 
@@ -312,42 +303,31 @@ static void ogl_res_destroy(void)
 
         SDL_GL_MakeCurrent(ogl_win[j], gl_context[j]);
         if (gl_use_vao) {
-            for (int i = 0; i < SCREEN_COUNT; ++i) {
-                if (gl_vbo[j][i]) {
-                    glDeleteBuffers(1, &gl_vbo[j][i]);
-                    gl_vbo[j][i] = 0;
-                }
-            }
-            if (gl_ebo[j]) {
-                glDeleteBuffers(1, &gl_ebo[j]);
-                gl_ebo[j] = 0;
-            }
-            for (int i = 0; i < SCREEN_COUNT; ++i) {
-                if (gl_vao[j][i]) {
-                    glDeleteVertexArrays(1, &gl_vao[j][i]);
-                    gl_vao[j][i] = 0;
-                }
+            if (gl_vao[j]) {
+                glDeleteVertexArrays(1, &gl_vao[j]);
+                gl_vao[j] = 0;
             }
             if (j == SCREEN_TOP) {
-                if (gl_vbo_fbo) {
-                    glDeleteBuffers(1, &gl_vbo_fbo);
-                    gl_vbo_fbo = 0;
-                }
-                if (gl_ebo_fbo) {
-                    glDeleteBuffers(1, &gl_ebo_fbo);
-                    gl_ebo_fbo = 0;
-                }
                 if (gl_vao_fbo) {
                     glDeleteVertexArrays(1, &gl_vao_fbo);
                     gl_vao_fbo = 0;
                 }
             }
         }
+        if (gl_csc_program[j]) {
+            glDeleteProgram(gl_csc_program[j]);
+            gl_csc_program[j] = 0;
+        }
         if (gl_program[j]) {
             glDeleteProgram(gl_program[j]);
             gl_program[j] = 0;
         }
         if (j == SCREEN_TOP) {
+            if (gl_cursor_program) {
+                glDeleteProgram(gl_cursor_program);
+                gl_cursor_program = 0;
+            }
+
             if (gl_ui_program) {
                 glDeleteProgram(gl_ui_program);
                 gl_ui_program = 0;
@@ -892,88 +872,31 @@ fail:
     return reset_mode;
 }
 
+static const GLushort indices[] = {0, 1, 2};
 void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared)
 {
-    double ctx_left_f;
-    double ctx_top_f;
-    double ctx_right_f;
-    double ctx_bot_f;
+    int i = ctx_top_bot;
+
+    int ctx_left;
+    int ctx_top;
     int ctx_width;
     int ctx_height;
-    int win_width_drawable;
-    int win_height_drawable;
-    draw_screen_get_dims(
-        screen_top_bot, ctx_top_bot, win_shared, view_mode, width, height,
-        &ctx_left_f, &ctx_top_f, &ctx_right_f, &ctx_bot_f, &ctx_width, &ctx_height, &win_width_drawable, &win_height_drawable);
+    if (win_shared)
+        draw_screen_get_dims_win_shared(screen_top_bot, i, width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
+    else
+        draw_screen_get_dims_lite(!screen_top_bot, i, view_mode, width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
+    ctx_left *= ui_win_scale[i];
+    ctx_top *= ui_win_scale[i];
+    ctx_width *= ui_win_scale[i];
+    ctx_height *= ui_win_scale[i];
 
-    double blur_ctx_left_f;
-    double blur_ctx_top_f;
-    double blur_ctx_right_f;
-    double blur_ctx_bot_f;
-    double blur_left_f;
-    double blur_top_f;
-    double blur_right_f;
-    double blur_bot_f;
-    draw_screen_get_blur_dims(screen_top_bot, ctx_top_bot, win_shared, view_mode, width, height,
-        &blur_ctx_left_f, &blur_ctx_top_f, &blur_ctx_right_f, &blur_ctx_bot_f,
-        &blur_left_f, &blur_top_f, &blur_right_f, &blur_bot_f);
-    blur_ctx_top_f = -blur_ctx_top_f;
-    blur_ctx_bot_f = -blur_ctx_bot_f;
+    int win_width_drawable = ui_win_width_drawable[i];
+    int win_height_drawable = ui_win_height_drawable[i];
 
-    int i = ctx_top_bot;
     if (win_shared) {
         i = screen_top_bot;;
-    }
-    GLfloat vertices_pos[4][3] = {0};
-    vertices_pos[0][0] = ctx_left_f;
-    vertices_pos[0][1] = ctx_top_f;
-    vertices_pos[1][0] = ctx_left_f;
-    vertices_pos[1][1] = ctx_bot_f;
-    vertices_pos[2][0] = ctx_right_f;
-    vertices_pos[2][1] = ctx_bot_f;
-    vertices_pos[3][0] = ctx_right_f;
-    vertices_pos[3][1] = ctx_top_f;
-    if (is_renderer_csc()) {
-        vertices_pos[0][1] = -ctx_top_f;
-        vertices_pos[1][1] = -ctx_bot_f;
-        vertices_pos[2][1] = -ctx_bot_f;
-        vertices_pos[3][1] = -ctx_top_f;
-    }
-    struct vao_vertice_t vertices[4] = {};
-    if (gl_use_vao) {
-        for (int i = 0; i < 4; ++i) {
-            memcpy(vertices[i].pos, vertices_pos[i], sizeof(vertices[i].pos));
-            memcpy(vertices[i].tex_coord, vertices_tex_coord[i], sizeof(vertices[i].tex_coord));
-        }
-    }
-
-    GLfloat blur_vertices_pos[4][3] = {0};
-    blur_vertices_pos[0][0] = blur_ctx_left_f;
-    blur_vertices_pos[0][1] = blur_ctx_top_f;
-    blur_vertices_pos[1][0] = blur_ctx_left_f;
-    blur_vertices_pos[1][1] = blur_ctx_bot_f;
-    blur_vertices_pos[2][0] = blur_ctx_right_f;
-    blur_vertices_pos[2][1] = blur_ctx_bot_f;
-    blur_vertices_pos[3][0] = blur_ctx_right_f;
-    blur_vertices_pos[3][1] = blur_ctx_top_f;
-    if (is_renderer_csc()) {
-        blur_vertices_pos[0][1] = blur_ctx_bot_f;
-        blur_vertices_pos[1][1] = blur_ctx_top_f;
-        blur_vertices_pos[2][1] = blur_ctx_top_f;
-        blur_vertices_pos[3][1] = blur_ctx_bot_f;
-    }
-    GLfloat blur_vertices_tex_coord[4][2] = {
-        {blur_bot_f, blur_left_f}, // TexCoord 2
-        {blur_top_f, blur_left_f}, // TexCoord 1
-        {blur_top_f, blur_right_f}, // TexCoord 0
-        {blur_bot_f, blur_right_f}, // TexCoord 3
-    };
-    struct vao_vertice_t blur_vertices[4] = {};
-    if (gl_use_vao) {
-        for (int i = 0; i < 4; ++i) {
-            memcpy(blur_vertices[i].pos, blur_vertices_pos[i], sizeof(blur_vertices[i].pos));
-            memcpy(blur_vertices[i].tex_coord, blur_vertices_tex_coord[i], sizeof(blur_vertices[i].tex_coord));
-        }
+        win_width_drawable = ui_ctx_width_drawable[i];
+        win_height_drawable = ui_ctx_height_drawable[i];
     }
 
     int upscaling_selected = ui_upscaling_selected;
@@ -1146,13 +1069,16 @@ rashader_fail:
         }
     }
 
-    if (is_renderer_csc())
+    if (is_renderer_csc()) {
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[i]);
-    else
+        glUseProgram(gl_csc_program[i]);
+        glUniform1i(gl_csc_sampler_loc[i], 0);
+    } else {
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    glViewport(0, 0, win_width_drawable, win_height_drawable);
-
-    glUseProgram(gl_program[i]);
+        glUseProgram(gl_program[i]);
+        glUniform1i(gl_sampler_loc[i], 0);
+    }
+    glViewport(ctx_left, ctx_top, MAX(ctx_width, 1), MAX(ctx_height, 1));
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -1160,29 +1086,18 @@ rashader_fail:
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glGenerateMipmap(GL_TEXTURE_2D);
 
-    glUniform1i(gl_sampler_loc[i], 0);
-
     if (gl_use_vao) {
-        glBindVertexArray(gl_vao[i][screen_top_bot]);
-        glBindBuffer(GL_ARRAY_BUFFER, gl_vbo[i][screen_top_bot]);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_ebo[i]);
-
-        glBufferData(GL_ARRAY_BUFFER, sizeof(blur_vertices), blur_vertices, GL_STREAM_DRAW);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
-
-        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+        glBindVertexArray(gl_vao[i]);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
     } else {
-        glEnableVertexAttribArray(gl_position_loc[i]);
-        glEnableVertexAttribArray(gl_tex_coord_loc[i]);
-
-        glVertexAttribPointer(gl_position_loc[i], 3, GL_FLOAT, GL_FALSE, sizeof(*blur_vertices_pos), blur_vertices_pos);
-        glVertexAttribPointer(gl_tex_coord_loc[i], 2, GL_FLOAT, GL_FALSE, sizeof(*blur_vertices_tex_coord), blur_vertices_tex_coord);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
-
-        glVertexAttribPointer(gl_position_loc[i], 3, GL_FLOAT, GL_FALSE, sizeof(*vertices_pos), vertices_pos);
-        glVertexAttribPointer(gl_tex_coord_loc[i], 2, GL_FLOAT, GL_FALSE, sizeof(*vertices_tex_coord), vertices_tex_coord);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+        if (is_renderer_csc()) {
+            glEnableVertexAttribArray(gl_csc_index_loc[i]);
+            glVertexAttribPointer(gl_csc_index_loc[i], 1, GL_UNSIGNED_SHORT, GL_FALSE, sizeof(*indices), indices);
+        } else {
+            glEnableVertexAttribArray(gl_index_loc[i]);
+            glVertexAttribPointer(gl_index_loc[i], 1, GL_UNSIGNED_SHORT, GL_FALSE, sizeof(*indices), indices);
+        }
+        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, indices);
     }
 
     ctx->width_prev = ctx_width;
@@ -1246,15 +1161,11 @@ void ui_renderer_ogl_present(int screen_top_bot, int ctx_top_bot, bool win_share
                 glUniform1i(gl_fbo_sampler_loc, 0);
                 if (gl_use_vao) {
                     glBindVertexArray(gl_vao_fbo);
-                    glBindBuffer(GL_ARRAY_BUFFER, gl_vbo_fbo);
-                    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_ebo_fbo);
-                    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+                    glDrawArrays(GL_TRIANGLES, 0, 3);
                 } else {
-                    glEnableVertexAttribArray(gl_fbo_position_loc);
-                    glEnableVertexAttribArray(gl_fbo_tex_coord_loc);
-                    glVertexAttribPointer(gl_fbo_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vertices_pos), fbo_vertices_pos);
-                    glVertexAttribPointer(gl_fbo_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vertices_tex_coord), fbo_vertices_tex_coord);
-                    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, fbo_indices);
+                    glEnableVertexAttribArray(gl_fbo_index_loc);
+                    glVertexAttribPointer(gl_fbo_index_loc, 1, GL_UNSIGNED_SHORT, GL_FALSE, sizeof(*indices), indices);
+                    glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, indices);
                 }
                 glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, 0);
 
@@ -1508,33 +1419,13 @@ no_upscale:
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
         glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl_out_tex, 0);
 
-        struct vao_vertice_t vertices[4] = {};
-        if (gl_use_vao) {
-            for (int i = 0; i < 4; ++i) {
-                memcpy(vertices[i].pos, vertices_pos[i], sizeof(vertices[i].pos));
-                memcpy(vertices[i].tex_coord, vertices_tex_coord[i], sizeof(vertices[i].tex_coord));
-            }
-        }
-
-        if (gl_use_vao) {
-            glBindVertexArray(gl_vao[i][screen_top_bot]);
-            glBindBuffer(GL_ARRAY_BUFFER, gl_vbo[i][screen_top_bot]);
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_ebo[i]);
-            glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
-        } else {
-            glEnableVertexAttribArray(gl_position_loc[i]);
-            glEnableVertexAttribArray(gl_tex_coord_loc[i]);
-            glVertexAttribPointer(gl_position_loc[i], 3, GL_FLOAT, GL_FALSE, sizeof(*vertices_pos), vertices_pos);
-            glVertexAttribPointer(gl_tex_coord_loc[i], 2, GL_FLOAT, GL_FALSE, sizeof(*vertices_tex_coord), vertices_tex_coord);
-        }
-
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, tex);
 
         glViewport(0, 0, target_width, target_height);
-        glUseProgram(gl_program[i]);
+        glUseProgram(gl_cursor_program);
 
-        glUniform1i(gl_sampler_loc[i], 0);
+        glUniform1i(gl_cursor_sampler_loc, 0);
 
         glDisable(GL_CULL_FACE);
         glDisable(GL_DEPTH_TEST);
@@ -1542,9 +1433,12 @@ no_upscale:
         glDisable(GL_SCISSOR_TEST);
 
         if (gl_use_vao) {
-            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+            glBindVertexArray(gl_vao[i]);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
         } else {
-            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+            glEnableVertexAttribArray(gl_cursor_index_loc);
+            glVertexAttribPointer(gl_cursor_index_loc, 1, GL_UNSIGNED_SHORT, GL_FALSE, sizeof(*indices), indices);
+            glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, indices);
         }
 
         fail = false;
