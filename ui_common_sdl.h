@@ -58,6 +58,7 @@ extern int ui_win_width_drawable[SCREEN_COUNT], ui_win_height_drawable[SCREEN_CO
 extern float ui_win_scale[SCREEN_COUNT];
 
 extern int ui_ctx_width[SCREEN_COUNT], ui_ctx_height[SCREEN_COUNT];
+extern int ui_ctx_width_drawable[SCREEN_COUNT], ui_ctx_height_drawable[SCREEN_COUNT];
 
 UNUSED static bool is_renderer_sdl_renderer(void) {
     return ui_renderer >= UI_RENDERER_SDL_HW && ui_renderer <= UI_RENDERER_SDL_SW;
@@ -137,6 +138,18 @@ void draw_screen_get_dims_lite(
     int *out_ctx_top,
     int *out_ctx_width,
     int *out_ctx_height
+);
+
+void draw_screen_get_blur_dims(
+    int screen_top_bot, int ctx_top_bot, int win_shared, view_mode_t view_mode, int width, int height,
+    double *out_ctx_left_f,
+    double *out_ctx_top_f,
+    double *out_ctx_right_f,
+    double *out_ctx_bot_f,
+    double *out_left_f,
+    double *out_top_f,
+    double *out_right_f,
+    double *out_bot_f
 );
 
 void draw_screen_get_dims(

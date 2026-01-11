@@ -179,7 +179,7 @@ static const char *d3d_vs_src =
     "}\n";
 #define d3d_ui_ps_src_0 \
     " if (any(color != float4(0.0, 0.0, 0.0, 0.0)))\n" \
-    "  color = float4(color.rgb * (7.0 / 8.0), 7.0 / 8.0);\n"
+    "  color = float4(color.rgb, 7.0 / 8.0);\n"
 #define d3d_ps_src_use_0(src_0) \
     "SamplerState my_samp: register(s0);\n" \
     "Texture2D my_tex: register(t0);\n" \
@@ -610,7 +610,7 @@ void ui_renderer_d3d11_main(int screen_top_bot, int ctx_top_bot, view_mode_t vie
 
         struct presentation_buffer_t *bufs = presentation_buffers[i][screen_top_bot];
         int index_sc;
-        if (presentation_buffer_get(bufs, p, win_shared, COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN, ui_ctx_width[p], ui_ctx_height[p], &index_sc) != 0) {
+        if (presentation_buffer_get(bufs, p, win_shared, COMPAT_PRESENATTION_BUFFER_COUNT_PER_SCREEN, ui_ctx_width_drawable[p], ui_ctx_height_drawable[p], &index_sc) != 0) {
             sc_fail[p] = 1;
             return;
         }
@@ -620,9 +620,9 @@ void ui_renderer_d3d11_main(int screen_top_bot, int ctx_top_bot, view_mode_t vie
         if (i == SCREEN_TOP)
             rp_lock_wait(comp_lock);
 
-        if (ui_ctx_width[i] != ui_win_width_drawable[i] || ui_ctx_height[i] != ui_win_height_drawable[i]) {
-            ui_ctx_width[i] = ui_win_width_drawable[i];
-            ui_ctx_height[i] = ui_win_height_drawable[i];
+        if (ui_ctx_width_drawable[i] != ui_win_width_drawable[i] || ui_ctx_height_drawable[i] != ui_win_height_drawable[i]) {
+            ui_ctx_width_drawable[i] = ui_win_width_drawable[i];
+            ui_ctx_height_drawable[i] = ui_win_height_drawable[i];
             hr = IDXGISwapChain_ResizeBuffers(dxgi_sc[i], 0, 0, 0, 0, 0);
             if (hr) {
                 err_log("ResizeBuffers failed: %d\n", (int)hr);
@@ -631,7 +631,7 @@ void ui_renderer_d3d11_main(int screen_top_bot, int ctx_top_bot, view_mode_t vie
             }
 
             if (i == SCREEN_TOP) {
-                if (nk_d3d11_resize(d3d11device_context[i], ui_ctx_width[i], ui_ctx_height[i], ui_win_scale[i])) {
+                if (nk_d3d11_resize(d3d11device_context[i], ui_ctx_width_drawable[i], ui_ctx_height_drawable[i], ui_win_scale[i])) {
                     err_log("nk_d3d11_resize failed\n");
                     sc_fail[p] = 1;
                     return;
@@ -1018,7 +1018,7 @@ rashader_fail:
         ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &d3d_rtv[i], NULL);
     }
 
-    D3D11_VIEWPORT vp = { .Width = ui_ctx_width[p], .Height = ui_ctx_height[p] };
+    D3D11_VIEWPORT vp = { .Width = ui_ctx_width_drawable[p], .Height = ui_ctx_height_drawable[p] };
     ID3D11DeviceContext_RSSetViewports(d3d11device_context[i], 1, &vp);
 
     d3d11_draw_screen(i, screen_top_bot, vertices, srv);
@@ -1146,7 +1146,7 @@ void ui_renderer_d3d11_present(int screen_top_bot, int ctx_top_bot, bool win_sha
                     goto fail;
                 }
             }
-            if (presentation_buffer_present(d3d_pres_buf[p], i, screen_top_bot, win_shared, ui_ctx_width[p], ui_ctx_height[p])) {
+            if (presentation_buffer_present(d3d_pres_buf[p], i, screen_top_bot, win_shared, ui_ctx_width_drawable[p], ui_ctx_height_drawable[p])) {
             }
         }
 fail:

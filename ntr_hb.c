@@ -188,6 +188,11 @@ static int rp_port_last;
 nk_bool ntr_auto_reconnect = nk_true;
 nk_bool ntr_auto_update_params = nk_true;
 
+static bool ntr_rp_config_valid(struct ntr_rp_config_t *config)
+{
+    return config->jpeg_quality && config->bandwidth_limit;
+}
+
 thread_ret_t tcp_thread_func(void *arg)
 {
     struct tcp_thread_arg *t = (struct tcp_thread_arg *)arg;
@@ -322,14 +327,14 @@ thread_ret_t tcp_thread_func(void *arg)
             const bool rp_send_wait_timeout = (int32_t)(rp_send_next_us - rp_send_last_us) > 1000000;
             if (t->remote_play && (*(t->remote_play) || rp_send_update || rp_send_wait_timeout))
             {
-                if (!*(t->remote_play)) {
-                    rp_send_last_us = rp_send_next_us;
-                    memcpy(&rp_config_last, &ntr_rp_config, sizeof(struct ntr_rp_config_t));
-                    rp_port_last = ntr_rp_port_bound;
-                    if (!rp_send_wait_timeout || !rp_send_need_update || !ntr_auto_update_params)
-                        continue;
-                    rp_send_need_update = false;
-                }
+                rp_send_last_us = rp_send_next_us;
+                memcpy(&rp_config_last, &ntr_rp_config, sizeof(struct ntr_rp_config_t));
+                rp_port_last = ntr_rp_port_bound;
+                if (!rp_port_last || !ntr_rp_config_valid(&rp_config_last))
+                    continue;
+                if (!*(t->remote_play) && (!rp_send_wait_timeout || !rp_send_need_update || !ntr_auto_update_params))
+                    continue;
+                rp_send_need_update = false;
 
                 *(t->remote_play) = 0;
 

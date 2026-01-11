@@ -27,9 +27,9 @@ static GLuint gl_vao[SCREEN_COUNT][SCREEN_COUNT];
 static GLuint gl_vbo[SCREEN_COUNT][SCREEN_COUNT];
 static GLuint gl_ebo[SCREEN_COUNT];
 
-static GLuint gl_vao_fbo[SCREEN_COUNT];
-static GLuint gl_vbo_fbo[SCREEN_COUNT];
-static GLuint gl_ebo_fbo[SCREEN_COUNT];
+static GLuint gl_vao_fbo;
+static GLuint gl_vbo_fbo;
+static GLuint gl_ebo_fbo;
 
 #ifdef _WIN32
 static HWND ogl_hwnd[SCREEN_COUNT];
@@ -52,7 +52,7 @@ static GLuint gl_fbo_sc[SCREEN_COUNT];
 
 #define fs_ui_str_0 \
     " if (color != vec4(0.0))\n" \
-    "  color = vec4(color.rgb * (7.0 / 8.0), 7.0 / 8.0);\n"
+    "  color = vec4(color.rgb, 7.0 / 8.0);\n"
 
 #define fs_str_use_0(str_0) \
     "varying vec2 v_texCoord;\n" \
@@ -66,41 +66,6 @@ static GLuint gl_fbo_sc[SCREEN_COUNT];
 
 #define fs_str fs_str_use_0("")
 #define fs_ui_str fs_str_use_0(fs_ui_str_0)
-
-#define GLES_GLSL_FBO_VERSION "#version 300 es\n" "precision highp float;\n" "precision highp sampler3D;\n"
-#define OGL_GLSL_FBO_VERSION "#version 130\n"
-#define vs_str_fbo \
-    "in vec4 a_position;\n" \
-    "in vec2 a_texCoord;\n" \
-    "out vec2 v_texCoord;\n" \
-    "void main()\n" \
-    "{\n" \
-    " gl_Position = a_position;\n" \
-    " v_texCoord = a_texCoord;\n" \
-    "}\n"
-
-#ifdef _WIN32
-#define fs_str_fbo_0 \
-    "  texture(s_texture, vec3(v_texCoord, 2.0 / 3.0)).x / 255.0," \
-    "  texture(s_texture, vec3(v_texCoord, 1.0 / 3.0)).x / 255.0," \
-    "  texture(s_texture, vec3(v_texCoord, 0.0)).x / 255.0,"
-#else
-#define fs_str_fbo_0 \
-    "  texture(s_texture, vec3(v_texCoord, 0.0)).x / 255.0," \
-    "  texture(s_texture, vec3(v_texCoord, 1.0 / 3.0)).x / 255.0," \
-    "  texture(s_texture, vec3(v_texCoord, 2.0 / 3.0)).x / 255.0,"
-#endif
-#define fs_str_fbo \
-    "in vec2 v_texCoord;\n" \
-    "uniform sampler3D s_texture;\n" \
-    "out vec4 fragColor;\n" \
-    "void main()\n" \
-    "{\n" \
-    " fragColor = vec4(" \
-    fs_str_fbo_0 \
-    "  texture(s_texture, vec3(v_texCoord, 1.0)).x / 255.0" \
-    " );\n" \
-    "}\n"
 
 static GLfloat fbo_vertices_pos[4][3] = {
     {-1.f, -1.f, 0.0f}, // Position 1
@@ -202,7 +167,7 @@ static GLuint Load_program(const char *vs_src, const char *fs_src)
     prog = glCreateProgram();
 
     if (prog == 0)
-        return 0;
+        goto end;
 
     glAttachShader(prog, vs);
     glAttachShader(prog, fs);
@@ -228,9 +193,10 @@ static GLuint Load_program(const char *vs_src, const char *fs_src)
         }
 
         glDeleteProgram(prog);
-        return 0;
+        prog = 0;
     }
 
+end:
     // Free up no longer needed shader resources
     glDeleteShader(vs);
     glDeleteShader(fs);
@@ -244,10 +210,9 @@ GLint gl_position_loc[SCREEN_COUNT];
 GLint gl_tex_coord_loc[SCREEN_COUNT];
 GLint gl_sampler_loc[SCREEN_COUNT];
 
-GLuint gl_fbo_program[SCREEN_COUNT];
-GLint gl_fbo_position_loc[SCREEN_COUNT];
-GLint gl_fbo_tex_coord_loc[SCREEN_COUNT];
-GLint gl_fbo_sampler_loc[SCREEN_COUNT];
+GLint gl_fbo_position_loc;
+GLint gl_fbo_tex_coord_loc;
+GLint gl_fbo_sampler_loc;
 
 static void on_gl_error(
     GLenum source, GLenum type, GLuint id, GLenum severity,
@@ -279,6 +244,9 @@ static int ogl_res_init(void) {
             } else {
                 gl_ui_program = Load_program(OGL_GLSL_VERSION vs_str, OGL_GLSL_VERSION fs_ui_str);
             }
+            gl_fbo_position_loc = glGetAttribLocation(gl_ui_program, "a_position");
+            gl_fbo_tex_coord_loc = glGetAttribLocation(gl_ui_program, "a_texCoord");
+            gl_fbo_sampler_loc = glGetUniformLocation(gl_ui_program, "s_texture");
         }
         if (is_renderer_gles()) {
             gl_program[j] = Load_program(GLES_GLSL_VERSION vs_str, GLES_GLSL_VERSION fs_str);
@@ -289,27 +257,12 @@ static int ogl_res_init(void) {
         gl_tex_coord_loc[j] = glGetAttribLocation(gl_program[j], "a_texCoord");
         gl_sampler_loc[j] = glGetUniformLocation(gl_program[j], "s_texture");
 
-        if (1) {
-            if (is_renderer_gles()) {
-                gl_fbo_program[j] = Load_program(GLES_GLSL_FBO_VERSION vs_str_fbo, GLES_GLSL_FBO_VERSION fs_str_fbo);
-            } else {
-                gl_fbo_program[j] = Load_program(OGL_GLSL_FBO_VERSION vs_str_fbo, OGL_GLSL_FBO_VERSION fs_str_fbo);
-            }
-            gl_fbo_position_loc[j] = glGetAttribLocation(gl_fbo_program[j], "a_position");
-            gl_fbo_tex_coord_loc[j] = glGetAttribLocation(gl_fbo_program[j], "a_texCoord");
-            gl_fbo_sampler_loc[j] = glGetUniformLocation(gl_fbo_program[j], "s_texture");
-        }
-
         if (gl_use_vao) {
             for (int i = 0; i < SCREEN_COUNT; ++i) {
                 glGenVertexArrays(1, &gl_vao[j][i]);
                 glGenBuffers(1, &gl_vbo[j][i]);
             }
             glGenBuffers(1, &gl_ebo[j]);
-
-            glGenVertexArrays(1, &gl_vao_fbo[j]);
-            glGenBuffers(1, &gl_vbo_fbo[j]);
-            glGenBuffers(1, &gl_ebo_fbo[j]);
 
             for (int i = 0; i < SCREEN_COUNT; ++i) {
                 glBindVertexArray(gl_vao[j][i]);
@@ -323,21 +276,27 @@ static int ogl_res_init(void) {
                 glVertexAttribPointer(gl_tex_coord_loc[j], 2, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, tex_coord));
             }
 
-            glBindVertexArray(gl_vao_fbo[j]);
-            glBindBuffer(GL_ARRAY_BUFFER, gl_vbo_fbo[j]);
-            struct vao_vertice_t fbo_vertices[4];
-            for (int i = 0; i < 4; ++i) {
-                memcpy(fbo_vertices[i].pos, fbo_vertices_pos[i], sizeof(fbo_vertices[i].pos));
-                memcpy(fbo_vertices[i].tex_coord, fbo_vertices_tex_coord[i], sizeof(fbo_vertices[i].tex_coord));
-            }
-            glBufferData(GL_ARRAY_BUFFER, sizeof(fbo_vertices), fbo_vertices, GL_STATIC_DRAW);
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_ebo_fbo[j]);
-            glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(fbo_indices), fbo_indices, GL_STATIC_DRAW);
+            if (j == SCREEN_TOP) {
+                glGenVertexArrays(1, &gl_vao_fbo);
+                glGenBuffers(1, &gl_vbo_fbo);
+                glGenBuffers(1, &gl_ebo_fbo);
 
-            glEnableVertexAttribArray(gl_fbo_position_loc[j]);
-            glEnableVertexAttribArray(gl_fbo_tex_coord_loc[j]);
-            glVertexAttribPointer(gl_fbo_position_loc[j], 3, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, pos));
-            glVertexAttribPointer(gl_fbo_tex_coord_loc[j], 2, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, tex_coord));
+                glBindVertexArray(gl_vao_fbo);
+                glBindBuffer(GL_ARRAY_BUFFER, gl_vbo_fbo);
+                struct vao_vertice_t fbo_vertices[4];
+                for (int i = 0; i < 4; ++i) {
+                    memcpy(fbo_vertices[i].pos, fbo_vertices_pos[i], sizeof(fbo_vertices[i].pos));
+                    memcpy(fbo_vertices[i].tex_coord, fbo_vertices_tex_coord[i], sizeof(fbo_vertices[i].tex_coord));
+                }
+                glBufferData(GL_ARRAY_BUFFER, sizeof(fbo_vertices), fbo_vertices, GL_STATIC_DRAW);
+                glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_ebo_fbo);
+                glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(fbo_indices), fbo_indices, GL_STATIC_DRAW);
+
+                glEnableVertexAttribArray(gl_fbo_position_loc);
+                glEnableVertexAttribArray(gl_fbo_tex_coord_loc);
+                glVertexAttribPointer(gl_fbo_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, pos));
+                glVertexAttribPointer(gl_fbo_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(struct vao_vertice_t), (const void *)offsetof(struct vao_vertice_t, tex_coord));
+            }
         }
     }
 
@@ -363,28 +322,26 @@ static void ogl_res_destroy(void)
                 glDeleteBuffers(1, &gl_ebo[j]);
                 gl_ebo[j] = 0;
             }
-            if (gl_vbo_fbo[j]) {
-                glDeleteBuffers(1, &gl_vbo_fbo[j]);
-                gl_vbo_fbo[j] = 0;
-            }
-            if (gl_ebo_fbo[j]) {
-                glDeleteBuffers(1, &gl_ebo_fbo[j]);
-                gl_ebo_fbo[j] = 0;
-            }
             for (int i = 0; i < SCREEN_COUNT; ++i) {
                 if (gl_vao[j][i]) {
                     glDeleteVertexArrays(1, &gl_vao[j][i]);
                     gl_vao[j][i] = 0;
                 }
             }
-            if (gl_vao_fbo[j]) {
-                glDeleteVertexArrays(1, &gl_vao_fbo[j]);
-                gl_vao_fbo[j] = 0;
+            if (j == SCREEN_TOP) {
+                if (gl_vbo_fbo) {
+                    glDeleteBuffers(1, &gl_vbo_fbo);
+                    gl_vbo_fbo = 0;
+                }
+                if (gl_ebo_fbo) {
+                    glDeleteBuffers(1, &gl_ebo_fbo);
+                    gl_ebo_fbo = 0;
+                }
+                if (gl_vao_fbo) {
+                    glDeleteVertexArrays(1, &gl_vao_fbo);
+                    gl_vao_fbo = 0;
+                }
             }
-        }
-        if (gl_fbo_program[j]) {
-            glDeleteProgram(gl_fbo_program[j]);
-            gl_fbo_program[j] = 0;
         }
         if (gl_program[j]) {
             glDeleteProgram(gl_program[j]);
@@ -775,7 +732,7 @@ void ui_renderer_ogl_main(int screen_top_bot, int ctx_top_bot, view_mode_t view_
         }
 
         struct render_buffer_t *sc_render_buf = &render_buffers[i][screen_top_bot];
-        if (render_buffer_get(sc_render_buf, i, ui_ctx_width[p], ui_ctx_height[p], &tex_sc[p], &handle_sc[p]) != 0) {
+        if (render_buffer_get(sc_render_buf, i, ui_ctx_width_drawable[p], ui_ctx_height_drawable[p], &tex_sc[p], &handle_sc[p]) != 0) {
             ui_compositing = 0;
             sc_fail[p] = 1;
             return;
@@ -791,7 +748,7 @@ void ui_renderer_ogl_main(int screen_top_bot, int ctx_top_bot, view_mode_t view_
     }
 #endif
 
-    glViewport(0, 0, ui_ctx_width[p], ui_ctx_height[p]);
+    glViewport(0, 0, ui_ctx_width_drawable[p], ui_ctx_height_drawable[p]);
     if (!win_shared) {
         glClearColor(bg[0], bg[1], bg[2], bg[3]);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -949,6 +906,20 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width,
         screen_top_bot, ctx_top_bot, win_shared, view_mode, width, height,
         &ctx_left_f, &ctx_top_f, &ctx_right_f, &ctx_bot_f, &ctx_width, &ctx_height, &win_width_drawable, &win_height_drawable);
 
+    double blur_ctx_left_f;
+    double blur_ctx_top_f;
+    double blur_ctx_right_f;
+    double blur_ctx_bot_f;
+    double blur_left_f;
+    double blur_top_f;
+    double blur_right_f;
+    double blur_bot_f;
+    draw_screen_get_blur_dims(screen_top_bot, ctx_top_bot, win_shared, view_mode, width, height,
+        &blur_ctx_left_f, &blur_ctx_top_f, &blur_ctx_right_f, &blur_ctx_bot_f,
+        &blur_left_f, &blur_top_f, &blur_right_f, &blur_bot_f);
+    blur_ctx_top_f = -blur_ctx_top_f;
+    blur_ctx_bot_f = -blur_ctx_bot_f;
+
     int i = ctx_top_bot;
     if (win_shared) {
         i = screen_top_bot;;
@@ -963,16 +934,45 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width,
     vertices_pos[3][0] = ctx_right_f;
     vertices_pos[3][1] = ctx_top_f;
     if (is_renderer_csc()) {
-        vertices_pos[0][1] = ctx_bot_f;
-        vertices_pos[1][1] = ctx_top_f;
-        vertices_pos[2][1] = ctx_top_f;
-        vertices_pos[3][1] = ctx_bot_f;
+        vertices_pos[0][1] = -ctx_top_f;
+        vertices_pos[1][1] = -ctx_bot_f;
+        vertices_pos[2][1] = -ctx_bot_f;
+        vertices_pos[3][1] = -ctx_top_f;
     }
     struct vao_vertice_t vertices[4] = {};
     if (gl_use_vao) {
         for (int i = 0; i < 4; ++i) {
             memcpy(vertices[i].pos, vertices_pos[i], sizeof(vertices[i].pos));
             memcpy(vertices[i].tex_coord, vertices_tex_coord[i], sizeof(vertices[i].tex_coord));
+        }
+    }
+
+    GLfloat blur_vertices_pos[4][3] = {0};
+    blur_vertices_pos[0][0] = blur_ctx_left_f;
+    blur_vertices_pos[0][1] = blur_ctx_top_f;
+    blur_vertices_pos[1][0] = blur_ctx_left_f;
+    blur_vertices_pos[1][1] = blur_ctx_bot_f;
+    blur_vertices_pos[2][0] = blur_ctx_right_f;
+    blur_vertices_pos[2][1] = blur_ctx_bot_f;
+    blur_vertices_pos[3][0] = blur_ctx_right_f;
+    blur_vertices_pos[3][1] = blur_ctx_top_f;
+    if (is_renderer_csc()) {
+        blur_vertices_pos[0][1] = blur_ctx_bot_f;
+        blur_vertices_pos[1][1] = blur_ctx_top_f;
+        blur_vertices_pos[2][1] = blur_ctx_top_f;
+        blur_vertices_pos[3][1] = blur_ctx_bot_f;
+    }
+    GLfloat blur_vertices_tex_coord[4][2] = {
+        {blur_bot_f, blur_left_f}, // TexCoord 2
+        {blur_top_f, blur_left_f}, // TexCoord 1
+        {blur_top_f, blur_right_f}, // TexCoord 0
+        {blur_bot_f, blur_right_f}, // TexCoord 3
+    };
+    struct vao_vertice_t blur_vertices[4] = {};
+    if (gl_use_vao) {
+        for (int i = 0; i < 4; ++i) {
+            memcpy(blur_vertices[i].pos, blur_vertices_pos[i], sizeof(blur_vertices[i].pos));
+            memcpy(blur_vertices[i].tex_coord, blur_vertices_tex_coord[i], sizeof(blur_vertices[i].tex_coord));
         }
     }
 
@@ -1154,18 +1154,6 @@ rashader_fail:
 
     glUseProgram(gl_program[i]);
 
-    if (gl_use_vao) {
-        glBindVertexArray(gl_vao[i][screen_top_bot]);
-        glBindBuffer(GL_ARRAY_BUFFER, gl_vbo[i][screen_top_bot]);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_ebo[i]);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
-    } else {
-        glEnableVertexAttribArray(gl_position_loc[i]);
-        glEnableVertexAttribArray(gl_tex_coord_loc[i]);
-        glVertexAttribPointer(gl_position_loc[i], 3, GL_FLOAT, GL_FALSE, sizeof(*vertices_pos), vertices_pos);
-        glVertexAttribPointer(gl_tex_coord_loc[i], 2, GL_FLOAT, GL_FALSE, sizeof(*vertices_tex_coord), vertices_tex_coord);
-    }
-
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -1175,8 +1163,25 @@ rashader_fail:
     glUniform1i(gl_sampler_loc[i], 0);
 
     if (gl_use_vao) {
+        glBindVertexArray(gl_vao[i][screen_top_bot]);
+        glBindBuffer(GL_ARRAY_BUFFER, gl_vbo[i][screen_top_bot]);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_ebo[i]);
+
+        glBufferData(GL_ARRAY_BUFFER, sizeof(blur_vertices), blur_vertices, GL_STREAM_DRAW);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
     } else {
+        glEnableVertexAttribArray(gl_position_loc[i]);
+        glEnableVertexAttribArray(gl_tex_coord_loc[i]);
+
+        glVertexAttribPointer(gl_position_loc[i], 3, GL_FLOAT, GL_FALSE, sizeof(*blur_vertices_pos), blur_vertices_pos);
+        glVertexAttribPointer(gl_tex_coord_loc[i], 2, GL_FLOAT, GL_FALSE, sizeof(*blur_vertices_tex_coord), blur_vertices_tex_coord);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+
+        glVertexAttribPointer(gl_position_loc[i], 3, GL_FLOAT, GL_FALSE, sizeof(*vertices_pos), vertices_pos);
+        glVertexAttribPointer(gl_tex_coord_loc[i], 2, GL_FLOAT, GL_FALSE, sizeof(*vertices_tex_coord), vertices_tex_coord);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
     }
 
@@ -1238,16 +1243,17 @@ void ui_renderer_ogl_present(int screen_top_bot, int ctx_top_bot, bool win_share
                 glBindTexture(GL_TEXTURE_2D, ui_nk_tex);
                 glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, ui_tex);
                 glUseProgram(gl_ui_program);
+                glUniform1i(gl_fbo_sampler_loc, 0);
                 if (gl_use_vao) {
-                    glBindVertexArray(gl_vao_fbo[i]);
-                    glBindBuffer(GL_ARRAY_BUFFER, gl_vbo_fbo[i]);
-                    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_ebo_fbo[i]);
+                    glBindVertexArray(gl_vao_fbo);
+                    glBindBuffer(GL_ARRAY_BUFFER, gl_vbo_fbo);
+                    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_ebo_fbo);
                     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
                 } else {
-                    glEnableVertexAttribArray(gl_fbo_position_loc[i]);
-                    glEnableVertexAttribArray(gl_fbo_tex_coord_loc[i]);
-                    glVertexAttribPointer(gl_fbo_position_loc[i], 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vertices_pos), fbo_vertices_pos);
-                    glVertexAttribPointer(gl_fbo_tex_coord_loc[i], 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vertices_tex_coord), fbo_vertices_tex_coord);
+                    glEnableVertexAttribArray(gl_fbo_position_loc);
+                    glEnableVertexAttribArray(gl_fbo_tex_coord_loc);
+                    glVertexAttribPointer(gl_fbo_position_loc, 3, GL_FLOAT, GL_FALSE, sizeof(*fbo_vertices_pos), fbo_vertices_pos);
+                    glVertexAttribPointer(gl_fbo_tex_coord_loc, 2, GL_FLOAT, GL_FALSE, sizeof(*fbo_vertices_tex_coord), fbo_vertices_tex_coord);
                     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, fbo_indices);
                 }
                 glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, 0);

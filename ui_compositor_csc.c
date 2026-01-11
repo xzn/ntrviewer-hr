@@ -203,7 +203,7 @@ static void composition_buffer_cleanup(int ctx_top_bot) {
         }
 
         for (int j = 0; j < SCREEN_COUNT; ++j) {
-            ui_win_height_drawable_prev[j] = ui_win_width_drawable_prev[j] = ui_ctx_height[j] = ui_ctx_width[j] = 0;
+            ui_win_height_drawable_prev[j] = ui_win_width_drawable_prev[j] = ui_ctx_height_drawable[j] = ui_ctx_width_drawable[j] = 0;
             src_rect[j].right = src_rect[j].bottom = 0;
             src_rect_child[j].right = src_rect_child[j].bottom = 0;
         }
@@ -950,8 +950,6 @@ void ui_compositor_csc_main(int screen_top_bot, int ctx_top_bot, bool win_shared
     }
 
     if (win_shared) {
-        int ctx_left;
-        int ctx_top;
 
         int ctx_width;
         int ctx_height;
@@ -962,17 +960,9 @@ void ui_compositor_csc_main(int screen_top_bot, int ctx_top_bot, bool win_shared
         ctx_height = (double)ui_win_height_drawable[i] / 2;
         if ((double)ui_win_width_drawable[i] / width * height > ctx_height) {
             ctx_width = (double)ctx_height / height * width;
-            ctx_left = (double)(ui_win_width_drawable[i] - ctx_width) / 2;
-            ctx_top = 0;
         } else {
             ctx_height = (double)ui_win_width_drawable[i] / width * height;
-            ctx_left = 0;
             ctx_width = ui_win_width_drawable[i];
-            ctx_top = (double)ui_win_height_drawable[i] / 2 - ctx_height;
-        }
-
-        if (screen_top_bot != SCREEN_TOP) {
-            ctx_top = (double)ui_win_height_drawable[i] / 2;
         }
 
         ctx_width = NK_MAX(ctx_width, 1);
@@ -981,14 +971,8 @@ void ui_compositor_csc_main(int screen_top_bot, int ctx_top_bot, bool win_shared
         if (ui_win_width_drawable_prev[screen_top_bot] != ui_win_width_drawable[i] || ui_win_height_drawable_prev[screen_top_bot] != ui_win_height_drawable[i]) {
             HRESULT hr;
 
-            hr = dcomp_vis_child[screen_top_bot]->lpVtbl->SetOffsetX2(dcomp_vis_child[screen_top_bot], (FLOAT)ctx_left);
-            if (hr) {
-                err_log("SetOffsetX failed: %d\n", (int)hr);
-                sc_fail[p] = 1;
-                return;
-            }
-
-            hr = dcomp_vis_child[screen_top_bot]->lpVtbl->SetOffsetY2(dcomp_vis_child[screen_top_bot], (FLOAT)ctx_top);
+            FLOAT offset_y = screen_top_bot == SCREEN_TOP ? 0. : (double)ui_win_height_drawable[i] / 2;
+            hr = dcomp_vis_child[screen_top_bot]->lpVtbl->SetOffsetY2(dcomp_vis_child[screen_top_bot], offset_y);
             if (hr) {
                 err_log("SetOffsetY failed: %d\n", (int)hr);
                 sc_fail[p] = 1;
@@ -1013,6 +997,9 @@ void ui_compositor_csc_main(int screen_top_bot, int ctx_top_bot, bool win_shared
             ui_win_width_drawable_prev[screen_top_bot] = ui_win_width_drawable[i];
             ui_win_height_drawable_prev[screen_top_bot] = ui_win_height_drawable[i];
 
+            ui_ctx_width_drawable[p] = ui_win_width_drawable_prev[screen_top_bot];
+            ui_ctx_height_drawable[p] = (double)ui_win_height_drawable_prev[screen_top_bot] / 2;
+
             ui_ctx_width[p] = ctx_width;
             ui_ctx_height[p] = ctx_height;
         }
@@ -1028,8 +1015,8 @@ void ui_compositor_csc_main(int screen_top_bot, int ctx_top_bot, bool win_shared
                     return;
                 }
             }
-            ui_ctx_width[p] = ui_win_width_drawable_prev[screen_top_bot] = ui_win_width_drawable[i];
-            ui_ctx_height[p] = ui_win_height_drawable_prev[screen_top_bot] = ui_win_height_drawable[i];
+            ui_ctx_width_drawable[p] = ui_win_width_drawable_prev[screen_top_bot] = ui_win_width_drawable[i];
+            ui_ctx_height_drawable[p] = ui_win_height_drawable_prev[screen_top_bot] = ui_win_height_drawable[i];
         }
     }
 }

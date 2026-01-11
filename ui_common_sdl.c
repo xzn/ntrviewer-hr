@@ -37,6 +37,7 @@ int ui_win_width_drawable[SCREEN_COUNT], ui_win_height_drawable[SCREEN_COUNT];
 float ui_win_scale[SCREEN_COUNT];
 
 int ui_ctx_width[SCREEN_COUNT], ui_ctx_height[SCREEN_COUNT];
+int ui_ctx_width_drawable[SCREEN_COUNT], ui_ctx_height_drawable[SCREEN_COUNT];
 
 event_t update_bottom_screen_evt;
 
@@ -521,6 +522,76 @@ void draw_screen_get_dims_lite(
     *out_ctx_height = ctx_height;
 }
 
+void draw_screen_get_blur_dims(
+    int screen_top_bot, int ctx_top_bot, int win_shared, view_mode_t view_mode, int in_width, int in_height,
+    double *out_ctx_left_f,
+    double *out_ctx_top_f,
+    double *out_ctx_right_f,
+    double *out_ctx_bot_f,
+    double *out_left_f,
+    double *out_top_f,
+    double *out_right_f,
+    double *out_bot_f
+) {
+    double ctx_left_f;
+    double ctx_top_f;
+    double ctx_right_f;
+    double ctx_bot_f;
+    double left_f;
+    double top_f;
+    double right_f;
+    double bot_f;
+
+    int i = ctx_top_bot;
+
+    int left;
+    int top;
+    int width;
+    int height;
+    int ctx_left;
+    int ctx_top;
+    int ctx_width;
+    int ctx_height;
+    draw_screen_get_blur_dims_lite(screen_top_bot, i, view_mode, in_width, in_height,
+        &left, &top, &width, &height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
+
+    left_f = (double)left / in_width;
+    top_f = (double)top / in_height;
+    right_f = (double)(left + width) / in_width;
+    bot_f = (double)(top + height) / in_height;
+
+    if (win_shared) {
+        ctx_left_f = -1;
+        ctx_top_f = -1;
+        ctx_right_f = 1;
+        ctx_bot_f = 1;
+    } else {
+        ctx_left_f = (double)ctx_left / ui_win_width[i];
+        ctx_top_f = (double)ctx_top / ui_win_height[i];
+        ctx_right_f = (double)(ctx_left + ctx_width) / ui_win_width[i];
+        ctx_bot_f = (double)(ctx_top + ctx_height) / ui_win_height[i];
+
+        ctx_left_f -= 0.5;
+        ctx_top_f -= 0.5;
+        ctx_right_f -= 0.5;
+        ctx_bot_f -= 0.5;
+
+        ctx_left_f *= 2.;
+        ctx_top_f *= 2.;
+        ctx_right_f *= 2.;
+        ctx_bot_f *= 2.;
+    }
+
+    *out_ctx_left_f = ctx_left_f;
+    *out_ctx_top_f = ctx_top_f;
+    *out_ctx_right_f = ctx_right_f;
+    *out_ctx_bot_f = ctx_bot_f;
+    *out_left_f = left_f;
+    *out_top_f = top_f;
+    *out_right_f = right_f;
+    *out_bot_f = bot_f;
+}
+
 void draw_screen_get_dims(
     int screen_top_bot, int ctx_top_bot, int win_shared, view_mode_t view_mode, int width, int height,
     double *out_ctx_left_f,
@@ -544,12 +615,27 @@ void draw_screen_get_dims(
     int i = ctx_top_bot;
 
     if (win_shared) {
-        win_width_drawable = ctx_width = ui_ctx_width[screen_top_bot];
-        win_height_drawable = ctx_height = ui_ctx_height[screen_top_bot];
-        ctx_left_f = -1.0f;
-        ctx_top_f = 1.0f;
-        ctx_right_f = 1.0f;
-        ctx_bot_f = -1.0f;
+        win_width_drawable = ui_ctx_width_drawable[screen_top_bot];
+        win_height_drawable = ui_ctx_height_drawable[screen_top_bot];
+        ctx_width = ui_ctx_width[screen_top_bot];
+        ctx_height = ui_ctx_height[screen_top_bot];
+        if (win_width_drawable > ctx_width) {
+            ctx_left_f = (double)(win_width_drawable - ctx_width) / win_width_drawable - 1;
+            ctx_right_f = -ctx_left_f;
+            ctx_top_f = 1.0;
+            ctx_bot_f = -1.0;
+        } else {
+            ctx_left_f = -1.0;
+            ctx_right_f = 1.0;
+            double ctx_top_bot_f = (double)(win_height_drawable - ctx_height) / win_height_drawable * 2;
+            if (screen_top_bot == SCREEN_TOP) {
+                ctx_top_f = 1.0 - ctx_top_bot_f;
+                ctx_bot_f = -1.0;
+            } else {
+                ctx_top_f = 1.0;
+                ctx_bot_f = -1.0 + ctx_top_bot_f;
+            }
+        }
     } else {
         if (view_mode == VIEW_MODE_TOP_BOT) {
             win_width_drawable = ui_win_width_drawable[i];
