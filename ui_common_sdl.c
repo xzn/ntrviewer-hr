@@ -473,7 +473,7 @@ void draw_screen_get_blur_dims_lite(
 }
 
 void draw_screen_get_blur_dims_win_shared(
-    int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared, UNUSED int in_width, UNUSED int in_height,
+    int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared, int in_width, int in_height,
     int *out_left,
     int *out_top,
     int *out_width,
@@ -520,6 +520,14 @@ void draw_screen_get_blur_dims_win_shared(
     top = ctx_top;
     width = ctx_width;
     height = ctx_height;
+
+    if ((double)width / in_width * in_height > height) {
+        height = (double)width / in_width * in_height;
+        top -= ((double)height - ctx_height) / 2;
+    } else {
+        width = (double)height / in_height * in_width;
+        left -= ((double)width - ctx_width) / 2;
+    }
 
     *out_left = left;
     *out_top = top;
