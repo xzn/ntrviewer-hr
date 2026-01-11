@@ -631,28 +631,32 @@ static double blur_offsets[UI_BLUR_RADIUS_MAX];
 static int blur_radius_prev;
 
 #include "ui_main_nk.h"
-int calculate_blur_weights_and_offsets(double weights[UI_BLUR_RADIUS_MAX], double offsets[UI_BLUR_RADIUS_MAX]) {
+int calculate_blur_weights_and_offsets(double out_weights[UI_BLUR_RADIUS_MAX], double out_offsets[UI_BLUR_RADIUS_MAX]) {
     rp_lock_wait(ui_nk_lock);
-    if (blur_radius_prev == ui_blur_radius) {
+
+    const int radius = ui_blur_radius;
+
+    if (blur_radius_prev == radius) {
         goto end;
     }
 
-    const double count = ui_blur_radius * 2 - 1;
+    const double count = radius * 2 - 1;
     blur_weights[0] = 1 / count;
-    for (int i = 1; i < ui_blur_radius; ++i) {
+    for (int i = 1; i < radius; ++i) {
         blur_weights[i] = 1 / count * 2;
     }
 
-    blur_offsets[0] = -(ui_blur_radius - 1);
-    for (int i = 1; i < ui_blur_radius; ++i) {
+    blur_offsets[0] = -(radius - 1);
+    for (int i = 1; i < radius; ++i) {
         blur_offsets[i] = blur_offsets[0] + i * 2 - 0.5;
     }
 
-    blur_radius_prev = ui_blur_radius;
+
+    blur_radius_prev = radius;
 
 end:
-    memcpy(weights, blur_weights, sizeof(blur_weights));
-    memcpy(offsets, blur_offsets, sizeof(blur_offsets));
+    memcpy(out_weights, blur_weights, sizeof(blur_weights));
+    memcpy(out_offsets, blur_offsets, sizeof(blur_offsets));
     rp_lock_rel(ui_nk_lock);
     return blur_radius_prev;
 }

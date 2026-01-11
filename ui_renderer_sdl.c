@@ -280,62 +280,6 @@ enum ui_sdl_blur_pass {
 
 static uint8_t sdl_data_blur[SCREEN_COUNT][SCREEN_COUNT][BLUR_PASS_COUNT][SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N];
 
-#if 0
-static void sdl_data_do_blur(uint8_t *data, uint8_t (*data_blur)[SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N], int width, int height) {
-    uint8_t *blur = data_blur[BLUR_H];
-    const int KERNEL_I_MIN = -(ui_blur_radius - 1);
-    const int KERNEL_I_MAX = ui_blur_radius - 1;
-    const int KERNEL_MAX = ui_blur_radius;
-
-    for (int y = 0; y < height; ++y) {
-        uint8_t *data_y = data + y * width * GL_CHANNELS_N;
-        uint8_t *blur_y = blur + y * width * GL_CHANNELS_N;
-        for (int x = 0; x < width; ++x) {
-            uint8_t *data_x = data_y + x * GL_CHANNELS_N;
-            uint8_t *blur_x = blur_y + x * GL_CHANNELS_N;
-
-            int x_min = MAX(x + KERNEL_I_MIN, 0);
-            int x_max = MIN(x + KERNEL_I_MAX, width - 1);
-            for (int c = 0; c < GL_CHANNELS_N; ++c) {
-                int count = 0;
-                int acc = 0;
-                for (int xx = x_min; xx <= x_max; ++xx) {
-                    int ii = xx - x;
-                    int mul = KERNEL_MAX - abs(ii);
-                    count += mul;
-                    acc += mul * data_x[c + ii * GL_CHANNELS_N];
-                }
-                blur_x[c] = acc / count;
-            }
-        }
-    }
-    data = blur;
-    blur = data_blur[BLUR_V];
-    for (int y = 0; y < height; ++y) {
-        uint8_t *data_y = data + y * width * GL_CHANNELS_N;
-        uint8_t *blur_y = blur + y * width * GL_CHANNELS_N;
-        for (int x = 0; x < width; ++x) {
-            uint8_t *data_x = data_y + x * GL_CHANNELS_N;
-            uint8_t *blur_x = blur_y + x * GL_CHANNELS_N;
-
-            int y_min = MAX(y + KERNEL_I_MIN, 0);
-            int y_max = MIN(y + KERNEL_I_MAX, height - 1);
-            for (int c = 0; c < GL_CHANNELS_N; ++c) {
-                int count = 0;
-                int acc = 0;
-                for (int yy = y_min; yy <= y_max; ++yy) {
-                    int ii = yy - y;
-                    int mul = KERNEL_MAX - abs(ii);
-                    count += mul;
-                    acc += mul * data_x[c + ii * width * GL_CHANNELS_N];
-                }
-                blur_x[c] = acc / count;
-            }
-        }
-    }
-}
-#endif
-
 static void sdl_data_do_blur1(uint8_t *data, uint8_t (*data_blur)[SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N], int width, int height) {
     uint8_t *blur = data_blur[BLUR_H];
     const int KERNEL_I_MIN = -(ui_blur_radius - 1);
@@ -460,10 +404,6 @@ void ui_renderer_sdl_draw(uint8_t *data, uint8_t *data_prev, int width, int heig
     need_blur = need_blur && !sdl_has_blur[screen_top_bot][i];
     if (need_blur) {
         uint8_t (*data_blur)[SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N] = sdl_data_blur[screen_top_bot][i];
-#if 0
-        sdl_data_do_blur(data, data_blur, height, width);
-        sdl_data_do_blur(data_blur[BLUR_OUT], data_blur, height, width);
-#endif
         sdl_data_do_blur1(data ? data : data_prev, data_blur, height, width);
         for (int b = 0; b < ui_blur_iter; ++b)
             sdl_data_do_blur1(data_blur[BLUR_OUT], data_blur, height, width);

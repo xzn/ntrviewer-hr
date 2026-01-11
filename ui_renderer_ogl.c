@@ -787,10 +787,8 @@ void ui_renderer_ogl_main(int screen_top_bot, int ctx_top_bot, view_mode_t view_
 #endif
 
     glViewport(0, 0, ui_ctx_width_drawable[p], ui_ctx_height_drawable[p]);
-    if (!win_shared) {
-        glClearColor(bg[0], bg[1], bg[2], bg[3]);
-        glClear(GL_COLOR_BUFFER_BIT);
-    }
+    glClearColor(bg[0], bg[1], bg[2], bg[3]);
+    glClear(GL_COLOR_BUFFER_BIT);
 
     if (view_mode == VIEW_MODE_TOP_BOT && !win_shared) {
         draw_screen(&rp_buffer_ctx[SCREEN_TOP], SCREEN_HEIGHT0, SCREEN_WIDTH, SCREEN_TOP, i, view_mode, 0);
@@ -938,10 +936,58 @@ static bool gl_blur_prog_make(struct gl_blur_t *blur, enum blur_pass_t pass) {
         blur->prog[b] = 0;
     }
 
+    char prog_fs_src[8192];
+    char line[256];
     if (is_renderer_gles()) {
         blur->prog[b] = Load_program(GLES_GLSL_VERSION vs_str, GLES_GLSL_VERSION fs_str);
+    } {
+        strcpy(prog_fs_src, OGL_GLSL3_VERSION);
+
+        sprintf(line, "const vec2 DIRECTION = %s;\n", b == BLUR_PASS_H ? "vec2(1.0, 0.0)" : "vec2(0.0, 1.0)");
+        strcat(prog_fs_src, line);
+
+        sprintf(line, "const int SAMPLE_COUNT = %d;\n", blur->radius);
+        strcat(prog_fs_src, line);
+
+        strcat(prog_fs_src, "const float OFFSETS[] = float[](\n");
+        for (int i = 0; i < blur->radius; ++i) {
+            if (i)
+                strcat(prog_fs_src, ",\n");;
+            sprintf(line, "%lf", blur->offsets[i]);
+            strcat(prog_fs_src, line);
+        }
+        strcat(prog_fs_src, ");\n");
+
+        strcat(prog_fs_src, "const float WEIGHTS[] = float[](\n");
+        for (int i = 0; i < blur->radius; ++i) {
+            if (i)
+                strcat(prog_fs_src, ",\n");;
+            sprintf(line, "%lf", blur->weights[i]);
+            strcat(prog_fs_src, line);
+        }
+        strcat(prog_fs_src, ");\n");
+
+        strcat(prog_fs_src,
+            "in vec2 v_texCoord;\n"
+            "uniform sampler2D s_texture;\n"
+            "out vec4 fragColor;\n"
+
+            "void main()\n"
+            "{\n"
+            " vec4 result = vec4(0.0);\n"
+            " vec2 size = DIRECTION / textureSize(s_texture, 0);\n"
+            " for (int i = 0; i < SAMPLE_COUNT; ++i)\n"
+            " {\n"
+            "  vec2 offset = OFFSETS[i] * size;\n"
+            "  float weight = WEIGHTS[i];\n"
+            "  result += texture(s_texture, v_texCoord + offset) * weight;\n"
+            " }\n"
+            " fragColor = result;\n"
+            "}\n"
+        );
+
+        blur->prog[b] = Load_program(OGL_GLSL3_VERSION vs3_str, prog_fs_src);
     }
-    blur->prog[b] = Load_program(OGL_GLSL3_VERSION vs3_str, OGL_GLSL3_VERSION fs3_str);
     if (!blur->prog[b])
         return false;
 
@@ -971,38 +1017,43 @@ static GLuint gl_blur_tex(GLuint in_tex, int width, int height, int screen_top_b
         blur->radius = radius_prev;
     }
 
-    for (int b = 0; b < BLUR_PASS_COUNT; ++b) {
-        if (!blur->prog[b]) {
-            if (!gl_blur_prog_make(blur, b))
-                return 0;
+    for (int bb = 0; bb < ui_blur_iter + 1; ++bb) {
+        for (int b = 0; b < BLUR_PASS_COUNT; ++b) {
+            if (!blur->prog[b]) {
+                if (!gl_blur_prog_make(blur, b))
+                    return 0;
+            }
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, blur->tex[screen_top_bot][b]);
+            glTexImage2D(
+                GL_TEXTURE_2D, 0, GL_INT_FORMAT,
+                width, height, 0,
+                GL_FORMAT, GL_UNSIGNED_BYTE,
+                NULL);
+
+            glBindTexture(GL_TEXTURE_2D,
+                b ? blur->tex[screen_top_bot][b - 1] :
+                bb ? blur->tex[screen_top_bot][BLUR_PASS_COUNT - 1] :
+                in_tex);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, blur->fbo[screen_top_bot][b]);
+
+            glViewport(0, 0, width, height);
+            glUseProgram(blur->prog[b]);
+
+            glUniform1i(blur->sampler_loc[b], 0);
+
+            if (gl_use_vao) {
+                glBindVertexArray(gl_vao[i]);
+                glDrawArrays(GL_TRIANGLES, 0, 3);
+            } else {
+                glEnableVertexAttribArray(blur->index_loc[b]);
+                glVertexAttribPointer(blur->index_loc[b], 1, GL_UNSIGNED_SHORT, GL_FALSE, sizeof(*gl_indices), gl_indices);
+                glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, gl_indices);
+            }
+
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
         }
-
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, blur->tex[screen_top_bot][b]);
-        glTexImage2D(
-            GL_TEXTURE_2D, 0, GL_INT_FORMAT,
-            width, height, 0,
-            GL_FORMAT, GL_UNSIGNED_BYTE,
-            NULL);
-
-        glBindTexture(GL_TEXTURE_2D, in_tex);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, blur->fbo[screen_top_bot][b]);
-
-        glViewport(0, 0, width, height);
-        glUseProgram(blur->prog[b]);
-
-        glUniform1i(blur->sampler_loc[b], 0);
-
-        if (gl_use_vao) {
-            glBindVertexArray(gl_vao[i]);
-            glDrawArrays(GL_TRIANGLES, 0, 3);
-        } else {
-            glEnableVertexAttribArray(blur->index_loc[b]);
-            glVertexAttribPointer(blur->index_loc[b], 1, GL_UNSIGNED_SHORT, GL_FALSE, sizeof(*gl_indices), gl_indices);
-            glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, gl_indices);
-        }
-
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
     }
 
 end:
@@ -1014,6 +1065,9 @@ static void gl_blur_tex_draw(GLuint blur_tex, int ctx_top_bot,
     int ctx_left, int ctx_top, int ctx_width, int ctx_height)
 {
     int i = ctx_top_bot;
+
+    if (!ui_blur_iter)
+        return;
 
     if (is_renderer_csc()) {
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[i]);
