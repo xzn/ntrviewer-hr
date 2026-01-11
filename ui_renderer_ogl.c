@@ -407,8 +407,7 @@ static int ogl_upscaling_init(void) {
             rashader_render_mode[j][i] = -1;
 
             // HACK workaround rashader not working on init (don't know what I'm doing wrong..)
-            if (!is_renderer_csc())
-                rashader_delay_init[j][i] = true;
+            rashader_delay_init[j][i] = true;
         }
     }
     SDL_GL_MakeCurrent(NULL, NULL);

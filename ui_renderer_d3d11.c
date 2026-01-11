@@ -18,20 +18,15 @@ static struct nk_context *nk_ctx;
 #define MAX_VERTEX_BUFFER 512 * 1024
 #define MAX_INDEX_BUFFER 128 * 1024
 
-struct d3d_vertex_t {
-    float pos[2];
-    float uv[2];
-};
-static ID3D11Buffer *d3d_child_vb[SCREEN_COUNT][SCREEN_COUNT];
-static ID3D11Buffer *d3d_vb[SCREEN_COUNT];
-static ID3D11Buffer *d3d_ib[SCREEN_COUNT];
 static ID3D11InputLayout *d3d_il[SCREEN_COUNT];
 static ID3D11BlendState *d3d_ui_bs[SCREEN_COUNT];
 static ID3D11VertexShader *d3d_vs[SCREEN_COUNT];
+static ID3D11VertexShader *d3d_data_vs[SCREEN_COUNT];
 static ID3D11PixelShader *d3d_ps[SCREEN_COUNT];
 static ID3D11PixelShader *d3d_ui_ps;
 static ID3D11SamplerState *d3d_ss_point[SCREEN_COUNT];
 static ID3D11SamplerState *d3d_ss_linear[SCREEN_COUNT];
+static ID3D11RasterizerState *d3d_rs[SCREEN_COUNT];
 
 enum {
     UPSCALING_DEFAULT_NONE = 0,
@@ -162,8 +157,7 @@ static void d3d11_upscaling_close(void) {
 static const char *d3d_vs_src =
     "struct VSInput\n"
     "{\n"
-    " float2 position: POSITION;\n"
-    " float2 uv: TEXCOORD;\n"
+    " uint vid : SV_VertexID;\n"
     "};\n"
     "struct VSOutput\n"
     "{\n"
@@ -173,8 +167,25 @@ static const char *d3d_vs_src =
     "VSOutput Main(VSInput input)\n"
     "{\n"
     " VSOutput output = (VSOutput)0;\n"
-    " output.position = float4(input.position, 0.0, 1.0);\n"
-    " output.uv = input.uv;\n"
+    " output.uv = float2((input.vid << 1) & 2, input.vid & 2);\n"
+    " output.position = float4(output.uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);\n"
+    " return output;\n"
+    "}\n";
+static const char *d3d_data_vs_src =
+    "struct VSInput\n"
+    "{\n"
+    " uint vid : SV_VertexID;\n"
+    "};\n"
+    "struct VSOutput\n"
+    "{\n"
+    " float4 position: SV_Position;\n"
+    " float2 uv: TEXCOORD;\n"
+    "};\n"
+    "VSOutput Main(VSInput input)\n"
+    "{\n"
+    " VSOutput output = (VSOutput)0;\n"
+    " output.uv = float2((input.vid << 1) & 2, input.vid & 2);\n"
+    " output.position = float4(output.uv.yx * 2.0 + -1.0, 0.0, 1.0);\n"
     " return output;\n"
     "}\n";
 #define d3d_ui_ps_src_0 \
@@ -237,7 +248,10 @@ static ID3D11VertexShader *load_vs(ID3D11Device *dev, const char *src, ID3DBlob 
         IUnknown_Release(code);
         return NULL;
     }
-    *compiled = code;
+    if (compiled)
+        *compiled = code;
+    else
+        IUnknown_Release(code);
     return vs;
 }
 
@@ -321,6 +335,10 @@ static int d3d11_init(void) {
         if (!d3d_vs[j]) {
             return -1;
         }
+        d3d_data_vs[j] = load_vs(d3d11device[j], d3d_data_vs_src, NULL);
+        if (!d3d_data_vs[j]) {
+            return -1;
+        }
         d3d_ps[j] = load_ps(d3d11device[j], d3d_ps_src);
         if (!d3d_ps[j]) {
             return -1;
@@ -332,11 +350,7 @@ static int d3d11_init(void) {
             }
         }
 
-        D3D11_INPUT_ELEMENT_DESC input_desc[] =
-            {
-                {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
-                {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
-            };
+        D3D11_INPUT_ELEMENT_DESC input_desc[] = {};
 
         hr = ID3D11Device_CreateInputLayout(
             d3d11device[j],
@@ -350,36 +364,6 @@ static int d3d11_init(void) {
             return -1;
         }
         CHECK_AND_RELEASE(vs_code);
-
-        const struct d3d_vertex_t vb_data[] = {
-            {{-1.0f, 1.0f}, {0.0f, 0.0f}},
-            {{-1.0f, -1.0f}, {0.0f, 1.0f}},
-            {{1.0f, 1.0f}, {1.0f, 0.0f}},
-            {{1.0f, -1.0f}, {1.0f, 1.0f}},
-        };
-        D3D11_BUFFER_DESC vb_desc = {};
-        vb_desc.ByteWidth = sizeof(vb_data);
-        vb_desc.Usage = D3D11_USAGE_IMMUTABLE;
-        vb_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-        D3D11_SUBRESOURCE_DATA vb_srd = {.pSysMem = vb_data};
-        hr = ID3D11Device_CreateBuffer(d3d11device[j], &vb_desc, &vb_srd, &d3d_vb[j]);
-        if (hr) {
-            err_log("CreateBuffer failed: %d\n", (int)hr);
-            return -1;
-        }
-
-        const unsigned ib_data[] =
-            {0, 2, 1, 1, 2, 3};
-        D3D11_BUFFER_DESC ib_desc = {};
-        ib_desc.ByteWidth = sizeof(ib_data);
-        ib_desc.Usage = D3D11_USAGE_IMMUTABLE;
-        ib_desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
-        D3D11_SUBRESOURCE_DATA ib_srd = {.pSysMem = ib_data};
-        hr = ID3D11Device_CreateBuffer(d3d11device[j], &ib_desc, &ib_srd, &d3d_ib[j]);
-        if (hr) {
-            err_log("CreateBuffer failed: %d\n", (int)hr);
-            return -1;
-        }
 
         D3D11_BLEND_DESC blend_desc = {
             .RenderTarget = {
@@ -418,17 +402,13 @@ static int d3d11_init(void) {
             return -1;
         }
 
-        for (int i = 0; i < SCREEN_COUNT; ++i) {
-            D3D11_BUFFER_DESC child_vb_desc = {};
-            child_vb_desc.ByteWidth = sizeof(struct d3d_vertex_t) * 4;
-            child_vb_desc.Usage = D3D11_USAGE_DYNAMIC;
-            child_vb_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-            child_vb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-            hr = ID3D11Device_CreateBuffer(d3d11device[j], &child_vb_desc, NULL, &d3d_child_vb[j][i]);
-            if (hr) {
-                err_log("CreateBuffer failed: %d\n", (int)hr);
-                return -1;
-            }
+        D3D11_RASTERIZER_DESC rast_desc = {};
+        rast_desc.FillMode = D3D11_FILL_SOLID;
+        rast_desc.CullMode = D3D11_CULL_NONE;
+        hr = ID3D11Device_CreateRasterizerState(d3d11device[j], &rast_desc, &d3d_rs[j]);
+        if (hr) {
+            err_log("CreateRasterizerState failed: %d\n", (int)hr);
+            return -1;
         }
     }
 
@@ -447,16 +427,15 @@ static void d3d11_close(void)
             CHECK_AND_RELEASE(rp_buffer_ctx[j].d3d_tex_staging[i]);
             CHECK_AND_RELEASE(rp_buffer_ctx[j].d3d_srv[i]);
             CHECK_AND_RELEASE(rp_buffer_ctx[j].d3d_tex[i]);
-            CHECK_AND_RELEASE(d3d_child_vb[j][i]);
         }
 
         CHECK_AND_RELEASE(d3d_ui_bs[j]);
-        CHECK_AND_RELEASE(d3d_ib[j]);
-        CHECK_AND_RELEASE(d3d_vb[j]);
+        CHECK_AND_RELEASE(d3d_rs[j]);
         CHECK_AND_RELEASE(d3d_ss_point[j]);
         CHECK_AND_RELEASE(d3d_ss_linear[j]);
         CHECK_AND_RELEASE(d3d_il[j]);
         CHECK_AND_RELEASE(d3d_vs[j]);
+        CHECK_AND_RELEASE(d3d_data_vs[j]);
         CHECK_AND_RELEASE(d3d_ps[j]);
         if (j == SCREEN_TOP) {
             CHECK_AND_RELEASE(d3d_ui_ps);
@@ -787,36 +766,18 @@ static int ctx_height[SCREEN_COUNT];
 static int win_width_drawable[SCREEN_COUNT];
 static int win_height_drawable[SCREEN_COUNT];
 
-static void d3d11_draw_screen(int ctx_top_bot, int screen_top_bot, struct d3d_vertex_t *vertices, ID3D11ShaderResourceView *in_srv)
+static void d3d11_draw_screen(int ctx_top_bot, ID3D11ShaderResourceView *in_srv)
 {
     int i = ctx_top_bot;
 
-    if (vertices) {
-        HRESULT hr;
-        D3D11_MAPPED_SUBRESOURCE tex_mapped = {};
-        hr = ID3D11DeviceContext_Map(d3d11device_context[i], (ID3D11Resource *)d3d_child_vb[i][screen_top_bot], 0, D3D11_MAP_WRITE_DISCARD, 0, &tex_mapped);
-        if (hr) {
-            err_log("Map failed: %d\n", (int)hr);
-            return;
-        }
-        memcpy(tex_mapped.pData, vertices, sizeof(struct d3d_vertex_t) * 4);
-
-        ID3D11DeviceContext_Unmap(d3d11device_context[i], (ID3D11Resource *)d3d_child_vb[i][screen_top_bot], 0);
-    }
-
     ID3D11DeviceContext_IASetPrimitiveTopology(d3d11device_context[i], D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    unsigned vb_stride = sizeof(struct d3d_vertex_t);
-    unsigned vb_offset = 0;
-    ID3D11DeviceContext_IASetVertexBuffers(d3d11device_context[i], 0, 1, &d3d_child_vb[i][screen_top_bot], &vb_stride, &vb_offset);
-    ID3D11DeviceContext_IASetIndexBuffer(d3d11device_context[i], d3d_ib[i], DXGI_FORMAT_R32_UINT, 0);
     ID3D11DeviceContext_IASetInputLayout(d3d11device_context[i], d3d_il[i]);
     ID3D11DeviceContext_OMSetBlendState(d3d11device_context[i], d3d_ui_bs[i], NULL, 0xffffffff);
-    ID3D11DeviceContext_VSSetShader(d3d11device_context[i], d3d_vs[i], NULL, 0);
     ID3D11DeviceContext_PSSetShader(d3d11device_context[i], d3d_ps[i], NULL, 0);
     ID3D11DeviceContext_PSSetSamplers(d3d11device_context[i], 0, 1, &d3d_ss_linear[i]);
-    ID3D11DeviceContext_RSSetState(d3d11device_context[i], NULL);
+    ID3D11DeviceContext_RSSetState(d3d11device_context[i], d3d_rs[i]);
     ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[i], 0, 1, &in_srv);
-    ID3D11DeviceContext_DrawIndexed(d3d11device_context[i], 6, 0, 0);
+    ID3D11DeviceContext_Draw(d3d11device_context[i], 3, 0);
     ID3D11ShaderResourceView *ptr_null = NULL;
     ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[i], 0, 1, &ptr_null);
 }
@@ -880,13 +841,6 @@ void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int widt
     draw_screen_get_dims(
         screen_top_bot, ctx_top_bot, win_shared, view_mode, width, height,
         &ctx_left_f, &ctx_top_f, &ctx_right_f, &ctx_bot_f, &ctx_width[screen_top_bot], &ctx_height[screen_top_bot], &win_width_drawable[screen_top_bot], &win_height_drawable[screen_top_bot]);
-
-    struct d3d_vertex_t vertices[] = {
-        {{ctx_left_f, ctx_bot_f}, {0.0f, 0.0f}},
-        {{ctx_right_f, ctx_bot_f}, {0.0f, 1.0f}},
-        {{ctx_left_f, ctx_top_f}, {1.0f, 0.0f}},
-        {{ctx_right_f, ctx_top_f}, {1.0f, 1.0f}},
-    };
 
     int i = ctx_top_bot;
     int p = win_shared ? screen_top_bot : i;
@@ -1020,8 +974,9 @@ rashader_fail:
 
     D3D11_VIEWPORT vp = { .Width = ui_ctx_width_drawable[p], .Height = ui_ctx_height_drawable[p] };
     ID3D11DeviceContext_RSSetViewports(d3d11device_context[i], 1, &vp);
+    ID3D11DeviceContext_VSSetShader(d3d11device_context[i], d3d_data_vs[i], NULL, 0);
 
-    d3d11_draw_screen(i, screen_top_bot, vertices, srv);
+    d3d11_draw_screen(i, srv);
 
     ctx->width_prev = ctx_width[screen_top_bot];
     ctx->height_prev = ctx_height[screen_top_bot];
@@ -1116,10 +1071,6 @@ void ui_renderer_d3d11_present(int screen_top_bot, int ctx_top_bot, bool win_sha
                 nk_gui_next = 0;
 
                 ID3D11DeviceContext_IASetPrimitiveTopology(d3d11device_context[i], D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-                unsigned vb_stride = sizeof(struct d3d_vertex_t);
-                unsigned vb_offset = 0;
-                ID3D11DeviceContext_IASetVertexBuffers(d3d11device_context[i], 0, 1, &d3d_vb[i], &vb_stride, &vb_offset);
-                ID3D11DeviceContext_IASetIndexBuffer(d3d11device_context[i], d3d_ib[i], DXGI_FORMAT_R32_UINT, 0);
                 ID3D11DeviceContext_IASetInputLayout(d3d11device_context[i], d3d_il[i]);
                 ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &buf->rtv, NULL);
                 ID3D11DeviceContext_OMSetBlendState(d3d11device_context[i], d3d_ui_bs[i], NULL, 0xffffffff);
@@ -1130,7 +1081,8 @@ void ui_renderer_d3d11_present(int screen_top_bot, int ctx_top_bot, bool win_sha
 
                 D3D11_VIEWPORT vp = {.Width = width, .Height = height};
                 ID3D11DeviceContext_RSSetViewports(d3d11device_context[i], 1, &vp);
-                ID3D11DeviceContext_DrawIndexed(d3d11device_context[i], 6, 0, 0);
+                ID3D11DeviceContext_RSSetState(d3d11device_context[i], d3d_rs[i]);
+                ID3D11DeviceContext_Draw(d3d11device_context[i], 3, 0);
 
                 ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 0, NULL, NULL);
                 ID3D11ShaderResourceView *ptr_null = NULL;
@@ -1363,14 +1315,9 @@ no_upscale:
         ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &rtv, NULL);
         D3D11_VIEWPORT vp = { .Width = target_width, .Height = target_height };
         ID3D11DeviceContext_RSSetViewports(d3d11device_context[i], 1, &vp);
+        ID3D11DeviceContext_VSSetShader(d3d11device_context[i], d3d_vs[i], NULL, 0);
 
-        struct d3d_vertex_t vertices[] = {
-            {{-1.0f, 1.0f}, {0.0f, 0.0f}},
-            {{-1.0f, -1.0f}, {0.0f, 1.0f}},
-            {{1.0f, 1.0f}, {1.0f, 0.0f}},
-            {{1.0f, -1.0f}, {1.0f, 1.0f}},
-        };
-        d3d11_draw_screen(i, screen_top_bot, vertices, srv);
+        d3d11_draw_screen(i, srv);
     }
     ID3D11DeviceContext_CopyResource(d3d11device_context[i], (ID3D11Resource *)staging, (ID3D11Resource *)tex);
     tex_mapped = (D3D11_MAPPED_SUBRESOURCE){};
