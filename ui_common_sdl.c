@@ -472,6 +472,65 @@ void draw_screen_get_blur_dims_lite(
     *out_ctx_height = ctx_height;
 }
 
+void draw_screen_get_blur_dims_win_shared(
+    int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared, UNUSED int in_width, UNUSED int in_height,
+    int *out_left,
+    int *out_top,
+    int *out_width,
+    int *out_height,
+    int *out_ctx_left,
+    int *out_ctx_top,
+    int *out_ctx_width,
+    int *out_ctx_height
+) {
+    int left;
+    int top;
+    int width;
+    int height;
+    int ctx_left;
+    int ctx_top;
+    int ctx_width;
+    int ctx_height;
+
+    int i = ctx_top_bot;
+
+    if (win_shared) {
+        ctx_left = 0;
+        ctx_top = 0;
+        ctx_width = ui_win_width_drawable[SCREEN_TOP];
+        ctx_height = (double)ui_win_height_drawable[SCREEN_TOP] / 2;
+    } else {
+        if (view_mode == VIEW_MODE_TOP_BOT) {
+            ctx_left = 0;
+            ctx_top = 0;
+            ctx_width = ui_win_width_drawable[i];
+            ctx_height = (double)ui_win_height_drawable[i] / 2;
+
+            if (screen_top_bot != SCREEN_TOP) {
+                ctx_top = (double)ui_win_height_drawable[i] / 2;
+            }
+        } else {
+            ctx_left = 0;
+            ctx_top = 0;
+            ctx_width = ui_win_width_drawable[i];
+            ctx_height = (double)ui_win_height_drawable[i];
+        }
+    }
+    left = ctx_left;
+    top = ctx_top;
+    width = ctx_width;
+    height = ctx_height;
+
+    *out_left = left;
+    *out_top = top;
+    *out_width = width;
+    *out_height = height;
+    *out_ctx_left = ctx_left;
+    *out_ctx_top = ctx_top;
+    *out_ctx_width = ctx_width;
+    *out_ctx_height = ctx_height;
+}
+
 void draw_screen_get_dims_lite(
     int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int width, int height,
     int *out_ctx_left,
@@ -556,6 +615,38 @@ void draw_screen_get_dims_win_shared(
     *out_ctx_top = ctx_top;
     *out_ctx_width = ctx_width;
     *out_ctx_height = ctx_height;
+}
+
+static double blur_weights[UI_BLUR_RADIUS_MAX];
+static double blur_offsets[UI_BLUR_RADIUS_MAX];
+
+static int blur_radius_prev;
+
+#include "ui_main_nk.h"
+int calculate_blur_weights_and_offsets(double weights[UI_BLUR_RADIUS_MAX], double offsets[UI_BLUR_RADIUS_MAX]) {
+    rp_lock_wait(ui_nk_lock);
+    if (blur_radius_prev == ui_blur_radius) {
+        goto end;
+    }
+
+    const double count = ui_blur_radius * 2 - 1;
+    blur_weights[0] = 1 / count;
+    for (int i = 1; i < ui_blur_radius; ++i) {
+        blur_weights[i] = 1 / count * 2;
+    }
+
+    blur_offsets[0] = -(ui_blur_radius - 1);
+    for (int i = 1; i < ui_blur_radius; ++i) {
+        blur_offsets[i] = blur_offsets[0] + i * 2 - 0.5;
+    }
+
+    blur_radius_prev = ui_blur_radius;
+
+end:
+    memcpy(weights, blur_weights, sizeof(blur_weights));
+    memcpy(offsets, blur_offsets, sizeof(blur_offsets));
+    rp_lock_rel(ui_nk_lock);
+    return blur_radius_prev;
 }
 
 void generate_cursor_image(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale) {

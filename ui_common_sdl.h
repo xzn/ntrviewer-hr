@@ -132,6 +132,18 @@ void draw_screen_get_blur_dims_lite(
     int *out_ctx_height
 );
 
+void draw_screen_get_blur_dims_win_shared(
+    int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared, int width, int height,
+    int *out_left,
+    int *out_top,
+    int *out_width,
+    int *out_height,
+    int *out_ctx_left,
+    int *out_ctx_top,
+    int *out_ctx_width,
+    int *out_ctx_height
+);
+
 void draw_screen_get_dims_lite(
     int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int width, int height,
     int *out_ctx_left,
@@ -147,6 +159,8 @@ void draw_screen_get_dims_win_shared(
     int *out_ctx_width,
     int *out_ctx_height
 );
+
+int calculate_blur_weights_and_offsets(double weights[UI_BLUR_RADIUS_MAX], double offsets[UI_BLUR_RADIUS_MAX]);
 
 typedef struct {
     unsigned char *image;

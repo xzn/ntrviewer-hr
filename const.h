@@ -206,6 +206,9 @@ enum frame_buffer_status_t
 #define ui_font_scale_step_factor (32.0f)
 #define ui_font_scale_epsilon (1.0f / ui_font_scale_step_factor)
 
+#define NTR_SCREEN_PRIORITY_FACTOR_DEFAULT (2)
+#define UI_BLUR_RADIUS_MAX (15)
+
 typedef uint8_t byte;
 typedef uint8_t u8;
 typedef uint16_t u16;

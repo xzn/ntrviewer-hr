@@ -230,6 +230,62 @@ GLuint gl_cursor_sampler_loc;
 GLint gl_fbo_index_loc;
 GLint gl_fbo_sampler_loc;
 
+static const GLushort gl_indices[] = {0, 1, 2};
+
+enum blur_pass_t {
+    BLUR_PASS_H,
+    BLUR_PASS_V,
+    BLUR_PASS_COUNT,
+};
+
+static struct gl_blur_t {
+    double weights[UI_BLUR_RADIUS_MAX];
+    double offsets[UI_BLUR_RADIUS_MAX];
+    int radius;
+
+    GLuint prog[BLUR_PASS_COUNT];
+    GLuint index_loc[BLUR_PASS_COUNT];
+    GLuint sampler_loc[BLUR_PASS_COUNT];
+
+    GLuint tex[SCREEN_COUNT][BLUR_PASS_COUNT];
+    GLuint fbo[SCREEN_COUNT][BLUR_PASS_COUNT];
+} gl_blur[SCREEN_COUNT];
+
+static void gl_blur_tex_init(int ctx_top_bot) {
+    struct gl_blur_t *blur = &gl_blur[ctx_top_bot];
+
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+        glGenTextures(BLUR_PASS_COUNT, blur->tex[i]);
+        glGenFramebuffers(BLUR_PASS_COUNT, blur->fbo[i]);
+
+        for (int b = 0; b < BLUR_PASS_COUNT; ++b) {
+            glBindTexture(GL_TEXTURE_2D, blur->tex[i][b]);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_INT_FORMAT, 1, 1, 0, GL_FORMAT, GL_UNSIGNED_BYTE, NULL);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glBindTexture(GL_TEXTURE_2D, 0);
+
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, blur->fbo[i][b]);
+            glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, blur->tex[i][b], 0);
+        }
+    }
+
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+}
+
+static void gl_blur_tex_close(int ctx_top_bot) {
+    struct gl_blur_t *blur = &gl_blur[ctx_top_bot];
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+        glDeleteFramebuffers(BLUR_PASS_COUNT, blur->fbo[i]);
+        memset(blur->fbo[i], 0, sizeof(blur->fbo[i]));
+
+        glDeleteTextures(BLUR_PASS_COUNT, blur->tex[i]);
+        memset(blur->tex[i], 0, sizeof(blur->tex[i]));
+    }
+}
+
 static void on_gl_error(
     GLenum source, GLenum type, GLuint id, GLenum severity,
     GLsizei length, const GLchar *message, const void *)
@@ -289,6 +345,8 @@ static int ogl_res_init(void) {
             if (j == SCREEN_TOP)
                 glGenVertexArrays(1, &gl_vao_fbo);
         }
+
+        gl_blur_tex_init(j);
     }
 
     SDL_GL_MakeCurrent(NULL, NULL);
@@ -302,6 +360,7 @@ static void ogl_res_destroy(void)
             continue;
 
         SDL_GL_MakeCurrent(ogl_win[j], gl_context[j]);
+        gl_blur_tex_close(j);
         if (gl_use_vao) {
             if (gl_vao[j]) {
                 glDeleteVertexArrays(1, &gl_vao[j]);
@@ -871,7 +930,124 @@ fail:
     return reset_mode;
 }
 
-static const GLushort indices[] = {0, 1, 2};
+static bool gl_blur_prog_make(struct gl_blur_t *blur, enum blur_pass_t pass) {
+    int b = pass;
+
+    if (blur->prog[b]) {
+        glDeleteProgram(blur->prog[b]);
+        blur->prog[b] = 0;
+    }
+
+    if (is_renderer_gles()) {
+        blur->prog[b] = Load_program(GLES_GLSL_VERSION vs_str, GLES_GLSL_VERSION fs_str);
+    }
+    blur->prog[b] = Load_program(OGL_GLSL3_VERSION vs3_str, OGL_GLSL3_VERSION fs3_str);
+    if (!blur->prog[b])
+        return false;
+
+    if (is_renderer_gles()) {
+        blur->index_loc[b] = glGetAttribLocation(blur->prog[b], "a_index");
+    }
+    blur->sampler_loc[b] = glGetAttribLocation(blur->prog[b], "s_texture");
+
+    return true;
+}
+
+static GLuint gl_blur_tex(GLuint in_tex, int width, int height, int screen_top_bot, int ctx_top_bot) {
+    int i = ctx_top_bot;
+    struct gl_blur_t *blur = &gl_blur[i];
+
+    if (!in_tex)
+        goto end;
+
+    const int radius_prev = calculate_blur_weights_and_offsets(blur->weights, blur->offsets);
+    if (radius_prev != blur->radius) {
+        for (int b = 0; b < BLUR_PASS_COUNT; ++b) {
+            if (blur->prog[b]) {
+                glDeleteProgram(blur->prog[b]);
+                blur->prog[b] = 0;
+            }
+        }
+        blur->radius = radius_prev;
+    }
+
+    for (int b = 0; b < BLUR_PASS_COUNT; ++b) {
+        if (!blur->prog[b]) {
+            if (!gl_blur_prog_make(blur, b))
+                return 0;
+        }
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, blur->tex[screen_top_bot][b]);
+        glTexImage2D(
+            GL_TEXTURE_2D, 0, GL_INT_FORMAT,
+            width, height, 0,
+            GL_FORMAT, GL_UNSIGNED_BYTE,
+            NULL);
+
+        glBindTexture(GL_TEXTURE_2D, in_tex);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, blur->fbo[screen_top_bot][b]);
+
+        glViewport(0, 0, width, height);
+        glUseProgram(blur->prog[b]);
+
+        glUniform1i(blur->sampler_loc[b], 0);
+
+        if (gl_use_vao) {
+            glBindVertexArray(gl_vao[i]);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+        } else {
+            glEnableVertexAttribArray(blur->index_loc[b]);
+            glVertexAttribPointer(blur->index_loc[b], 1, GL_UNSIGNED_SHORT, GL_FALSE, sizeof(*gl_indices), gl_indices);
+            glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, gl_indices);
+        }
+
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    }
+
+end:
+    return blur->tex[screen_top_bot][BLUR_PASS_COUNT - 1];
+}
+
+static void gl_blur_tex_draw(GLuint blur_tex, int ctx_top_bot,
+    int left, int top, int width, int height,
+    int ctx_left, int ctx_top, int ctx_width, int ctx_height)
+{
+    int i = ctx_top_bot;
+
+    if (is_renderer_csc()) {
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gl_fbo_sc[i]);
+    } else {
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    }
+
+    glViewport(left, top, width, height);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(ctx_left, ctx_top, ctx_width, ctx_height);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, blur_tex);
+
+    if (is_renderer_csc()) {
+        glUseProgram(gl_csc_program[i]);
+        glUniform1i(gl_csc_sampler_loc[i], 0);
+    } else {
+        glUseProgram(gl_program[i]);
+        glUniform1i(gl_sampler_loc[i], 0);
+    }
+
+    if (gl_use_vao) {
+        glBindVertexArray(gl_vao[i]);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    } else {
+        glEnableVertexAttribArray(gl_index_loc[i]);
+        glVertexAttribPointer(gl_index_loc[i], 1, GL_UNSIGNED_SHORT, GL_FALSE, sizeof(*gl_indices), gl_indices);
+        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, gl_indices);
+    }
+
+    glDisable(GL_SCISSOR_TEST);
+}
+
 void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared)
 {
     int i = ctx_top_bot;
@@ -899,6 +1075,18 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width,
         win_height_drawable = ui_ctx_height_drawable[i];
     }
 
+    int blur_left;
+    int blur_top;
+    int blur_width;
+    int blur_height;
+    int blur_ctx_left;
+    int blur_ctx_top;
+    int blur_ctx_width;
+    int blur_ctx_height;
+    // HACK same as above for screen_top_bot
+    draw_screen_get_blur_dims_win_shared(win_shared ? screen_top_bot : !screen_top_bot, i, view_mode, win_shared, width, height,
+        &blur_left, &blur_top, &blur_width, &blur_height, &blur_ctx_left, &blur_ctx_top, &blur_ctx_width, &blur_ctx_height);
+
     int upscaling_selected = ui_upscaling_selected;
     bool upscaled = upscaling_selected != UPSCALING_DEFAULT_NONE;
     bool do_upscaled = false;
@@ -915,11 +1103,17 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width,
             if (need_tex_update || !ctx->gl_tex_upscaled_prev[i]) {
                 data = ctx->data_prev;
             } else {
+                gl_blur_tex_draw(gl_blur_tex(0, 0, 0, screen_top_bot, i), i,
+                    blur_left, blur_top, blur_width, blur_height,
+                    blur_ctx_left, blur_ctx_top, blur_ctx_width, blur_ctx_height);
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, ctx->gl_tex_upscaled_prev[i]);
             }
         } else {
             ctx->gl_tex_upscaled_prev[i] = 0;
+            gl_blur_tex_draw(gl_blur_tex(0, 0, 0, screen_top_bot, i), i,
+                blur_left, blur_top, blur_width, blur_height,
+                blur_ctx_left, blur_ctx_top, blur_ctx_width, blur_ctx_height);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, ctx->gl_tex[i]);
         }
@@ -933,6 +1127,11 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width,
             GL_INT_FORMAT, height, width, 0,
             GL_FORMAT, GL_UNSIGNED_BYTE,
             data);
+
+        gl_blur_tex_draw(gl_blur_tex(ctx->gl_tex[i], height, width, screen_top_bot, i), i,
+            blur_left, blur_top, blur_width, blur_height,
+            blur_ctx_left, blur_ctx_top, blur_ctx_width, blur_ctx_height);
+        glBindTexture(GL_TEXTURE_2D, ctx->gl_tex[i]);
 
         if (!IS_PLACEBO(upscaling_selected)) {
             placebo_upscaling_update(-1, i, screen_top_bot);
@@ -1092,12 +1291,12 @@ rashader_fail:
     } else {
         if (is_renderer_csc()) {
             glEnableVertexAttribArray(gl_csc_index_loc[i]);
-            glVertexAttribPointer(gl_csc_index_loc[i], 1, GL_UNSIGNED_SHORT, GL_FALSE, sizeof(*indices), indices);
+            glVertexAttribPointer(gl_csc_index_loc[i], 1, GL_UNSIGNED_SHORT, GL_FALSE, sizeof(*gl_indices), gl_indices);
         } else {
             glEnableVertexAttribArray(gl_index_loc[i]);
-            glVertexAttribPointer(gl_index_loc[i], 1, GL_UNSIGNED_SHORT, GL_FALSE, sizeof(*indices), indices);
+            glVertexAttribPointer(gl_index_loc[i], 1, GL_UNSIGNED_SHORT, GL_FALSE, sizeof(*gl_indices), gl_indices);
         }
-        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, indices);
+        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, gl_indices);
     }
 
     ctx->width_prev = ctx_width;
@@ -1164,8 +1363,8 @@ void ui_renderer_ogl_present(int screen_top_bot, int ctx_top_bot, bool win_share
                     glDrawArrays(GL_TRIANGLES, 0, 3);
                 } else {
                     glEnableVertexAttribArray(gl_fbo_index_loc);
-                    glVertexAttribPointer(gl_fbo_index_loc, 1, GL_UNSIGNED_SHORT, GL_FALSE, sizeof(*indices), indices);
-                    glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, indices);
+                    glVertexAttribPointer(gl_fbo_index_loc, 1, GL_UNSIGNED_SHORT, GL_FALSE, sizeof(*gl_indices), gl_indices);
+                    glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, gl_indices);
                 }
                 glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, 0);
 
@@ -1437,8 +1636,8 @@ no_upscale:
             glDrawArrays(GL_TRIANGLES, 0, 3);
         } else {
             glEnableVertexAttribArray(gl_cursor_index_loc);
-            glVertexAttribPointer(gl_cursor_index_loc, 1, GL_UNSIGNED_SHORT, GL_FALSE, sizeof(*indices), indices);
-            glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, indices);
+            glVertexAttribPointer(gl_cursor_index_loc, 1, GL_UNSIGNED_SHORT, GL_FALSE, sizeof(*gl_indices), gl_indices);
+            glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, gl_indices);
         }
 
         fail = false;

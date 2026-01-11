@@ -965,7 +965,7 @@ void ui_main_nk(void)
         snprintf(msg_buf, sizeof(msg_buf), "Ambience Blur %d", ui_blur_radius);
         nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
         do_nav_slider_next(ctx, NK_FOCUS_BORDER_RADIUS, &ui_blur_radius);
-        nk_slider_int(ctx, 3, &ui_blur_radius, 15, 1);
+        nk_slider_int(ctx, 3, &ui_blur_radius, UI_BLUR_RADIUS_MAX, 1);
         check_nav_slider_prev(ctx, NK_FOCUS_BORDER_RADIUS, ui_blur_radius);
 
         nk_layout_row_dynamic(ctx, 30, 1);

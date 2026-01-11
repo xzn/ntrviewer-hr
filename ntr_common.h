@@ -75,7 +75,6 @@ struct ntr_rp_config_t {
 extern struct ntr_rp_config_t ntr_rp_config;
 void ntr_config_set_default(void);
 
-#define NTR_SCREEN_PRIORITY_FACTOR_DEFAULT (2)
 extern bool ntr_top_screen_priority_prev;
 extern int ntr_screen_priority_factor_prev;
 
