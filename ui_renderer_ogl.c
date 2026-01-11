@@ -883,6 +883,7 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width,
     if (win_shared)
         draw_screen_get_dims_win_shared(screen_top_bot, i, width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
     else
+        // HACK dims are symmetrical, negate screen_top_bot to flip top and bot for OpenGL
         draw_screen_get_dims_lite(!screen_top_bot, i, view_mode, width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
     ctx_left *= ui_win_scale[i];
     ctx_top *= ui_win_scale[i];

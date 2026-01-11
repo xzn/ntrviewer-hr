@@ -834,15 +834,22 @@ fail:
 }
 
 void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared) {
-    double ctx_left_f;
-    double ctx_top_f;
-    double ctx_right_f;
-    double ctx_bot_f;
-    draw_screen_get_dims(
-        screen_top_bot, ctx_top_bot, win_shared, view_mode, width, height,
-        &ctx_left_f, &ctx_top_f, &ctx_right_f, &ctx_bot_f, &ctx_width[screen_top_bot], &ctx_height[screen_top_bot], &win_width_drawable[screen_top_bot], &win_height_drawable[screen_top_bot]);
-
     int i = ctx_top_bot;
+
+    int ctx_left;
+    int ctx_top;
+    if (win_shared)
+        draw_screen_get_dims_win_shared(screen_top_bot, i, width, height, &ctx_left, &ctx_top, &ctx_width[screen_top_bot], &ctx_height[screen_top_bot]);
+    else
+        draw_screen_get_dims_lite(screen_top_bot, i, view_mode, width, height, &ctx_left, &ctx_top, &ctx_width[screen_top_bot], &ctx_height[screen_top_bot]);
+    ctx_left *= ui_win_scale[i];
+    ctx_top *= ui_win_scale[i];
+    ctx_width[screen_top_bot] *= ui_win_scale[i];
+    ctx_height[screen_top_bot] *= ui_win_scale[i];
+
+    win_width_drawable[screen_top_bot] = ui_win_width_drawable[i];
+    win_height_drawable[screen_top_bot] = ui_win_height_drawable[i];
+
     int p = win_shared ? screen_top_bot : i;
 
     if (d3d11_texs_update(ctx, i, height, width) != 0) {
@@ -972,7 +979,7 @@ rashader_fail:
         ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &d3d_rtv[i], NULL);
     }
 
-    D3D11_VIEWPORT vp = { .Width = ui_ctx_width_drawable[p], .Height = ui_ctx_height_drawable[p] };
+    D3D11_VIEWPORT vp = { .TopLeftX = ctx_left, .TopLeftY = ctx_top, .Width = ctx_width[screen_top_bot], .Height = ctx_height[screen_top_bot] };
     ID3D11DeviceContext_RSSetViewports(d3d11device_context[i], 1, &vp);
     ID3D11DeviceContext_VSSetShader(d3d11device_context[i], d3d_data_vs[i], NULL, 0);
 

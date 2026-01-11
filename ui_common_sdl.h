@@ -148,18 +148,6 @@ void draw_screen_get_dims_win_shared(
     int *out_ctx_height
 );
 
-void draw_screen_get_dims(
-    int screen_top_bot, int ctx_top_bot, int win_shared, view_mode_t view_mode, int width, int height,
-    double *out_ctx_left_f,
-    double *out_ctx_top_f,
-    double *out_ctx_right_f,
-    double *out_ctx_bot_f,
-    int *out_ctx_width,
-    int *out_ctx_height,
-    int *out_win_width,
-    int *out_win_height
-);
-
 typedef struct {
     unsigned char *image;
     int width, height, channels;
