@@ -1188,7 +1188,7 @@ static void pres_man_proc_stat(int ctx_top_bot, int win_shared)
             UINT target_count;
             hr = DCompositionGetStatistics(comp_frame_id, &comp_frame_stats, 0, NULL, &target_count);
             if (hr) {
-                err_log("DCompositionGetStatistics failed: %d\n", (int)hr);
+                // err_log("DCompositionGetStatistics failed: %d\n", (int)hr);
                 goto comp_frame_done;
             } else {
                 COMPOSITION_TARGET_ID comp_target_ids[target_count];

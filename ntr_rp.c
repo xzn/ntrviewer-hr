@@ -1262,12 +1262,12 @@ static void receive_from_socket_loop(void) {
         }
 
         // err_log("new connection\n");
-        for (int i = 0; i < SCREEN_COUNT; ++i)
-        {
-            rp_lock_wait(rp_buffer_ctx[i].status_lock);
-            rp_buffer_ctx[i].status = FBS_NOT_AVAIL;
-            rp_lock_rel(rp_buffer_ctx[i].status_lock);
-        }
+        // for (int i = 0; i < SCREEN_COUNT; ++i)
+        // {
+        //     rp_lock_wait(rp_buffer_ctx[i].status_lock);
+        //     rp_buffer_ctx[i].status = FBS_NOT_AVAIL;
+        //     rp_lock_rel(rp_buffer_ctx[i].status_lock);
+        // }
         for (int i = 0; i < RP_WORK_COUNT; ++i)
         {
             recv_end[i] = 2;
