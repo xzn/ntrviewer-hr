@@ -33,7 +33,6 @@ static HDC ogl_hdc[SCREEN_COUNT];
 static GLuint gl_fbo_sc[SCREEN_COUNT];
 
 #define GLES_GLSL_VERSION "#version 100\n" "precision highp float;\n"
-#define OGL_GLSL_VERSION "#version 110\n"
 #define vs_str \
     "attribute float a_index;\n" \
     "varying vec2 v_texCoord;\n" \
@@ -246,6 +245,7 @@ static struct gl_blur_t {
     GLuint prog[BLUR_PASS_COUNT];
     GLuint index_loc[BLUR_PASS_COUNT];
     GLuint sampler_loc[BLUR_PASS_COUNT];
+    GLuint tex_size_loc[BLUR_PASS_COUNT];
 
     GLuint tex[SCREEN_COUNT][BLUR_PASS_COUNT];
     GLuint fbo[SCREEN_COUNT][BLUR_PASS_COUNT];
@@ -939,8 +939,38 @@ static bool gl_blur_prog_make(struct gl_blur_t *blur, enum blur_pass_t pass) {
     char prog_fs_src[8192];
     char line[256];
     if (is_renderer_gles()) {
-        blur->prog[b] = Load_program(GLES_GLSL_VERSION vs_str, GLES_GLSL_VERSION fs_str);
-    } {
+        strcpy(prog_fs_src, GLES_GLSL_VERSION);
+
+        sprintf(line, "const vec2 DIRECTION = %s;\n", b == BLUR_PASS_H ? "vec2(1.0, 0.0)" : "vec2(0.0, 1.0)");
+        strcat(prog_fs_src, line);
+
+        strcat(prog_fs_src,
+            "varying vec2 v_texCoord;\n"
+            "uniform sampler2D s_texture;\n"
+            "uniform vec2 v_size;\n" \
+            "void main()\n"
+            "{\n"
+            " vec4 result = vec4(0.0);\n"
+            " vec2 size = DIRECTION / v_size;\n"
+            " vec2 offset;\n"
+            " float weight;\n"
+        );
+        for (int i = 0; i < blur->radius; ++i) {
+            sprintf(line, " offset = %lf * size;\n", blur->offsets[i]);
+            strcat(prog_fs_src, line);
+            sprintf(line, " weight = %lf;\n", blur->weights[i]);
+            strcat(prog_fs_src, line);
+            strcat(prog_fs_src,
+                " result += texture2D(s_texture, v_texCoord + offset) * weight;\n"
+            );
+        }
+        strcat(prog_fs_src,
+            " gl_FragColor = result;\n"
+            "}\n"
+        );
+
+        blur->prog[b] = Load_program(GLES_GLSL_VERSION vs_str, prog_fs_src);
+    } else {
         strcpy(prog_fs_src, OGL_GLSL3_VERSION);
 
         sprintf(line, "const vec2 DIRECTION = %s;\n", b == BLUR_PASS_H ? "vec2(1.0, 0.0)" : "vec2(0.0, 1.0)");
@@ -993,8 +1023,9 @@ static bool gl_blur_prog_make(struct gl_blur_t *blur, enum blur_pass_t pass) {
 
     if (is_renderer_gles()) {
         blur->index_loc[b] = glGetAttribLocation(blur->prog[b], "a_index");
+        blur->tex_size_loc[b] = glGetUniformLocation(blur->prog[b], "v_size");
     }
-    blur->sampler_loc[b] = glGetAttribLocation(blur->prog[b], "s_texture");
+    blur->sampler_loc[b] = glGetUniformLocation(blur->prog[b], "s_texture");
 
     return true;
 }
@@ -1042,6 +1073,9 @@ static GLuint gl_blur_tex(GLuint in_tex, int width, int height, int screen_top_b
             glUseProgram(blur->prog[b]);
 
             glUniform1i(blur->sampler_loc[b], 0);
+            if (is_renderer_gles()) {
+                glUniform2f(blur->tex_size_loc[b], width, height);
+            }
 
             if (gl_use_vao) {
                 glBindVertexArray(gl_vao[i]);

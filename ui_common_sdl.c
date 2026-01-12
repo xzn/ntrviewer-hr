@@ -651,7 +651,6 @@ int calculate_blur_weights_and_offsets(double out_weights[UI_BLUR_RADIUS_MAX], d
         blur_offsets[i] = blur_offsets[0] + i * 2 - 0.5;
     }
 
-
     blur_radius_prev = radius;
 
 end:
