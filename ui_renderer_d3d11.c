@@ -18,7 +18,6 @@ static struct nk_context *nk_ctx;
 #define MAX_VERTEX_BUFFER 512 * 1024
 #define MAX_INDEX_BUFFER 128 * 1024
 
-static ID3D11InputLayout *d3d_il[SCREEN_COUNT];
 static ID3D11BlendState *d3d_ui_bs[SCREEN_COUNT];
 static ID3D11VertexShader *d3d_vs[SCREEN_COUNT];
 static ID3D11VertexShader *d3d_data_vs[SCREEN_COUNT];
@@ -27,6 +26,7 @@ static ID3D11PixelShader *d3d_ui_ps;
 static ID3D11SamplerState *d3d_ss_point[SCREEN_COUNT];
 static ID3D11SamplerState *d3d_ss_linear[SCREEN_COUNT];
 static ID3D11RasterizerState *d3d_rs[SCREEN_COUNT];
+static ID3D11RasterizerState *d3d_scissor_rs[SCREEN_COUNT];
 
 enum {
     UPSCALING_DEFAULT_NONE = 0,
@@ -326,12 +326,225 @@ static int d3d11_texs_update(struct rp_buffer_ctx_t *ctx, int ctx_top_bot, int w
     return 0;
 }
 
+enum blur_pass_t {
+    BLUR_PASS_H,
+    BLUR_PASS_V,
+    BLUR_PASS_COUNT,
+};
+
+static struct d3d_blur_t {
+    double weights[UI_BLUR_RADIUS_MAX];
+    double offsets[UI_BLUR_RADIUS_MAX];
+    int radius;
+
+    ID3D11PixelShader *ps[BLUR_PASS_COUNT];
+    struct {
+        ID3D11Texture2D *tex;
+        ID3D11ShaderResourceView *srv;
+        ID3D11RenderTargetView *rtv;
+    } tex[SCREEN_COUNT][BLUR_PASS_COUNT];
+    struct {
+        int width;
+        int height;
+    } dims[SCREEN_COUNT];
+} d3d_blur[SCREEN_COUNT];
+
+static bool d3d_blur_prog_make(int ctx_top_bot, enum blur_pass_t pass) {
+    int b = pass;
+
+    int i = ctx_top_bot;
+    struct d3d_blur_t *blur = &d3d_blur[i];
+
+    CHECK_AND_RELEASE(blur->ps[b]);
+
+    char prog_fs_src[8192];
+    char line[256];
+
+    strcpy(prog_fs_src,
+        "SamplerState my_samp: register(s0);\n"
+        "Texture2D my_tex: register(t0);\n"
+        "struct PSInput\n"
+        "{\n"
+        " float4 position: SV_Position;\n"
+        " float2 uv: TEXCOORD;\n"
+        "};\n"
+        "struct PSOutput\n"
+        "{\n"
+        " float4 color: SV_Target0;\n"
+        "};\n");
+
+    sprintf(line, "static const float2 DIRECTION = %s;\n", b == BLUR_PASS_H ? "float2(1.0, 0.0)" : "float2(0.0, 1.0)");
+    strcat(prog_fs_src, line);
+
+    sprintf(line, "static const int SAMPLE_COUNT = %d;\n", blur->radius);
+    strcat(prog_fs_src, line);
+
+    strcat(prog_fs_src, "static const float OFFSETS[] = {\n");
+    for (int i = 0; i < blur->radius; ++i) {
+        if (i)
+            strcat(prog_fs_src, ",\n");;
+        sprintf(line, "%lf", blur->offsets[i]);
+        strcat(prog_fs_src, line);
+    }
+    strcat(prog_fs_src, "};\n");
+
+    strcat(prog_fs_src, "static const float WEIGHTS[] = {\n");
+    for (int i = 0; i < blur->radius; ++i) {
+        if (i)
+            strcat(prog_fs_src, ",\n");;
+        sprintf(line, "%lf", blur->weights[i]);
+        strcat(prog_fs_src, line);
+    }
+    strcat(prog_fs_src, "};\n");
+
+    strcat(prog_fs_src,
+        "PSOutput Main(PSInput input)\n"
+        "{\n"
+        " float4 result = float4(0.0, 0.0, 0.0, 0.0);\n"
+        " uint width, height;\n"
+        " my_tex.GetDimensions(width, height);\n"
+        " float2 size = DIRECTION / float2(width, height);\n"
+        " for (int i = 0; i < SAMPLE_COUNT; ++i)\n"
+        " {\n"
+        "  float2 offset = OFFSETS[i] * size;\n"
+        "  float weight = WEIGHTS[i];\n"
+        "  result += my_tex.Sample(my_samp, input.uv + offset) * weight;\n"
+        " }\n"
+        " PSOutput output = (PSOutput)0;\n"
+        " output.color = result;\n"
+        " return output;\n"
+        "}\n");
+
+    blur->ps[b] = load_ps(d3d11device[i], prog_fs_src);
+    return !!blur->ps[b];
+}
+
+static bool d3d_blur_tex_init(int screen_top_bot, int ctx_top_bot, int width, int height) {
+    int i = ctx_top_bot;
+    struct d3d_blur_t *blur = &d3d_blur[i];
+
+    if (blur->dims[screen_top_bot].width == width && blur->dims[screen_top_bot].height == height)
+        return true;
+
+    blur->dims[screen_top_bot].width = 0;
+    blur->dims[screen_top_bot].height = 0;
+    for (int b = 0; b < BLUR_PASS_COUNT; ++b) {
+        CHECK_AND_RELEASE(blur->tex[screen_top_bot][b].tex);
+        CHECK_AND_RELEASE(blur->tex[screen_top_bot][b].srv);
+        CHECK_AND_RELEASE(blur->tex[screen_top_bot][b].rtv);
+    }
+
+    D3D11_TEXTURE2D_DESC tex_desc = {};
+    tex_desc.Width = width;
+    tex_desc.Height = height;
+    tex_desc.MipLevels = 1;
+    tex_desc.ArraySize = 1;
+    tex_desc.Format = D3D_FORMAT;
+    tex_desc.SampleDesc.Count = 1;
+    tex_desc.SampleDesc.Quality = 0;
+    tex_desc.Usage = D3D11_USAGE_DEFAULT;
+    tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    tex_desc.MiscFlags = 0;
+    tex_desc.CPUAccessFlags = 0;
+
+    for (int b = 0; b < BLUR_PASS_COUNT; ++b) {
+        HRESULT hr;
+
+        hr = ID3D11Device_CreateTexture2D(d3d11device[i], &tex_desc, NULL, &blur->tex[screen_top_bot][b].tex);
+        if (hr) {
+            err_log("CreateTexture2D failed: %d\n", (int)hr);
+            goto fail;
+        }
+
+        hr = ID3D11Device_CreateShaderResourceView(d3d11device[i], (ID3D11Resource *)blur->tex[screen_top_bot][b].tex, NULL, &blur->tex[screen_top_bot][b].srv);
+        if (hr) {
+            err_log("CreateShaderResourceView failed: %d\n", (int)hr);
+            goto fail;
+        }
+
+        hr = ID3D11Device_CreateRenderTargetView(d3d11device[i], (ID3D11Resource *)blur->tex[screen_top_bot][b].tex, NULL, &blur->tex[screen_top_bot][b].rtv);
+        if (hr) {
+            err_log("CreateRenderTargetView failed: %d\n", (int)hr);
+            goto fail;
+        }
+    }
+
+    blur->dims[screen_top_bot].width = width;
+    blur->dims[screen_top_bot].height = height;
+    return true;
+
+fail:
+    return false;
+}
+
+static ID3D11ShaderResourceView *d3d_blur_tex(ID3D11ShaderResourceView *srv, int width, int height, int screen_top_bot, int ctx_top_bot) {
+    int i = ctx_top_bot;
+    struct d3d_blur_t *blur = &d3d_blur[i];
+
+    if (!srv)
+        goto end;
+
+    const int radius_prev = calculate_blur_weights_and_offsets(blur->weights, blur->offsets);
+    if (radius_prev != blur->radius) {
+        for (int b = 0; b < BLUR_PASS_COUNT; ++b) {
+            CHECK_AND_RELEASE(blur->ps[b]);
+        }
+        blur->radius = radius_prev;
+    }
+
+    d3d_blur_tex_init(screen_top_bot, i, width, height);
+    for (int bb = 0; bb < ui_blur_iter + 1; ++bb) {
+        for (int b = 0; b < BLUR_PASS_COUNT; ++b) {
+            if (!blur->ps[b]) {
+                if (!d3d_blur_prog_make(i, b))
+                    return 0;
+            }
+
+            ID3D11DeviceContext_IASetPrimitiveTopology(d3d11device_context[i], D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            ID3D11DeviceContext_IASetInputLayout(d3d11device_context[i], NULL);
+            ID3D11DeviceContext_OMSetBlendState(d3d11device_context[i], d3d_ui_bs[i], NULL, 0xffffffff);
+            ID3D11DeviceContext_PSSetShader(d3d11device_context[i], blur->ps[b], NULL, 0);
+            ID3D11DeviceContext_PSSetSamplers(d3d11device_context[i], 0, 1, &d3d_ss_linear[i]);
+            ID3D11DeviceContext_RSSetState(d3d11device_context[i], d3d_rs[i]);
+            ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[i], 0, 1,
+                b ? &blur->tex[screen_top_bot][b - 1].srv :
+                bb ? &blur->tex[screen_top_bot][BLUR_PASS_COUNT - 1].srv :
+                &srv);
+            ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &blur->tex[screen_top_bot][b].rtv, NULL);
+            D3D11_VIEWPORT vp = { .Width = width, .Height = height };
+            ID3D11DeviceContext_RSSetViewports(d3d11device_context[i], 1, &vp);
+            ID3D11DeviceContext_VSSetShader(d3d11device_context[i], d3d_vs[i], NULL, 0);
+            ID3D11DeviceContext_Draw(d3d11device_context[i], 3, 0);
+            ID3D11ShaderResourceView *srv_null = NULL;
+            ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[i], 0, 1, &srv_null);
+            ID3D11RenderTargetView *rtv_null = NULL;
+            ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &rtv_null, NULL);
+        }
+    }
+
+end:
+    return blur->tex[screen_top_bot][BLUR_PASS_COUNT - 1].srv;
+}
+
+static void d3d_blur_tex_close(int ctx_top_bot) {
+    struct d3d_blur_t *blur = &d3d_blur[ctx_top_bot];
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
+        for (int b = 0; b < BLUR_PASS_COUNT; ++b) {
+            CHECK_AND_RELEASE(blur->tex[i][b].tex);
+            CHECK_AND_RELEASE(blur->tex[i][b].rtv);
+            CHECK_AND_RELEASE(blur->tex[i][b].srv);
+        }
+    }
+    for (int b = 0; b < BLUR_PASS_COUNT; ++b)
+        CHECK_AND_RELEASE(blur->ps[b]);
+    memset(blur, 0, sizeof(*blur));
+}
+
 static int d3d11_init(void) {
     for (int j = 0; j < SCREEN_COUNT; ++j) {
         HRESULT hr;
 
-        ID3DBlob *vs_code;
-        d3d_vs[j] = load_vs(d3d11device[j], d3d_vs_src, &vs_code);
+        d3d_vs[j] = load_vs(d3d11device[j], d3d_vs_src, NULL);
         if (!d3d_vs[j]) {
             return -1;
         }
@@ -349,21 +562,6 @@ static int d3d11_init(void) {
                 return -1;
             }
         }
-
-        D3D11_INPUT_ELEMENT_DESC input_desc[] = {};
-
-        hr = ID3D11Device_CreateInputLayout(
-            d3d11device[j],
-            input_desc,
-            ARRAYSIZE(input_desc),
-            vs_code->lpVtbl->GetBufferPointer(vs_code),
-            vs_code->lpVtbl->GetBufferSize(vs_code),
-            &d3d_il[j]);
-        if (hr) {
-            err_log("CreateInputLayout failed: %d\n", (int)hr);
-            return -1;
-        }
-        CHECK_AND_RELEASE(vs_code);
 
         D3D11_BLEND_DESC blend_desc = {
             .RenderTarget = {
@@ -410,6 +608,13 @@ static int d3d11_init(void) {
             err_log("CreateRasterizerState failed: %d\n", (int)hr);
             return -1;
         }
+
+        rast_desc.ScissorEnable = TRUE;
+        hr = ID3D11Device_CreateRasterizerState(d3d11device[j], &rast_desc, &d3d_scissor_rs[j]);
+        if (hr) {
+            err_log("CreateRasterizerState failed: %d\n", (int)hr);
+            return -1;
+        }
     }
 
     return 0;
@@ -420,6 +625,8 @@ static void d3d11_close(void)
     d3d11_ui_close();
 
     for (int j = 0; j < SCREEN_COUNT; ++j) {
+        d3d_blur_tex_close(j);
+
         for (int i = 0; i < SCREEN_COUNT; ++i) {
             CHECK_AND_RELEASE(rp_buffer_ctx[j].d3d_rtv_upscaled[i]);
             CHECK_AND_RELEASE(rp_buffer_ctx[j].d3d_srv_upscaled[i]);
@@ -430,10 +637,10 @@ static void d3d11_close(void)
         }
 
         CHECK_AND_RELEASE(d3d_ui_bs[j]);
+        CHECK_AND_RELEASE(d3d_scissor_rs[j]);
         CHECK_AND_RELEASE(d3d_rs[j]);
         CHECK_AND_RELEASE(d3d_ss_point[j]);
         CHECK_AND_RELEASE(d3d_ss_linear[j]);
-        CHECK_AND_RELEASE(d3d_il[j]);
         CHECK_AND_RELEASE(d3d_vs[j]);
         CHECK_AND_RELEASE(d3d_data_vs[j]);
         CHECK_AND_RELEASE(d3d_ps[j]);
@@ -636,10 +843,7 @@ void ui_renderer_d3d11_main(int screen_top_bot, int ctx_top_bot, view_mode_t vie
         d3d_rtv[i] = sc_rtv[i];
     }
 
-    if (!win_shared) {
-        ID3D11DeviceContext_ClearRenderTargetView(d3d11device_context[i], d3d_rtv[p], bg);
-    }
-
+    ID3D11DeviceContext_ClearRenderTargetView(d3d11device_context[i], d3d_rtv[p], bg);
     if (view_mode == VIEW_MODE_TOP_BOT && !win_shared) {
         draw_screen(&rp_buffer_ctx[SCREEN_TOP], SCREEN_HEIGHT0, SCREEN_WIDTH, SCREEN_TOP, i, view_mode, 0);
         draw_screen(&rp_buffer_ctx[SCREEN_BOT], SCREEN_HEIGHT1, SCREEN_WIDTH, SCREEN_BOT, i, view_mode, 0);
@@ -771,11 +975,10 @@ static void d3d11_draw_screen(int ctx_top_bot, ID3D11ShaderResourceView *in_srv)
     int i = ctx_top_bot;
 
     ID3D11DeviceContext_IASetPrimitiveTopology(d3d11device_context[i], D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    ID3D11DeviceContext_IASetInputLayout(d3d11device_context[i], d3d_il[i]);
+    ID3D11DeviceContext_IASetInputLayout(d3d11device_context[i], NULL);
     ID3D11DeviceContext_OMSetBlendState(d3d11device_context[i], d3d_ui_bs[i], NULL, 0xffffffff);
     ID3D11DeviceContext_PSSetShader(d3d11device_context[i], d3d_ps[i], NULL, 0);
     ID3D11DeviceContext_PSSetSamplers(d3d11device_context[i], 0, 1, &d3d_ss_linear[i]);
-    ID3D11DeviceContext_RSSetState(d3d11device_context[i], d3d_rs[i]);
     ID3D11DeviceContext_PSSetShaderResources(d3d11device_context[i], 0, 1, &in_srv);
     ID3D11DeviceContext_Draw(d3d11device_context[i], 3, 0);
     ID3D11ShaderResourceView *ptr_null = NULL;
@@ -833,6 +1036,28 @@ fail:
     return false;
 }
 
+static void d3d_blur_tex_draw(ID3D11ShaderResourceView *srv, int ctx_top_bot, ID3D11RenderTargetView *rtv,
+    int left, int top, int width, int height,
+    int ctx_left, int ctx_top, int ctx_width, int ctx_height)
+{
+    int i = ctx_top_bot;
+
+    if (!ui_blur_iter)
+        return;
+
+    ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &rtv, NULL);
+    D3D11_VIEWPORT vp = { .TopLeftX = left, .TopLeftY = top, .Width = width, .Height = height };
+    ID3D11DeviceContext_RSSetViewports(d3d11device_context[i], 1, &vp);
+    ID3D11DeviceContext_VSSetShader(d3d11device_context[i], d3d_data_vs[i], NULL, 0);
+    ID3D11DeviceContext_RSSetState(d3d11device_context[i], d3d_scissor_rs[i]);
+    D3D11_RECT rect = { .left = ctx_left, .top = ctx_top, .right = ctx_left + ctx_width, .bottom = ctx_top + ctx_height };
+    ID3D11DeviceContext_RSSetScissorRects(d3d11device_context[i], 1, &rect);
+
+    d3d11_draw_screen(i, srv);
+
+    ID3D11DeviceContext_RSSetScissorRects(d3d11device_context[i], 0, NULL);
+}
+
 void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared) {
     int i = ctx_top_bot;
 
@@ -864,6 +1089,17 @@ void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int widt
         ctx->win_width_prev != win_width_drawable[screen_top_bot] || ctx->win_height_prev != win_height_drawable[screen_top_bot] ||
         ctx->view_mode_prev != view_mode;
 
+    int blur_left;
+    int blur_top;
+    int blur_width;
+    int blur_height;
+    int blur_ctx_left;
+    int blur_ctx_top;
+    int blur_ctx_width;
+    int blur_ctx_height;
+    draw_screen_get_blur_dims_win_shared(win_shared ? screen_top_bot : screen_top_bot, i, view_mode, win_shared, width, height,
+        &blur_left, &blur_top, &blur_width, &blur_height, &blur_ctx_left, &blur_ctx_top, &blur_ctx_width, &blur_ctx_height);
+
     ID3D11ShaderResourceView *srv = ctx->d3d_srv[i];
     if (!data) {
         if (upscaled) {
@@ -889,6 +1125,11 @@ void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int widt
         }
 
         ID3D11DeviceContext_Unmap(d3d11device_context[i], (ID3D11Resource *)ctx->d3d_tex[i], 0);
+
+        d3d_blur_tex_draw(d3d_blur_tex(srv, height, width, screen_top_bot, i), i,
+            d3d_rtv[is_renderer_csc() ? p : i],
+            blur_left, blur_top, blur_width, blur_height,
+            blur_ctx_left, blur_ctx_top, blur_ctx_width, blur_ctx_height);
 
         if (!IS_PLACEBO(upscaling_selected)) {
             placebo_upscaling_update(-1, i, screen_top_bot);
@@ -971,17 +1212,18 @@ rashader_fail:
 
         if (ui_upscaling_selected == UPSCALING_DEFAULT_NONE)
             ctx->d3d_srv_upscaled_prev[i] = 0;
+    } else { // !data
+        d3d_blur_tex_draw(d3d_blur_tex(NULL, height, width, screen_top_bot, i), i,
+            d3d_rtv[is_renderer_csc() ? p : i],
+            blur_left, blur_top, blur_width, blur_height,
+            blur_ctx_left, blur_ctx_top, blur_ctx_width, blur_ctx_height);
     }
 
-    if (is_renderer_csc()) {
-        ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &d3d_rtv[p], NULL);
-    } else {
-        ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &d3d_rtv[i], NULL);
-    }
-
+    ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &d3d_rtv[is_renderer_csc() ? p : i], NULL);
     D3D11_VIEWPORT vp = { .TopLeftX = ctx_left, .TopLeftY = ctx_top, .Width = ctx_width[screen_top_bot], .Height = ctx_height[screen_top_bot] };
     ID3D11DeviceContext_RSSetViewports(d3d11device_context[i], 1, &vp);
     ID3D11DeviceContext_VSSetShader(d3d11device_context[i], d3d_data_vs[i], NULL, 0);
+    ID3D11DeviceContext_RSSetState(d3d11device_context[i], d3d_rs[i]);
 
     d3d11_draw_screen(i, srv);
 
@@ -1078,7 +1320,7 @@ void ui_renderer_d3d11_present(int screen_top_bot, int ctx_top_bot, bool win_sha
                 nk_gui_next = 0;
 
                 ID3D11DeviceContext_IASetPrimitiveTopology(d3d11device_context[i], D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-                ID3D11DeviceContext_IASetInputLayout(d3d11device_context[i], d3d_il[i]);
+                ID3D11DeviceContext_IASetInputLayout(d3d11device_context[i], NULL);
                 ID3D11DeviceContext_OMSetRenderTargets(d3d11device_context[i], 1, &buf->rtv, NULL);
                 ID3D11DeviceContext_OMSetBlendState(d3d11device_context[i], d3d_ui_bs[i], NULL, 0xffffffff);
                 ID3D11DeviceContext_VSSetShader(d3d11device_context[i], d3d_vs[i], NULL, 0);
@@ -1323,6 +1565,7 @@ no_upscale:
         D3D11_VIEWPORT vp = { .Width = target_width, .Height = target_height };
         ID3D11DeviceContext_RSSetViewports(d3d11device_context[i], 1, &vp);
         ID3D11DeviceContext_VSSetShader(d3d11device_context[i], d3d_vs[i], NULL, 0);
+        ID3D11DeviceContext_RSSetState(d3d11device_context[i], d3d_rs[i]);
 
         d3d11_draw_screen(i, srv);
     }

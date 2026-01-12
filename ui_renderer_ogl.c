@@ -284,6 +284,11 @@ static void gl_blur_tex_close(int ctx_top_bot) {
         glDeleteTextures(BLUR_PASS_COUNT, blur->tex[i]);
         memset(blur->tex[i], 0, sizeof(blur->tex[i]));
     }
+    for (int b = 0; b < BLUR_PASS_COUNT; ++b)
+        if (blur->prog[b]) {
+            glDeleteProgram(blur->prog[b]);
+            blur->prog[b] = 0;
+        }
 }
 
 static void on_gl_error(
