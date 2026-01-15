@@ -28,9 +28,17 @@
 #define VK_MIN_VERSION VK_API_VERSION_1_1
 #define MAX_VERTEX_BUFFER 512 * 1024
 #define MAX_ELEMENT_BUFFER 128 * 1024
-// two screens for top ctx and one for bottom, times two for upscaled, plus cursor
+
+enum blur_pass_t {
+    BLUR_PASS_H,
+    BLUR_PASS_V,
+    BLUR_PASS_COUNT,
+};
+
+// two screens for top ctx and one for bottom, times two for upscaled, plus cursor,
+// plus background blur passes
 // top and bottom ctxs have separate pools
-#define VK_VIEW_DESC_COUNT_MAX (SCREEN_COUNT * 2 + 1)
+#define VK_VIEW_DESC_COUNT_MAX (SCREEN_COUNT * 2 + 1 + SCREEN_COUNT * BLUR_PASS_COUNT)
 
 /* ===============================================================
  *
@@ -119,6 +127,7 @@ struct vulkan_demo {
     VkCommandBuffer *command_buffers;
     VkCommandBuffer *upload_command_buffers[SCREEN_COUNT];
     VkCommandBuffer *libra_command_buffers[SCREEN_COUNT];
+    VkCommandBuffer *blur_command_buffers[SCREEN_COUNT];
     VkSemaphore upload_sem[SCREEN_COUNT];
     VkSemaphore libra_sem[SCREEN_COUNT];
     VkSemaphore image_available;
@@ -326,9 +335,9 @@ static bool create_instance(struct vulkan_demo *demo) {
 
     memset(&app_info, 0, sizeof(VkApplicationInfo));
     app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    app_info.pApplicationName = "Demo";
+    app_info.pApplicationName = WIN_TITLE;
     app_info.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-    app_info.pEngineName = "No Engine";
+    app_info.pEngineName = WIN_TITLE " Engine";
     app_info.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     app_info.apiVersion = VK_VERSION;
 
@@ -1841,6 +1850,8 @@ static bool create_command_buffers(struct vulkan_demo *demo) {
             malloc(demo->swap_chain_images_len * sizeof(VkCommandBuffer));
         demo->libra_command_buffers[i] =
             malloc(demo->swap_chain_images_len * sizeof(VkCommandBuffer));
+        demo->blur_command_buffers[i] =
+            malloc(demo->swap_chain_images_len * sizeof(VkCommandBuffer));
     }
 
     memset(&alloc_info, 0, sizeof(VkCommandBufferAllocateInfo));
@@ -1868,6 +1879,14 @@ static bool create_command_buffers(struct vulkan_demo *demo) {
         result = vkAllocateCommandBuffers(
             demo->device, &alloc_info,
             demo->libra_command_buffers[i]);
+        if (result != VK_SUCCESS) {
+            err_log("vkAllocateCommandBuffers failed: %d\n", result);
+            return false;
+        }
+
+        result = vkAllocateCommandBuffers(
+            demo->device, &alloc_info,
+            demo->blur_command_buffers[i]);
         if (result != VK_SUCCESS) {
             err_log("vkAllocateCommandBuffers failed: %d\n", result);
             return false;
@@ -2123,6 +2142,9 @@ static void destroy_vulkan_demo(struct vulkan_demo *demo) {
             if (demo->libra_command_buffers[i])
                 vkFreeCommandBuffers(demo->device, demo->command_pool,
                     demo->swap_chain_images_len, demo->libra_command_buffers[i]);
+            if (demo->blur_command_buffers[i])
+                vkFreeCommandBuffers(demo->device, demo->command_pool,
+                    demo->swap_chain_images_len, demo->blur_command_buffers[i]);
         }
         if (demo->command_pool)
             vkDestroyCommandPool(demo->device, demo->command_pool, NULL);
@@ -2188,6 +2210,9 @@ static void destroy_vulkan_demo(struct vulkan_demo *demo) {
         }
         if (demo->libra_command_buffers[i]) {
             free(demo->libra_command_buffers[i]);
+        }
+        if (demo->blur_command_buffers[i]) {
+            free(demo->blur_command_buffers[i]);
         }
     }
 
@@ -2883,6 +2908,406 @@ struct vk_render_img_t {
 
 static struct vk_render_img_t vk_render_upscaled[SCREEN_COUNT][SCREEN_COUNT];
 
+static struct vk_render_blur_t {
+    double weights[UI_BLUR_RADIUS_MAX];
+    double offsets[UI_BLUR_RADIUS_MAX];
+    int radius;
+
+    struct vk_render_blur_graphics_t {
+        VkPipeline pipeline;
+    } graphics[BLUR_PASS_COUNT];
+
+    struct vk_render_blur_screen_t {
+        int width, height;
+        struct vk_render_blur_pass_t {
+            struct vk_image_t img;
+            struct vk_view_desc_t view;
+            VkFramebuffer fb;
+        } pass[BLUR_PASS_COUNT];
+    } screen[SCREEN_COUNT];
+
+    VkRenderPass render_pass;
+} vk_render_blur[SCREEN_COUNT];
+
+static void render_blur_destroy_graphics(int ctx_top_bot, struct vk_render_blur_graphics_t *graphics) {
+    int i = ctx_top_bot;
+    struct vulkan_demo *demo = &vk_demo[i];
+
+    if (graphics->pipeline) {
+        vkDestroyPipeline(demo->device, graphics->pipeline, NULL);
+        graphics->pipeline = 0;
+    }
+}
+
+static bool render_blur_create_graphics(int ctx_top_bot, struct vk_render_blur_graphics_t *graphics) {
+    int i = ctx_top_bot;
+    struct vulkan_demo *demo = &vk_demo[i];
+    struct vk_render_blur_t *blur = &vk_render_blur[i];
+
+    if (graphics->pipeline) {
+        return true;
+    }
+
+    bool ret = false;
+    VkShaderModule vert_shader_module = VK_NULL_HANDLE;
+    VkShaderModule frag_shader_module = VK_NULL_HANDLE;
+    VkResult result;
+    VkGraphicsPipelineCreateInfo pipeline_info;
+    VkPipelineDynamicStateCreateInfo pipeline_dyn_state_info;
+    VkPipelineShaderStageCreateInfo vert_shader_stage_info;
+    VkPipelineShaderStageCreateInfo frag_shader_stage_info;
+    VkPipelineShaderStageCreateInfo shader_stages[2];
+    VkPipelineVertexInputStateCreateInfo vertex_input_info;
+    VkPipelineInputAssemblyStateCreateInfo input_assembly;
+    VkViewport viewport;
+    VkRect2D scissor;
+    VkPipelineViewportStateCreateInfo viewport_state;
+    VkPipelineRasterizationStateCreateInfo rasterizer;
+    VkPipelineMultisampleStateCreateInfo multisampling;
+    VkPipelineColorBlendAttachmentState color_blend_attachment;
+    VkPipelineColorBlendStateCreateInfo color_blending;
+
+    if (!create_shader_module(demo->device, shaders_demo_vert_spv, shaders_demo_vert_spv_len,
+                              &vert_shader_module)) {
+        goto cleanup;
+    }
+    if (!create_shader_module(demo->device, shaders_demo_frag_spv, shaders_demo_frag_spv_len,
+                              &frag_shader_module)) {
+        goto cleanup;
+    }
+
+    memset(&vert_shader_stage_info, 0, sizeof(VkPipelineShaderStageCreateInfo));
+    vert_shader_stage_info.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    vert_shader_stage_info.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vert_shader_stage_info.module = vert_shader_module;
+    vert_shader_stage_info.pName = "main";
+
+    memset(&frag_shader_stage_info, 0, sizeof(VkPipelineShaderStageCreateInfo));
+    frag_shader_stage_info.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    frag_shader_stage_info.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    frag_shader_stage_info.module = frag_shader_module;
+    frag_shader_stage_info.pName = "main";
+
+    shader_stages[0] = vert_shader_stage_info;
+    shader_stages[1] = frag_shader_stage_info;
+
+    memset(&vertex_input_info, 0, sizeof(VkPipelineVertexInputStateCreateInfo));
+    vertex_input_info.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    memset(&input_assembly, 0, sizeof(VkPipelineInputAssemblyStateCreateInfo));
+    input_assembly.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    input_assembly.primitiveRestartEnable = VK_FALSE;
+
+    memset(&viewport, 0, sizeof(VkViewport));
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = 1.0f;
+    viewport.height = 1.0f;
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+
+    memset(&scissor, 0, sizeof(VkRect2D));
+    scissor.extent.width = 1.0f;
+    scissor.extent.height = 1.0f;
+
+    memset(&viewport_state, 0, sizeof(VkPipelineViewportStateCreateInfo));
+    viewport_state.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewport_state.viewportCount = 1;
+    viewport_state.pViewports = &viewport;
+    viewport_state.scissorCount = 1;
+    viewport_state.pScissors = &scissor;
+
+    memset(&rasterizer, 0, sizeof(VkPipelineRasterizationStateCreateInfo));
+    rasterizer.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.depthClampEnable = VK_FALSE;
+    rasterizer.rasterizerDiscardEnable = VK_FALSE;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.lineWidth = 1.0f;
+    rasterizer.cullMode = VK_CULL_MODE_FRONT_BIT;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.depthBiasEnable = VK_FALSE;
+
+    memset(&multisampling, 0, sizeof(VkPipelineMultisampleStateCreateInfo));
+    multisampling.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.sampleShadingEnable = VK_FALSE;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    memset(&color_blend_attachment, 0,
+           sizeof(VkPipelineColorBlendAttachmentState));
+    color_blend_attachment.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    color_blend_attachment.blendEnable = VK_TRUE;
+    color_blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    color_blend_attachment.dstColorBlendFactor =
+        VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    color_blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
+    color_blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    color_blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    color_blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+
+    memset(&color_blending, 0, sizeof(VkPipelineColorBlendStateCreateInfo));
+    color_blending.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    color_blending.logicOpEnable = VK_FALSE;
+    color_blending.logicOp = VK_LOGIC_OP_COPY;
+    color_blending.attachmentCount = 1;
+    color_blending.pAttachments = &color_blend_attachment;
+    color_blending.blendConstants[0] = 1.0f;
+    color_blending.blendConstants[1] = 1.0f;
+    color_blending.blendConstants[2] = 1.0f;
+    color_blending.blendConstants[3] = 1.0f;
+
+    VkDynamicState dyn_state[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    memset(&pipeline_dyn_state_info, 0, sizeof(VkPipelineDynamicStateCreateInfo));
+    pipeline_dyn_state_info.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    pipeline_dyn_state_info.pNext = NULL;
+    pipeline_dyn_state_info.flags = 0;
+    pipeline_dyn_state_info.dynamicStateCount = sizeof(dyn_state) / sizeof(*dyn_state);
+    pipeline_dyn_state_info.pDynamicStates = dyn_state;
+
+    memset(&pipeline_info, 0, sizeof(VkGraphicsPipelineCreateInfo));
+    pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipeline_info.stageCount = 2;
+    pipeline_info.pStages = shader_stages;
+    pipeline_info.pVertexInputState = &vertex_input_info;
+    pipeline_info.pInputAssemblyState = &input_assembly;
+    pipeline_info.pViewportState = &viewport_state;
+    pipeline_info.pRasterizationState = &rasterizer;
+    pipeline_info.pMultisampleState = &multisampling;
+    pipeline_info.pColorBlendState = &color_blending;
+    pipeline_info.pDynamicState = &pipeline_dyn_state_info;
+    pipeline_info.layout = demo->pipeline_layout;
+    pipeline_info.renderPass = blur->render_pass;
+    pipeline_info.basePipelineHandle = NULL;
+
+    result = vkCreateGraphicsPipelines(demo->device, NULL, 1, &pipeline_info,
+                                       NULL, &graphics->pipeline);
+    if (result != VK_SUCCESS) {
+        err_log("vkCreateGraphicsPipelines failed: %d\n", result);
+        goto cleanup;
+    }
+
+    ret = true;
+cleanup:
+    if (frag_shader_module) {
+        vkDestroyShaderModule(demo->device, frag_shader_module, NULL);
+    }
+    if (vert_shader_module) {
+        vkDestroyShaderModule(demo->device, vert_shader_module, NULL);
+    }
+    return ret;
+}
+
+static void render_blur_destroy_images(int screen_top_bot, int ctx_top_bot) {
+    int i = ctx_top_bot;
+    struct vulkan_demo *demo = &vk_demo[i];
+    struct vk_render_blur_t *blur = &vk_render_blur[i];
+
+    struct vk_render_blur_screen_t *screen = &blur->screen[screen_top_bot];
+
+    for (int b = 0; b < BLUR_PASS_COUNT; ++b) {
+        struct vk_render_blur_pass_t *pass = &screen->pass[b];
+        if (pass->img.img) {
+            vmaDestroyImage(vma[i], pass->img.img, pass->img.alloc);
+            pass->img = (struct vk_image_t){};
+        }
+
+        // do not destroy descriptor set, update it for reuse instead.
+        if (pass->view.view) {
+            vkDestroyImageView(demo->device, pass->view.view, NULL);
+            pass->view.view = 0;
+        }
+
+        if (pass->fb) {
+            vkDestroyFramebuffer(demo->device, pass->fb, NULL);
+            pass->fb = 0;
+        }
+    }
+
+    screen->width = 0;
+    screen->height = 0;
+}
+
+static bool render_blur_create_images(int screen_top_bot, int ctx_top_bot, int width, int height) {
+    int i = ctx_top_bot;
+    struct vulkan_demo *demo = &vk_demo[i];
+    struct vk_render_blur_t *blur = &vk_render_blur[i];
+
+    struct vk_render_blur_screen_t *screen = &blur->screen[screen_top_bot];
+
+    if (screen->width == width && screen->height == height)
+        return true;
+
+    render_blur_destroy_images(screen_top_bot, i);
+
+    VkResult result;
+    for (int b = 0; b < BLUR_PASS_COUNT; ++b) {
+        struct vk_render_blur_pass_t *pass = &screen->pass[b];
+
+        VkImageCreateInfo img_info = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+        img_info.imageType = VK_IMAGE_TYPE_2D;
+        img_info.format = VK_FORMAT;
+        img_info.extent.width = width;
+        img_info.extent.height = height;
+        img_info.extent.depth = 1;
+        img_info.mipLevels = 1;
+        img_info.arrayLayers = 1;
+        img_info.samples = VK_SAMPLE_COUNT_1_BIT;
+        img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        img_info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        VmaAllocationCreateInfo alloc_info = {};
+        alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
+        alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        result = vmaCreateImage(vma[i], &img_info, &alloc_info, &pass->img.img, &pass->img.alloc, &pass->img.info);
+        if (result != VK_SUCCESS) {
+            err_log("vmaCreateImage dst failed: %d\n", (int)result);
+            goto fail;
+        }
+
+        VkImageSubresourceRange range = {};
+        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        range.levelCount = 1;
+        range.layerCount = 1;
+
+        VkImageViewCreateInfo view_info = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+        view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view_info.image = pass->img.img;
+        view_info.format = VK_FORMAT;
+        view_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+        view_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+        view_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+        view_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+        view_info.subresourceRange = range;
+        result = vkCreateImageView(demo->device, &view_info, NULL, &pass->view.view);
+        if (result != VK_SUCCESS) {
+            err_log("vkCreateImageView dst_view failed: %d\n", (int)result);
+            goto fail;
+        }
+
+        if (!pass->view.desc) {
+            VkDescriptorSetAllocateInfo alloc_info = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+            alloc_info.descriptorPool = demo->descriptor_pool;
+            alloc_info.descriptorSetCount = 1;
+            alloc_info.pSetLayouts = &demo->descriptor_set_layout;
+            result = vkAllocateDescriptorSets(demo->device, &alloc_info,
+                &pass->view.desc);
+            if (result != VK_SUCCESS) {
+                err_log("vkAllocateDescriptorSets src_view failed: %d\n", result);
+                goto fail;
+            }
+        }
+
+        VkDescriptorImageInfo descriptor_image_info = {};
+        VkWriteDescriptorSet descriptor_write = {};
+        descriptor_image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        descriptor_image_info.sampler = demo->sampler;
+        descriptor_image_info.imageView = pass->view.view;
+        descriptor_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptor_write.dstBinding = 0;
+        descriptor_write.dstArrayElement = 0;
+        descriptor_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptor_write.descriptorCount = 1;
+        descriptor_write.pImageInfo = &descriptor_image_info;
+        descriptor_write.dstSet = pass->view.desc;
+        vkUpdateDescriptorSets(demo->device, 1, &descriptor_write, 0, NULL);
+
+        VkFramebufferCreateInfo framebuffer_info;
+
+        memset(&framebuffer_info, 0, sizeof(VkFramebufferCreateInfo));
+        framebuffer_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebuffer_info.renderPass = blur->render_pass;
+        framebuffer_info.attachmentCount = 1;
+        framebuffer_info.width = width;
+        framebuffer_info.height = height;
+        framebuffer_info.layers = 1;
+        framebuffer_info.pAttachments = &pass->view.view;
+
+        result = vkCreateFramebuffer(demo->device, &framebuffer_info, NULL,
+                                     &pass->fb);
+        if (result != VK_SUCCESS) {
+            err_log("vkCreateFramebuffer failed : %d\n", result);
+            goto fail;
+        }
+    }
+
+    return true;
+
+fail:
+    return false;
+}
+
+static bool render_blur_create_render_pass(int ctx_top_bot) {
+    int i = ctx_top_bot;
+    struct vulkan_demo *demo = &vk_demo[i];
+    struct vk_render_blur_t *blur = &vk_render_blur[i];
+
+    if (blur->render_pass)
+        return true;
+
+    VkAttachmentDescription attachment;
+    VkAttachmentReference color_attachment_ref;
+    VkSubpassDescription subpass;
+    VkSubpassDependency dependency;
+    VkRenderPassCreateInfo render_pass_info;
+    VkResult result;
+
+    memset(&attachment, 0, sizeof(VkAttachmentDescription));
+    attachment.format = VK_FORMAT;
+    attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    memset(&color_attachment_ref, 0, sizeof(VkAttachmentReference));
+    color_attachment_ref.attachment = 0;
+    color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    memset(&subpass, 0, sizeof(VkSubpassDescription));
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &color_attachment_ref;
+
+    memset(&dependency, 0, sizeof(VkSubpassDependency));
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+
+    memset(&render_pass_info, 0, sizeof(VkRenderPassCreateInfo));
+    render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    render_pass_info.attachmentCount = 1;
+    render_pass_info.pAttachments = &attachment;
+    render_pass_info.subpassCount = 1;
+    render_pass_info.pSubpasses = &subpass;
+    render_pass_info.dependencyCount = 1;
+    render_pass_info.pDependencies = &dependency;
+
+    result = vkCreateRenderPass(demo->device, &render_pass_info, NULL,
+                                &blur->render_pass);
+    if (result != VK_SUCCESS) {
+        err_log("vkCreateRenderPass blur failed: %d\n", result);
+        return false;
+    }
+
+    return true;
+}
+
 enum {
     BARRIER_SRC,
     BARRIER_DST,
@@ -2903,7 +3328,7 @@ static struct vk_draw_t {
     uint64_t val, val_in;
 #endif
     VkPipelineStageFlags stages;
-} vk_draw[SCREEN_COUNT][SCREEN_COUNT];
+} vk_draw[SCREEN_COUNT][SCREEN_COUNT * 2]; // (* 2) for blur passes
 
 static void vk_render_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_src_t *render);
 static void vk_render_dst_destroy(struct vulkan_demo *demo, VmaAllocator vma, struct vk_render_dst_t *render);
@@ -3404,7 +3829,11 @@ static int ui_renderer_vk_upscale(
         rashader_upscaling_update(-1, i, screen_top_bot);
     }
 
+#if 0
     bool src_barrier = data && !render_dst;
+#else
+    bool src_barrier = false;
+#endif
     pl_tex in_tex = NULL;
     pl_tex out_tex = NULL;
     if (IS_PLACEBO(upscaling_selected)) {
@@ -3588,7 +4017,6 @@ rashader_vk:;
                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL,
                 1, &barrier[BARRIER_DST]);
 
-
             result = vkEndCommandBuffer(command_buffer);
             if (result != VK_SUCCESS) {
                 err_log("vkEndCommandBuffer failed: %d\n", result);
@@ -3648,6 +4076,7 @@ rashader_fail:
         case UPSCALING_NONE:
             if (render_dst || !data)
                 break;
+#if 0
             draw->barrier = (VkImageMemoryBarrier){ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
             draw->barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             draw->barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -3658,11 +4087,14 @@ rashader_fail:
             draw->barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             draw->barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             draw->need_barrier = 1;
+#endif
             draw->sem = demo->upload_sem[screen_top_bot];
 #ifdef __APPLE__
             draw->val = demo->upload_val[screen_top_bot]++;
 #endif
+#if 0
             draw->stages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+#endif
             break;
 
         case UPSCALING_PLACEBO:
@@ -3719,7 +4151,7 @@ fail:
     return -1;
 }
 
-static bool ui_renderer_vk_upload(struct vk_render_src_t *render, struct vk_render_dst_t *render_dst, VkRenderPass render_pass, uint8_t *data,int screen_top_bot, int ctx_top_bot) {
+static bool ui_renderer_vk_upload(struct vk_render_src_t *render, struct vk_render_dst_t *render_dst, VkRenderPass render_pass, uint8_t *data, int screen_top_bot, int ctx_top_bot) {
     int i = ctx_top_bot;
     struct vulkan_demo *demo = &vk_demo[i];
 
@@ -3854,6 +4286,171 @@ fail:
     return false;
 }
 
+static bool ui_renderer_vk_blur(struct vk_render_src_t *src, int width, int height, int screen_top_bot, int ctx_top_bot) {
+    int i = ctx_top_bot;
+    struct vulkan_demo *demo = &vk_demo[i];
+
+    if (!render_blur_create_render_pass(i))
+        return false;
+    struct vk_render_blur_t *blur = &vk_render_blur[i];
+
+    const int radius_prev = calculate_blur_weights_and_offsets(blur->weights, blur->offsets);
+    if (radius_prev != blur->radius) {
+        for (int b = 0; b < BLUR_PASS_COUNT; ++b)
+            render_blur_destroy_graphics(i, &blur->graphics[b]);
+        blur->radius = radius_prev;
+    }
+
+    if (!render_blur_create_images(screen_top_bot, i, width, height))
+        goto fail;
+
+    VkCommandBufferBeginInfo command_buffer_begin_info;
+    memset(&command_buffer_begin_info, 0, sizeof(VkCommandBufferBeginInfo));
+    command_buffer_begin_info.sType =
+        VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    command_buffer_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    VkCommandBuffer command_buffer = demo->blur_command_buffers[screen_top_bot][demo->image_index];
+    VkResult result;
+    result = vkBeginCommandBuffer(command_buffer, &command_buffer_begin_info);
+
+    if (result != VK_SUCCESS) {
+        err_log("vkBeginCommandBuffer failed: %d\n", result);
+        goto fail;
+    }
+
+    VkImageSubresourceRange range_mip = {};
+    range_mip.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range_mip.layerCount = 1;
+    range_mip.levelCount = src->src_mip;
+
+    struct vk_render_blur_screen_t *screen = &blur->screen[screen_top_bot];
+
+    VkImageMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.image = src->src.img;
+    barrier.subresourceRange = range_mip;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, NULL, 0, NULL,
+        1, &barrier);
+
+    for (int bb = 0; bb < ui_blur_iter + 1; ++bb) {
+        for (int b = 0; b < BLUR_PASS_COUNT; ++b) {
+            if (!render_blur_create_graphics(i, &blur->graphics[b]))
+                goto fail;
+
+            VkRenderPassBeginInfo render_pass_info;
+
+            struct vk_render_blur_pass_t *pass = &screen->pass[b];
+            VkDescriptorSet *prev = b ? &screen->pass[b - 1].view.desc :
+                bb ? &screen->pass[BLUR_PASS_COUNT - 1].view.desc :
+                &src->src_view.desc;
+
+            memset(&render_pass_info, 0, sizeof(VkRenderPassBeginInfo));
+            render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            render_pass_info.renderPass = blur->render_pass;
+            render_pass_info.framebuffer = pass->fb;
+            render_pass_info.renderArea.offset.x = 0;
+            render_pass_info.renderArea.offset.y = 0;
+            render_pass_info.renderArea.extent = (VkExtent2D){ .width = width, .height = height };
+            render_pass_info.clearValueCount = 0;
+            render_pass_info.pClearValues = NULL;
+
+            vkCmdBeginRenderPass(command_buffer, &render_pass_info,
+                                VK_SUBPASS_CONTENTS_INLINE);
+
+            vkCmdBindPipeline(
+                command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                blur->graphics[b].pipeline);
+
+            vkCmdBindDescriptorSets(
+                command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                demo->pipeline_layout, 0, 1,
+                prev, 0, NULL);
+
+            VkViewport viewport;
+            VkRect2D scissor;
+            memset(&viewport, 0, sizeof(VkViewport));
+            memset(&scissor, 0, sizeof(VkRect2D));
+            scissor.offset.x = viewport.x = 0.0f;
+            scissor.offset.y = viewport.y = 0.0f;
+            scissor.extent.width = viewport.width = width;
+            scissor.extent.height = viewport.height = height;
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+            vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+
+            vkCmdDraw(command_buffer, 3, 1, 0, 0);
+
+            vkCmdEndRenderPass(command_buffer);
+        }
+    }
+
+    result = vkEndCommandBuffer(command_buffer);
+    if (result != VK_SUCCESS) {
+        err_log("vkEndCommandBuffer failed: %d\n", result);
+        goto fail;
+    }
+
+    VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    VkSubmitInfo submit_info;
+    memset(&submit_info, 0, sizeof(VkSubmitInfo));
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &command_buffer;
+    submit_info.waitSemaphoreCount = 1;
+    submit_info.pWaitSemaphores = &demo->upload_sem[screen_top_bot];
+    submit_info.pWaitDstStageMask = &wait_stage;
+    submit_info.signalSemaphoreCount = 1;
+    submit_info.pSignalSemaphores = &demo->upload_sem[screen_top_bot];
+
+    result = vkQueueSubmit(demo->graphics_queue, 1, &submit_info, 0);
+
+    if (result != VK_SUCCESS) {
+        err_log("vkQueueSubmit failed: %d\n", result);
+        goto fail;
+    }
+
+    return true;
+
+fail:
+    return false;
+}
+
+static bool ui_renderer_vk_blur_draw(struct vk_draw_t *draw, int screen_top_bot, int ctx_top_bot,
+    int left, int top, int width, int height,
+    int ctx_left, int ctx_top, int ctx_width, int ctx_height)
+{
+    int i = ctx_top_bot;
+    struct vk_render_blur_t *blur = &vk_render_blur[i];
+
+    draw->vp.x = left;
+    draw->vp.y = top;
+    draw->vp.width = MAX(width, 1);
+    draw->vp.height = MAX(height, 1);
+    draw->vp.minDepth = 0;
+    draw->vp.maxDepth = 1;
+    draw->sc.offset.x = ctx_left;
+    draw->sc.offset.y = ctx_top;
+    draw->sc.extent.width = ctx_width;
+    draw->sc.extent.height = ctx_height;
+    draw->need_barrier = 0;
+    draw->need_mips = 0;
+    draw->sem_in = 0;
+    draw->sem = 0;
+    draw->stages = 0;
+    draw->desc = blur->screen[screen_top_bot].pass[BLUR_PASS_COUNT - 1].view.desc;
+
+    return true;
+}
+
 void ui_renderer_vk_draw(uint8_t *data, uint8_t *data_prev, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode) {
     int i = ctx_top_bot;
     struct vulkan_demo *demo = &vk_demo[i];
@@ -3882,6 +4479,19 @@ void ui_renderer_vk_draw(uint8_t *data, uint8_t *data_prev, int width, int heigh
     ctx_width *= ui_win_scale[i];
     ctx_height *= ui_win_scale[i];
 
+    int blur_left;
+    int blur_top;
+    int blur_width;
+    int blur_height;
+    int blur_ctx_left;
+    int blur_ctx_top;
+    int blur_ctx_width;
+    int blur_ctx_height;
+    draw_screen_get_blur_dims_win_shared(screen_top_bot, i, view_mode, 0, width, height,
+        &blur_left, &blur_top, &blur_width, &blur_height, &blur_ctx_left, &blur_ctx_top, &blur_ctx_width, &blur_ctx_height);
+
+    struct vk_draw_t *blur_draw = &vk_draw[i][vk_draw_count[i]];
+    ++vk_draw_count[i];
     struct vk_draw_t *draw = &vk_draw[i][vk_draw_count[i]];
     draw->sc.offset.x = draw->vp.x = ctx_left;
     draw->sc.offset.y = draw->vp.y = ctx_top;
@@ -3893,6 +4503,7 @@ void ui_renderer_vk_draw(uint8_t *data, uint8_t *data_prev, int width, int heigh
     draw->need_mips = 0;
     draw->sem_in = 0;
     draw->sem = 0;
+    draw->stages = 0;
     draw->desc = render->src_view.desc;
 
     struct ui_prev_dims_t *prev = &ui_prev_dims[i][screen_top_bot];
@@ -3901,7 +4512,16 @@ void ui_renderer_vk_draw(uint8_t *data, uint8_t *data_prev, int width, int heigh
     if (data) {
         if (!ui_renderer_vk_upload(render, NULL, 0, data, screen_top_bot, ctx_top_bot))
             goto fail;
+
+        if (!ui_renderer_vk_blur(render, height, width, screen_top_bot, i))
+            goto fail;
     }
+
+    if (!ui_renderer_vk_blur_draw(blur_draw, screen_top_bot, i,
+        blur_left, blur_top, blur_width, blur_height,
+            blur_ctx_left, blur_ctx_top, blur_ctx_width, blur_ctx_height
+    ))
+        goto fail;
 
     struct vk_render_img_t *render_upscaled = &vk_render_upscaled[i][screen_top_bot];
     if (need_tex_update) {
@@ -4411,7 +5031,13 @@ static void vmaAuxCleanup(void) {
         for (int i = 0; i < SCREEN_COUNT; ++i) {
             vk_render_destroy(&vk_demo[j], vma[j], &vk_render[j][i]);
             vk_render_img_destroy(&vk_demo[j], vma[j], &vk_render_upscaled[j][i]);
+
+            render_blur_destroy_images(i, j);
         }
+
+        vkDestroyRenderPass(vk_demo[j].device, vk_render_blur[j].render_pass, NULL);
+        for (int b = 0; b < BLUR_PASS_COUNT; ++b)
+            render_blur_destroy_graphics(j, &vk_render_blur[j].graphics[b]);
     }
     vk_render_destroy(&vk_demo[SCREEN_TOP], vma[SCREEN_TOP], &cursor_src);
     vk_render_dst_destroy(&vk_demo[SCREEN_TOP], vma[SCREEN_TOP], &cursor_dst);

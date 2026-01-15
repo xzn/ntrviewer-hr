@@ -1097,7 +1097,7 @@ void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int widt
     int blur_ctx_top;
     int blur_ctx_width;
     int blur_ctx_height;
-    draw_screen_get_blur_dims_win_shared(win_shared ? screen_top_bot : screen_top_bot, i, view_mode, win_shared, width, height,
+    draw_screen_get_blur_dims_win_shared(screen_top_bot, i, view_mode, win_shared, width, height,
         &blur_left, &blur_top, &blur_width, &blur_height, &blur_ctx_left, &blur_ctx_top, &blur_ctx_width, &blur_ctx_height);
 
     ID3D11ShaderResourceView *srv = ctx->d3d_srv[i];
