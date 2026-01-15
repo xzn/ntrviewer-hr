@@ -15,7 +15,7 @@ jobs:
         with:
           repository: libsdl-org/SDL
           path: SDL
-          ref: release-3.2.20
+          ref: release-3.4.0
       - name: Compile sdl
         run: |
           cd SDL

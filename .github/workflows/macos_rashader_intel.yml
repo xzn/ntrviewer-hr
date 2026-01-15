@@ -10,7 +10,7 @@ jobs:
           path: ntrviewer-hr
       - uses: actions/checkout@v5
         with:
-          repository: xzn/librashader
+          repository: SnowflakePowered/librashader
           path: librashader
       - name: Compile librashader
         run: |

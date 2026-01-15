@@ -33,7 +33,7 @@ jobs:
           path: Anime4K
       - uses: actions/checkout@v5
         with:
-          repository: xzn/slang-shaders
+          repository: libretro/slang-shaders
           path: slang-shaders
       - name: Compile NTRViewer-HR
         run: |

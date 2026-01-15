@@ -2,7 +2,7 @@ on:
   workflow_dispatch:
 
 env:
-  VULKAN_VERSION: 1.4.321.0
+  VULKAN_VERSION: 1.4.335.1
 
 jobs:
   build-macos-app:

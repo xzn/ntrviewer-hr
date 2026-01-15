@@ -15,7 +15,7 @@ jobs:
         with:
           repository: google/shaderc
           path: shaderc
-          ref: v2025.3
+          ref: v2025.5
           submodules: recursive
       - name: Compile shaderc
         run: |

@@ -15,12 +15,12 @@ jobs:
           update: true
       - uses: actions/checkout@v5
         with:
-          repository: xzn/librashader
+          repository: SnowflakePowered/librashader
           path: librashader
       - name: Compile librashader
         run: |
-          rustup toolchain install nightly-2025-08-08-gnu
-          rustup default nightly-2025-08-08-gnu
+          rustup toolchain install nightly-2026-01-08-gnu
+          rustup default nightly-2026-01-08-gnu
           pushd librashader/librashader-capi
           cargo build --profile optimized --no-default-features --features runtime-opengl,runtime-d3d11,runtime-vulkan
           popd

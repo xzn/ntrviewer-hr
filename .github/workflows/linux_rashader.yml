@@ -9,7 +9,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          repository: xzn/librashader
+          repository: SnowflakePowered/librashader
           path: librashader
       - name: Compile librashader
         run: |
@@ -17,8 +17,8 @@ jobs:
           apt install -y --fix-missing curl gcc g++ clang
           curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain none
           . "$HOME/.cargo/env"
-          rustup toolchain install nightly-2025-08-08
-          rustup default nightly-2025-08-08
+          rustup toolchain install nightly-2026-01-08
+          rustup default nightly-2026-01-08
           cd librashader/librashader-capi
           cargo build --profile optimized --no-default-features --features runtime-opengl,runtime-vulkan
           cd ../..
