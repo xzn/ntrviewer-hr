@@ -45,6 +45,7 @@ static void change_working_directory_to_exe_path(void);
 void init_local_network_access(void);
 int ui_common_sdl_init(void) {
     SDL_SetHint(SDL_HINT_RENDER_VSYNC, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
 #ifdef _WIN32
     SDL_SetHint(SDL_HINT_RENDER_DIRECT3D_THREADSAFE, "1");
     SDL_SetHint(SDL_HINT_WINDOWS_USE_D3D9EX, "1");
