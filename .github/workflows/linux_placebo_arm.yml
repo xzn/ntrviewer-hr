@@ -27,7 +27,7 @@ jobs:
         run: |
           export PATH=~/.local/bin:$PATH
           cd libplacebo
-          PKG_CONFIG_PATH=$(realpath ../linux-shaderc-arm/lib/pkgconfig/) meson ./build/ --prefix=$(realpath ../linux-placebo-arm) --default-library=static
+          PKG_CONFIG_PATH=$(realpath ../linux-shaderc-arm/lib/pkgconfig/) meson ./build/ --prefix=$(realpath ../linux-placebo-arm) --default-library=static -Dlcms=false
           ninja -C build
           ninja install -C build
           cd ..
