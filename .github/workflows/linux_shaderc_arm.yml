@@ -2,15 +2,13 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-linux-shaderc:
-    runs-on: ubuntu-latest
-    container:
-      image: debian:bookworm-slim
+  build-linux-shaderc-arm:
+    runs-on: ubuntu-22.04-arm
     steps:
       - name: Install prereq
         run: |
-          apt update
-          apt install -y --fix-missing git curl cmake clang ninja-build python3 wget build-essential checkinstall zlib1g-dev libssl-dev
+          sudo apt update
+          sudo apt install -y --fix-missing git curl cmake clang ninja-build python3 wget build-essential checkinstall zlib1g-dev libssl-dev
       - uses: actions/checkout@v5
         with:
           repository: google/shaderc
@@ -19,10 +17,10 @@ jobs:
           submodules: recursive
       - name: Compile shaderc
         run: |
-          wget -nv https://github.com/Kitware/CMake/releases/download/v4.2.1/cmake-4.2.1-linux-x86_64.sh
-          chmod +x cmake-4.2.1-linux-x86_64.sh
+          wget -nv https://github.com/Kitware/CMake/releases/download/v4.2.1/cmake-4.2.1-linux-aarch64.sh
+          chmod +x cmake-4.2.1-linux-aarch64.sh
           mkdir cmake
-          ./cmake-4.2.1-linux-x86_64.sh --prefix=$(realpath ./cmake) <<EOF
+          ./cmake-4.2.1-linux-aarch64.sh --prefix=$(realpath ./cmake) <<EOF
           y
           n
           EOF
@@ -33,11 +31,11 @@ jobs:
           ./utils/git-sync-deps
           rm -rf third_party/glslang/
           cp -r ../glslang-sys-0.7.0+1062752/native/glslang third_party/
-          cmake -GNinja -DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX=../linux-shaderc -DCMAKE_BUILD_TYPE=Release -DSHADERC_SKIP_TESTS=ON -DSHADERC_SKIP_EXAMPLES=ON -DENABLE_GLSLANG_BINARIES=OFF -DENABLE_HLSL=ON -DENABLE_OPT=ON .
+          cmake -GNinja -DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX=../linux-shaderc-arm -DCMAKE_BUILD_TYPE=Release -DSHADERC_SKIP_TESTS=ON -DSHADERC_SKIP_EXAMPLES=ON -DENABLE_GLSLANG_BINARIES=OFF -DENABLE_HLSL=ON -DENABLE_OPT=ON .
           ninja
           ninja install
           cd ..
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-shaderc
-          path: linux-shaderc
+          name: linux-shaderc-arm
+          path: linux-shaderc-arm
