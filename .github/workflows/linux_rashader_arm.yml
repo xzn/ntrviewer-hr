@@ -2,10 +2,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-linux-rashader:
-    runs-on: ubuntu-latest
-    container:
-      image: debian:bookworm-slim
+  build-linux-rashader-arm:
+    runs-on: ubuntu-22.04-arm
     steps:
       - uses: actions/checkout@v5
         with:
@@ -22,11 +20,11 @@ jobs:
           curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain none
           . "$HOME/.cargo/env"
           ntrviewer-hr/linux-scripts/compile-rashader.sh
-          mkdir -p linux-rashader/include
-          ln -s ../../librashader/include/librashader.h linux-rashader/include/librashader.h
-          mkdir linux-rashader/lib
-          ln -s ../../librashader/target/optimized/liblibrashader_capi.a linux-rashader/lib/librashader.a
+          mkdir -p linux-rashader-arm/include
+          ln -s ../../librashader/include/librashader.h linux-rashader-arm/include/librashader.h
+          mkdir linux-rashader-arm/lib
+          ln -s ../../librashader/target/optimized/liblibrashader_capi.a linux-rashader-arm/lib/librashader.a
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-rashader
-          path: linux-rashader
+          name: linux-rashader-arm
+          path: linux-rashader-arm
