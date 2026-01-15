@@ -1,0 +1,35 @@
+on:
+  workflow_dispatch:
+
+jobs:
+  build-linux-placebo-arm:
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - name: Install prereq
+        run: |
+          sudo apt update
+          sudo apt install -y --fix-missing git curl cmake clang ninja-build meson python3 wget build-essential checkinstall zlib1g-dev libssl-dev pkg-config gh libvulkan-dev
+      - uses: actions/checkout@v5
+        with:
+          repository: haasn/libplacebo
+          path: libplacebo
+          ref: v7.351.0
+          submodules: recursive
+      - name: Get artifact
+        id: artifact-name
+        run: |
+          RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w linux_shaderc_arm.yml --json databaseId -q '.[0].databaseId')
+          gh run download --repo ${{ github.repository }} $RUN -n linux-shaderc-arm -D linux-shaderc-arm
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compile placebo
+        run: |
+          cd libplacebo
+          PKG_CONFIG_PATH=$(realpath ../linux-shaderc-arm/lib/pkgconfig/) meson ./build/ --prefix=$(realpath ../linux-placebo-arm) --default-library=static
+          ninja -C build
+          ninja install -C build
+          cd ..
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-placebo-arm
+          path: linux-placebo-arm
