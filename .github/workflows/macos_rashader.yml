@@ -12,6 +12,7 @@ jobs:
         with:
           repository: SnowflakePowered/librashader
           path: librashader
+          ref: librashader-v0.10.0
       - name: Compile librashader
         run: |
           ntrviewer-hr/macos-scripts/compile-rashader.sh

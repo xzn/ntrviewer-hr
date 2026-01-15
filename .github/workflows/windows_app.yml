@@ -39,10 +39,12 @@ jobs:
         with:
           repository: bloc97/Anime4K
           path: Anime4K
+          ref: 7684e9586f8dcc738af08a1cdceb024cc184f426
       - uses: actions/checkout@v5
         with:
           repository: libretro/slang-shaders
           path: slang-shaders
+          ref: 3d62b0e20f5bfa1a244edd70987e565de7e68849
       - name: Compile NTRViewer-HR
         run: |
           ln -s ../../windows-rashader/include/librashader.h ntrviewer-hr/include/librashader.h

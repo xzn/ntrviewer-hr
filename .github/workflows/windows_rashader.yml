@@ -17,6 +17,7 @@ jobs:
         with:
           repository: SnowflakePowered/librashader
           path: librashader
+          ref: librashader-v0.10.0
       - name: Compile librashader
         run: |
           rustup toolchain install nightly-2026-01-08-gnu

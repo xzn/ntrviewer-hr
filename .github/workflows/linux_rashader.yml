@@ -11,6 +11,7 @@ jobs:
         with:
           repository: SnowflakePowered/librashader
           path: librashader
+          ref: librashader-v0.10.0
       - name: Compile librashader
         run: |
           apt update
