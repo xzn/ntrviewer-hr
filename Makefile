@@ -1,6 +1,9 @@
 ifneq ($(OS),Windows_NT)
 OS := $(shell uname -s)
 ARCH := $(shell uname -m)
+ifeq ($(ARCH),aarch64)
+ARCH := arm64
+endif
 endif
 ifeq ($(OS),Darwin)
 CLANG := 1
