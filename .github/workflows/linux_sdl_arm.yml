@@ -7,8 +7,8 @@ jobs:
     steps:
       - name: Install prereq
         run: |
-          apt update
-          apt install -y --fix-missing git curl cmake clang ninja-build meson python3 wget build-essential checkinstall zlib1g-dev libssl-dev pkg-config gh libvulkan-dev libopengl-dev libsdl2-dev libpipewire-0.3-dev
+          sudo apt update
+          sudo apt install -y --fix-missing git curl cmake clang ninja-build meson python3 wget build-essential checkinstall zlib1g-dev libssl-dev pkg-config gh libvulkan-dev libopengl-dev libsdl2-dev libpipewire-0.3-dev
       - uses: actions/checkout@v5
         with:
           repository: libsdl-org/SDL
