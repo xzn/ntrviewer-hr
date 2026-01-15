@@ -15,8 +15,8 @@ jobs:
           ref: librashader-v0.10.0
       - name: Compile librashader
         run: |
-          apt update
-          apt install -y --fix-missing curl gcc g++ clang
+          sudo apt update
+          sudo apt install -y --fix-missing curl gcc g++ clang
           curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain none
           . "$HOME/.cargo/env"
           ntrviewer-hr/linux-scripts/compile-rashader.sh
