@@ -9,7 +9,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y --fix-missing git curl cmake clang ninja-build meson python3 wget build-essential checkinstall zlib1g-dev libssl-dev pkg-config gh libvulkan-dev
-          pip3 install --user meson
+          pip3 install --upgrade --user meson
       - uses: actions/checkout@v5
         with:
           repository: haasn/libplacebo
