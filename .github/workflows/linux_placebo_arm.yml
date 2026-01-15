@@ -9,6 +9,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y --fix-missing git curl cmake clang ninja-build meson python3 wget build-essential checkinstall zlib1g-dev libssl-dev pkg-config gh libvulkan-dev
+          pip3 install --user meson
       - uses: actions/checkout@v5
         with:
           repository: haasn/libplacebo
@@ -24,6 +25,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Compile placebo
         run: |
+          export PATH=~/.local/bin:$PATH
           cd libplacebo
           PKG_CONFIG_PATH=$(realpath ../linux-shaderc-arm/lib/pkgconfig/) meson ./build/ --prefix=$(realpath ../linux-placebo-arm) --default-library=static
           ninja -C build
