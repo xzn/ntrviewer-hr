@@ -131,7 +131,7 @@ struct vulkan_demo {
     VkSemaphore upload_sem[SCREEN_COUNT];
     VkSemaphore libra_sem[SCREEN_COUNT];
     VkSemaphore image_available;
-    VkSemaphore render_finished;
+    VkSemaphore *render_finished;
 
     VkFence render_fence;
 
@@ -1908,11 +1908,18 @@ static bool create_semaphores(struct vulkan_demo *demo) {
         err_log("vkCreateSemaphore failed: %d\n", result);
         return false;
     }
-    result = vkCreateSemaphore(demo->device, &semaphore_info, NULL,
-                               &demo->render_finished);
-    if (result != VK_SUCCESS) {
-        err_log("vkCreateSemaphore failed: %d\n", result);
+    demo->render_finished = malloc(demo->swap_chain_images_len * sizeof(VkSemaphore));
+    if (!demo->render_finished) {
+        err_log("Out of memory\n");
         return false;
+    }
+    for (uint32_t i = 0; i < demo->swap_chain_images_len; i++) {
+        result = vkCreateSemaphore(demo->device, &semaphore_info, NULL,
+                                &demo->render_finished[i]);
+        if (result != VK_SUCCESS) {
+            err_log("vkCreateSemaphore failed: %d\n", result);
+            return false;
+        }
     }
 #ifdef __APPLE__
     VkExportMetalObjectCreateInfoEXT mtl_ex_info = { VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT };
@@ -2150,8 +2157,11 @@ static void destroy_vulkan_demo(struct vulkan_demo *demo) {
             vkDestroyCommandPool(demo->device, demo->command_pool, NULL);
         if (demo->sampler)
             vkDestroySampler(demo->device, demo->sampler, NULL);
-        if (demo->render_finished)
-            vkDestroySemaphore(demo->device, demo->render_finished, NULL);
+        if (demo->render_finished) {
+            for (uint32_t i = 0; i < demo->swap_chain_images_len; i++)
+                vkDestroySemaphore(demo->device, demo->render_finished[i], NULL);
+            free(demo->render_finished);
+        }
         if (demo->image_available)
             vkDestroySemaphore(demo->device, demo->image_available, NULL);
         for (int i = 0; i < SCREEN_COUNT; ++i) {
@@ -2939,7 +2949,7 @@ static void render_blur_destroy_graphics(int ctx_top_bot, struct vk_render_blur_
     }
 }
 
-static bool render_blur_create_graphics(int ctx_top_bot, struct vk_render_blur_graphics_t *graphics) {
+static bool render_blur_create_graphics(int ctx_top_bot, struct vk_render_blur_graphics_t *graphics, enum blur_pass_t b) {
     int i = ctx_top_bot;
     struct vulkan_demo *demo = &vk_demo[i];
     struct vk_render_blur_t *blur = &vk_render_blur[i];
@@ -2967,11 +2977,69 @@ static bool render_blur_create_graphics(int ctx_top_bot, struct vk_render_blur_g
     VkPipelineColorBlendAttachmentState color_blend_attachment;
     VkPipelineColorBlendStateCreateInfo color_blending;
 
+    shaderc_compilation_result_t prog_fs_res = NULL;
+    const uint32_t *prog_fs_spv;
+    size_t prog_fs_spv_len;
+
+    char prog_fs_src[8192];
+    char line[256];
+
+    strcpy(prog_fs_src,
+        "#version 450\n"
+        "#extension GL_ARB_separate_shader_objects : enable\n"
+        "layout(binding = 0) uniform sampler2D overlay;\n"
+        "layout(location = 0) in vec2 inUV;\n"
+        "layout(location = 0) out vec4 outColor;\n"
+    );
+
+    sprintf(line, "const vec2 DIRECTION = %s;\n", b == BLUR_PASS_H ? "vec2(1.0, 0.0)" : "vec2(0.0, 1.0)");
+    strcat(prog_fs_src, line);
+
+    sprintf(line, "const int SAMPLE_COUNT = %d;\n", blur->radius);
+    strcat(prog_fs_src, line);
+
+    strcat(prog_fs_src, "const float OFFSETS[] = float[](\n");
+    for (int i = 0; i < blur->radius; ++i) {
+        if (i)
+            strcat(prog_fs_src, ",\n");;
+        sprintf(line, "%lf", blur->offsets[i]);
+        strcat(prog_fs_src, line);
+    }
+    strcat(prog_fs_src, ");\n");
+
+    strcat(prog_fs_src, "const float WEIGHTS[] = float[](\n");
+    for (int i = 0; i < blur->radius; ++i) {
+        if (i)
+            strcat(prog_fs_src, ",\n");;
+        sprintf(line, "%lf", blur->weights[i]);
+        strcat(prog_fs_src, line);
+    }
+    strcat(prog_fs_src, ");\n");
+
+    strcat(prog_fs_src,
+        "void main()\n"
+        "{\n"
+        " vec4 result = vec4(0.0);\n"
+        " vec2 size = DIRECTION / textureSize(overlay, 0);\n"
+        " for (int i = 0; i < SAMPLE_COUNT; ++i)\n"
+        " {\n"
+        "  vec2 offset = OFFSETS[i] * size;\n"
+        "  float weight = WEIGHTS[i];\n"
+        "  result += texture(overlay, inUV + offset) * weight;\n"
+        " }\n"
+        " outColor = result;\n"
+        "}");
+
+    if (!compile_shader_shaderc(prog_fs_src, shaderc_fragment_shader,
+        &prog_fs_res, &prog_fs_spv, &prog_fs_spv_len)) {
+        goto cleanup;
+    }
+
     if (!create_shader_module(demo->device, shaders_demo_vert_spv, shaders_demo_vert_spv_len,
                               &vert_shader_module)) {
         goto cleanup;
     }
-    if (!create_shader_module(demo->device, shaders_demo_frag_spv, shaders_demo_frag_spv_len,
+    if (!create_shader_module(demo->device, prog_fs_spv, prog_fs_spv_len,
                               &frag_shader_module)) {
         goto cleanup;
     }
@@ -3098,6 +3166,9 @@ static bool render_blur_create_graphics(int ctx_top_bot, struct vk_render_blur_g
 
     ret = true;
 cleanup:
+    if (prog_fs_res) {
+        shaderc_result_release(prog_fs_res);
+    }
     if (frag_shader_module) {
         vkDestroyShaderModule(demo->device, frag_shader_module, NULL);
     }
@@ -4342,7 +4413,7 @@ static bool ui_renderer_vk_blur(struct vk_render_src_t *src, int width, int heig
 
     for (int bb = 0; bb < ui_blur_iter + 1; ++bb) {
         for (int b = 0; b < BLUR_PASS_COUNT; ++b) {
-            if (!render_blur_create_graphics(i, &blur->graphics[b]))
+            if (!render_blur_create_graphics(i, &blur->graphics[b], b))
                 goto fail;
 
             VkRenderPassBeginInfo render_pass_info;
@@ -4490,8 +4561,11 @@ void ui_renderer_vk_draw(uint8_t *data, uint8_t *data_prev, int width, int heigh
     draw_screen_get_blur_dims_win_shared(screen_top_bot, i, view_mode, 0, width, height,
         &blur_left, &blur_top, &blur_width, &blur_height, &blur_ctx_left, &blur_ctx_top, &blur_ctx_width, &blur_ctx_height);
 
-    struct vk_draw_t *blur_draw = &vk_draw[i][vk_draw_count[i]];
-    ++vk_draw_count[i];
+    struct vk_draw_t *blur_draw = NULL;
+    if (ui_blur_iter) {
+        blur_draw = &vk_draw[i][vk_draw_count[i]];
+        ++vk_draw_count[i];
+    }
     struct vk_draw_t *draw = &vk_draw[i][vk_draw_count[i]];
     draw->sc.offset.x = draw->vp.x = ctx_left;
     draw->sc.offset.y = draw->vp.y = ctx_top;
@@ -4517,7 +4591,7 @@ void ui_renderer_vk_draw(uint8_t *data, uint8_t *data_prev, int width, int heigh
             goto fail;
     }
 
-    if (!ui_renderer_vk_blur_draw(blur_draw, screen_top_bot, i,
+    if (blur_draw && !ui_renderer_vk_blur_draw(blur_draw, screen_top_bot, i,
         blur_left, blur_top, blur_width, blur_height,
             blur_ctx_left, blur_ctx_top, blur_ctx_width, blur_ctx_height
     ))
@@ -4637,6 +4711,8 @@ void ui_renderer_vk_present(int ctx_top_bot) {
 
     for (uint32_t k = 0; k < vk_draw_count[i]; ++k) {
         struct vk_draw_t *draw = &vk_draw[i][k];
+        if (!draw->desc)
+            continue;
         vkCmdBindPipeline(
             command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
             demo->data_pipeline);
@@ -4699,7 +4775,7 @@ void ui_renderer_vk_present(int ctx_top_bot) {
     submit_info.commandBufferCount = 1;
     submit_info.pCommandBuffers = &command_buffer;
     submit_info.signalSemaphoreCount = 1;
-    submit_info.pSignalSemaphores = &demo->render_finished;
+    submit_info.pSignalSemaphores = &demo->render_finished[demo->image_index];
 
 #ifdef __APPLE__
     VkTimelineSemaphoreSubmitInfo tl_info = { VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
@@ -4728,7 +4804,7 @@ void ui_renderer_vk_present(int ctx_top_bot) {
     memset(&present_info, 0, sizeof(VkPresentInfoKHR));
     present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     present_info.waitSemaphoreCount = 1;
-    present_info.pWaitSemaphores = &demo->render_finished;
+    present_info.pWaitSemaphores = &demo->render_finished[demo->image_index];
     present_info.swapchainCount = 1;
     present_info.pSwapchains = &demo->swap_chain;
     present_info.pImageIndices = &demo->image_index;
