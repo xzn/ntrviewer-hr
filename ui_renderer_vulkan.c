@@ -1,3 +1,7 @@
+#if defined(__APPLE__) && defined(NDEBUG)
+#define MOLTENVK_ICD
+#endif
+
 #include "ui_renderer_vulkan.h"
 #include "ui_common_sdl.h"
 #include "main.h"
@@ -2690,7 +2694,7 @@ int ui_renderer_vk_init(void) {
 #else
 // for debug build we are not patching install_names and rpaths for the executable,
 // so let sdl use the default library it can find instead.
-#if defined(__APPLE__) && defined(NDEBUG)
+#ifdef MOLTENVK_ICD
 #ifdef __aarch64__
     setenv("VK_DRIVER_FILES", "arm64/MoltenVK_icd.json", 0);
 #elif defined(__x86_64__)
