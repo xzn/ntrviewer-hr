@@ -1,0 +1,78 @@
+on:
+  workflow_dispatch:
+
+jobs:
+  build-linux-app-arm:
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - name: Install prereq
+        run: |
+          sudo apt update
+          sudo apt install -y --fix-missing git curl cmake clang ninja-build meson python3 wget build-essential checkinstall zlib1g-dev libssl-dev gh vim nasm
+      - uses: actions/checkout@v5
+        with:
+          path: ntrviewer-hr
+      - name: Get artifact
+        id: artifact-name
+        run: |
+          RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w linux_sdl_arm.yml --json databaseId -q '.[0].databaseId')
+          gh run download --repo ${{ github.repository }} $RUN -n linux-sdl-arm -D linux-sdl-arm
+          RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w linux_shaderc_arm.yml --json databaseId -q '.[0].databaseId')
+          gh run download --repo ${{ github.repository }} $RUN -n linux-shaderc-arm -D linux-shaderc-arm
+          RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w linux_placebo_arm.yml --json databaseId -q '.[0].databaseId')
+          gh run download --repo ${{ github.repository }} $RUN -n linux-placebo-arm -D linux-placebo-arm
+          RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w linux_rashader_arm.yml --json databaseId -q '.[0].databaseId')
+          gh run download --repo ${{ github.repository }} $RUN -n linux-rashader-arm -D linux-rashader-arm
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v5
+        with:
+          repository: bloc97/Anime4K
+          path: Anime4K
+          ref: 7684e9586f8dcc738af08a1cdceb024cc184f426
+      - uses: actions/checkout@v5
+        with:
+          repository: libretro/slang-shaders
+          path: slang-shaders
+          ref: 3d62b0e20f5bfa1a244edd70987e565de7e68849
+      - name: Compile NTRViewer-HR
+        run: |
+          ln -s ../../linux-sdl-arm/include/SDL3 ntrviewer-hr/include/SDL3
+          ln -s ../../linux-shaderc-arm/include/glslang ntrviewer-hr/include/glslang
+          ln -s ../../linux-shaderc-arm/include/spirv-tools ntrviewer-hr/include/spirv-tools
+          ln -s ../../linux-shaderc-arm/include/shaderc ntrviewer-hr/include/shaderc
+          ln -s ../../linux-placebo-arm/include/libplacebo ntrviewer-hr/include/libplacebo
+          ln -s ../../linux-rashader-arm/include/librashader.h  ntrviewer-hr/include/librashader.h
+          mkdir ntrviewer-hr/lib
+          ln -s ../../linux-sdl-arm/lib/libSDL3.a ntrviewer-hr/lib/libSDL3.a
+          ln -s ../../linux-shaderc-arm/lib/libshaderc_combined.a ntrviewer-hr/lib/libshaderc_combined.a
+          ln -s ../../linux-placebo-arm/lib/x86_64-linux-gnu/libplacebo.a ntrviewer-hr/lib/libplacebo.a
+          ln -s ../../linux-rashader-arm/lib/librashader.a ntrviewer-hr/lib/librashader.a
+          git clone https://github.com/KhronosGroup/Vulkan-Headers.git
+          cd Vulkan-Headers
+          cmake -S . -B build/
+          cmake --install build --prefix build/install
+          cd ..
+          ln -s ../../Vulkan-Headers/build/install/include/vulkan ntrviewer-hr/include/vulkan
+          ln -s ../../Vulkan-Headers/build/install/include/vk_video ntrviewer-hr/include/vk_video
+          cd ntrviewer-hr
+          make -j$(nproc) STATIC_SDL=1
+          cd ..
+          mkdir NTRViewer-HR-Linux-arm64
+          cp ntrviewer-hr/ntrviewer NTRViewer-HR-Linux-arm64/
+          cp ntrviewer-hr/ntrviewer-x11.sh NTRViewer-HR-Linux-arm64/
+          cp ntrviewer-hr/rashader.json NTRViewer-HR-Linux-arm64
+          cp ntrviewer-hr/placebo.json NTRViewer-HR-Linux-arm64
+          mkdir -p NTRViewer-HR-Linux-arm64/placebo-shaders/Anime4K
+          cp -R Anime4K/glsl/* NTRViewer-HR-Linux-arm64/placebo-shaders/Anime4K/
+          mkdir -p NTRViewer-HR-Linux-arm64/slang-shaders
+          cp -R slang-shaders/anti-aliasing NTRViewer-HR-Linux-arm64/slang-shaders/
+          cp -R slang-shaders/edge-smoothing NTRViewer-HR-Linux-arm64/slang-shaders/
+          cp -R slang-shaders/interpolation NTRViewer-HR-Linux-arm64/slang-shaders/
+          cp -R slang-shaders/pixel-art-scaling NTRViewer-HR-Linux-arm64/slang-shaders/
+          cp -R slang-shaders/stock.slang NTRViewer-HR-Linux-arm64/slang-shaders/
+          tar -czvf NTRViewer-HR-Linux-arm64.tar.gz NTRViewer-HR-Linux-arm64/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NTRViewer-HR-Linux-arm64.tar.gz
+          path: NTRViewer-HR-Linux-arm64.tar.gz
