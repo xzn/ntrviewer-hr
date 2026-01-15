@@ -1,0 +1,37 @@
+on:
+  workflow_dispatch:
+
+jobs:
+  build-linux-app-lite-arm:
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - name: Install prereq
+        run: |
+          sudo apt update
+          sudo apt install -y --fix-missing git curl cmake clang ninja-build meson python3 wget build-essential checkinstall zlib1g-dev libssl-dev gh vim nasm
+      - uses: actions/checkout@v5
+        with:
+          path: ntrviewer-hr
+      - name: Get artifact
+        id: artifact-name
+        run: |
+          RUN=$(gh run list --repo ${{ github.repository }} -L 1 -w linux_sdl_arm.yml --json databaseId -q '.[0].databaseId')
+          gh run download --repo ${{ github.repository }} $RUN -n linux-sdl-arm -D linux-sdl-arm
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compile NTRViewer-HR
+        run: |
+          ln -s ../../linux-sdl-arm/include/SDL3 ntrviewer-hr/include/SDL3
+          mkdir ntrviewer-hr/lib
+          ln -s ../../linux-sdl-arm/lib/libSDL3.a ntrviewer-hr/lib/libSDL3.a
+          cd ntrviewer-hr
+          make -j$(nproc) LITE=1 STATIC_SDL=1
+          cd ..
+          mkdir NTRViewer-HR-Lite-Linux-arm64
+          cp ntrviewer-hr/ntrviewer NTRViewer-HR-Lite-Linux-arm64/
+          cp ntrviewer-hr/ntrviewer-x11.sh NTRViewer-HR-Lite-Linux-arm64/
+          tar -czvf NTRViewer-HR-Lite-Linux-arm64.tar.gz NTRViewer-HR-Lite-Linux-arm64/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NTRViewer-HR-Lite-Linux-arm64.tar.gz
+          path: NTRViewer-HR-Lite-Linux-arm64.tar.gz
