@@ -46,7 +46,7 @@ jobs:
           mkdir ntrviewer-hr/lib
           ln -s ../../linux-sdl-arm/lib/libSDL3.a ntrviewer-hr/lib/libSDL3.a
           ln -s ../../linux-shaderc-arm/lib/libshaderc_combined.a ntrviewer-hr/lib/libshaderc_combined.a
-          ln -s ../../linux-placebo-arm/lib/x86_64-linux-gnu/libplacebo.a ntrviewer-hr/lib/libplacebo.a
+          ln -s ../../linux-placebo-arm/lib/aarch64-linux-gnu/libplacebo.a ntrviewer-hr/lib/libplacebo.a
           ln -s ../../linux-rashader-arm/lib/librashader.a ntrviewer-hr/lib/librashader.a
           git clone https://github.com/KhronosGroup/Vulkan-Headers.git
           cd Vulkan-Headers
