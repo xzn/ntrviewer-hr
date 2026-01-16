@@ -30,7 +30,8 @@ void ntr_config_set_default(void) {
         .screen_priority_factor = NTR_SCREEN_PRIORITY_FACTOR_DEFAULT,
         .jpeg_quality = 75,
         .bandwidth_limit = 16,
-        .kcp_mode = 2,
+        .kcp_mode = KCP_MODE_L_ON_DELTA,
+        .lossless_color = 0,
     };
 }
 bool ntr_top_screen_priority_prev;

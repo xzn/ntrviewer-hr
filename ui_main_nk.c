@@ -102,7 +102,7 @@ void nk_backend_font_init(void)
         // nk_style_set_font(ui_nk_ctx, &roboto->handle);
     }
 
-    nk_default_color_style[NK_COLOR_WINDOW].a = 
+    nk_default_color_style[NK_COLOR_WINDOW].a =
         nk_default_color_style[NK_COLOR_HEADER].a =
         nk_default_color_style[NK_COLOR_EDIT].a =
         255 * 7 / 8;
@@ -142,9 +142,9 @@ static enum NK_FOCUS {
     NK_FOCUS_VIEWER_PORT,
     NK_FOCUS_PRIORITY_SCREEN,
     NK_FOCUS_PRIORITY_FACTOR,
+    NK_FOCUS_FMT_PROT,
     NK_FOCUS_QUALITY,
     NK_FOCUS_BANDWIDTH_LIMIT,
-    NK_FOCUS_RELIABLE_STREAM,
     NK_FOCUS_DEFAULT,
     NK_FOCUS_CONNECT,
     NK_FOCUS_INPUT_REDIRECTION,
@@ -845,11 +845,41 @@ void ui_main_nk(void)
         check_nav_property_prev(ctx, nk_property_name, NK_FOCUS_PRIORITY_FACTOR);
 
         nk_layout_row_dynamic(ctx, 30, 2);
-        snprintf(msg_buf, sizeof(msg_buf), "JPEG Quality %d", ntr_rp_config.jpeg_quality);
-        nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-        do_nav_slider_next(ctx, NK_FOCUS_QUALITY, &ntr_rp_config.jpeg_quality);
-        nk_slider_int(ctx, 10, &ntr_rp_config.jpeg_quality, 100, 1);
-        check_nav_slider_prev(ctx, NK_FOCUS_QUALITY, ntr_rp_config.jpeg_quality);
+        nk_label(ctx, "Compression Format and Protocol", NK_TEXT_CENTERED);
+        selected = ntr_rp_config.kcp_mode;
+        const char *compression_fmt_prot[] = {
+            "JPEG Compat (UDP)",
+            "JPEG (Reliable Stream)",
+            "JPEG (Reliable Stream, Delta)",
+            "Lossless (UDP)",
+            "Lossless (Reliable Stream)",
+            "Lossless (Reliable Stream, Delta)",
+        };
+        combo_count = sizeof(compression_fmt_prot) / sizeof(*compression_fmt_prot);
+        do_nav_combobox_next(ctx, NK_FOCUS_FMT_PROT, &selected, &ntr_rp_config.kcp_mode, combo_count);
+        nk_combobox(ctx, compression_fmt_prot, combo_count, &selected, 30, combo_size);
+        check_nav_combobox_prev(ctx, &selected);
+        if (selected != ntr_rp_config.kcp_mode)
+        {
+            set_nav_combobox_prev(NK_FOCUS_FMT_PROT);
+            ntr_rp_config.kcp_mode = selected;
+        }
+
+        if (ntr_rp_config.kcp_mode / KCP_MODE_COUNT) {
+            nk_layout_row_dynamic(ctx, 30, 2);
+            snprintf(msg_buf, sizeof(msg_buf), "Color Quality Bias %d", ntr_rp_config.lossless_color);
+            nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+            do_nav_slider_next(ctx, NK_FOCUS_QUALITY, &ntr_rp_config.lossless_color);
+            nk_slider_int(ctx, 0, &ntr_rp_config.lossless_color, 2, 1);
+            check_nav_slider_prev(ctx, NK_FOCUS_QUALITY, ntr_rp_config.lossless_color);
+        } else {
+            nk_layout_row_dynamic(ctx, 30, 2);
+            snprintf(msg_buf, sizeof(msg_buf), "JPEG Quality %d", ntr_rp_config.jpeg_quality);
+            nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+            do_nav_slider_next(ctx, NK_FOCUS_QUALITY, &ntr_rp_config.jpeg_quality);
+            nk_slider_int(ctx, 10, &ntr_rp_config.jpeg_quality, 100, 1);
+            check_nav_slider_prev(ctx, NK_FOCUS_QUALITY, ntr_rp_config.jpeg_quality);
+        }
 
         nk_layout_row_dynamic(ctx, 30, 2);
         snprintf(msg_buf, sizeof(msg_buf), "Bandwidth Limit %d Mbps", ntr_rp_config.bandwidth_limit);
@@ -857,24 +887,6 @@ void ui_main_nk(void)
         do_nav_slider_next(ctx, NK_FOCUS_BANDWIDTH_LIMIT, &ntr_rp_config.bandwidth_limit);
         nk_slider_int(ctx, 4, &ntr_rp_config.bandwidth_limit, 20, 1);
         check_nav_slider_prev(ctx, NK_FOCUS_BANDWIDTH_LIMIT, ntr_rp_config.bandwidth_limit);
-
-        nk_layout_row_dynamic(ctx, 30, 2);
-        nk_label(ctx, "Reliable Stream", NK_TEXT_CENTERED);
-        selected = ntr_rp_config.kcp_mode;
-        const char *reliable_stream_options[] = {
-            "Off",
-            "On",
-            "On + Delta",
-        };
-        combo_count = sizeof(reliable_stream_options) / sizeof(*reliable_stream_options);
-        do_nav_combobox_next(ctx, NK_FOCUS_RELIABLE_STREAM, &selected, &ntr_rp_config.kcp_mode, combo_count);
-        nk_combobox(ctx, reliable_stream_options, combo_count, &selected, 30, combo_size);
-        check_nav_combobox_prev(ctx, &selected);
-        if (selected != (int)ntr_rp_config.kcp_mode)
-        {
-            set_nav_combobox_prev(NK_FOCUS_RELIABLE_STREAM);
-            ntr_rp_config.kcp_mode = selected;
-        }
 
         nk_layout_row_dynamic(ctx, 30, 2);
         button_ret = do_nav_button_next(ctx, NK_FOCUS_DEFAULT);

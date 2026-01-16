@@ -64,12 +64,23 @@ extern int ntr_rp_port;
 extern atomic_int ntr_rp_port_bound;
 extern atomic_bool ntr_rp_port_changed;
 
+enum ntr_kcp_mode_t {
+    KCP_MODE_NONE,
+    KCP_MODE_ON,
+    KCP_MODE_ON_DELTA,
+    KCP_MODE_COUNT,
+
+    KCP_MODE_L_NONE = KCP_MODE_COUNT,
+    KCP_MODE_L_ON,
+    KCP_MODE_L_ON_DELTA,
+};
 struct ntr_rp_config_t {
     nk_bool top_screen_priority;
     int screen_priority_factor;
     int jpeg_quality;
     int bandwidth_limit;
     int kcp_mode;
+    int lossless_color;
 };
 
 extern struct ntr_rp_config_t ntr_rp_config;

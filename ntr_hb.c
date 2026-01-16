@@ -338,14 +338,20 @@ thread_ret_t tcp_thread_func(void *arg)
 
                 *(t->remote_play) = 0;
 
+                int kcp_mode = rp_config_last.kcp_mode % KCP_MODE_COUNT;
+                int lossless_mode = rp_config_last.kcp_mode / KCP_MODE_COUNT;
                 uint32_t args[] = {
                     ((uint32_t)rp_config_last.top_screen_priority << 8) | (uint32_t)rp_config_last.screen_priority_factor,
                     (uint32_t)rp_config_last.jpeg_quality,
                     (uint32_t)rp_config_last.bandwidth_limit * 128 * 1024,
                     1404036572 /* guarding magic */,
-                    (uint32_t)rp_port_last |
-                        (rp_config_last.kcp_mode ? (uint32_t)(1 << 30) : (uint32_t)0) |
-                        (rp_config_last.kcp_mode == 2 ? (uint32_t)(1 << 31) : (uint32_t)0)};
+                    (uint32_t)(uint16_t)rp_port_last |
+                        (kcp_mode != KCP_MODE_NONE ? (uint32_t)(1 << 30) : (uint32_t)0) |
+                        (kcp_mode == KCP_MODE_ON_DELTA ? (uint32_t)(1 << 31) : (uint32_t)0) |
+                        (lossless_mode ?
+                            (uint32_t)(1 << 29) |
+                                (uint32_t)((rp_config_last.lossless_color & ((1 << 2) - 1)) << 27) :
+                            (uint32_t)0)};
 
                 ret = tcp_send_packet_header(
                     sockfd, packet_seq, 0, 901,
