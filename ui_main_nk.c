@@ -851,7 +851,7 @@ void ui_main_nk(void)
             "JPEG Compat (UDP)",
             "JPEG (Reliable Stream)",
             "JPEG (Reliable Stream, Delta)",
-            "Lossless (UDP)",
+            "Uncompressed (UDP)",
             "Lossless (Reliable Stream)",
             "Lossless (Reliable Stream, Delta)",
         };
