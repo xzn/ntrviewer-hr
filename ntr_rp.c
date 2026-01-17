@@ -1136,7 +1136,7 @@ static void socket_reply(void)
 
 static int test_kcp_magic(int magic)
 {
-    return !((magic & (~0x00001100 & 0x0000ff00)) == 0 && (magic & 0x00f30000) == 0x00020000);
+    return !((magic & (~0x00001100 & 0x0000ff00)) == 0 && (magic & 0x00f20000) == 0x00020000);
 }
 
 static void socket_action(int ret)
