@@ -204,6 +204,9 @@ thread_ret_t tcp_thread_func(void *arg)
     *(t->work_req_state) = CONNECTION_REQ_STATE_NONE; \
     if (t->remote_play) { \
         *(t->remote_play) = 0; \
+        rp_lock_wait(ui_nk_lock); \
+        *(uint32_t *)ntr_ip_octet_incoming = 0; \
+        rp_lock_rel(ui_nk_lock); \
     } \
     err_log("disconnected\n"); \
 } while (0)
