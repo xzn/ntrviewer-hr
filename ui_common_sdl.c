@@ -197,13 +197,13 @@ static void ui_kcp_window_title_update(SDL_Window *win, int tick_diff)
     snprintf(window_title, sizeof(window_title),
              WIN_TITLE " (FPS %03d %03d | %03d %03d)"
                        " (Connection Quality %.1f%%)"
-                       " [Reliable Stream Mode%s]",
+                       " [JPEG RS%s]",
              __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_TOP], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
              __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_BOT], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
              __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_TOP], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
              __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_BOT], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
              kcp_get_connection_quality(),
-             kcp_dq ? " + Delta" : "");
+             kcp_dq ? ", Delta" : "");
     SDL_SetWindowTitle(win, window_title);
 }
 
@@ -215,13 +215,13 @@ static void ui_kcp_windows_titles_update(int ctx_top_bot, int screen_top_bot, in
                  ? WIN_TITLE
                  " (FPS %03d | %03d)"
                  " (Connection Quality %.1f%%)"
-                 " [Reliable Stream Mode%s]"
+                 " [JPEG RS%s]"
                  : WIN_TITLE
                  " (FPS %03d | %03d)",
              __atomic_load_n(&frame_rate_decoded_tracker[screen_top_bot], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
              __atomic_load_n(&frame_rate_displayed_tracker[screen_top_bot], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
              kcp_get_connection_quality(),
-             kcp_dq ? " + Delta" : "");
+             kcp_dq ? ", Delta" : "");
     SDL_SetWindowTitle(ui_sdl_win[ctx_top_bot], window_title);
 }
 
@@ -251,7 +251,7 @@ void ui_windows_titles_update(void)
                     WIN_TITLE
                     " (FPS %03d %03d | %03d %03d)"
                     " (Packet Rate %.1f%%)"
-                    " [Compatibility Mode]",
+                    " [JPEG Compat]",
                     __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_TOP], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
                     __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_BOT], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
                     __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_TOP], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
