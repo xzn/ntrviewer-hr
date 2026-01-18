@@ -274,6 +274,18 @@ final:
     return ret;
 }
 
+static void color_bias_1(uint16_t in, uint8_t *r, uint8_t *g, uint8_t *b) {
+    *r = ((in >> 11) & 0x1f) << 3;
+    *g = ((in >> 5) & 0x3f) << 2;
+    *b = (in & 0x1f) << 3;
+}
+
+static void color_bias_2(uint16_t in, uint8_t *r, uint8_t *g, uint8_t *b) {
+    *r = ((in >> 8) & 0xf) << 4;
+    *g = ((in >> 4) & 0xf) << 4;
+    *b = (in & 0xf) << 4;
+}
+
 static int handle_decode_lossless(uint8_t *out, uint8_t *in, uint8_t *in_track, int size, int w, int h) {
     int last_size = size % RP_PACKET_DATA_SIZE;
     int first_count = size / RP_PACKET_DATA_SIZE;
@@ -375,9 +387,88 @@ static int handle_decode_lossless(uint8_t *out, uint8_t *in, uint8_t *in_track, 
                         }
                     }
                         break;
-                    case 1:
+                    case 1: {
+                        int p = 2;
+                        int next = RP_LOSSLESS_DATA_SIZE * i;
+                        int next_r = next % p;
+                        int next_p = next / p;
+                        if (next_r) {
+                            uint8_t *curr_out = out + next_p * P_N;
+                            int curr_s = p - next_r;
+                            memcpy(&prev_buf[next_r], curr, curr_s);
+
+                            color_bias_1(*(uint16_t *)prev_buf, &curr_out[R_I], &curr_out[G_I], &curr_out[B_I]);
+                            curr_out[A_I] = 255;
+
+                            curr += curr_s;
+                            curr_size -= curr_s;
+                            if (curr_size < 0)
+                                continue;
+                            ++next_p;
+                        }
+                        uint8_t *curr_out = out + next_p * P_N;
+                        int c = 0;
+                        for (; c < curr_size - p + 1; c += p, curr_out += P_N) {
+                            color_bias_1(*(uint16_t *)&curr[c], &curr_out[R_I], &curr_out[G_I], &curr_out[B_I]);
+                            curr_out[A_I] = 255;
+                        }
+                        if (c < curr_size) {
+                            prev_i = i;
+                            memcpy(prev_buf, &curr[c], curr_size - c);
+                        }
+                    }
                         break;
-                    case 2:
+                    case 2: {
+                        int pb = 12;
+                        int nextb = RP_LOSSLESS_DATA_SIZE * i * 8;
+                        int nextb_r = nextb % pb;
+                        int next_p = nextb / pb;
+                        int currb_s = 0;
+                        if (nextb_r) {
+                            currb_s = pb - nextb_r;
+
+                            memcpy(&prev_buf[(nextb_r + (8 - 1)) / 8], curr, (currb_s + (8 - 1)) / 8);
+                            uint16_t in;
+                            in = prev_buf[0];
+                            if (nextb_r % 8) {
+                                in &= 0xf;
+                                in <<= 8;
+                                in |= prev_buf[1];
+                            } else {
+                                in <<= 4;
+                                in |= ((prev_buf[1] >> 4) & 0xf);
+                            }
+                            uint8_t *curr_out = out + next_p * P_N;
+                            color_bias_2(in, &curr_out[R_I], &curr_out[G_I], &curr_out[B_I]);
+                            curr_out[A_I] = 255;
+
+                            ++next_p;
+                        }
+                        uint8_t *curr_out = out + next_p * P_N;
+                        int cb = currb_s;
+                        int currb_size = curr_size * 8;
+                        for (; cb < currb_size - pb + 1; cb += pb, curr_out += P_N) {
+                            int c = cb / 8;
+                            int cb_r = cb % 8;
+                            uint16_t in;
+                            in = curr[c];
+                            if (cb_r) {
+                                in &= 0xf;
+                                in <<= 8;
+                                in |= curr[c + 1];
+                            } else {
+                                in <<= 4;
+                                in |= ((curr[c + 1] >> 4) & 0xf);
+                            }
+
+                            color_bias_2(in, &curr_out[R_I], &curr_out[G_I], &curr_out[B_I]);
+                            curr_out[A_I] = 255;
+                        }
+                        if (cb < currb_size) {
+                            prev_i = i;
+                            memcpy(prev_buf, &curr[cb / 8], (currb_size - cb + (8 - 1)) / 8);
+                        }
+                    }
                         break;
                 }
                 break;
