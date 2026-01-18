@@ -195,6 +195,10 @@ enum frame_buffer_status_t
 
 #define JPEG_DCTSIZE 8
 
+#define R_I 0
+#define G_I 1
+#define B_I 2
+#define A_I 3
 #define RGB_CHANNELS_N 3
 #define GL_CHANNELS_N 4
 #define TJ_FORMAT TJPF_RGBA

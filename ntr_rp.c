@@ -126,8 +126,6 @@ void rp_buffer_init(void) {
         ctx->index_decode = FBI_DECODE;
         ctx->index_decode_prev = FBI_DECODE_PREV;
         event_init(&ctx->decode_updated_event);
-
-        memset(ctx->screen_decoded, 255, sizeof(ctx->screen_decoded));
     }
 
     event_init(&decode_updated_event);
@@ -281,19 +279,168 @@ final:
 }
 
 static void color_bias_1(uint16_t in, uint8_t *r, uint8_t *g, uint8_t *b) {
-    *r = ((in >> 11) & 0x1f) << 3;
-    *g = ((in >> 5) & 0x3f) << 2;
-    *b = (in & 0x1f) << 3;
+    *r = (((in >> 11) & 0x1f) << 3) + (1 << 2);
+    *g = (((in >> 5) & 0x3f) << 2) + (1 << 1);
+    *b = ((in & 0x1f) << 3) + (1 << 2);
 }
 
 static void color_bias_2(uint16_t in, uint8_t *r, uint8_t *g, uint8_t *b) {
-    *r = ((in >> 8) & 0xf) << 4;
-    *g = ((in >> 4) & 0xf) << 4;
-    *b = (in & 0xf) << 4;
+    *r = (((in >> 8) & 0xf) << 4) + (1 << 3);
+    *g = (((in >> 4) & 0xf) << 4) + (1 << 3);
+    *b = ((in & 0xf) << 4) + (1 << 3);
 }
 
-static int handle_decode_lossless(uint8_t *out, uint8_t *out_prev, uint8_t *in, uint8_t *in_track, int size, int w, int h) {
-    memcpy(out, out_prev, w * h * GL_CHANNELS_N);
+static uint8_t screens_decoded_channels[SCREEN_COUNT][RGB_CHANNELS_N][SCREEN_WIDTH * SCREEN_HEIGHT0];
+static JSAMPLE screens_upsampled_channels[SCREEN_COUNT][SCREEN_WIDTH * SCREEN_HEIGHT0 * RGB_CHANNELS_N];
+static uint8_t screens_out_channels[SCREEN_COUNT][SCREEN_WIDTH * SCREEN_HEIGHT0 * GL_CHANNELS_N];
+
+static struct {
+    int width, height;
+} screens_out_dims_last[SCREEN_COUNT];
+
+static struct {
+    int width, height, chroma_ss;
+} screens_decoded_dims_last[SCREEN_COUNT];
+
+static void do_chroma_ss_1_2_color_0(int chroma_ss, int w, int h, int top_bot, int next_p, uint8_t *curr) {
+    uint8_t (*decoded_channels)[SCREEN_WIDTH * SCREEN_HEIGHT0] = screens_decoded_channels[top_bot];
+    JSAMPLE *upsampled_channels = screens_upsampled_channels[top_bot];
+    uint8_t *out = screens_out_channels[top_bot];
+
+    if (
+        screens_decoded_dims_last[top_bot].width != w ||
+        screens_decoded_dims_last[top_bot].height != h ||
+        screens_decoded_dims_last[top_bot].chroma_ss != chroma_ss
+    ) {
+        memset(decoded_channels, 127, sizeof(screens_decoded_channels[top_bot]));
+        screens_decoded_dims_last[top_bot].width = w;
+        screens_decoded_dims_last[top_bot].height = h;
+        screens_decoded_dims_last[top_bot].chroma_ss = chroma_ss;
+    }
+
+    int hss = true;
+    int vss = chroma_ss == 0;
+    int hsamp = hss ? 2 : 1;
+    int vsamp = vss ? 2 : 1;
+    int bw_x[RGB_CHANNELS_N] = {hsamp, 1, 1};
+    int bh_x[RGB_CHANNELS_N] = {vsamp, 1, 1};
+
+    int out_cx = 0;
+    int out_cy = 0;
+    int out_ex = 0;
+    int out_ey = 0;
+
+    for (int comp = 0; comp < RGB_CHANNELS_N; ++comp) {
+        int need_ss = comp > 0;
+        int width = need_ss ? w / 2 : w;
+
+        uint8_t *out_comp = decoded_channels[comp];
+        int out_x = next_p * bw_x[comp];
+        int out_y = out_x / width * bh_x[comp];
+        out_x %= width;
+        out_comp += out_y * width + out_x;
+
+        if (comp == 0) {
+            out_cx = out_x;
+            out_cy = out_y;
+
+            out_ex = out_cx + bw_x[comp];
+            out_ey = out_cy + bh_x[comp];
+        }
+
+        for (int by = 0; by < bh_x[comp]; ++by) {
+            for (int bx = 0; bx < bw_x[comp]; ++bx) {
+                uint8_t *out = out_comp + by * width + bx;
+                *out = *curr;
+                ++curr;
+            }
+        }
+    }
+
+    for (int comp = 0; comp < RGB_CHANNELS_N; ++comp) {
+        int need_ss = comp > 0;
+        int hss = need_ss ? hsamp : 1;
+        int vss = need_ss ? vsamp : 1;
+        int width = need_ss ? w / 2 : w;
+
+        for (int y = out_cy; y < out_ey; ++y) {
+            for (int x = out_cx; x < out_ex; ++x) {
+                if (need_ss) {
+                    int xc = hss > 1 ? (x - 1) / hss : x;
+                    int xe = hss > 1 ? (x + 1) / hss : x;
+                    xc = MAX(xc, 0);
+                    xe = MIN(xe, w / hss - 1);
+
+                    int yc = vss > 1 ? (y - 1) / vss : y;
+                    int ye = vss > 1 ? (y + 1) / vss : y;
+                    yc = MAX(yc, 0);
+                    ye = MIN(ye, h / vss - 1);
+
+                    int xf = (x - 1) % hss;
+                    float xfc = hss > 1 ? xf ? 0.25 : 0.75 : 0.5;
+                    float xfe = hss > 1 ? xf ? 0.75 : 0.25 : 0.5;
+
+                    int yf = (y - 1) % vss;
+                    float yfc = vss > 1 ? yf ? 0.25 : 0.75 : 0.5;
+                    float yfe = vss > 1 ? yf ? 0.75 : 0.25 : 0.5;
+
+                    float tl = decoded_channels[comp][yc * width + xc];
+                    float tr = decoded_channels[comp][yc * width + xe];
+                    float bl = decoded_channels[comp][ye * width + xc];
+                    float br = decoded_channels[comp][ye * width + xe];
+
+                    float t = tl * xfc + tr * xfe;
+                    float b = bl * xfc + br * xfe;
+                    upsampled_channels[(y * w + x) * RGB_CHANNELS_N + comp] = t * yfc + b * yfe;
+                } else {
+                    upsampled_channels[(y * w + x) * RGB_CHANNELS_N + comp] = decoded_channels[comp][y * w + x];
+                }
+            }
+        }
+    }
+
+    for (int y = out_cy; y < out_ey; ++y) {
+        for (int x = out_cx; x < out_ex; ++x) {
+            ycc_rgb_convert(&out[(y * w + x) * GL_CHANNELS_N], &upsampled_channels[(y * w + x) * RGB_CHANNELS_N]);
+        }
+    }
+}
+
+static void do_chroma_ss_2_color_0(uint8_t *curr, uint8_t *out) {
+    out[R_I] = curr[2];
+    out[G_I] = curr[1];
+    out[B_I] = curr[0];
+    out[A_I] = 255;
+}
+
+static void do_chroma_ss_2_color_1(uint8_t *curr, uint8_t *out) {
+    color_bias_1(*(uint16_t *)curr, &out[R_I], &out[G_I], &out[B_I]);
+    out[A_I] = 255;
+}
+
+static void do_chroma_ss_2_color_2(uint8_t *curr, int r, uint8_t *out) {
+    uint16_t in;
+    in = curr[0];
+    if (r) {
+        in &= 0xf;
+        in <<= 8;
+        in |= curr[1];
+    } else {
+        in <<= 4;
+        in |= ((curr[1] >> 4) & 0xf);
+    }
+
+    color_bias_2(in, &out[R_I], &out[G_I], &out[B_I]);
+    out[A_I] = 255;
+}
+
+static int handle_decode_lossless(int top_bot, uint8_t *out_final, uint8_t *in, uint8_t *in_track, int size, int w, int h) {
+    uint8_t *out = screens_out_channels[top_bot];
+    if (screens_out_dims_last[top_bot].width != w || screens_out_dims_last[top_bot].height != h) {
+        screens_out_dims_last[top_bot].width = w;
+        screens_out_dims_last[top_bot].height = h;
+        memset(out, 255, sizeof(screens_out_channels[top_bot]));
+    }
 
     int last_size = size % RP_PACKET_DATA_SIZE;
     int first_count = size / RP_PACKET_DATA_SIZE;
@@ -329,7 +476,7 @@ static int handle_decode_lossless(uint8_t *out, uint8_t *out_prev, uint8_t *in, 
     int chroma_ss = (hdr[0] >> 4) & 0x3;
     int color_bias = (hdr[0] >> 6) & 0x3;
 
-#define MAX_P 3
+#define MAX_P 6
     UNUSED int prev_i = -1;
     uint8_t prev_buf[MAX_P] = {};
 
@@ -350,10 +497,6 @@ static int handle_decode_lossless(uint8_t *out, uint8_t *out_prev, uint8_t *in, 
         }
 
 #define P_N GL_CHANNELS_N
-#define R_I 0
-#define G_I 1
-#define B_I 2
-#define A_I 3
 
         int curr_size = i == first_count ? last_size : RP_PACKET_DATA_SIZE;
         curr_size -= RP_LOSSLESS_HDR_SIZE;
@@ -363,10 +506,52 @@ static int handle_decode_lossless(uint8_t *out, uint8_t *out_prev, uint8_t *in, 
 
         switch (chroma_ss) {
             case 0:
+            case 1: {
+                int p = chroma_ss == 0 ? 6 : 4;
+
+                switch (color_bias) {
+                    case 0: {
+                        int next = RP_LOSSLESS_DATA_SIZE * i;
+                        int next_r = next % p;
+                        int next_p = next / p;
+
+                        if (next_r) {
+                            int curr_s = p - next_r;
+
+                            if (prev_i == i - 1) {
+                                memcpy(&prev_buf[next_r], curr, curr_s);
+                                do_chroma_ss_1_2_color_0(chroma_ss, w, h, top_bot, next_p, prev_buf);
+                            }
+
+                            curr += curr_s;
+                            curr_size -= curr_s;
+                            if (curr_size < 0)
+                                continue;
+                            ++next_p;
+                        }
+
+                        int c = 0;
+                        for (; c < curr_size - p + 1; c += p, ++next_p) {
+                            do_chroma_ss_1_2_color_0(chroma_ss, w, h, top_bot, next_p, curr + c);
+                        }
+                        if (c < curr_size) {
+                            prev_i = i;
+                            memcpy(prev_buf, &curr[c], curr_size - c);
+                        }
+                    }
+                        break;
+                    case 1: {
+                        // TODO
+                    }
+                        break;
+                    case 2: {
+                        // TODO
+                    }
+                        break;
+                }
+            }
                 break;
-            case 1:
-                break;
-            case 2:
+            case 2: {
                 switch (color_bias) {
                     case 0: {
                         int p = 3;
@@ -376,12 +561,10 @@ static int handle_decode_lossless(uint8_t *out, uint8_t *out_prev, uint8_t *in, 
                         if (next_r) {
                             uint8_t *curr_out = out + next_p * P_N;
                             int curr_s = p - next_r;
-                            memcpy(&prev_buf[next_r], curr, curr_s);
-
-                            curr_out[R_I] = prev_buf[2];
-                            curr_out[G_I] = prev_buf[1];
-                            curr_out[B_I] = prev_buf[0];
-                            curr_out[A_I] = 255;
+                            if (prev_i == i - 1) {
+                                memcpy(&prev_buf[next_r], curr, curr_s);
+                                do_chroma_ss_2_color_0(prev_buf, curr_out);
+                            }
 
                             curr += curr_s;
                             curr_size -= curr_s;
@@ -392,10 +575,7 @@ static int handle_decode_lossless(uint8_t *out, uint8_t *out_prev, uint8_t *in, 
                         uint8_t *curr_out = out + next_p * P_N;
                         int c = 0;
                         for (; c < curr_size - p + 1; c += p, curr_out += P_N) {
-                            curr_out[R_I] = curr[c + 2];
-                            curr_out[G_I] = curr[c + 1];
-                            curr_out[B_I] = curr[c + 0];
-                            curr_out[A_I] = 255;
+                            do_chroma_ss_2_color_0(curr + c, curr_out);
                         }
                         if (c < curr_size) {
                             prev_i = i;
@@ -411,10 +591,10 @@ static int handle_decode_lossless(uint8_t *out, uint8_t *out_prev, uint8_t *in, 
                         if (next_r) {
                             uint8_t *curr_out = out + next_p * P_N;
                             int curr_s = p - next_r;
-                            memcpy(&prev_buf[next_r], curr, curr_s);
-
-                            color_bias_1(*(uint16_t *)prev_buf, &curr_out[R_I], &curr_out[G_I], &curr_out[B_I]);
-                            curr_out[A_I] = 255;
+                            if (prev_i == i - 1) {
+                                memcpy(&prev_buf[next_r], curr, curr_s);
+                                do_chroma_ss_2_color_1(prev_buf, curr_out);
+                            }
 
                             curr += curr_s;
                             curr_size -= curr_s;
@@ -425,8 +605,7 @@ static int handle_decode_lossless(uint8_t *out, uint8_t *out_prev, uint8_t *in, 
                         uint8_t *curr_out = out + next_p * P_N;
                         int c = 0;
                         for (; c < curr_size - p + 1; c += p, curr_out += P_N) {
-                            color_bias_1(*(uint16_t *)&curr[c], &curr_out[R_I], &curr_out[G_I], &curr_out[B_I]);
-                            curr_out[A_I] = 255;
+                            do_chroma_ss_2_color_1(curr + c, curr_out);
                         }
                         if (c < curr_size) {
                             prev_i = i;
@@ -442,21 +621,11 @@ static int handle_decode_lossless(uint8_t *out, uint8_t *out_prev, uint8_t *in, 
                         int currb_s = 0;
                         if (nextb_r) {
                             currb_s = pb - nextb_r;
-
-                            memcpy(&prev_buf[(nextb_r + (8 - 1)) / 8], curr, (currb_s + (8 - 1)) / 8);
-                            uint16_t in;
-                            in = prev_buf[0];
-                            if (nextb_r % 8) {
-                                in &= 0xf;
-                                in <<= 8;
-                                in |= prev_buf[1];
-                            } else {
-                                in <<= 4;
-                                in |= ((prev_buf[1] >> 4) & 0xf);
+                            if (prev_i == i - 1) {
+                                memcpy(&prev_buf[(nextb_r + (8 - 1)) / 8], curr, (currb_s + (8 - 1)) / 8);
+                                uint8_t *curr_out = out + next_p * P_N;
+                                do_chroma_ss_2_color_2(prev_buf, nextb_r % 8, curr_out);
                             }
-                            uint8_t *curr_out = out + next_p * P_N;
-                            color_bias_2(in, &curr_out[R_I], &curr_out[G_I], &curr_out[B_I]);
-                            curr_out[A_I] = 255;
 
                             ++next_p;
                         }
@@ -466,19 +635,7 @@ static int handle_decode_lossless(uint8_t *out, uint8_t *out_prev, uint8_t *in, 
                         for (; cb < currb_size - pb + 1; cb += pb, curr_out += P_N) {
                             int c = cb / 8;
                             int cb_r = cb % 8;
-                            uint16_t in;
-                            in = curr[c];
-                            if (cb_r) {
-                                in &= 0xf;
-                                in <<= 8;
-                                in |= curr[c + 1];
-                            } else {
-                                in <<= 4;
-                                in |= ((curr[c + 1] >> 4) & 0xf);
-                            }
-
-                            color_bias_2(in, &curr_out[R_I], &curr_out[G_I], &curr_out[B_I]);
-                            curr_out[A_I] = 255;
+                            do_chroma_ss_2_color_2(curr + c, cb_r, curr_out);
                         }
                         if (cb < currb_size) {
                             prev_i = i;
@@ -487,10 +644,12 @@ static int handle_decode_lossless(uint8_t *out, uint8_t *out_prev, uint8_t *in, 
                     }
                         break;
                 }
+            }
                 break;
         }
         __atomic_add_fetch(&packet_received_tracker, 1, __ATOMIC_RELAXED);
     }
+    memcpy(out_final, out, w * h * GL_CHANNELS_N);
 
     return 0;
 }
@@ -878,7 +1037,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
         int index_prev = ctx->index_decode_prev;
         rp_lock_rel(ctx->status_lock);
         uint8_t *out = ctx->screen_decoded[index];
-        uint8_t *out_prev = ctx->screen_decoded[index_prev];
+        UNUSED uint8_t *out_prev = ctx->screen_decoded[index_prev];
         struct rp_dims *dims = &ctx->dims_decoded[index];
         dims->width = 0;
         dims->height = 0;
@@ -966,7 +1125,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
 
                 bool good = false;
                 if (ptr->is_lossless) {
-                    if (handle_decode_lossless(processing, out_prev, ptr->in, ptr->in_track, ptr->in_size, width, height) != 0) {
+                    if (handle_decode_lossless(top_bot, processing, ptr->in, ptr->in_track, ptr->in_size, width, height) != 0) {
                         err_log("lossless recv decode error\n");
                     } else {
                         good = true;

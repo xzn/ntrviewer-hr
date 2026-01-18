@@ -84,4 +84,10 @@ struct rp_buffer_ctx_t {
 };
 extern struct rp_buffer_ctx_t rp_buffer_ctx[SCREEN_COUNT];
 extern event_t decode_updated_event;
+
+#define RP_NUM_JPEG_COMP 3
+typedef float JSAMPLE;
+void ycc_rgb_convert(
+    uint8_t out[GL_CHANNELS_N],
+    JSAMPLE in[RP_NUM_JPEG_COMP]);
 #endif

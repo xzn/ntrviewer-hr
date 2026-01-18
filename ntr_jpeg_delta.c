@@ -2,6 +2,7 @@
 // See jpeg_turbo/LICENSE.md for license
 
 #include "ntr_jpeg_delta.h"
+#include "ntr_rp.h"
 
 #include <stdlib.h>
 #include <math.h>
@@ -46,7 +47,6 @@ struct bitread_perm_state_t {
 
 #define RP_NUM_QUANT_TBLS 2
 #define RP_NUM_HUFF_TBLS 2
-#define RP_NUM_JPEG_COMP 3
 #define RP_SAMP_FACTOR 2
 #define RP_DOWNSAMP_FACTOR 2
 
@@ -73,7 +73,6 @@ typedef JBLOCKROW *JBLOCKARRAY;
 typedef JBLOCKARRAY *JBLOCKIMAGE;
 
 // typedef unsigned char JSAMPLE;
-typedef float JSAMPLE;
 typedef JSAMPLE *JSAMPROW;
 typedef JSAMPROW *JSAMPARRAY;
 typedef JSAMPARRAY *JSAMPIMAGE;
@@ -997,17 +996,14 @@ static uint8_t range_limit_i(JSAMPLE in) {
     return out > 255 ? 255 : out < 0 ? 0 : out;
 }
 
-static void ycc_rgb_convert(
+void ycc_rgb_convert(
     uint8_t out[GL_CHANNELS_N],
     JSAMPLE in[RP_NUM_JPEG_COMP])
 {
     JSAMPLE y = in[0];
     JSAMPLE cb = in[1];
     JSAMPLE cr = in[2];
-#define R_I 0
-#define G_I 1
-#define B_I 2
-#define A_I 3
+
     /* Range-limiting is essential due to noise introduced by DCT losses. */
     out[R_I] = range_limit_i(y + 1.40200f * (cr - 128.0f));
     out[G_I] = range_limit_i(y - 0.34414f * (cb - 128.0f) - 0.71414f * (cr - 128.0f));
