@@ -160,7 +160,8 @@ enum screen_t {
 enum frame_buffer_index_t
 {
     FBI_DECODE,
-    FBI_READY_DISPLAY,
+    FBI_DECODE_PREV,
+    FBI_READY_DISPLAY = FBI_DECODE_PREV,
     FBI_READY_DISPLAY_2,
     FBI_DISPLAY,
     FBI_DISPLAY_2,

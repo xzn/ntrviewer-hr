@@ -25,11 +25,14 @@ extern int frame_rate_decoded_tracker[SCREEN_COUNT];
 extern int frame_rate_displayed_tracker[SCREEN_COUNT];
 extern int frame_size_tracker[SCREEN_COUNT];
 extern int delay_between_packet_tracker[SCREEN_COUNT];
+extern int packet_received_tracker;
+extern int packet_should_receive_tracker;
 extern int frame_fully_received_tracker;
 extern int frame_lost_tracker;
 extern atomic_bool kcp_active;
 extern atomic_bool kcp_dq;
 extern atomic_bool kcp_restart;
+extern atomic_bool is_lossless;
 
 #include "ui_common_sdl.h"
 #include "rp_syn.h"
@@ -69,6 +72,7 @@ struct rp_buffer_ctx_t {
     int index_ready_display_2;
     int index_ready_display;
     int index_decode;
+    int index_decode_prev;
 
     uint8_t *data_prev;
     int width_prev, height_prev;

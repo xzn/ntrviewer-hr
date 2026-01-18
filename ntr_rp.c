@@ -26,6 +26,7 @@ static int kcp_cid_reset = (IUINT16)-1 & ((1 << CID_NBITS) - 1);
 atomic_bool kcp_active;
 atomic_bool kcp_dq;
 atomic_bool kcp_restart;
+atomic_bool is_lossless;
 
 static int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
 {
@@ -123,7 +124,10 @@ void rp_buffer_init(void) {
         ctx->index_ready_display_2 = FBI_READY_DISPLAY_2;
         ctx->index_ready_display = FBI_READY_DISPLAY;
         ctx->index_decode = FBI_DECODE;
+        ctx->index_decode_prev = FBI_DECODE_PREV;
         event_init(&ctx->decode_updated_event);
+
+        memset(ctx->screen_decoded, 255, sizeof(ctx->screen_decoded));
     }
 
     event_init(&decode_updated_event);
@@ -222,6 +226,8 @@ static int queue_decode_kcp(int w, int queue_w) {
     return 0;
 }
 
+int packet_received_tracker;
+int packet_should_receive_tracker;
 int frame_fully_received_tracker;
 int frame_lost_tracker;
 static uint8_t last_decoded_frame_id[SCREEN_COUNT];
@@ -286,7 +292,9 @@ static void color_bias_2(uint16_t in, uint8_t *r, uint8_t *g, uint8_t *b) {
     *b = (in & 0xf) << 4;
 }
 
-static int handle_decode_lossless(uint8_t *out, uint8_t *in, uint8_t *in_track, int size, UNUSED int w, UNUSED int h) {
+static int handle_decode_lossless(uint8_t *out, uint8_t *out_prev, uint8_t *in, uint8_t *in_track, int size, int w, int h) {
+    memcpy(out, out_prev, w * h * GL_CHANNELS_N);
+
     int last_size = size % RP_PACKET_DATA_SIZE;
     int first_count = size / RP_PACKET_DATA_SIZE;
     int count = first_count + (last_size > 0);
@@ -326,6 +334,8 @@ static int handle_decode_lossless(uint8_t *out, uint8_t *in, uint8_t *in_track, 
     uint8_t prev_buf[MAX_P] = {};
 
     for (int i = 0; i < count; ++i) {
+        __atomic_add_fetch(&packet_should_receive_tracker, 1, __ATOMIC_RELAXED);
+
         if (!in_track[i]) {
             continue;
         }
@@ -339,7 +349,7 @@ static int handle_decode_lossless(uint8_t *out, uint8_t *in, uint8_t *in_track, 
             return -2;
         }
 
-#define P_N 4
+#define P_N GL_CHANNELS_N
 #define R_I 0
 #define G_I 1
 #define B_I 2
@@ -479,6 +489,7 @@ static int handle_decode_lossless(uint8_t *out, uint8_t *in, uint8_t *in_track, 
                 }
                 break;
         }
+        __atomic_add_fetch(&packet_received_tracker, 1, __ATOMIC_RELAXED);
     }
 
     return 0;
@@ -776,11 +787,16 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w) {
 static void handle_decode_frame_screen(struct rp_buffer_ctx_t *ctx, int top_bot, int frame_size, int delay_between_packet, struct rp_buffer_ctx_t *sync_ctx)
 {
     __atomic_add_fetch(&frame_rate_decoded_tracker[top_bot], 1, __ATOMIC_RELAXED);
-    if (__atomic_load_n(&frame_size_tracker[top_bot], __ATOMIC_RELAXED) < frame_size) {
-        __atomic_store_n(&frame_size_tracker[top_bot], frame_size, __ATOMIC_RELAXED);
+
+    {
+        int frame_size_track = __atomic_load_n(&frame_size_tracker[top_bot], __ATOMIC_RELAXED);
+        while (frame_size_track < frame_size && !__atomic_compare_exchange_n(&frame_size_tracker[top_bot], &frame_size_track, frame_size, __ATOMIC_RELAXED, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+            ;
     }
-    if (__atomic_load_n(&delay_between_packet_tracker[top_bot], __ATOMIC_RELAXED) < delay_between_packet) {
-        __atomic_store_n(&delay_between_packet_tracker[top_bot], delay_between_packet, __ATOMIC_RELAXED);
+    {
+        int delay_between_packet_track = __atomic_load_n(&delay_between_packet_tracker[top_bot], __ATOMIC_RELAXED);
+        while (delay_between_packet_track < delay_between_packet && !__atomic_compare_exchange_n(&delay_between_packet_tracker[top_bot], &delay_between_packet_track, delay_between_packet, __ATOMIC_RELAXED, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+            ;
     }
 
     rp_lock_wait(ctx->status_lock);
@@ -789,12 +805,12 @@ static void handle_decode_frame_screen(struct rp_buffer_ctx_t *ctx, int top_bot,
     if (/* ctx_sync && */ ctx->status >= FBS_UPDATED) {
         int index = ctx->index_ready_display_2;
         ctx->index_ready_display_2 = ctx->index_ready_display;
-        ctx->index_ready_display = ctx->index_decode;
+        ctx->index_decode_prev = ctx->index_ready_display = ctx->index_decode;
         ctx->index_decode = index;
         ctx->status = FBS_UPDATED_2;
     } else {
         int index = ctx->index_ready_display;
-        ctx->index_ready_display = ctx->index_decode;
+        ctx->index_decode_prev = ctx->index_ready_display = ctx->index_decode;
         ctx->index_decode = index;
         ctx->status = FBS_UPDATED;
     }
@@ -857,8 +873,12 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
 
         int top_bot = ptr->top_bot;
         struct rp_buffer_ctx_t *ctx = &rp_buffer_ctx[top_bot];
+        rp_lock_wait(ctx->status_lock);
         int index = ctx->index_decode;
+        int index_prev = ctx->index_decode_prev;
+        rp_lock_rel(ctx->status_lock);
         uint8_t *out = ctx->screen_decoded[index];
+        uint8_t *out_prev = ctx->screen_decoded[index_prev];
         struct rp_dims *dims = &ctx->dims_decoded[index];
         dims->width = 0;
         dims->height = 0;
@@ -904,7 +924,8 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
 
             if (ptr->is_lossless) {
                 // TODO
-            } if ((ret = handle_decode_kcp(processing, ptr->kcp_w, ptr->kcp_queue_w)) != 0)
+            }
+            else if ((ret = handle_decode_kcp(processing, ptr->kcp_w, ptr->kcp_queue_w)) != 0)
             {
                 err_log("kcp recv decode error: %d\n", ret);
                 kcp_restart = 1;
@@ -945,7 +966,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
 
                 bool good = false;
                 if (ptr->is_lossless) {
-                    if (handle_decode_lossless(processing, ptr->in, ptr->in_track, ptr->in_size, width, height) != 0) {
+                    if (handle_decode_lossless(processing, out_prev, ptr->in, ptr->in_track, ptr->in_size, width, height) != 0) {
                         err_log("lossless recv decode error\n");
                     } else {
                         good = true;
@@ -990,6 +1011,8 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
 #define RP_HDR_DOWNSAMPLE_MASK (0xc)
 static void set_jpeg_decode_info(int work) {
     int top_bot = !recv_hdr[work][1];
+    bool lossless = recv_is_lossless[work];
+    is_lossless = lossless;
     jpeg_decode_info[work] = (struct jpeg_decode_info_t){
         .top_bot = top_bot,
         .in_delay = recv_delay_between_packets[work],
@@ -998,7 +1021,7 @@ static void set_jpeg_decode_info(int work) {
         .downsample = (recv_hdr[work][2] & RP_HDR_DOWNSAMPLE_MASK) >> 2,
         .even_odd = recv_hdr[work][0] % 2,
         .in_size = recv_end_size[work],
-        .is_lossless = recv_is_lossless[work],
+        .is_lossless = lossless,
         .in_track = recv_track[work],
     };
 }
@@ -1128,7 +1151,8 @@ static int handle_recv(uint8_t *buf, int size)
                 if (!recv_end_incomp[work])
                 {
                     recv_end_incomp[work] = 1;
-                    err_log("recv end packet incomplete\n");
+                    if (!recv_is_lossless[work])
+                        err_log("recv end packet incomplete\n");
                 }
                 return 0;
             }

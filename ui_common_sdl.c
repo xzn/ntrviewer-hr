@@ -184,10 +184,10 @@ static uint64_t windows_titles_last_tick;
 
 static double kcp_get_connection_quality(void)
 {
-    int fec_count = __atomic_load_n(&kcp_input_fec_count, __ATOMIC_RELAXED);
+    int fec_count = __atomic_exchange_n(&kcp_input_fec_count, 0, __ATOMIC_RELAXED);
     int input_count = fec_count ?
-        (IUINT32)__atomic_load_n(&kcp_input_pid_count, __ATOMIC_RELAXED) * __atomic_load_n(&kcp_input_fid_count, __ATOMIC_RELAXED) / fec_count : 0;
-    double ret = input_count ? (double)__atomic_load_n(&kcp_recv_pid_count, __ATOMIC_RELAXED) / input_count : 0.0;
+        (IUINT32)__atomic_exchange_n(&kcp_input_pid_count, 0, __ATOMIC_RELAXED) * __atomic_exchange_n(&kcp_input_fid_count, 0, __ATOMIC_RELAXED) / fec_count : 0;
+    double ret = input_count ? (double)__atomic_exchange_n(&kcp_recv_pid_count, 0, __ATOMIC_RELAXED) / input_count : 0.0;
     return ret * ret * 100;
 }
 
@@ -195,13 +195,13 @@ static void ui_kcp_window_title_update(SDL_Window *win, int tick_diff)
 {
     char window_title[WINDOW_TITLE_LEN_MAX];
     snprintf(window_title, sizeof(window_title),
-             WIN_TITLE " (FPS %03d %03d | %03d %03d)"
+             WIN_TITLE " (FPS %03d/%03d %03d/%03d)"
                        " (Connection Quality %.1f%%)"
                        " [JPEG RS%s]",
-             __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_TOP], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-             __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_BOT], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-             __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_TOP], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-             __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_BOT], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+             __atomic_exchange_n(&frame_rate_displayed_tracker[SCREEN_TOP], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+             __atomic_exchange_n(&frame_rate_decoded_tracker[SCREEN_TOP], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+             __atomic_exchange_n(&frame_rate_displayed_tracker[SCREEN_BOT], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+             __atomic_exchange_n(&frame_rate_decoded_tracker[SCREEN_BOT], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
              kcp_get_connection_quality(),
              kcp_dq ? ", Delta" : "");
     SDL_SetWindowTitle(win, window_title);
@@ -213,13 +213,13 @@ static void ui_kcp_windows_titles_update(int ctx_top_bot, int screen_top_bot, in
     snprintf(window_title, sizeof(window_title),
              ctx_top_bot == SCREEN_TOP
                  ? WIN_TITLE
-                 " (FPS %03d | %03d)"
+                 " (FPS %03d/%03d)"
                  " (Connection Quality %.1f%%)"
                  " [JPEG RS%s]"
                  : WIN_TITLE
-                 " (FPS %03d | %03d)",
-             __atomic_load_n(&frame_rate_decoded_tracker[screen_top_bot], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
-             __atomic_load_n(&frame_rate_displayed_tracker[screen_top_bot], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
+                 " (FPS %03d/%03d)",
+             __atomic_exchange_n(&frame_rate_displayed_tracker[screen_top_bot], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
+             __atomic_exchange_n(&frame_rate_decoded_tracker[screen_top_bot], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
              kcp_get_connection_quality(),
              kcp_dq ? ", Delta" : "");
     SDL_SetWindowTitle(ui_sdl_win[ctx_top_bot], window_title);
@@ -231,9 +231,13 @@ void ui_windows_titles_update(void)
     uint64_t tick_diff = next_tick - windows_titles_last_tick;
     if (tick_diff >= FRAME_STAT_EVERY_X_US)
     {
-        int frame_fully_received = __atomic_load_n(&frame_fully_received_tracker, __ATOMIC_RELAXED);
-        int frame_lost = __atomic_load_n(&frame_lost_tracker, __ATOMIC_RELAXED);
+        int frame_fully_received = __atomic_exchange_n(&frame_fully_received_tracker, 0, __ATOMIC_RELAXED);
+        int frame_lost = __atomic_exchange_n(&frame_lost_tracker, 0, __ATOMIC_RELAXED);
         double packet_rate = frame_fully_received ? (double)frame_fully_received / (frame_fully_received + frame_lost) * 100 : 0.0;
+
+        int packet_received = __atomic_exchange_n(&packet_received_tracker, 0, __ATOMIC_RELAXED);
+        int packet_should_receive = __atomic_exchange_n(&packet_should_receive_tracker, 0, __ATOMIC_RELAXED);
+        double lossless_rate = packet_rate * packet_received / packet_should_receive;
 
         int view_mode = __atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED);
 
@@ -242,6 +246,20 @@ void ui_windows_titles_update(void)
             if (kcp_active)
             {
                 ui_kcp_window_title_update(ui_sdl_win[SCREEN_TOP], (int)tick_diff);
+            } else if (is_lossless) {
+                char window_title[WINDOW_TITLE_LEN_MAX];
+                snprintf(
+                    window_title, sizeof(window_title),
+                    WIN_TITLE
+                    " (FPS %03d/%03d %03d/%03d)"
+                    " (Packet Rate %.1f%%)"
+                    " [Uncompresssed UDP]",
+                    __atomic_exchange_n(&frame_rate_displayed_tracker[SCREEN_TOP], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+                    __atomic_exchange_n(&frame_rate_decoded_tracker[SCREEN_TOP], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+                    __atomic_exchange_n(&frame_rate_displayed_tracker[SCREEN_BOT], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+                    __atomic_exchange_n(&frame_rate_decoded_tracker[SCREEN_BOT], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+                    lossless_rate);
+                SDL_SetWindowTitle(ui_sdl_win[SCREEN_TOP], window_title);
             }
             else
             {
@@ -249,13 +267,13 @@ void ui_windows_titles_update(void)
                 snprintf(
                     window_title, sizeof(window_title),
                     WIN_TITLE
-                    " (FPS %03d %03d | %03d %03d)"
+                    " (FPS %03d/%03d %03d/%03d)"
                     " (Packet Rate %.1f%%)"
                     " [JPEG Compat]",
-                    __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_TOP], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-                    __atomic_load_n(&frame_rate_decoded_tracker[SCREEN_BOT], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-                    __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_TOP], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-                    __atomic_load_n(&frame_rate_displayed_tracker[SCREEN_BOT], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+                    __atomic_exchange_n(&frame_rate_displayed_tracker[SCREEN_TOP], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+                    __atomic_exchange_n(&frame_rate_decoded_tracker[SCREEN_TOP], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+                    __atomic_exchange_n(&frame_rate_displayed_tracker[SCREEN_BOT], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+                    __atomic_exchange_n(&frame_rate_decoded_tracker[SCREEN_BOT], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
                     packet_rate);
                 SDL_SetWindowTitle(ui_sdl_win[SCREEN_TOP], window_title);
             }
@@ -273,6 +291,21 @@ void ui_windows_titles_update(void)
                 if (kcp_active)
                 {
                     ui_kcp_windows_titles_update(ctx_top_bot, screen_top_bot, (int)tick_diff);
+                } else if (is_lossless) {
+                    char window_title[WINDOW_TITLE_LEN_MAX];
+                    snprintf(
+                        window_title, sizeof(window_title),
+                        ctx_top_bot == SCREEN_TOP
+                            ? WIN_TITLE
+                            " (FPS %03d/%03d) "
+                            " (Packet Rate %.1f%%)"
+                            " [Uncompresssed UDP]"
+                            : WIN_TITLE
+                            " (FPS %03d/%03d) ",
+                        __atomic_exchange_n(&frame_rate_displayed_tracker[screen_top_bot], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+                        __atomic_exchange_n(&frame_rate_decoded_tracker[screen_top_bot], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+                        lossless_rate);
+                    SDL_SetWindowTitle(ui_sdl_win[ctx_top_bot], window_title);
                 }
                 else
                 {
@@ -281,13 +314,13 @@ void ui_windows_titles_update(void)
                         window_title, sizeof(window_title),
                         ctx_top_bot == SCREEN_TOP
                             ? WIN_TITLE
-                            " (FPS %03d | %03d) "
+                            " (FPS %03d/%03d) "
                             " (Packet Rate %.1f%%)"
-                            " [Compatibility Mode]"
+                            " [JPEG Compat]"
                             : WIN_TITLE
-                            " (FPS %03d | %03d) ",
-                        __atomic_load_n(&frame_rate_decoded_tracker[screen_top_bot], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-                        __atomic_load_n(&frame_rate_displayed_tracker[screen_top_bot], __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+                            " (FPS %03d/%03d) ",
+                        __atomic_exchange_n(&frame_rate_displayed_tracker[screen_top_bot], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
+                        __atomic_exchange_n(&frame_rate_decoded_tracker[screen_top_bot], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
                         packet_rate);
                     SDL_SetWindowTitle(ui_sdl_win[ctx_top_bot], window_title);
                 }
@@ -301,18 +334,9 @@ void ui_windows_titles_update(void)
         windows_titles_last_tick = next_tick;
         for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot)
         {
-            __atomic_store_n(&frame_rate_decoded_tracker[top_bot], 0, __ATOMIC_RELAXED);
-            __atomic_store_n(&frame_rate_displayed_tracker[top_bot], 0, __ATOMIC_RELAXED);
             __atomic_store_n(&frame_size_tracker[top_bot], 0, __ATOMIC_RELAXED);
             __atomic_store_n(&delay_between_packet_tracker[top_bot], 0, __ATOMIC_RELAXED);
         }
-        __atomic_store_n(&kcp_input_fec_count, 0, __ATOMIC_RELAXED);
-        __atomic_store_n(&kcp_input_fid_count, 0, __ATOMIC_RELAXED);
-        __atomic_store_n(&kcp_input_pid_count, 0, __ATOMIC_RELAXED);
-        __atomic_store_n(&kcp_recv_pid_count, 0, __ATOMIC_RELAXED);
-
-        __atomic_store_n(&frame_fully_received_tracker, 0, __ATOMIC_RELAXED);
-        __atomic_store_n(&frame_lost_tracker, 0, __ATOMIC_RELAXED);
     }
 }
 
