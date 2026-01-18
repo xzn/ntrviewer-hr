@@ -42,6 +42,7 @@ static int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
 #define RP_MAX_PACKET_COUNT (240)
 
 #define RP_WORK_COUNT (3)
+static uint8_t recv_is_lossless[RP_WORK_COUNT];
 static uint8_t recv_buf[RP_WORK_COUNT][RP_PACKET_SIZE * RP_MAX_PACKET_COUNT];
 static uint8_t recv_track[RP_WORK_COUNT][RP_MAX_PACKET_COUNT];
 static uint8_t recv_hdr[RP_WORK_COUNT][RP_DATA_HDR_ID_SIZE];
@@ -160,6 +161,8 @@ struct jpeg_decode_info_t {
             uint8_t frame_id;
             uint8_t downsample;
             uint8_t even_odd;
+            bool is_lossless;
+            uint8_t *in_track;
         };
 
         struct {
@@ -252,13 +255,13 @@ static int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
 
     int width = tj3Get(tjInstance, TJPARAM_JPEGWIDTH);
     int height = tj3Get(tjInstance, TJPARAM_JPEGHEIGHT);
-    if (h != width || w != height)
+    if (w != width || h != height)
     {
-        err_log("jpeg unexpected dimensions: %d %d\n", height, width);
+        err_log("jpeg unexpected dimensions: %d %d\n", width, height);
         goto final;
     }
 
-    if (tj3Decompress8(tjInstance, in, size, out, h * GL_CHANNELS_N, TJ_FORMAT) != 0)
+    if (tj3Decompress8(tjInstance, in, size, out, w * GL_CHANNELS_N, TJ_FORMAT) != 0)
     {
         err_log("jpeg decompression error: %s\n", tj3GetErrorStr(tjInstance));
         goto final;
@@ -271,6 +274,118 @@ final:
     return ret;
 }
 
+static int handle_decode_lossless(uint8_t *out, uint8_t *in, uint8_t *in_track, int size, int w, int h) {
+    int last_size = size % RP_PACKET_DATA_SIZE;
+    int first_count = size / RP_PACKET_DATA_SIZE;
+    int count = first_count + (last_size > 0);
+    if (!count)
+        return -1;
+#define RP_LOSSLESS_HDR_SIZE (2)
+    uint8_t hdr[RP_LOSSLESS_HDR_SIZE] = {};
+#define RP_LOSSLESS_DATA_SIZE (RP_PACKET_DATA_SIZE - RP_LOSSLESS_HDR_SIZE)
+
+    int first = -1;
+    for (int i = 0; i < count; ++i) {
+        if (in_track[i]) {
+            first = i;
+            break;
+        }
+    }
+
+    if (first < 0) {
+        return -3;
+    }
+
+    memcpy(hdr, in + first * RP_PACKET_DATA_SIZE, RP_LOSSLESS_HDR_SIZE);
+
+    bool is_huff_tbl = hdr[0] & 0x1;
+    int huff_tbl_no = (hdr[0] >> 1) & 0x7;
+    int chroma_ss = (hdr[0] >> 4) & 0x3;
+    int color_bias = (hdr[0] >> 6) & 0x3;
+
+#define MAX_P 3
+    int prev_i = -1;
+    uint8_t prev_buf[MAX_P];
+
+    for (int i = 0; i < count; ++i) {
+        if (!in_track[i]) {
+            continue;
+        }
+        uint8_t *curr = in + i * RP_PACKET_DATA_SIZE;
+        uint8_t curr_hdr[RP_LOSSLESS_HDR_SIZE] = {};
+        memcpy(curr_hdr, curr, RP_LOSSLESS_HDR_SIZE);
+        curr_hdr[1] &= ~0x3;
+
+        if (memcmp(hdr, curr_hdr, RP_LOSSLESS_HDR_SIZE)) {
+            err_log("lossless decode hdr mismatch [%x, %x] <=> [%x, %x]\n", hdr[0], hdr[1], curr_hdr[0], curr_hdr[1]);
+            return -2;
+        }
+
+#define P_N 4
+#define R_I 0
+#define G_I 1
+#define B_I 2
+#define A_I 3
+
+        int curr_size = i == first_count ? last_size : RP_PACKET_DATA_SIZE;
+        curr_size -= RP_LOSSLESS_HDR_SIZE;
+        if (curr_size <= 0)
+            continue;
+        curr += RP_LOSSLESS_HDR_SIZE;
+
+        switch (chroma_ss) {
+            case 0:
+                break;
+            case 1:
+                break;
+            case 2:
+                switch (color_bias) {
+                    case 0: {
+                        int p = 3;
+                        int next = RP_LOSSLESS_DATA_SIZE * i;
+                        int next_r = next % p;
+                        int next_p = next / p;
+                        if (next_r) {
+                            uint8_t *curr_out = out + next_p * P_N;
+                            int curr_s = p - next_r;
+                            memcpy(&prev_buf[next_r], curr, curr_s);
+
+                            curr_out[R_I] = prev_buf[2];
+                            curr_out[G_I] = prev_buf[1];
+                            curr_out[B_I] = prev_buf[0];
+                            curr_out[A_I] = 255;
+
+                            curr += curr_s;
+                            curr_size -= curr_s;
+                            if (curr_size < 0)
+                                continue;
+                            ++next_p;
+                        }
+                        uint8_t *curr_out = out + next_p * P_N;
+                        int c = 0;
+                        for (; c < curr_size - p + 1; c += p, curr_out += P_N) {
+                            curr_out[R_I] = curr[c + 2];
+                            curr_out[G_I] = curr[c + 1];
+                            curr_out[B_I] = curr[c + 0];
+                            curr_out[A_I] = 255;
+                        }
+                        if (c < curr_size) {
+                            prev_i = i;
+                            memcpy(prev_buf, &curr[c], curr_size - c);
+                        }
+                    }
+                        break;
+                    case 1:
+                        break;
+                    case 2:
+                        break;
+                }
+                break;
+        }
+    }
+
+    return 0;
+}
 
 static unsigned char jpeg_header_top_buffer_kcp[SCREEN_HEIGHT0 * SCREEN_WIDTH * RGB_CHANNELS_N * 2 + 2048];
 static unsigned char jpeg_header_bot_buffer_kcp[SCREEN_HEIGHT1 * SCREEN_WIDTH * RGB_CHANNELS_N * 2 + 2048];
@@ -550,7 +665,7 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w) {
         ++ptr;
     }
 
-    if (handle_decode(out, jpeg_buffer_kcp, ptr - jpeg_buffer_kcp, downsample_height(info->downsample, info->is_top), downsample_width(info->downsample)) != 0)
+    if (handle_decode(out, jpeg_buffer_kcp, ptr - jpeg_buffer_kcp, downsample_width(info->downsample), downsample_height(info->downsample, info->is_top)) != 0)
     {
         return -3;
     }
@@ -690,7 +805,9 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                 processing = screen_processing[top_bot][processing_index];
             }
 
-            if ((ret = handle_decode_kcp(processing, ptr->kcp_w, ptr->kcp_queue_w)) != 0)
+            if (ptr->is_lossless) {
+                // TODO
+            } if ((ret = handle_decode_kcp(processing, ptr->kcp_w, ptr->kcp_queue_w)) != 0)
             {
                 err_log("kcp recv decode error: %d\n", ret);
                 kcp_restart = 1;
@@ -729,12 +846,21 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                     processing = screen_processing[top_bot][processing_index];
                 }
 
-                if (handle_decode(processing, ptr->in, ptr->in_size, height, width) != 0)
-                {
-                    err_log("recv decode error\n");
-                    __atomic_add_fetch(&frame_lost_tracker, 1, __ATOMIC_RELAXED);
+                bool good = false;
+                if (ptr->is_lossless) {
+                    if (handle_decode_lossless(processing, ptr->in, ptr->in_track, ptr->in_size, width, height) != 0) {
+                        err_log("lossless recv decode error\n");
+                    } else {
+                        good = true;
+                    }
+                } else {
+                    if (handle_decode(processing, ptr->in, ptr->in_size, width, height) != 0) {
+                        err_log("recv decode error\n");
+                    } else {
+                        good = true;
+                    }
                 }
-                else
+                if (good)
                 {
                     dims->width = downsample_display_width(ptr->downsample);
                     dims->height = downsample_display_height(ptr->downsample, top_bot == SCREEN_TOP);
@@ -747,6 +873,8 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                     stats_overlay_0(out, top_bot, ptr->in_size, -1, SCREEN_WIDTH, ptr->is_kcp ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1);
                     handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay, sync_ctx);
                     __atomic_add_fetch(&frame_fully_received_tracker, 1, __ATOMIC_RELAXED);
+                } else {
+                    __atomic_add_fetch(&frame_lost_tracker, 1, __ATOMIC_RELAXED);
                 }
             }
             else
@@ -763,6 +891,21 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
 }
 
 #define RP_HDR_DOWNSAMPLE_MASK (0xc)
+static void set_jpeg_decode_info(int work) {
+    int top_bot = !recv_hdr[work][1];
+    jpeg_decode_info[work] = (struct jpeg_decode_info_t){
+        .top_bot = top_bot,
+        .in_delay = recv_delay_between_packets[work],
+        .in = recv_buf[work],
+        .frame_id = recv_hdr[work][0],
+        .downsample = (recv_hdr[work][2] & RP_HDR_DOWNSAMPLE_MASK) >> 2,
+        .even_odd = recv_hdr[work][0] % 2,
+        .in_size = recv_end_size[work],
+        .is_lossless = recv_is_lossless[work],
+        .in_track = recv_track[work],
+    };
+}
+
 static int handle_recv(uint8_t *buf, int size)
 {
     if (size < RP_DATA_HDR_SIZE)
@@ -776,7 +919,7 @@ static int handle_recv(uint8_t *buf, int size)
 
     // err_log("%d %d %d %d (%d)\n", hdr[0], hdr[1], hdr[2], hdr[3], size);
 
-    if ((hdr[2] & ~RP_HDR_DOWNSAMPLE_MASK) != 2)
+    if ((hdr[2] & ~(RP_HDR_DOWNSAMPLE_MASK | 0x1)) != 2)
     {
         err_log("recv invalid header\n");
         return 0;
@@ -792,7 +935,7 @@ static int handle_recv(uint8_t *buf, int size)
         err_log("recv incorrect size: %d\n", size);
         return 0;
     }
-    hdr[1] &= 0x1;
+    hdr[1] &= ~0x10;
     uint8_t work = recv_work;
 
     int work_next = 0;
@@ -802,6 +945,9 @@ static int handle_recv(uint8_t *buf, int size)
         // Queue empty info to keep in sync.
         if (jpeg_decode_info[work].not_queued)
         {
+            if (recv_is_lossless[work]) {
+                set_jpeg_decode_info(work);
+            }
             if (queue_decode(work) != 0)
             {
                 return -1;
@@ -832,13 +978,17 @@ static int handle_recv(uint8_t *buf, int size)
         memset(recv_track[work], 0, RP_MAX_PACKET_COUNT);
         if (recv_end[work] != 2)
         {
-            err_log("recv incomplete skipping frame\n");
+            if (!recv_is_lossless[work])
+                err_log("recv incomplete skipping frame\n");
         }
         recv_end[work] = 0;
         recv_end_incomp[work] = 0;
+        recv_end_packet[work] = 0;
 
         recv_work = work;
     }
+
+    recv_is_lossless[work] = recv_hdr[work][2] & 0x1;
 
     uint8_t packet = hdr[3];
     if (packet >= RP_MAX_PACKET_COUNT)
@@ -861,11 +1011,14 @@ static int handle_recv(uint8_t *buf, int size)
 
     memcpy(&recv_buf[work][RP_PACKET_DATA_SIZE * packet], buf, size);
     recv_track[work][packet] = 1;
+
+    if (packet > recv_end_packet[work]) {
+        recv_end_packet[work] = packet;
+        recv_end_size[work] = RP_PACKET_DATA_SIZE * packet + size;
+    }
     if (end)
     {
         recv_end[work] = 1;
-        recv_end_packet[work] = packet;
-        recv_end_size[work] = RP_PACKET_DATA_SIZE * packet + size;
         // err_log("size %d\n", recv_end_size[work]);
     }
 
@@ -885,17 +1038,7 @@ static int handle_recv(uint8_t *buf, int size)
         }
 
         recv_end[work] = 2;
-        int top_bot = !recv_hdr[work][1];
-
-        jpeg_decode_info[work] = (struct jpeg_decode_info_t){
-            .top_bot = top_bot,
-            .in_delay = recv_delay_between_packets[work],
-            .in = recv_buf[work],
-            .frame_id = recv_hdr[work][0],
-            .downsample = (recv_hdr[work][2] & RP_HDR_DOWNSAMPLE_MASK) >> 2,
-            .even_odd = recv_hdr[work][0] % 2,
-            .in_size = recv_end_size[work],
-        };
+        set_jpeg_decode_info(work);
         if (queue_decode(work) != 0)
             return -1;
     }
