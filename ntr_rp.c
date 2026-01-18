@@ -286,7 +286,7 @@ static void color_bias_2(uint16_t in, uint8_t *r, uint8_t *g, uint8_t *b) {
     *b = (in & 0xf) << 4;
 }
 
-static int handle_decode_lossless(uint8_t *out, uint8_t *in, uint8_t *in_track, int size, int w, int h) {
+static int handle_decode_lossless(uint8_t *out, uint8_t *in, uint8_t *in_track, int size, UNUSED int w, UNUSED int h) {
     int last_size = size % RP_PACKET_DATA_SIZE;
     int first_count = size / RP_PACKET_DATA_SIZE;
     int count = first_count + (last_size > 0);
@@ -309,15 +309,21 @@ static int handle_decode_lossless(uint8_t *out, uint8_t *in, uint8_t *in_track, 
     }
 
     memcpy(hdr, in + first * RP_PACKET_DATA_SIZE, RP_LOSSLESS_HDR_SIZE);
+    hdr[1] &= ~0x3;
 
     bool is_huff_tbl = hdr[0] & 0x1;
     int huff_tbl_no = (hdr[0] >> 1) & 0x7;
+
+    if (is_huff_tbl || huff_tbl_no) {
+        return -4;
+    }
+
     int chroma_ss = (hdr[0] >> 4) & 0x3;
     int color_bias = (hdr[0] >> 6) & 0x3;
 
 #define MAX_P 3
-    int prev_i = -1;
-    uint8_t prev_buf[MAX_P];
+    UNUSED int prev_i = -1;
+    uint8_t prev_buf[MAX_P] = {};
 
     for (int i = 0; i < count; ++i) {
         if (!in_track[i]) {
