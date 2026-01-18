@@ -351,7 +351,7 @@ static void do_chroma_ss_0_1(int chroma_ss, int w, int h, int top_bot, int next_
         screens_decoded_dims_last[top_bot].height != h ||
         screens_decoded_dims_last[top_bot].chroma_ss != chroma_ss
     ) {
-        for (int i = 0; i < sizeof(screens_decoded_channels[top_bot]) / sizeof(JSAMPLE); ++i)
+        for (size_t i = 0; i < sizeof(screens_decoded_channels[top_bot]) / sizeof(JSAMPLE); ++i)
             decoded_channels[0][i] = 128.0;
         screens_decoded_dims_last[top_bot].width = w;
         screens_decoded_dims_last[top_bot].height = h;
@@ -602,6 +602,9 @@ static int handle_decode_lossless(int top_bot, uint8_t *out_final, uint8_t *in, 
                         if (nextb_r) {
                             currb_s = pb - nextb_r;
                             if (prev_i == i - 1) {
+                                memcpy(&prev_buf[(nextb_r + (8 - 1)) / 8], curr, (currb_s + (8 - 1)) / 8);
+                                curr_bits_left = 8 - prevb_s;
+                                do_chroma_ss_0_1(chroma_ss, w, h, top_bot, next_p, prev_buf, do_curr_next_color_1_2);
                             }
 
                             ++next_p;
@@ -618,6 +621,7 @@ static int handle_decode_lossless(int top_bot, uint8_t *out_final, uint8_t *in, 
                         if (cb < currb_size) {
                             prev_i = i;
                             memcpy(prev_buf, &curr[cb / 8], (currb_size - cb + (8 - 1)) / 8);
+                            prevb_s = cb % 8;
                         }
                     }
                         break;
