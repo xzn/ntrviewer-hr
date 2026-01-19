@@ -329,13 +329,15 @@ JSAMPLE do_curr_next_color_1_2(uint8_t **curr, int comp) {
         ret = (**curr >> curr_bits_left) & ((1 << bits) - 1);
     }
     bits = comp_bits[comp];
-    JSAMPLE out = (JSAMPLE)(ret << (8 - bits)) + (JSAMPLE)(1 << (8 - bits - 1));
+    JSAMPLE half = (JSAMPLE)(1 << (8 - bits - 1));
+    JSAMPLE out = (JSAMPLE)(ret << (8 - bits)) + half;
     if (comp == 0)
         return out;
     out -= 128.0;
     JSAMPLE out_abs = fabsf(out);
     JSAMPLE sign = out >= 0 ? 1.0 : -1.0;
-    out_abs -= (JSAMPLE)(1 << (8 - bits - 1));
+    out_abs -= half;
+    out_abs = MAX(out_abs, 0.0);
     out = out_abs * sign;
     out += 128.0;
     return out;
@@ -445,16 +447,29 @@ static void do_chroma_ss_0_1(int chroma_ss, int w, int h, int top_bot, int next_
     }
 }
 
+static bool decode_lossless_quarter;
+static void do_chroma_ss_2_lossless_quarter(uint8_t *out) {
+    uint8_t g = out[R_I];
+    out[R_I] = out[G_I];
+    out[G_I] = g;
+}
+
 static void do_chroma_ss_2_color_0(uint8_t *curr, uint8_t *out) {
     out[R_I] = curr[2];
     out[G_I] = curr[1];
     out[B_I] = curr[0];
     out[A_I] = 255;
+
+    if (decode_lossless_quarter)
+        do_chroma_ss_2_lossless_quarter(out);
 }
 
 static void do_chroma_ss_2_color_1(uint8_t *curr, uint8_t *out) {
     color_bias_1(*(uint16_t *)curr, &out[R_I], &out[G_I], &out[B_I]);
     out[A_I] = 255;
+
+    if (decode_lossless_quarter)
+        do_chroma_ss_2_lossless_quarter(out);
 }
 
 static void do_chroma_ss_2_color_2(uint8_t *curr, int r, uint8_t *out) {
@@ -471,6 +486,9 @@ static void do_chroma_ss_2_color_2(uint8_t *curr, int r, uint8_t *out) {
 
     color_bias_2(in, &out[R_I], &out[G_I], &out[B_I]);
     out[A_I] = 255;
+
+    if (decode_lossless_quarter)
+        do_chroma_ss_2_lossless_quarter(out);
 }
 
 static int handle_decode_lossless(int top_bot, uint8_t *out_final, uint8_t *in, uint8_t *in_track, int size, int w, int h) {
@@ -1202,6 +1220,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
 
                 bool good = false;
                 if (ptr->is_lossless) {
+                    decode_lossless_quarter = ptr->downsample == 3;
                     if (handle_decode_lossless(top_bot, processing, ptr->in, ptr->in_track, ptr->in_size, width, height) != 0) {
                         err_log("lossless recv decode error\n");
                     } else {
