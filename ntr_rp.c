@@ -290,7 +290,7 @@ static void color_bias_2(uint16_t in, uint8_t *r, uint8_t *g, uint8_t *b) {
     *b = ((in & 0xf) << 4) + (1 << 3);
 }
 
-static JSAMPLE screens_decoded_channels[SCREEN_COUNT][RGB_CHANNELS_N][SCREEN_WIDTH * SCREEN_HEIGHT0];
+static JSAMPLE screens_decoded_channels[SCREEN_COUNT][SCREEN_WIDTH * SCREEN_HEIGHT0 * RGB_CHANNELS_N];
 static JSAMPLE screens_upsampled_channels[SCREEN_COUNT][SCREEN_WIDTH * SCREEN_HEIGHT0 * RGB_CHANNELS_N];
 static uint8_t screens_out_channels[SCREEN_COUNT][SCREEN_WIDTH * SCREEN_HEIGHT0 * GL_CHANNELS_N];
 
@@ -343,8 +343,9 @@ JSAMPLE do_curr_next_color_1_2(uint8_t **curr, int comp) {
     return out;
 }
 
+static int decode_lossless_even_odd;
 static void do_chroma_ss_0_1(int chroma_ss, int w, int h, int top_bot, int next_p, uint8_t *curr, do_curr_next_func_t next_func) {
-    JSAMPLE (*decoded_channels)[SCREEN_WIDTH * SCREEN_HEIGHT0] = screens_decoded_channels[top_bot];
+    JSAMPLE *decoded_channels = screens_decoded_channels[top_bot];
     JSAMPLE *upsampled_channels = screens_upsampled_channels[top_bot];
     uint8_t *out = screens_out_channels[top_bot];
 
@@ -354,11 +355,15 @@ static void do_chroma_ss_0_1(int chroma_ss, int w, int h, int top_bot, int next_
         screens_decoded_dims_last[top_bot].chroma_ss != chroma_ss
     ) {
         for (size_t i = 0; i < sizeof(screens_decoded_channels[top_bot]) / sizeof(JSAMPLE); ++i)
-            decoded_channels[0][i] = 128.0;
+            screens_decoded_channels[top_bot][i] = 128.0;
         screens_decoded_dims_last[top_bot].width = w;
         screens_decoded_dims_last[top_bot].height = h;
         screens_decoded_dims_last[top_bot].chroma_ss = chroma_ss;
     }
+
+    decoded_channels += decode_lossless_even_odd * RGB_CHANNELS_N;
+    upsampled_channels += decode_lossless_even_odd * RGB_CHANNELS_N;
+    out += decode_lossless_even_odd * GL_CHANNELS_N;
 
     int hss = true;
     int vss = chroma_ss == 0;
@@ -376,7 +381,7 @@ static void do_chroma_ss_0_1(int chroma_ss, int w, int h, int top_bot, int next_
         int need_ss = comp > 0;
         int width = need_ss ? w / 2 : w;
 
-        JSAMPLE *out_comp = decoded_channels[comp];
+        JSAMPLE *out_comp = decoded_channels + comp * w * h;
         int out_x = next_p * bw_x[comp];
         int out_y = out_x / width * bh_x[comp];
         out_x %= width;
@@ -406,6 +411,7 @@ static void do_chroma_ss_0_1(int chroma_ss, int w, int h, int top_bot, int next_
 
         for (int y = out_cy; y < out_ey; ++y) {
             for (int x = out_cx; x < out_ex; ++x) {
+                JSAMPLE *dec_chn = decoded_channels + comp * w * h;
                 if (need_ss) {
                     int xc = hss > 1 ? (x - 1) / hss : x;
                     int xe = hss > 1 ? (x + 1) / hss : x;
@@ -425,16 +431,16 @@ static void do_chroma_ss_0_1(int chroma_ss, int w, int h, int top_bot, int next_
                     float yfc = vss > 1 ? yf ? 0.25 : 0.75 : 0.5;
                     float yfe = vss > 1 ? yf ? 0.75 : 0.25 : 0.5;
 
-                    float tl = decoded_channels[comp][yc * width + xc];
-                    float tr = decoded_channels[comp][yc * width + xe];
-                    float bl = decoded_channels[comp][ye * width + xc];
-                    float br = decoded_channels[comp][ye * width + xe];
+                    float tl = dec_chn[yc * width + xc];
+                    float tr = dec_chn[yc * width + xe];
+                    float bl = dec_chn[ye * width + xc];
+                    float br = dec_chn[ye * width + xe];
 
                     float t = tl * xfc + tr * xfe;
                     float b = bl * xfc + br * xfe;
                     upsampled_channels[(y * w + x) * RGB_CHANNELS_N + comp] = t * yfc + b * yfe;
                 } else {
-                    upsampled_channels[(y * w + x) * RGB_CHANNELS_N + comp] = decoded_channels[comp][y * w + x];
+                    upsampled_channels[(y * w + x) * RGB_CHANNELS_N + comp] = dec_chn[y * w + x];
                 }
             }
         }
@@ -496,8 +502,9 @@ static int handle_decode_lossless(int top_bot, uint8_t *out_final, uint8_t *in, 
     if (screens_out_dims_last[top_bot].width != w || screens_out_dims_last[top_bot].height != h) {
         screens_out_dims_last[top_bot].width = w;
         screens_out_dims_last[top_bot].height = h;
-        memset(out, 255, sizeof(screens_out_channels[top_bot]));
+        memset(screens_out_channels[top_bot], 255, sizeof(screens_out_channels[top_bot]));
     }
+    out += decode_lossless_even_odd * GL_CHANNELS_N;
 
     int last_size = size % RP_PACKET_DATA_SIZE;
     int first_count = size / RP_PACKET_DATA_SIZE;
@@ -1221,6 +1228,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                 bool good = false;
                 if (ptr->is_lossless) {
                     decode_lossless_quarter = ptr->downsample == 3;
+                    decode_lossless_even_odd = ptr->downsample == 2 && ptr->even_odd ? width * height : 0;
                     if (handle_decode_lossless(top_bot, processing, ptr->in, ptr->in_track, ptr->in_size, width, height) != 0) {
                         err_log("lossless recv decode error\n");
                     } else {
