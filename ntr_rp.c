@@ -85,7 +85,11 @@ static struct kcp_recv_t {
 static struct kcp_recv_info_t {
     bool is_top;
     bool delta_prog;
-    u16 jpeg_quality;
+    bool is_lossless;
+    union {
+        u16 jpeg_quality;
+        u16 color_bias;
+    };
     u8 chroma_ss;
     u8 downsample;
     u8 even_odd;
@@ -966,7 +970,10 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w) {
     struct kcp_recv_t *recvs = kcp_recv[w][queue_w];
     struct kcp_recv_info_t *info = &kcp_recv_info[w][queue_w];
 
-    if (info->delta_prog) {
+    if (info->is_lossless) {
+        // TODO
+        return -1;
+    } else if (info->delta_prog) {
         kcp_dq = 1;
         return handle_decode_delta_prog(out, recvs, info);
     }
@@ -1528,7 +1535,14 @@ static int handle_recv_kcp(uint8_t *buf, int size)
                 jpeg_quality &= ((1 << RP_DQ_HDR_QUALITY_NBITS) - 1);
             }
 
-            info->jpeg_quality = jpeg_quality;
+            bool is_lossless = jpeg_quality <= NTR_COLOR_BIAS_MAX;
+
+            info->is_lossless = is_lossless;
+            if (is_lossless) {
+                info->color_bias = jpeg_quality;
+            } else {
+                info->jpeg_quality = jpeg_quality;
+            }
             info->core_count = core_count;
             info->is_top = top_bot == SCREEN_TOP;
             info->chroma_ss = chroma_ss;

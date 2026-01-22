@@ -214,6 +214,12 @@ enum frame_buffer_status_t
 #define NTR_SCREEN_PRIORITY_FACTOR_DEFAULT (2)
 #define UI_BLUR_RADIUS_MAX (15)
 
+#define NTR_JPEG_QUALITY_MIN (10)
+#define NTR_JPEG_QUALITY_MAX (100)
+
+#define NTR_COLOR_BIAS_MIN (0)
+#define NTR_COLOR_BIAS_MAX (2)
+
 typedef uint8_t byte;
 typedef uint8_t u8;
 typedef uint16_t u16;

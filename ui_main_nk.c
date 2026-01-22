@@ -870,14 +870,14 @@ void ui_main_nk(void)
             snprintf(msg_buf, sizeof(msg_buf), "Color Quality Bias %d", ntr_rp_config.lossless_color);
             nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
             do_nav_slider_next(ctx, NK_FOCUS_QUALITY, &ntr_rp_config.lossless_color);
-            nk_slider_int(ctx, 0, &ntr_rp_config.lossless_color, 2, 1);
+            nk_slider_int(ctx, NTR_COLOR_BIAS_MIN, &ntr_rp_config.lossless_color, NTR_COLOR_BIAS_MAX, 1);
             check_nav_slider_prev(ctx, NK_FOCUS_QUALITY, ntr_rp_config.lossless_color);
         } else {
             nk_layout_row_dynamic(ctx, 30, 2);
             snprintf(msg_buf, sizeof(msg_buf), "JPEG Quality %d", ntr_rp_config.jpeg_quality);
             nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
             do_nav_slider_next(ctx, NK_FOCUS_QUALITY, &ntr_rp_config.jpeg_quality);
-            nk_slider_int(ctx, 10, &ntr_rp_config.jpeg_quality, 100, 1);
+            nk_slider_int(ctx, NTR_JPEG_QUALITY_MIN, &ntr_rp_config.jpeg_quality, NTR_JPEG_QUALITY_MAX, 1);
             check_nav_slider_prev(ctx, NK_FOCUS_QUALITY, ntr_rp_config.jpeg_quality);
         }
 
