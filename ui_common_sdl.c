@@ -408,7 +408,7 @@ int sdl_win_init(SDL_Window *sdl_win[SCREEN_COUNT], SDL_WindowFlags aflags) {
         sdl_win[i] = SDL_CreateWindow(WIN_TITLE,
             WIN_WIDTH_DEFAULT, WIN_HEIGHT_DEFAULT, SDL_WIN_FLAGS_DEFAULT | aflags);
         if (!sdl_win[i]) {
-            err_log("SDL_CreateWindow: %s\n", SDL_GetError());
+            err_log("SDL_CreateWindow (%d): %s\n", i, SDL_GetError());
             return -1;
         }
     }
