@@ -617,6 +617,7 @@ static thread_ret_t window_thread_func(void *arg) {
 static void main_loop(void) {
     // TODO csc
 
+    int64_t begin_time = iclock64();
     SDL_Event evt;
     while (!renderer_single_thread && !renderer_evt_sync ? SDL_WaitEventTimeout(&evt, REST_EVERY_MS) : SDL_PollEvent(&evt))
     {
@@ -734,8 +735,10 @@ static void main_loop(void) {
                     rp_lock_rel(nk_input_lock);
                 }
             }
-skip_evt:
         }
+skip_evt:
+        if (iclock64() - begin_time >= REST_EVERY_MS * 1000)
+            break;
     }
 
     if (!SDL_GetKeyboardState(NULL)[SDL_SCANCODE_TAB]) {

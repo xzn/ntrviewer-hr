@@ -1531,11 +1531,13 @@ static int handle_recv_kcp(uint8_t *buf, int size)
                 return 0;
             }
 
+            bool is_lossless = false;
             if (delta_prog) {
+                is_lossless = (jpeg_quality & (1 << (RP_KCP_HDR_QUALITY_NBITS - 1))) > 0;
                 jpeg_quality &= ((1 << RP_DQ_HDR_QUALITY_NBITS) - 1);
+            } else {
+                is_lossless = jpeg_quality <= NTR_COLOR_BIAS_MAX;
             }
-
-            bool is_lossless = jpeg_quality <= NTR_COLOR_BIAS_MAX;
 
             info->is_lossless = is_lossless;
             if (is_lossless) {
