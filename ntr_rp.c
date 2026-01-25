@@ -1,12 +1,14 @@
 #include "ntr_rp.h"
 #include "const.h"
-#include "ntr_common.h"
-#include "ntr_stats_overlay.h"
 #include "main.h"
+#include "ntr_common.h"
+#include "ntr_huff.h"
+#include "ntr_jpeg_delta.h"
+#include "ntr_stats_overlay.h"
+#include "rp_syn.h"
 #include "ui_common_sdl.h"
 #include "ui_main_nk.h"
-#include "rp_syn.h"
-#include "ntr_jpeg_delta.h"
+
 
 #include "ikcp.h"
 
@@ -14,8 +16,9 @@ static SOCKET s = INVALID_SOCKET;
 static struct sockaddr_in remote_addr;
 static bool remote_received;
 
-static void socket_error_pause(void) {
-  Sleep(SOCKET_RESET_INTERVAL_MS);
+static void socket_error_pause(void)
+{
+    Sleep(SOCKET_RESET_INTERVAL_MS);
 }
 
 #define BUF_SIZE 2000
@@ -78,7 +81,7 @@ static u8 kcp_recv_w[RP_KCP_WORK_COUNT];
 #define RP_KCP_PACKET_SIZE (RP_PACKET_SIZE - sizeof(IUINT16) - sizeof(u16))
 static struct kcp_recv_t {
     u8 buf[RP_MAX_PACKET_COUNT][RP_KCP_PACKET_SIZE];
-    u8 count; // packet count including term
+    u8 count;      // packet count including term
     u16 term_size; // term packet size
 } kcp_recv[RP_KCP_WORK_COUNT][RP_WORK_COUNT][RP_CORE_COUNT_MAX];
 
@@ -99,11 +102,12 @@ static struct kcp_recv_info_t {
     u16 term_sizes[RP_CORE_COUNT_MAX];
     u8 term_count; // term count
 
-    u8 last_term; // term being saved
+    u8 last_term;       // term being saved
     u16 last_term_size; // size saved so far
 } kcp_recv_info[RP_KCP_WORK_COUNT][RP_WORK_COUNT];
 
-static void kcp_init(ikcpcb *kcp) {
+static void kcp_init(ikcpcb *kcp)
+{
     kcp->output = kcp_udp_output;
     ikcp_setmtu(kcp, RP_PACKET_SIZE);
 
@@ -118,8 +122,9 @@ static void kcp_init(ikcpcb *kcp) {
 struct rp_buffer_ctx_t rp_buffer_ctx[SCREEN_COUNT];
 event_t decode_updated_event;
 
-void rp_buffer_init(void) {
-  for (int i = 0; i < SCREEN_COUNT; ++i) {
+void rp_buffer_init(void)
+{
+    for (int i = 0; i < SCREEN_COUNT; ++i) {
         struct rp_buffer_ctx_t *ctx = &rp_buffer_ctx[i];
         rp_lock_init(ctx->status_lock);
         ctx->status = FBS_NOT_AVAIL;
@@ -135,7 +140,8 @@ void rp_buffer_init(void) {
     event_init(&decode_updated_event);
 }
 
-void rp_buffer_destroy(void) {
+void rp_buffer_destroy(void)
+{
     event_close(&decode_updated_event);
 
     for (int i = 0; i < SCREEN_COUNT; ++i) {
@@ -182,7 +188,8 @@ struct jpeg_decode_info_t {
 static struct jpeg_decode_info_t jpeg_decode_info[RP_WORK_COUNT];
 static struct jpeg_decode_info_t *jpeg_decode_ptr[RP_WORK_COUNT];
 
-static int queue_decode(int work) {
+static int queue_decode(int work)
+{
     struct jpeg_decode_info_t *ptr = &jpeg_decode_info[work];
     if (rp_syn_rel(&jpeg_decode_queue, ptr) != 0) {
         program_running = 0;
@@ -191,7 +198,8 @@ static int queue_decode(int work) {
     return 0;
 }
 
-static int acquire_decode() {
+static int acquire_decode()
+{
     int ret;
     if ((ret = acquire_sem(&jpeg_decode_sem)) != 0) {
         if (program_running) {
@@ -202,7 +210,8 @@ static int acquire_decode() {
     return ret;
 }
 
-static int queue_decode_kcp(int w, int queue_w) {
+static int queue_decode_kcp(int w, int queue_w)
+{
     if (acquire_decode() != 0) {
         return -1;
     }
@@ -217,8 +226,7 @@ static int queue_decode_kcp(int w, int queue_w) {
         .kcp_queue_w = queue_w,
         .is_kcp = true,
     };
-    if (rp_syn_rel(&jpeg_decode_queue, ptr) != 0)
-    {
+    if (rp_syn_rel(&jpeg_decode_queue, ptr) != 0) {
         program_running = 0;
         return -1;
     }
@@ -240,37 +248,33 @@ static uint8_t last_decoded_frame_id[SCREEN_COUNT];
 #include <turbojpeg.h>
 #endif
 
-static int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h) {
+static int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h)
+{
     tjhandle tjInstance = NULL;
-    if ((tjInstance = tj3Init(TJINIT_DECOMPRESS)) == NULL)
-    {
+    if ((tjInstance = tj3Init(TJINIT_DECOMPRESS)) == NULL) {
         err_log("create turbo jpeg decompressor failed\n");
         return -1;
     }
 
     int ret = -1;
 
-    if (tj3Set(tjInstance, TJPARAM_STOPONWARNING, 1) != 0)
-    {
+    if (tj3Set(tjInstance, TJPARAM_STOPONWARNING, 1) != 0) {
         goto final;
     }
 
-    if (tj3DecompressHeader(tjInstance, in, size) != 0)
-    {
+    if (tj3DecompressHeader(tjInstance, in, size) != 0) {
         err_log("jpeg header error\n");
         goto final;
     }
 
     int width = tj3Get(tjInstance, TJPARAM_JPEGWIDTH);
     int height = tj3Get(tjInstance, TJPARAM_JPEGHEIGHT);
-    if (w != width || h != height)
-    {
+    if (w != width || h != height) {
         err_log("jpeg unexpected dimensions: %d %d\n", width, height);
         goto final;
     }
 
-    if (tj3Decompress8(tjInstance, in, size, out, w * GL_CHANNELS_N, TJ_FORMAT) != 0)
-    {
+    if (tj3Decompress8(tjInstance, in, size, out, w * GL_CHANNELS_N, TJ_FORMAT) != 0) {
         err_log("jpeg decompression error: %s\n", tj3GetErrorStr(tjInstance));
         goto final;
     }
@@ -282,26 +286,30 @@ final:
     return ret;
 }
 
-static void color_bias_1_lossless_quarter(uint16_t in, uint8_t *r, uint8_t *g, uint8_t *b) {
+static void color_bias_1_lossless_quarter(uint16_t in, uint8_t *r, uint8_t *g, uint8_t *b)
+{
     in = __builtin_bswap16(in);
     *g = (((in >> 10) & 0x3f) << 2) + (1 << 1);
     *r = (((in >> 5) & 0x1f) << 3) + (1 << 2);
     *b = ((in & 0x1f) << 3) + (1 << 2);
 }
 
-static void color_bias_1(uint16_t in, uint8_t *r, uint8_t *g, uint8_t *b) {
+static void color_bias_1(uint16_t in, uint8_t *r, uint8_t *g, uint8_t *b)
+{
     *r = (((in >> 11) & 0x1f) << 3) + (1 << 2);
     *g = (((in >> 5) & 0x3f) << 2) + (1 << 1);
     *b = ((in & 0x1f) << 3) + (1 << 2);
 }
 
-static void color_bias_2_lossless_quarter(uint16_t in, uint8_t *r, uint8_t *g, uint8_t *b) {
+static void color_bias_2_lossless_quarter(uint16_t in, uint8_t *r, uint8_t *g, uint8_t *b)
+{
     *g = (((in >> 8) & 0xf) << 4) + (1 << 3);
     *r = (((in >> 4) & 0xf) << 4) + (1 << 3);
     *b = ((in & 0xf) << 4) + (1 << 3);
 }
 
-static void color_bias_2(uint16_t in, uint8_t *r, uint8_t *g, uint8_t *b) {
+static void color_bias_2(uint16_t in, uint8_t *r, uint8_t *g, uint8_t *b)
+{
     *r = (((in >> 8) & 0xf) << 4) + (1 << 3);
     *g = (((in >> 4) & 0xf) << 4) + (1 << 3);
     *b = ((in & 0xf) << 4) + (1 << 3);
@@ -321,7 +329,8 @@ static struct {
 
 typedef JSAMPLE (*do_curr_next_func_t)(uint8_t **curr, int comp);
 
-JSAMPLE do_curr_next_color_0(uint8_t **curr, UNUSED int comp) {
+JSAMPLE do_curr_next_color_0(uint8_t **curr, UNUSED int comp)
+{
     return *(*curr)++;
 }
 
@@ -329,7 +338,8 @@ JSAMPLE do_curr_next_color_0(uint8_t **curr, UNUSED int comp) {
 
 static int comp_bits[RGB_CHANNELS_N];
 static int curr_bits_left;
-JSAMPLE do_curr_next_color_1_2(uint8_t **curr, int comp) {
+JSAMPLE do_curr_next_color_1_2(uint8_t **curr, int comp)
+{
     int bits = comp_bits[comp];
     int ret;
     if (bits > curr_bits_left) {
@@ -350,18 +360,19 @@ JSAMPLE do_curr_next_color_1_2(uint8_t **curr, int comp) {
     JSAMPLE out = (JSAMPLE)(ret << (8 - bits)) + half;
     if (comp == 0)
         return out;
-    out -= 128.0;
+    out -= 128.0f;
     JSAMPLE out_abs = fabsf(out);
-    JSAMPLE sign = out >= 0 ? 1.0 : -1.0;
+    JSAMPLE sign = out >= 0 ? 1.0f : -1.0f;
     out_abs -= half;
-    out_abs = MAX(out_abs, 0.0);
+    out_abs = MAX(out_abs, 0.0f);
     out = out_abs * sign;
-    out += 128.0;
+    out += 128.0f;
     return out;
 }
 
 static int decode_lossless_even_odd;
-static void do_chroma_ss_0_1(int chroma_ss, int w, int h, int top_bot, int next_p, uint8_t *curr, do_curr_next_func_t next_func) {
+static void do_chroma_ss_0_1(int chroma_ss, int w, int h, int top_bot, int next_p, uint8_t *curr, do_curr_next_func_t next_func)
+{
     JSAMPLE *decoded_channels = screens_decoded_channels[top_bot];
     JSAMPLE *upsampled_channels = screens_upsampled_channels[top_bot];
     uint8_t *out = screens_out_channels[top_bot];
@@ -369,8 +380,7 @@ static void do_chroma_ss_0_1(int chroma_ss, int w, int h, int top_bot, int next_
     if (
         screens_decoded_dims_last[top_bot].width != w ||
         screens_decoded_dims_last[top_bot].height != h ||
-        screens_decoded_dims_last[top_bot].chroma_ss != chroma_ss
-    ) {
+        screens_decoded_dims_last[top_bot].chroma_ss != chroma_ss) {
         for (size_t i = 0; i < sizeof(screens_decoded_channels[top_bot]) / sizeof(JSAMPLE); ++i)
             screens_decoded_channels[top_bot][i] = 128.0;
         screens_decoded_dims_last[top_bot].width = w;
@@ -471,7 +481,8 @@ static void do_chroma_ss_0_1(int chroma_ss, int w, int h, int top_bot, int next_
 }
 
 static bool decode_lossless_quarter;
-static void do_chroma_ss_2_color_0(uint8_t *curr, uint8_t *out) {
+static void do_chroma_ss_2_color_0(uint8_t *curr, uint8_t *out)
+{
     if (decode_lossless_quarter) {
         out[G_I] = curr[0];
         out[R_I] = curr[1];
@@ -484,7 +495,8 @@ static void do_chroma_ss_2_color_0(uint8_t *curr, uint8_t *out) {
     out[A_I] = 255;
 }
 
-static void do_chroma_ss_2_color_1(uint8_t *curr, uint8_t *out) {
+static void do_chroma_ss_2_color_1(uint8_t *curr, uint8_t *out)
+{
     if (decode_lossless_quarter) {
         color_bias_1_lossless_quarter(*(uint16_t *)curr, &out[R_I], &out[G_I], &out[B_I]);
     } else {
@@ -493,7 +505,8 @@ static void do_chroma_ss_2_color_1(uint8_t *curr, uint8_t *out) {
     out[A_I] = 255;
 }
 
-static void do_chroma_ss_2_color_2(uint8_t *curr, int r, uint8_t *out) {
+static void do_chroma_ss_2_color_2(uint8_t *curr, int r, uint8_t *out)
+{
     uint16_t in;
     in = curr[0];
     if (r) {
@@ -513,7 +526,8 @@ static void do_chroma_ss_2_color_2(uint8_t *curr, int r, uint8_t *out) {
     out[A_I] = 255;
 }
 
-static int handle_decode_lossless(int top_bot, uint8_t *out_final, uint8_t *in, uint8_t *in_track, int size, int w, int h) {
+static int handle_decode_lossless(int top_bot, uint8_t *out_final, uint8_t *in, uint8_t *in_track, int size, int w, int h)
+{
     uint8_t *out = screens_out_channels[top_bot];
     if (screens_out_dims_last[top_bot].width != w || screens_out_dims_last[top_bot].height != h) {
         screens_out_dims_last[top_bot].width = w;
@@ -618,13 +632,11 @@ static int handle_decode_lossless(int top_bot, uint8_t *out_final, uint8_t *in, 
                             prev_i = i;
                             memcpy(prev_buf, &curr[c], curr_size - c);
                         }
-                    }
-                        break;
+                    } break;
                     case 1:
                     case 2: {
-                        int pb = chroma_ss == 0 ?
-                            color_bias == 1 ? 34 : 24 :
-                            color_bias == 1 ? 22 : 16;
+                        int pb = chroma_ss == 0 ? color_bias == 1 ? 34 : 24 : color_bias == 1 ? 22
+                                                                                              : 16;
                         int nextb = RP_LOSSLESS_DATA_SIZE * i * 8;
                         int nextb_r = nextb % pb;
                         int next_p = nextb / pb;
@@ -664,11 +676,9 @@ static int handle_decode_lossless(int top_bot, uint8_t *out_final, uint8_t *in, 
                             memcpy(prev_buf, &curr[cb / 8], (currb_size - cb + (8 - 1)) / 8);
                             prevb_s = cb % 8;
                         }
-                    }
-                        break;
+                    } break;
                 }
-            }
-                break;
+            } break;
             case 2: {
                 switch (color_bias) {
                     case 0: {
@@ -699,8 +709,7 @@ static int handle_decode_lossless(int top_bot, uint8_t *out_final, uint8_t *in, 
                             prev_i = i;
                             memcpy(prev_buf, &curr[c], curr_size - c);
                         }
-                    }
-                        break;
+                    } break;
                     case 1: {
                         int p = 2;
                         int next = RP_LOSSLESS_DATA_SIZE * i;
@@ -729,8 +738,7 @@ static int handle_decode_lossless(int top_bot, uint8_t *out_final, uint8_t *in, 
                             prev_i = i;
                             memcpy(prev_buf, &curr[c], curr_size - c);
                         }
-                    }
-                        break;
+                    } break;
                     case 2: {
                         int pb = 12;
                         int nextb = RP_LOSSLESS_DATA_SIZE * i * 8;
@@ -759,11 +767,9 @@ static int handle_decode_lossless(int top_bot, uint8_t *out_final, uint8_t *in, 
                             prev_i = i;
                             memcpy(prev_buf, &curr[cb / 8], (currb_size - cb + (8 - 1)) / 8);
                         }
-                    }
-                        break;
+                    } break;
                 }
-            }
-                break;
+            } break;
         }
         __atomic_add_fetch(&packet_received_tracker, 1, __ATOMIC_RELAXED);
     }
@@ -782,7 +788,8 @@ static u16 jpeg_header_bot_chroma_ss_kcp;
 static u16 jpeg_header_top_downsample_kcp;
 static u16 jpeg_header_bot_downsample_kcp;
 
-static int downsample_height(int downsample, int is_top) {
+static int downsample_height(int downsample, int is_top)
+{
     switch (downsample) {
         case 3:
             return (is_top ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1) / 2;
@@ -792,7 +799,8 @@ static int downsample_height(int downsample, int is_top) {
     }
 }
 
-static int downsample_width(int downsample) {
+static int downsample_width(int downsample)
+{
     switch (downsample) {
         case 3:
         case 2:
@@ -802,7 +810,8 @@ static int downsample_width(int downsample) {
     }
 }
 
-static int downsample_display_height(int downsample, int is_top) {
+static int downsample_display_height(int downsample, int is_top)
+{
     switch (downsample) {
         case 3:
             return (is_top ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1) / 2;
@@ -812,7 +821,8 @@ static int downsample_display_height(int downsample, int is_top) {
     }
 }
 
-static int downsample_display_width(int downsample) {
+static int downsample_display_width(int downsample)
+{
     switch (downsample) {
         case 3:
             return SCREEN_WIDTH / 2;
@@ -822,7 +832,8 @@ static int downsample_display_width(int downsample) {
     }
 }
 
-static int set_decode_quality_kcp(bool is_top, int quality, int chroma_ss, int downsample, int rc) {
+static int set_decode_quality_kcp(bool is_top, int quality, int chroma_ss, int downsample, int rc)
+{
     u16 *hdr_quality = is_top ? &jpeg_header_top_quality_kcp : &jpeg_header_bot_quality_kcp;
     u16 *hdr_chroma_ss = is_top ? &jpeg_header_top_chroma_ss_kcp : &jpeg_header_bot_chroma_ss_kcp;
     u16 *hdr_downsample = is_top ? &jpeg_header_top_downsample_kcp : &jpeg_header_bot_downsample_kcp;
@@ -853,7 +864,8 @@ static int set_decode_quality_kcp(bool is_top, int quality, int chroma_ss, int d
             goto final;
         }
 
-        enum TJSAMP tjsamp = chroma_ss == 2 ? TJSAMP_444 : chroma_ss == 1 ? TJSAMP_422 : TJSAMP_420;
+        enum TJSAMP tjsamp = chroma_ss == 2 ? TJSAMP_444 : chroma_ss == 1 ? TJSAMP_422
+                                                                          : TJSAMP_420;
         ret = tj3Set(tjInst, TJPARAM_SUBSAMP, tjsamp);
         if (ret < 0) {
             ret = ret * 0x10 - 7;
@@ -874,8 +886,8 @@ static int set_decode_quality_kcp(bool is_top, int quality, int chroma_ss, int d
         unsigned char *jpeg_buf = is_top ? jpeg_header_top_buffer_kcp : jpeg_header_bot_buffer_kcp;
 
         ret = tj3Compress8(tjInst, jpeg_header_empty_src_kcp, width, 0, height, TJPF_RGB,
-            &jpeg_buf,
-            &size);
+                           &jpeg_buf,
+                           &size);
 
         if (ret < 0) {
             err_log("tj3Compress8 error (%d): %s\n", tj3GetErrorCode(tjInst), tj3GetErrorStr(tjInst));
@@ -888,7 +900,7 @@ static int set_decode_quality_kcp(bool is_top, int quality, int chroma_ss, int d
         *hdr_chroma_ss = chroma_ss;
         *hdr_downsample = downsample;
 
-final:
+    final:
         tj3Destroy(tjInst);
         return ret;
     }
@@ -898,18 +910,14 @@ final:
 
 static uint8_t *copy_with_escape(uint8_t *out, const uint8_t *in, int size)
 {
-    while (size)
-    {
-        if (*in == 0xff)
-        {
+    while (size) {
+        if (*in == 0xff) {
             *out = 0xff;
             ++out;
             *out = 0;
             ++out;
             ++in;
-        }
-        else
-        {
+        } else {
             *out = *in;
             ++out;
             ++in;
@@ -921,7 +929,8 @@ static uint8_t *copy_with_escape(uint8_t *out, const uint8_t *in, int size)
 
 static unsigned char jpeg_buffer_kcp[SCREEN_HEIGHT0 * SCREEN_WIDTH * RGB_CHANNELS_N + 2048];
 
-static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, struct kcp_recv_info_t *info) {
+static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, struct kcp_recv_info_t *info)
+{
     // memset(out, 0, SCREEN_WIDTH * SCREEN_HEIGHT0 * GL_CHANNELS_N);
 
     int max_h_samp_fact = info->chroma_ss == 2 ? 1 : 2;
@@ -931,8 +940,7 @@ static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, stru
     int height = downsample_height(info->downsample, info->is_top);
 
     // int total_size = 0;
-    for (int t = 0; t < info->core_count; ++t)
-    {
+    for (int t = 0; t < info->core_count; ++t) {
         struct kcp_recv_t *recv = &recvs[t];
         int rows_in_mcus = t == info->core_count - 1 ? info->v_last_adjusted : info->v_adjusted;
         if (info->core_count == 1) {
@@ -944,19 +952,18 @@ static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, stru
 
         int size = (recv->count - 1) * RP_KCP_PACKET_SIZE + recv->term_size;
         // total_size += size;
-        int part_height = t == info->core_count - 1 ?
-            height - info->v_adjusted * (info->core_count - 1) * JPEG_DCTSIZE * max_v_samp_fact :
-            rows_in_mcus * JPEG_DCTSIZE * max_v_samp_fact;
+        int part_height = t == info->core_count - 1 ? height - info->v_adjusted * (info->core_count - 1) * JPEG_DCTSIZE * max_v_samp_fact : rows_in_mcus * JPEG_DCTSIZE * max_v_samp_fact;
         if ((res = decode_jpeg_delta(
-            out_t,
-            &recv->buf[0][0], size,
-            rows_in_mcus,
-            max_h_samp_fact, max_v_samp_fact, info->jpeg_quality, info->is_top, t * info->v_adjusted,
-            width, part_height, info->even_odd
-        )) < 0) {
+                 out_t,
+                 &recv->buf[0][0], size,
+                 rows_in_mcus,
+                 max_h_samp_fact, max_v_samp_fact, info->jpeg_quality, info->is_top, t * info->v_adjusted,
+                 width, part_height, info->even_odd)) < 0) {
             err_log("decode_jpeg_delta: %d\n", res);
             break;
         }
+
+        // memset(out_t, 255, width * GL_CHANNELS_N);
     }
     // err_log("size %d\n", total_size);
 
@@ -966,13 +973,247 @@ static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, stru
     return 0;
 }
 
-static int handle_decode_kcp(uint8_t *out, int w, int queue_w) {
+struct huff_tbl_t lossless_huff_tbl_ptrs;
+struct d_derived_tbl_t lossless_derived_tbls;
+
+struct bitread_global_state_t {
+    int unread_marker;
+    const uint8_t *next_input_byte;
+    size_t bytes_in_buffer;
+};
+
+#define LOSSLESS_BLOCK_SIZE 16
+static int do_decode_lossless_compressed(uint8_t *out, const uint8_t *in, int size, int chroma_ss, int bias, int width, int height)
+{
+    {
+        long freq[257];
+        memset(freq, 0, sizeof(freq));
+        for (int i = 0; i <= 128; ++i) {
+            int i_pos = (uint8_t)(128 + i);
+            int i_neg = (uint8_t)(128 - i);
+            int count = 128 + 1 - i;
+            freq[i_pos] = count;
+            freq[i_neg] = count;
+        }
+        gen_optimal_table(&lossless_huff_tbl_ptrs, freq);
+        make_d_derived_tbl(&lossless_huff_tbl_ptrs, &lossless_derived_tbls);
+    }
+
+    struct bitread_global_state_t state, *g_state = &state;
+    struct bitread_perm_state_t bitstate;
+    memset(&bitstate, 0, sizeof(bitstate));
+
+    g_state->unread_marker = 0;
+    g_state->next_input_byte = in;
+    g_state->bytes_in_buffer = size;
+
+    BITREAD_STATE_VARS;
+    BITREAD_LOAD_STATE(g_state, bitstate);
+
+    int hss = chroma_ss < 2;
+    int vss = chroma_ss < 1;
+    int hsamp = hss ? 2 : 1;
+    int vsamp = vss ? 2 : 1;
+
+    int bw_x[RGB_CHANNELS_N] = {hsamp, 1, 1};
+    int bh_x[RGB_CHANNELS_N] = {vsamp, 1, 1};
+
+    JSAMPLE *decoded_channels = screens_decoded_channels[0];
+    JSAMPLE *upsampled_channels = screens_upsampled_channels[0];
+
+    int comp_bits[RGB_CHANNELS_N];
+
+    switch (bias) {
+        default:
+        case 0:
+            comp_bits[0] = 8;
+            comp_bits[1] = 8;
+            comp_bits[2] = 8;
+            break;
+        case 1:
+            comp_bits[0] = 6;
+            comp_bits[1] = 5;
+            comp_bits[2] = 5;
+            break;
+        case 2:
+            comp_bits[0] = 4;
+            comp_bits[1] = 4;
+            comp_bits[2] = 4;
+            break;
+    }
+
+    for (int j = 0; j < height / vsamp; ++j) {
+        for (int comp = 0; comp < RGB_CHANNELS_N; ++comp) {
+            int w = width / hsamp * bw_x[comp];
+            JSAMPLE *out_comp = decoded_channels + comp * width * height;
+
+            for (int by = 0; by < bh_x[comp]; ++by) {
+                int y = (j * bh_x[comp] + by);
+
+                for (int bx = 0; bx < w; ++bx) {
+                    int s;
+                    HUFF_DECODE(s, br_state, (&lossless_derived_tbls), return -1, label0);
+                    JSAMPLE *out_t = out_comp + y * width + bx;
+                    uint8_t pred = 0;
+                    if (!y) {
+                        if (!bx) {
+                            pred = 128;
+                        } else {
+                            pred = out_t[-1];
+                        }
+                    } else {
+                        if (!bx) {
+                            pred = out_t[-width];
+                        } else {
+                            uint8_t t = out_t[-width];
+                            uint8_t l = out_t[-1];
+                            uint8_t tl = out_t[-width + -1];
+                            uint8_t min = MIN(MIN(t, l), tl);
+                            uint8_t max = MAX(MAX(t, l), tl);
+                            pred = t + l + tl - min - max;
+                        }
+                    }
+
+                    int ret = (uint8_t)(((uint8_t)s) - (uint8_t)128 + pred);
+                    *out_t = ret;
+                }
+            }
+        }
+    }
+
+    BITREAD_SAVE_STATE(g_state, bitstate);
+
+    int out_cx = 0;
+    int out_cy = 0;
+    int out_ex = width;
+    int out_ey = height;
+
+    for (int comp = 0; comp < RGB_CHANNELS_N; ++comp) {
+        int need_ss = comp > 0;
+        int hss = need_ss ? hsamp : 1;
+        int vss = need_ss ? vsamp : 1;
+
+        for (int y = out_cy; y < out_ey; ++y) {
+            for (int x = out_cx; x < out_ex; ++x) {
+                JSAMPLE *dec_chn = decoded_channels + comp * width * height;
+                JSAMPLE *up_chn = upsampled_channels + (y * width + x) * RGB_CHANNELS_N + comp;
+                if (need_ss) {
+                    int xc = hss > 1 ? (x - 1) / hss : x;
+                    int xe = hss > 1 ? (x + 1) / hss : x;
+                    xc = MAX(xc, 0);
+                    xe = MIN(xe, width / hss - 1);
+
+                    int yc = vss > 1 ? (y - 1) / vss : y;
+                    int ye = vss > 1 ? (y + 1) / vss : y;
+                    yc = MAX(yc, 0);
+                    ye = MIN(ye, height / vss - 1);
+
+                    int xf = (x - 1) % hss;
+                    float xfc = hss > 1 ? xf ? 0.25 : 0.75 : 0.5;
+                    float xfe = hss > 1 ? xf ? 0.75 : 0.25 : 0.5;
+
+                    int yf = (y - 1) % vss;
+                    float yfc = vss > 1 ? yf ? 0.25 : 0.75 : 0.5;
+                    float yfe = vss > 1 ? yf ? 0.75 : 0.25 : 0.5;
+
+                    float tl = dec_chn[yc * width + xc];
+                    float tr = dec_chn[yc * width + xe];
+                    float bl = dec_chn[ye * width + xc];
+                    float br = dec_chn[ye * width + xe];
+
+                    float t = tl * xfc + tr * xfe;
+                    float b = bl * xfc + br * xfe;
+                    *up_chn = t * yfc + b * yfe;
+                } else {
+                    *up_chn = dec_chn[y * width + x];
+                }
+
+                int bits = comp_bits[comp];
+                if (bits < 8) {
+                    JSAMPLE half = (JSAMPLE)(1 << (8 - bits - 1));
+                    JSAMPLE out = (*up_chn - 128.0f) * (JSAMPLE)(1 << (8 - bits)) + half;
+                    if (comp == 0) {
+                        out += 128.0;
+                        *up_chn = out;
+                        continue;
+                    }
+                    JSAMPLE out_abs = fabsf(out);
+                    JSAMPLE sign = out >= 0 ? 1.0 : -1.0;
+                    out_abs -= half;
+                    out_abs = MAX(out_abs, 0.0);
+                    out = out_abs * sign;
+                    out += 128.0;
+                    *up_chn = out;
+                }
+            }
+        }
+    }
+
+    for (int y = out_cy; y < out_ey; ++y) {
+        for (int x = out_cx; x < out_ex; ++x) {
+            ycc_rgb_convert(&out[(y * width + x) * GL_CHANNELS_N], &upsampled_channels[(y * width + x) * RGB_CHANNELS_N]);
+        }
+    }
+
+    return 0;
+}
+
+static int handle_decode_lossless_compressed(uint8_t *out, struct kcp_recv_t *recvs, struct kcp_recv_info_t *info)
+{
+    // int max_h_samp_fact = info->chroma_ss == 2 ? 1 : 2;
+    // int max_v_samp_fact = info->chroma_ss == 0 ? 2 : 1;
+
+    memset(out, 0, SCREEN_WIDTH * SCREEN_HEIGHT0 * GL_CHANNELS_N);
+
+    int width = downsample_width(info->downsample);
+    int height = downsample_height(info->downsample, info->is_top);
+    int height_0 = downsample_height(0, info->is_top);
+    int height_f = height_0 / height;
+
+    for (int t = 0; t < info->core_count; ++t) {
+        struct kcp_recv_t *recv = &recvs[t];
+        int rows_in_blks = t == info->core_count - 1 ? info->v_last_adjusted : info->v_adjusted;
+        if (info->core_count == 1) {
+            rows_in_blks = height_0 / LOSSLESS_BLOCK_SIZE;
+        }
+        int height_per_blk_row = width * GL_CHANNELS_N * LOSSLESS_BLOCK_SIZE / height_f;
+        uint8_t *out_t = out + t * info->v_adjusted * height_per_blk_row;
+
+        int size = (recv->count - 1) * RP_KCP_PACKET_SIZE + recv->term_size;
+        int part_height = t == info->core_count - 1 ? height - info->v_adjusted * (info->core_count - 1) * LOSSLESS_BLOCK_SIZE / height_f : rows_in_blks * LOSSLESS_BLOCK_SIZE / height_f;
+
+        // err_log("%d %d %d %d\n", t, part_height, (int)(out_t - out), size);
+        // memset(out_t, 255, width * GL_CHANNELS_N);
+
+        int res = do_decode_lossless_compressed(out_t, &recv->buf[0][0], size, info->chroma_ss, info->color_bias, width, part_height);
+        if (res < 0) {
+            err_log("do_decode_lossless_compressed: %d\n", res);
+            break;
+        }
+    }
+
+    memset(recvs, 0, sizeof(struct kcp_recv_t) * RP_CORE_COUNT_MAX);
+    memset(info, 0, sizeof(struct kcp_recv_info_t));
+
+    return 0;
+}
+
+static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
+{
     struct kcp_recv_t *recvs = kcp_recv[w][queue_w];
     struct kcp_recv_info_t *info = &kcp_recv_info[w][queue_w];
 
     if (info->is_lossless) {
         // TODO
-        return -1;
+        if (info->delta_prog) {
+            kcp_dq = 1;
+            memset(recvs, 0, sizeof(struct kcp_recv_t) * RP_CORE_COUNT_MAX);
+            memset(info, 0, sizeof(struct kcp_recv_info_t));
+            return 0;
+        }
+
+        kcp_dq = 0;
+        return handle_decode_lossless_compressed(out, recvs, info);
     } else if (info->delta_prog) {
         kcp_dq = 1;
         return handle_decode_delta_prog(out, recvs, info);
@@ -980,38 +1221,28 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w) {
     kcp_dq = 0;
 
     int ret;
-    if ((ret = set_decode_quality_kcp(info->is_top, info->jpeg_quality, info->chroma_ss, info->downsample, info->v_adjusted)) < 0)
-    {
+    if ((ret = set_decode_quality_kcp(info->is_top, info->jpeg_quality, info->chroma_ss, info->downsample, info->v_adjusted)) < 0) {
         return ret * 0x100 - 1;
     }
 
     unsigned char *jpeg_header = info->is_top ? jpeg_header_top_buffer_kcp : jpeg_header_bot_buffer_kcp;
     size_t jpeg_header_size_max = info->is_top ? sizeof(jpeg_header_top_buffer_kcp) : sizeof(jpeg_header_bot_buffer_kcp);
     size_t jpeg_header_size = 0;
-    for (size_t i = 0; i < jpeg_header_size_max; ++i)
-    {
-        if (jpeg_header[i] == 0xff)
-        {
-            if (i + 1 < jpeg_header_size_max)
-            {
-                if (jpeg_header[i + 1] == 0xdd)
-                {
-                    if (i + 6 >= jpeg_header_size_max)
-                    {
+    for (size_t i = 0; i < jpeg_header_size_max; ++i) {
+        if (jpeg_header[i] == 0xff) {
+            if (i + 1 < jpeg_header_size_max) {
+                if (jpeg_header[i + 1] == 0xdd) {
+                    if (i + 6 >= jpeg_header_size_max) {
                         return -6;
                     }
                     *(u16 *)&jpeg_header[i + 4] = htons(info->v_adjusted * DIV_ROUND_UP(downsample_width(info->downsample), (JPEG_DCTSIZE * (info->chroma_ss == 2 ? 1 : 2))));
-                }
-                else if (jpeg_header[i + 1] == 0xda)
-                {
+                } else if (jpeg_header[i + 1] == 0xda) {
                     jpeg_header_size = i + 2;
-                    if (jpeg_header_size + 2 >= jpeg_header_size_max)
-                    {
+                    if (jpeg_header_size + 2 >= jpeg_header_size_max) {
                         return -4;
                     }
                     jpeg_header_size += ntohs(*(u16 *)&jpeg_header[jpeg_header_size]);
-                    if (jpeg_header_size >= jpeg_header_size_max)
-                    {
+                    if (jpeg_header_size >= jpeg_header_size_max) {
                         return -5;
                     }
                     break;
@@ -1019,42 +1250,32 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w) {
             }
         }
     }
-    if (jpeg_header_size == 0)
-    {
+    if (jpeg_header_size == 0) {
         return -2;
     }
 
     memcpy(jpeg_buffer_kcp, jpeg_header, jpeg_header_size);
     unsigned char *ptr = jpeg_buffer_kcp + jpeg_header_size;
-    for (int t = 0; t < info->core_count; ++t)
-    {
+    for (int t = 0; t < info->core_count; ++t) {
         struct kcp_recv_t *recv = &recvs[t];
-        for (int i = 0; i < recv->count; ++i)
-        {
-            if (i == recv->count - 1)
-            {
+        for (int i = 0; i < recv->count; ++i) {
+            if (i == recv->count - 1) {
                 ptr = copy_with_escape(ptr, recv->buf[i], recv->term_size);
-            }
-            else
-            {
+            } else {
                 ptr = copy_with_escape(ptr, recv->buf[i], RP_KCP_PACKET_SIZE);
             }
         }
         *ptr = 0xff;
         ++ptr;
-        if (t == info->core_count - 1)
-        {
+        if (t == info->core_count - 1) {
             *ptr = 0xd9;
-        }
-        else
-        {
+        } else {
             *ptr = 0xd0 + t;
         }
         ++ptr;
     }
 
-    if (handle_decode(out, jpeg_buffer_kcp, ptr - jpeg_buffer_kcp, downsample_width(info->downsample), downsample_height(info->downsample, info->is_top)) != 0)
-    {
+    if (handle_decode(out, jpeg_buffer_kcp, ptr - jpeg_buffer_kcp, downsample_width(info->downsample), downsample_height(info->downsample, info->is_top)) != 0) {
         return -3;
     }
 
@@ -1109,7 +1330,8 @@ static void handle_decode_frame_screen(struct rp_buffer_ctx_t *ctx, int top_bot,
 #define SCREEN_PROCESS_WORK_COUNT (2)
 uint8_t screen_processing[SCREEN_COUNT][SCREEN_PROCESS_WORK_COUNT][SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N];
 
-static void screen_process(uint8_t *curr, uint8_t *prev, uint8_t *out, bool even_odd, int width, int height) {
+static void screen_process(uint8_t *curr, uint8_t *prev, uint8_t *out, bool even_odd, int width, int height)
+{
     if (even_odd) {
         uint8_t *swap = curr;
         curr = prev;
@@ -1134,8 +1356,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
 
     while (program_running && !kcp_restart) {
         struct jpeg_decode_info_t *ptr;
-        while (1)
-        {
+        while (1) {
             if (!(program_running && !kcp_restart))
                 return 0;
             thread_set_cancel_state(true);
@@ -1143,8 +1364,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
             thread_set_cancel_state(false);
             if (res == 0)
                 break;
-            if (res != ETIMEDOUT)
-            {
+            if (res != ETIMEDOUT) {
                 err_log("rp_syn_acq failed\n");
                 program_running = 0;
                 return 0;
@@ -1167,8 +1387,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
         struct rp_buffer_ctx_t *sync_ctx = view_mode == VIEW_MODE_TOP_BOT && !is_renderer_csc() ? &rp_buffer_ctx[SCREEN_TOP] : NULL;
 
         int ret;
-        if (ptr->is_kcp)
-        {
+        if (ptr->is_kcp) {
             // err_log("%d %d\n", ptr->kcp_w, ptr->kcp_queue_w);
 
             int in_size = 0;
@@ -1204,18 +1423,14 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
 
             if (ptr->is_lossless) {
                 // TODO
-            }
-            else if ((ret = handle_decode_kcp(processing, ptr->kcp_w, ptr->kcp_queue_w)) != 0)
-            {
+            } else if ((ret = handle_decode_kcp(processing, ptr->kcp_w, ptr->kcp_queue_w)) != 0) {
                 err_log("kcp recv decode error: %d\n", ret);
                 kcp_restart = 1;
 
                 // ikcp_reset(kcp, kcp->cid);
                 kcp_cid_reset = kcp->cid;
                 kcp_cid = (kcp->cid + 1) & ((1 << CID_NBITS) - 1);
-            }
-            else
-            {
+            } else {
                 // err_log("%d\n", kcp_recv_info[ptr->kcp_w][ptr->kcp_queue_w].term_count);
                 dims->width = width;
                 dims->height = height;
@@ -1228,11 +1443,8 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                 stats_overlay_0(out, top_bot, in_size, q, width, height);
                 handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay, sync_ctx);
             }
-        }
-        else
-        {
-            if (ptr->in)
-            {
+        } else {
+            if (ptr->in) {
                 int width = downsample_width(ptr->downsample);
                 int height = downsample_height(ptr->downsample, top_bot == SCREEN_TOP);
 
@@ -1260,8 +1472,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                         good = true;
                     }
                 }
-                if (good)
-                {
+                if (good) {
                     dims->width = downsample_display_width(ptr->downsample);
                     dims->height = downsample_display_height(ptr->downsample, top_bot == SCREEN_TOP);
 
@@ -1276,9 +1487,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                 } else {
                     __atomic_add_fetch(&frame_lost_tracker, 1, __ATOMIC_RELAXED);
                 }
-            }
-            else
-            {
+            } else {
                 __atomic_add_fetch(&frame_lost_tracker, (uint8_t)(ptr->frame_id - last_decoded_frame_id[top_bot]), __ATOMIC_RELAXED);
             }
             last_decoded_frame_id[top_bot] = ptr->frame_id;
@@ -1291,7 +1500,8 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
 }
 
 #define RP_HDR_DOWNSAMPLE_MASK (0xc)
-static void set_jpeg_decode_info(int work) {
+static void set_jpeg_decode_info(int work)
+{
     int top_bot = !recv_hdr[work][1];
     bool lossless = recv_is_lossless[work];
     is_lossless = lossless;
@@ -1310,8 +1520,7 @@ static void set_jpeg_decode_info(int work) {
 
 static int handle_recv(uint8_t *buf, int size)
 {
-    if (size < RP_DATA_HDR_SIZE)
-    {
+    if (size < RP_DATA_HDR_SIZE) {
         err_log("recv header too small\n");
         return 0;
     }
@@ -1321,19 +1530,15 @@ static int handle_recv(uint8_t *buf, int size)
 
     // err_log("%d %d %d %d (%d)\n", hdr[0], hdr[1], hdr[2], hdr[3], size);
 
-    if ((hdr[2] & ~(RP_HDR_DOWNSAMPLE_MASK | 0x1)) != 2)
-    {
+    if ((hdr[2] & ~(RP_HDR_DOWNSAMPLE_MASK | 0x1)) != 2) {
         err_log("recv invalid header\n");
         return 0;
     }
 
     uint8_t end = 0;
-    if (hdr[1] & 0x10)
-    {
+    if (hdr[1] & 0x10) {
         end = 1;
-    }
-    else if (size != RP_PACKET_DATA_SIZE)
-    {
+    } else if (size != RP_PACKET_DATA_SIZE) {
         err_log("recv incorrect size: %d\n", size);
         return 0;
     }
@@ -1341,17 +1546,14 @@ static int handle_recv(uint8_t *buf, int size)
     uint8_t work = recv_work;
 
     int work_next = 0;
-    if (memcmp(recv_hdr[work], hdr, RP_DATA_HDR_ID_SIZE) != 0)
-    {
+    if (memcmp(recv_hdr[work], hdr, RP_DATA_HDR_ID_SIZE) != 0) {
         // If no decode_info is set at this point, it means network receive has skipped frame.
         // Queue empty info to keep in sync.
-        if (jpeg_decode_info[work].not_queued)
-        {
+        if (jpeg_decode_info[work].not_queued) {
             if (recv_is_lossless[work]) {
                 set_jpeg_decode_info(work);
             }
-            if (queue_decode(work) != 0)
-            {
+            if (queue_decode(work) != 0) {
                 return -1;
             }
         }
@@ -1360,10 +1562,8 @@ static int handle_recv(uint8_t *buf, int size)
         work_next = 1;
     }
 
-    if (work_next)
-    {
-        if (acquire_decode() != 0)
-        {
+    if (work_next) {
+        if (acquire_decode() != 0) {
             return -1;
         }
 
@@ -1378,8 +1578,7 @@ static int handle_recv(uint8_t *buf, int size)
         recv_last_packet_time[work] = iclock();
 
         memset(recv_track[work], 0, RP_MAX_PACKET_COUNT);
-        if (recv_end[work] != 2)
-        {
+        if (recv_end[work] != 2) {
             if (!recv_is_lossless[work])
                 err_log("recv incomplete skipping frame\n");
         }
@@ -1393,8 +1592,7 @@ static int handle_recv(uint8_t *buf, int size)
     recv_is_lossless[work] = recv_hdr[work][2] & 0x1;
 
     uint8_t packet = hdr[3];
-    if (packet >= RP_MAX_PACKET_COUNT)
-    {
+    if (packet >= RP_MAX_PACKET_COUNT) {
         err_log("recv packet number too high\n");
         return 0;
     }
@@ -1402,8 +1600,7 @@ static int handle_recv(uint8_t *buf, int size)
     {
         uint32_t packet_time = iclock();
         uint32_t delay_from_last_packet = packet_time - recv_last_packet_time[work];
-        if (delay_from_last_packet > recv_delay_between_packets[work])
-        {
+        if (delay_from_last_packet > recv_delay_between_packets[work]) {
             recv_delay_between_packets[work] = delay_from_last_packet;
         }
         recv_last_packet_time[work] = packet_time;
@@ -1418,20 +1615,15 @@ static int handle_recv(uint8_t *buf, int size)
         recv_end_packet[work] = packet;
         recv_end_size[work] = RP_PACKET_DATA_SIZE * packet + size;
     }
-    if (end)
-    {
+    if (end) {
         recv_end[work] = 1;
         // err_log("size %d\n", recv_end_size[work]);
     }
 
-    if (recv_end[work] == 1)
-    {
-        for (int i = 0; i < recv_end_packet[work]; ++i)
-        {
-            if (!recv_track[work][i])
-            {
-                if (!recv_end_incomp[work])
-                {
+    if (recv_end[work] == 1) {
+        for (int i = 0; i < recv_end_packet[work]; ++i) {
+            if (!recv_track[work][i]) {
+                if (!recv_end_incomp[work]) {
                     recv_end_incomp[work] = 1;
                     if (!recv_is_lossless[work])
                         err_log("recv end packet incomplete\n");
@@ -1449,9 +1641,17 @@ static int handle_recv(uint8_t *buf, int size)
     return 0;
 }
 
-static int jpeg_get_v_total(int chroma_ss, int downsample, bool is_top) {
+static int jpeg_get_v_total(int chroma_ss, int downsample, bool is_top)
+{
     int h = JPEG_DCTSIZE * (chroma_ss == 0 ? 2 : 1);
     int h_total = downsample_height(downsample, is_top);
+    return h_total / h;
+}
+
+static int lossless_get_v_total(UNUSED int chroma_ss, UNUSED int downsample, bool is_top)
+{
+    int h = LOSSLESS_BLOCK_SIZE;
+    int h_total = downsample_height(0, is_top);
     return h_total / h;
 }
 
@@ -1574,7 +1774,7 @@ static int handle_recv_kcp(uint8_t *buf, int size)
                 } else {
                     // HACK kind of, I didn't count the bits correctly so now I have to do this dumb thing
                     // to get chroma subsampling working with reliable stream.
-                    int v_total = jpeg_get_v_total(info->chroma_ss, info->downsample, info->is_top);
+                    int v_total = is_lossless ? lossless_get_v_total(info->chroma_ss, info->downsample, info->is_top) : jpeg_get_v_total(info->chroma_ss, info->downsample, info->is_top);
                     if (info->core_count == 1) {
                         if (v_adjusted == (v_total & ((1 << RP_KCP_HDR_RC_NBITS) - 1))) {
                             v_adjusted = v_total;
@@ -1747,33 +1947,25 @@ static void socket_action(int ret)
 
 static void receive_from_socket()
 {
-    while (program_running && !kcp_restart)
-    {
+    while (program_running && !kcp_restart) {
         socklen_t addr_len = sizeof(remote_addr);
 
         int ret = recvfrom(s, (char *)buf, sizeof(buf), 0, (struct sockaddr *)&remote_addr, &addr_len);
         if (
             ret == 0
             // || (rand() & 0xf) == 0
-        )
-        {
+        ) {
             continue;
-        }
-        else if (ret < 0)
-        {
+        } else if (ret < 0) {
             int err = socket_errno();
-            if (err != WSAETIMEDOUT && err != WSAEWOULDBLOCK)
-            {
+            if (err != WSAETIMEDOUT && err != WSAEWOULDBLOCK) {
                 // err_log("recvfrom failed: %d\n", err);
                 // Sleep(SOCKET_RESET_INTERVAL_MS);
                 ntr_rp_port_changed = 1; // HACK to restart recv
                 return;
-            }
-            else if (err == WSAEWOULDBLOCK)
-            {
+            } else if (err == WSAEWOULDBLOCK) {
                 socket_reply();
-                if (!socket_poll(s))
-                {
+                if (!socket_poll(s)) {
                     if (program_running)
                         err_log("socket poll failed: %d\n", socket_errno());
                     return;
@@ -1795,22 +1987,20 @@ static void receive_from_socket()
     }
 }
 
-static void receive_from_socket_loop(void) {
-    while (program_running && !ntr_rp_port_changed)
-    {
+static void receive_from_socket_loop(void)
+{
+    while (program_running && !ntr_rp_port_changed) {
         if (kcp)
             ikcp_release(kcp);
         kcp = ikcp_create(kcp_cid, 0);
-        if (!kcp)
-        {
+        if (!kcp) {
             err_log("ikcp_create failed\n");
             Sleep(SOCKET_RESET_INTERVAL_MS);
             continue;
         }
         kcp_init(kcp);
 
-        for (int i = 0; i < SCREEN_COUNT; ++i)
-        {
+        for (int i = 0; i < SCREEN_COUNT; ++i) {
             recv_has_last_frame_id[i] = 0;
             recv_last_frame_id[i] = 0;
             recv_last_packet_id[i] = 0;
@@ -1823,8 +2013,7 @@ static void receive_from_socket_loop(void) {
         //     rp_buffer_ctx[i].status = FBS_NOT_AVAIL;
         //     rp_lock_rel(rp_buffer_ctx[i].status_lock);
         // }
-        for (int i = 0; i < RP_WORK_COUNT; ++i)
-        {
+        for (int i = 0; i < RP_WORK_COUNT; ++i) {
             recv_end[i] = 2;
         }
         memset(recv_hdr, 0, sizeof(recv_hdr));
@@ -1835,33 +2024,27 @@ static void receive_from_socket_loop(void) {
         memset(frame_size_tracker, 0, sizeof(frame_size_tracker));
         memset(delay_between_packet_tracker, 0, sizeof(delay_between_packet_tracker));
 
-        if (jpeg_decode_sem_inited)
-        {
-            if (rp_sem_close(jpeg_decode_sem) != 0)
-            {
+        if (jpeg_decode_sem_inited) {
+            if (rp_sem_close(jpeg_decode_sem) != 0) {
                 err_log("jpeg_decode_sem close failed\n");
                 break;
             }
             jpeg_decode_sem_inited = 0;
         }
-        if (rp_sem_create(jpeg_decode_sem, RP_WORK_COUNT, RP_WORK_COUNT) != 0)
-        {
+        if (rp_sem_create(jpeg_decode_sem, RP_WORK_COUNT, RP_WORK_COUNT) != 0) {
             err_log("jpeg_decode_sem init failed\n");
             break;
         }
         jpeg_decode_sem_inited = 1;
 
-        if (jpeg_decode_queue_inited)
-        {
-            if (rp_syn_close1(&jpeg_decode_queue))
-            {
+        if (jpeg_decode_queue_inited) {
+            if (rp_syn_close1(&jpeg_decode_queue)) {
                 err_log("jpeg_decode_queue close failed\n");
                 break;
             }
             jpeg_decode_queue_inited = 0;
         }
-        if (rp_syn_init1(&jpeg_decode_queue, 0, 0, 0, RP_WORK_COUNT, (void **)jpeg_decode_ptr) != 0)
-        {
+        if (rp_syn_init1(&jpeg_decode_queue, 0, 0, 0, RP_WORK_COUNT, (void **)jpeg_decode_ptr) != 0) {
             err_log("jpeg_decode_queue init failed\n");
             break;
         }
@@ -1877,8 +2060,7 @@ static void receive_from_socket_loop(void) {
 #else
         void *jpeg_decode_thread_e = NULL;
 #endif
-        if ((ret = thread_create(jpeg_decode_thread, jpeg_decode_thread_func, jpeg_decode_thread_e)))
-        {
+        if ((ret = thread_create(jpeg_decode_thread, jpeg_decode_thread_func, jpeg_decode_thread_e))) {
             err_log("jpeg_decode_thread create failed\n");
             break;
         }
@@ -1903,13 +2085,12 @@ static void receive_from_socket_loop(void) {
     }
 }
 
-thread_ret_t udp_recv_thread_func(void *) {
-    while (program_running)
-    {
+thread_ret_t udp_recv_thread_func(void *)
+{
+    while (program_running) {
         s = INVALID_SOCKET;
         int ret;
-        if (!socket_valid(s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)))
-        {
+        if (!socket_valid(s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP))) {
             err_log("socket creation failed\n");
             socket_error_pause();
             continue;
@@ -1921,8 +2102,7 @@ thread_ret_t udp_recv_thread_func(void *) {
         si_other.sin_port = htons(ntr_rp_port_bound);
         si_other.sin_addr.s_addr = ntr_adapter_octet_list ? *(uint32_t *)ntr_adapter_octet_list[ntr_selected_adapter] : 0;
 
-        if (bind(s, (struct sockaddr *)&si_other, sizeof(si_other)) == SOCKET_ERROR)
-        {
+        if (bind(s, (struct sockaddr *)&si_other, sizeof(si_other)) == SOCKET_ERROR) {
             err_log("socket bind failed for port %d\n", ntr_rp_port_bound);
             socket_error_pause();
             goto socket_final;
@@ -1939,8 +2119,7 @@ thread_ret_t udp_recv_thread_func(void *) {
         ret = setsockopt(s, SOL_SOCKET, SO_RCVBUF, (char *)(&buff_size), sizeof(buff_size));
         buff_size = 0;
         ret = getsockopt(s, SOL_SOCKET, SO_RCVBUF, (char *)(&buff_size), &tmp);
-        if (ret)
-        {
+        if (ret) {
             err_log("setsockopt buf size failed\n");
             socket_error_pause();
             goto socket_final;
@@ -1954,15 +2133,13 @@ thread_ret_t udp_recv_thread_func(void *) {
         timeout.tv_usec = (SOCKET_RESET_INTERVAL_MS % 1000) * 1000;
 #endif
         ret = setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout));
-        if (ret)
-        {
+        if (ret) {
             err_log("setsockopt timeout failed\n");
             socket_error_pause();
             goto socket_final;
         }
 
-        if (!socket_set_nonblock(s, 1))
-        {
+        if (!socket_set_nonblock(s, 1)) {
             err_log("socket_set_nonblock failed, %d\n", socket_errno());
             socket_error_pause();
             goto socket_final;
@@ -1970,12 +2147,11 @@ thread_ret_t udp_recv_thread_func(void *) {
 
         receive_from_socket_loop();
 
-socket_final:
+    socket_final:
         closesocket(s);
     }
 
-    if (kcp)
-    {
+    if (kcp) {
         ikcp_release(kcp);
         kcp = 0;
     }
@@ -1985,7 +2161,8 @@ socket_final:
 
 #define INPUT_REDIRECTION_PORT (4950)
 static SOCKET ir_socket = INVALID_SOCKET;
-void input_redirection_send_frame(input_redirection_frame_t *frame) {
+void input_redirection_send_frame(input_redirection_frame_t *frame)
+{
     if (!socket_valid(ir_socket)) {
         ir_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
         if (!socket_valid(ir_socket)) {
