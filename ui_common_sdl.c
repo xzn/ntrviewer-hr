@@ -197,13 +197,15 @@ static void ui_kcp_window_title_update(SDL_Window *win, int tick_diff)
     snprintf(window_title, sizeof(window_title),
              WIN_TITLE " (FPS %03d/%03d %03d/%03d)"
                        " (Connection Quality %.1f%%)"
-                       " [JPEG RS%s]",
+                       " [%s]",
              __atomic_exchange_n(&frame_rate_displayed_tracker[SCREEN_TOP], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
              __atomic_exchange_n(&frame_rate_decoded_tracker[SCREEN_TOP], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
              __atomic_exchange_n(&frame_rate_displayed_tracker[SCREEN_BOT], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
              __atomic_exchange_n(&frame_rate_decoded_tracker[SCREEN_BOT], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
              kcp_get_connection_quality(),
-             kcp_dq ? ", Delta" : "");
+             is_lossless ?
+                kcp_dq ? "Lossless RS, Delta" : "Lossless RS" :
+                kcp_dq ? "JPEG RS, Delta" : "JPEG RS");
     SDL_SetWindowTitle(win, window_title);
 }
 
@@ -215,13 +217,15 @@ static void ui_kcp_windows_titles_update(int ctx_top_bot, int screen_top_bot, in
                  ? WIN_TITLE
                  " (FPS %03d/%03d)"
                  " (Connection Quality %.1f%%)"
-                 " [JPEG RS%s]"
+                 " [%s]"
                  : WIN_TITLE
                  " (FPS %03d/%03d)",
              __atomic_exchange_n(&frame_rate_displayed_tracker[screen_top_bot], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
              __atomic_exchange_n(&frame_rate_decoded_tracker[screen_top_bot], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
              kcp_get_connection_quality(),
-             kcp_dq ? ", Delta" : "");
+             is_lossless ?
+                kcp_dq ? "Lossless RS, Delta" : "Lossless RS" :
+                kcp_dq ? "JPEG RS, Delta" : "JPEG RS");
     SDL_SetWindowTitle(ui_sdl_win[ctx_top_bot], window_title);
 }
 
@@ -246,35 +250,20 @@ void ui_windows_titles_update(void)
             if (kcp_active)
             {
                 ui_kcp_window_title_update(ui_sdl_win[SCREEN_TOP], (int)tick_diff);
-            } else if (is_lossless) {
+            } else {
                 char window_title[WINDOW_TITLE_LEN_MAX];
                 snprintf(
                     window_title, sizeof(window_title),
                     WIN_TITLE
                     " (FPS %03d/%03d %03d/%03d)"
                     " (Packet Rate %.1f%%)"
-                    " [Uncompresssed UDP]",
+                    " [%s UDP]",
                     __atomic_exchange_n(&frame_rate_displayed_tracker[SCREEN_TOP], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
                     __atomic_exchange_n(&frame_rate_decoded_tracker[SCREEN_TOP], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
                     __atomic_exchange_n(&frame_rate_displayed_tracker[SCREEN_BOT], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
                     __atomic_exchange_n(&frame_rate_decoded_tracker[SCREEN_BOT], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-                    lossless_rate);
-                SDL_SetWindowTitle(ui_sdl_win[SCREEN_TOP], window_title);
-            }
-            else
-            {
-                char window_title[WINDOW_TITLE_LEN_MAX];
-                snprintf(
-                    window_title, sizeof(window_title),
-                    WIN_TITLE
-                    " (FPS %03d/%03d %03d/%03d)"
-                    " (Packet Rate %.1f%%)"
-                    " [JPEG Compat]",
-                    __atomic_exchange_n(&frame_rate_displayed_tracker[SCREEN_TOP], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-                    __atomic_exchange_n(&frame_rate_decoded_tracker[SCREEN_TOP], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-                    __atomic_exchange_n(&frame_rate_displayed_tracker[SCREEN_BOT], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-                    __atomic_exchange_n(&frame_rate_decoded_tracker[SCREEN_BOT], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-                    packet_rate);
+                    is_lossless ? lossless_rate : packet_rate,
+                    is_lossless ? "Uncompresssed" : "JPEG");
                 SDL_SetWindowTitle(ui_sdl_win[SCREEN_TOP], window_title);
             }
         }
@@ -291,7 +280,7 @@ void ui_windows_titles_update(void)
                 if (kcp_active)
                 {
                     ui_kcp_windows_titles_update(ctx_top_bot, screen_top_bot, (int)tick_diff);
-                } else if (is_lossless) {
+                } else {
                     char window_title[WINDOW_TITLE_LEN_MAX];
                     snprintf(
                         window_title, sizeof(window_title),
@@ -299,29 +288,13 @@ void ui_windows_titles_update(void)
                             ? WIN_TITLE
                             " (FPS %03d/%03d) "
                             " (Packet Rate %.1f%%)"
-                            " [Uncompresssed UDP]"
+                            " [%s UDP]"
                             : WIN_TITLE
                             " (FPS %03d/%03d) ",
                         __atomic_exchange_n(&frame_rate_displayed_tracker[screen_top_bot], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
                         __atomic_exchange_n(&frame_rate_decoded_tracker[screen_top_bot], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-                        lossless_rate);
-                    SDL_SetWindowTitle(ui_sdl_win[ctx_top_bot], window_title);
-                }
-                else
-                {
-                    char window_title[WINDOW_TITLE_LEN_MAX];
-                    snprintf(
-                        window_title, sizeof(window_title),
-                        ctx_top_bot == SCREEN_TOP
-                            ? WIN_TITLE
-                            " (FPS %03d/%03d) "
-                            " (Packet Rate %.1f%%)"
-                            " [JPEG Compat]"
-                            : WIN_TITLE
-                            " (FPS %03d/%03d) ",
-                        __atomic_exchange_n(&frame_rate_displayed_tracker[screen_top_bot], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-                        __atomic_exchange_n(&frame_rate_decoded_tracker[screen_top_bot], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-                        packet_rate);
+                        is_lossless ? lossless_rate : packet_rate,
+                        is_lossless ? "Uncompresssed" : "JPEG");
                     SDL_SetWindowTitle(ui_sdl_win[ctx_top_bot], window_title);
                 }
                 if (view_mode != VIEW_MODE_SEPARATE)

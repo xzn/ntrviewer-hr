@@ -114,6 +114,7 @@ static void kcp_init(ikcpcb *kcp)
     kcp_active = 0;
     kcp_dq = 0;
     kcp_restart = 0;
+    is_lossless = 0;
 
     memset(kcp_recv, 0, sizeof(kcp_recv));
     memset(kcp_recv_info, 0, sizeof(kcp_recv_info));
@@ -1203,6 +1204,7 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
     struct kcp_recv_t *recvs = kcp_recv[w][queue_w];
     struct kcp_recv_info_t *info = &kcp_recv_info[w][queue_w];
 
+    is_lossless = info->is_lossless;
     if (info->is_lossless) {
         // TODO
         if (info->delta_prog) {
