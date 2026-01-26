@@ -152,7 +152,7 @@ static void fill_ac_freq(long freq[257], const uint8_t base[], int base_len)
     }
 };
 
-static void std_huff_tables (struct jpeg_shared_t *shared)
+static void std_huff_tables(struct jpeg_shared_t *shared)
 /* Set up the standard Huffman tables (cf. JPEG standard section K.3) */
 /* IMPORTANT: these are only valid for 8-bit data precision! */
 {

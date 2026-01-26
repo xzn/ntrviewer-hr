@@ -992,7 +992,7 @@ static int do_decode_lossless_compressed(uint8_t *out, const uint8_t *in, int si
         for (int i = 0; i <= 128; ++i) {
             int i_pos = (uint8_t)(128 + i);
             int i_neg = (uint8_t)(128 - i);
-            int count = 128 + 1 - i;
+            int count = i < 24 ? powf(1.5, 24 - i) * 2 : 2;
             freq[i_pos] = count;
             freq[i_neg] = count;
         }
