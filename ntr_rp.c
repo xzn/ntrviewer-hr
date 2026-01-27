@@ -974,8 +974,60 @@ static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, stru
     return 0;
 }
 
-struct huff_tbl_t lossless_huff_tbl_ptrs;
-struct d_derived_tbl_t lossless_derived_tbls;
+enum {
+    LOSSLESS_TBL8,
+    LOSSLESS_TBL6,
+    LOSSLESS_TBL5,
+    LOSSLESS_TBL4,
+    LOSSLESS_TBL_COUNT,
+};
+
+static int lossless_tbl_name_from_bits(uint8_t bits) {
+    switch(bits) {
+        default:
+        case 8:
+            return LOSSLESS_TBL8;
+        case 6:
+            return LOSSLESS_TBL6;
+        case 5:
+            return LOSSLESS_TBL5;
+        case 4:
+            return LOSSLESS_TBL4;
+    }
+}
+
+static struct huff_tbl_t lossless_huff_tbl_ptrs[LOSSLESS_TBL_COUNT];
+static struct d_derived_tbl_t lossless_derived_tbls[LOSSLESS_TBL_COUNT];
+static bool lossless_tbls_inited;
+
+static void lossless_tbls_init() {
+    if (lossless_tbls_inited)
+        return;
+
+    uint8_t bits[] = {8, 6, 5, 4};
+
+    for (size_t i = 0; i < sizeof(bits) / sizeof(*bits); ++i) {
+        long freq[257];
+        uint8_t b = bits[i];
+        memset(freq, 0, sizeof(freq));
+        int end = 1 << (b - 1);
+        for (int i = 0; i <= end; ++i) {
+            int i_pos = 128 + i;
+            int i_neg = 128 - i;
+            int count =
+                (i < 24 ? powf(1.5, 24.0f - i) * 2.0f : 2.0f) *
+                (i == 0 ? powf(1.5, 8.0f - b + 1.0f) : 1.0f);
+            freq[i_pos] = count;
+            freq[i_neg] = count;
+        }
+        freq[128 + end] = 0;
+        int name = lossless_tbl_name_from_bits(b);
+        gen_optimal_table(&lossless_huff_tbl_ptrs[name], freq);
+        make_d_derived_tbl(&lossless_huff_tbl_ptrs[name], &lossless_derived_tbls[name]);
+    }
+
+    lossless_tbls_inited = true;
+}
 
 struct bitread_global_state_t {
     int unread_marker;
@@ -986,19 +1038,7 @@ struct bitread_global_state_t {
 #define LOSSLESS_BLOCK_SIZE 16
 static int do_decode_lossless_compressed(uint8_t *out, const uint8_t *in, int size, int chroma_ss, int bias, int width, int height)
 {
-    {
-        long freq[257];
-        memset(freq, 0, sizeof(freq));
-        for (int i = 0; i <= 128; ++i) {
-            int i_pos = (uint8_t)(128 + i);
-            int i_neg = (uint8_t)(128 - i);
-            int count = i < 24 ? powf(1.5, 24 - i) * 2 : 2;
-            freq[i_pos] = count;
-            freq[i_neg] = count;
-        }
-        gen_optimal_table(&lossless_huff_tbl_ptrs, freq);
-        make_d_derived_tbl(&lossless_huff_tbl_ptrs, &lossless_derived_tbls);
-    }
+    lossless_tbls_init();
 
     struct bitread_global_state_t state, *g_state = &state;
     struct bitread_perm_state_t bitstate;
@@ -1047,13 +1087,16 @@ static int do_decode_lossless_compressed(uint8_t *out, const uint8_t *in, int si
         for (int comp = 0; comp < RGB_CHANNELS_N; ++comp) {
             int w = width / hsamp * bw_x[comp];
             JSAMPLE *out_comp = decoded_channels + comp * width * height;
+            int bits = comp_bits[comp];
+            int shift = 8 - bits;
+            int name = lossless_tbl_name_from_bits(bits);
 
             for (int by = 0; by < bh_x[comp]; ++by) {
                 int y = (j * bh_x[comp] + by);
 
                 for (int bx = 0; bx < w; ++bx) {
                     int s;
-                    HUFF_DECODE(s, br_state, (&lossless_derived_tbls), return -1, label0);
+                    HUFF_DECODE(s, br_state, (&lossless_derived_tbls[name]), return -1, label0);
                     JSAMPLE *out_t = out_comp + y * width + bx;
                     uint8_t pred = 0;
                     if (!y) {
@@ -1075,7 +1118,7 @@ static int do_decode_lossless_compressed(uint8_t *out, const uint8_t *in, int si
                         }
                     }
 
-                    int ret = (uint8_t)(((uint8_t)s) - (uint8_t)128 + pred);
+                    int ret = (uint8_t)(((((int8_t)s) - (int8_t)128) << shift) + pred);
                     *out_t = ret;
                 }
             }
@@ -1132,7 +1175,7 @@ static int do_decode_lossless_compressed(uint8_t *out, const uint8_t *in, int si
                 int bits = comp_bits[comp];
                 if (bits < 8) {
                     JSAMPLE half = (JSAMPLE)(1 << (8 - bits - 1));
-                    JSAMPLE out = (*up_chn - 128.0f) * (JSAMPLE)(1 << (8 - bits)) + half;
+                    JSAMPLE out = (*up_chn - 128.0f) + half;
                     if (comp == 0) {
                         out += 128.0;
                         *up_chn = out;
