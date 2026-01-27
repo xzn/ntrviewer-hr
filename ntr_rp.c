@@ -1015,8 +1015,8 @@ static void lossless_tbls_init() {
             int i_pos = 128 + i;
             int i_neg = 128 - i;
             int count =
-                (i < 24 ? powf(1.5, 24.0f - i) * 2.0f : 2.0f) *
-                (i == 0 ? powf(1.5, 8.0f - b + 1.0f) : 1.0f);
+                (i < 24 ? powf(M_SQRT2, 24.0f - i) * 2.0f : 2.0f) *
+                (i == 0 ? powf(M_SQRT2, 8.0f - b + 1.0f) : 1.0f);
             freq[i_pos] = count;
             freq[i_neg] = count;
         }
