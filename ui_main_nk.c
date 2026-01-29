@@ -867,7 +867,7 @@ void ui_main_nk(void)
 
         if (ntr_rp_config.kcp_mode / KCP_MODE_COUNT) {
             nk_layout_row_dynamic(ctx, 30, 2);
-            snprintf(msg_buf, sizeof(msg_buf), "Color Quality Bias %d", ntr_rp_config.lossless_color);
+            snprintf(msg_buf, sizeof(msg_buf), "Color Quality Bias %d", ntr_rp_config.lossless_color - NTR_COLOR_BIAS_MAX);
             nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
             do_nav_slider_next(ctx, NK_FOCUS_QUALITY, &ntr_rp_config.lossless_color);
             nk_slider_int(ctx, NTR_COLOR_BIAS_MIN, &ntr_rp_config.lossless_color, NTR_COLOR_BIAS_MAX, 1);

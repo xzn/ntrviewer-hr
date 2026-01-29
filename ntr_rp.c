@@ -1202,6 +1202,203 @@ static int do_decode_lossless_compressed(uint8_t *out, const uint8_t *in, int si
     return 0;
 }
 
+static uint8_t lossless_delta_prev[SCREEN_COUNT][SCREEN_HEIGHT0 * SCREEN_WIDTH * RGB_CHANNELS_N];
+static int do_decode_lossless_delta_compressed(uint8_t *out, const uint8_t *in, int size, int offset,
+    int is_top, int chroma_ss, int bias, int width, int height, int even_odd)
+{
+    lossless_tbls_init();
+
+    struct bitread_global_state_t state, *g_state = &state;
+    struct bitread_perm_state_t bitstate;
+    memset(&bitstate, 0, sizeof(bitstate));
+
+    g_state->unread_marker = 0;
+    g_state->next_input_byte = in;
+    g_state->bytes_in_buffer = size;
+
+    BITREAD_STATE_VARS;
+    BITREAD_LOAD_STATE(g_state, bitstate);
+
+    int hss = chroma_ss < 2;
+    int vss = chroma_ss < 1;
+    int hsamp = hss ? 2 : 1;
+    int vsamp = vss ? 2 : 1;
+
+    int bw_x[RGB_CHANNELS_N] = {hsamp, 1, 1};
+    int bh_x[RGB_CHANNELS_N] = {vsamp, 1, 1};
+
+    JSAMPLE *decoded_channels = screens_decoded_channels[0];
+    JSAMPLE *upsampled_channels = screens_upsampled_channels[0];
+
+    int comp_bits[RGB_CHANNELS_N];
+
+    switch (bias) {
+        default:
+        case 0:
+            comp_bits[0] = 8;
+            comp_bits[1] = 8;
+            comp_bits[2] = 8;
+            break;
+        case 1:
+            comp_bits[0] = 6;
+            comp_bits[1] = 5;
+            comp_bits[2] = 5;
+            break;
+        case 2:
+            comp_bits[0] = 4;
+            comp_bits[1] = 4;
+            comp_bits[2] = 4;
+            break;
+    }
+
+    uint8_t *prev_screen = lossless_delta_prev[is_top] +
+        even_odd * sizeof(*lossless_delta_prev) / 2 +
+        offset * width * RGB_CHANNELS_N;
+
+    for (int j = 0; j < height / vsamp; ++j) {
+        uint8_t *prev_j = prev_screen + j * vsamp * width * RGB_CHANNELS_N;
+
+        for (int comp = 0; comp < RGB_CHANNELS_N; ++comp) {
+            uint8_t *prev_comp = prev_j + vsamp * width * comp;
+
+            int w = width / hsamp * bw_x[comp];
+            JSAMPLE *out_comp = decoded_channels + comp * width * height;
+            int bits = comp_bits[comp];
+            int shift = 8 - bits;
+            int name = lossless_tbl_name_from_bits(bits);
+
+            for (int by = 0; by < bh_x[comp]; ++by) {
+                uint8_t *prev_by = prev_comp + by * width;
+
+                int y = (j * bh_x[comp] + by);
+
+                for (int bx = 0; bx < w;) {
+                    CHECK_BIT_BUFFER(br_state, 1, return -2);
+                    int pred_diff = GET_BITS(1);
+
+#define DELTA_BLOCK_WIDTH_COUNT 30
+                    if (pred_diff) {
+                        for (int i = 0; i < DELTA_BLOCK_WIDTH_COUNT; ++i, ++bx) {
+                            int s;
+                            HUFF_DECODE(s, br_state, (&lossless_derived_tbls[name]), return -3, label0);
+                            uint8_t *prev_bx = prev_by + bx;
+                            JSAMPLE *out_t = out_comp + y * width + bx;
+
+                            int ret = (uint8_t)(((((int8_t)s) - (int8_t)128) << shift) + *prev_bx);
+                            *out_t = *prev_bx = ret;
+                        }
+                    } else {
+                        for (int i = 0; i < DELTA_BLOCK_WIDTH_COUNT; ++i, ++bx) {
+                            int s;
+                            HUFF_DECODE(s, br_state, (&lossless_derived_tbls[name]), return -1, label1);
+                            JSAMPLE *out_t = out_comp + y * width + bx;
+                            uint8_t pred = 0;
+                            if (!y) {
+                                if (!bx) {
+                                    pred = 128;
+                                } else {
+                                    pred = out_t[-1];
+                                }
+                            } else {
+                                if (!bx) {
+                                    pred = out_t[-width];
+                                } else {
+                                    uint8_t t = out_t[-width];
+                                    uint8_t l = out_t[-1];
+                                    uint8_t tl = out_t[-width + -1];
+                                    uint8_t min = MIN(MIN(t, l), tl);
+                                    uint8_t max = MAX(MAX(t, l), tl);
+                                    pred = t + l + tl - min - max;
+                                }
+                            }
+
+                            int ret = (uint8_t)(((((int8_t)s) - (int8_t)128) << shift) + pred);
+                            uint8_t *prev_bx = prev_by + bx;
+                            *out_t = *prev_bx = ret;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    BITREAD_SAVE_STATE(g_state, bitstate);
+
+    int out_cx = 0;
+    int out_cy = 0;
+    int out_ex = width;
+    int out_ey = height;
+
+    for (int comp = 0; comp < RGB_CHANNELS_N; ++comp) {
+        int need_ss = comp > 0;
+        int hss = need_ss ? hsamp : 1;
+        int vss = need_ss ? vsamp : 1;
+
+        for (int y = out_cy; y < out_ey; ++y) {
+            for (int x = out_cx; x < out_ex; ++x) {
+                JSAMPLE *dec_chn = decoded_channels + comp * width * height;
+                JSAMPLE *up_chn = upsampled_channels + (y * width + x) * RGB_CHANNELS_N + comp;
+                if (need_ss) {
+                    int xc = hss > 1 ? (x - 1) / hss : x;
+                    int xe = hss > 1 ? (x + 1) / hss : x;
+                    xc = MAX(xc, 0);
+                    xe = MIN(xe, width / hss - 1);
+
+                    int yc = vss > 1 ? (y - 1) / vss : y;
+                    int ye = vss > 1 ? (y + 1) / vss : y;
+                    yc = MAX(yc, 0);
+                    ye = MIN(ye, height / vss - 1);
+
+                    int xf = (x - 1) % hss;
+                    float xfc = hss > 1 ? xf ? 0.25 : 0.75 : 0.5;
+                    float xfe = hss > 1 ? xf ? 0.75 : 0.25 : 0.5;
+
+                    int yf = (y - 1) % vss;
+                    float yfc = vss > 1 ? yf ? 0.25 : 0.75 : 0.5;
+                    float yfe = vss > 1 ? yf ? 0.75 : 0.25 : 0.5;
+
+                    float tl = dec_chn[yc * width + xc];
+                    float tr = dec_chn[yc * width + xe];
+                    float bl = dec_chn[ye * width + xc];
+                    float br = dec_chn[ye * width + xe];
+
+                    float t = tl * xfc + tr * xfe;
+                    float b = bl * xfc + br * xfe;
+                    *up_chn = t * yfc + b * yfe;
+                } else {
+                    *up_chn = dec_chn[y * width + x];
+                }
+
+                int bits = comp_bits[comp];
+                if (bits < 8) {
+                    JSAMPLE half = (JSAMPLE)(1 << (8 - bits - 1));
+                    JSAMPLE out = (*up_chn - 128.0f) + half;
+                    if (comp == 0) {
+                        out += 128.0;
+                        *up_chn = out;
+                        continue;
+                    }
+                    JSAMPLE out_abs = fabsf(out);
+                    JSAMPLE sign = out >= 0 ? 1.0 : -1.0;
+                    out_abs -= half;
+                    out_abs = MAX(out_abs, 0.0);
+                    out = out_abs * sign;
+                    out += 128.0;
+                    *up_chn = out;
+                }
+            }
+        }
+    }
+
+    for (int y = out_cy; y < out_ey; ++y) {
+        for (int x = out_cx; x < out_ex; ++x) {
+            ycc_rgb_convert(&out[(y * width + x) * GL_CHANNELS_N], &upsampled_channels[(y * width + x) * RGB_CHANNELS_N]);
+        }
+    }
+
+    return 0;
+}
+
 static int handle_decode_lossless_compressed(uint8_t *out, struct kcp_recv_t *recvs, struct kcp_recv_info_t *info)
 {
     // int max_h_samp_fact = info->chroma_ss == 2 ? 1 : 2;
@@ -1229,10 +1426,19 @@ static int handle_decode_lossless_compressed(uint8_t *out, struct kcp_recv_t *re
         // err_log("%d %d %d %d\n", t, part_height, (int)(out_t - out), size);
         // memset(out_t, 255, width * GL_CHANNELS_N);
 
-        int res = do_decode_lossless_compressed(out_t, &recv->buf[0][0], size, info->chroma_ss, info->color_bias, width, part_height);
-        if (res < 0) {
-            err_log("do_decode_lossless_compressed: %d\n", res);
-            break;
+        if (info->delta_prog) {
+            int res = do_decode_lossless_delta_compressed(out_t, &recv->buf[0][0], size, info->v_adjusted * LOSSLESS_BLOCK_SIZE / height_f * t,
+                info->is_top, info->chroma_ss, info->color_bias, width, part_height, info->even_odd);
+            if (res < 0) {
+                err_log("do_decode_lossless_delta_compressed: %d\n", res);
+                break;
+            }
+        } else {
+            int res = do_decode_lossless_compressed(out_t, &recv->buf[0][0], size, info->chroma_ss, info->color_bias, width, part_height);
+            if (res < 0) {
+                err_log("do_decode_lossless_compressed: %d\n", res);
+                break;
+            }
         }
     }
 
@@ -1249,15 +1455,7 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
 
     is_lossless = info->is_lossless;
     if (info->is_lossless) {
-        // TODO
-        if (info->delta_prog) {
-            kcp_dq = 1;
-            memset(recvs, 0, sizeof(struct kcp_recv_t) * RP_CORE_COUNT_MAX);
-            memset(info, 0, sizeof(struct kcp_recv_info_t));
-            return 0;
-        }
-
-        kcp_dq = 0;
+        kcp_dq = info->delta_prog;
         return handle_decode_lossless_compressed(out, recvs, info);
     } else if (info->delta_prog) {
         kcp_dq = 1;
@@ -1396,6 +1594,7 @@ static void screen_process(uint8_t *curr, uint8_t *prev, uint8_t *out, bool even
 static thread_ret_t jpeg_decode_thread_func(void *e)
 {
     reset_jpeg_delta();
+    memset(lossless_delta_prev, 0, sizeof(lossless_delta_prev));
 
     memset(screen_processing, 0, sizeof(screen_processing));
 
@@ -1466,9 +1665,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                 processing = screen_processing[top_bot][processing_index];
             }
 
-            if (ptr->is_lossless) {
-                // TODO
-            } else if ((ret = handle_decode_kcp(processing, ptr->kcp_w, ptr->kcp_queue_w)) != 0) {
+            if ((ret = handle_decode_kcp(processing, ptr->kcp_w, ptr->kcp_queue_w)) != 0) {
                 err_log("kcp recv decode error: %d\n", ret);
                 kcp_restart = 1;
 
@@ -1485,7 +1682,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                     screen_process(processing, screen_processing[top_bot][prev_index], out, even_odd, width, height);
                 }
 
-                stats_overlay_0(out, top_bot, in_size, q, width, height);
+                stats_overlay_0(out, top_bot, in_size, is_lossless ? -1 : q, width, height);
                 handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay, sync_ctx);
             }
         } else {

@@ -353,7 +353,7 @@ thread_ret_t tcp_thread_func(void *arg)
                         (kcp_mode == KCP_MODE_ON_DELTA ? (uint32_t)(1 << 31) : (uint32_t)0) |
                         (lossless_mode ?
                             (uint32_t)(1 << 29) |
-                                (uint32_t)((rp_config_last.lossless_color & ((1 << 2) - 1)) << 27) :
+                                (uint32_t)(((NTR_COLOR_BIAS_MAX - rp_config_last.lossless_color) & ((1 << 2) - 1)) << 27) :
                             (uint32_t)0)};
 
                 ret = tcp_send_packet_header(
