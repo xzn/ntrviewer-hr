@@ -55,7 +55,7 @@ Assumes optimal Wi-Fi network condition.
 | JPEG Compat (Old 3DS) | 3 |
 | Uncompressed (Old 3DS) | 3 |
 
-Note: For true lossless image, you need to set Color Quality Bias to 0, and set Chroma Subsampling to Off in the NTR-HR menu (in Remote Play -> Advanced Options). Frame rate will be very low.
+Note: For true lossless image, you need to set Color Quality Bias to 0, and set Chroma Subsampling to Off in the NTR-HR menu on the console (accessed with X+Y -> Remote Play -> Advanced Options). Frame rate will be very low.
 
 ## FAQ
 
