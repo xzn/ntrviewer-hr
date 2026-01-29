@@ -119,8 +119,12 @@ LDLIBS += -lshaderc_combined
 # LDLIBS += -lglslang -lMachineIndependent -lOSDependent -lGenericCodeGen -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools
 endif
 endif
+ifneq ($(OS),Darwin)
 ifneq ($(STATIC_SDL),1)
 LDLIBS += -Wl,-Bstatic -lrashader -Wl,-Bdynamic
+else
+LDLIBS += -lrashader
+endif
 else
 LDLIBS += -lrashader
 endif
