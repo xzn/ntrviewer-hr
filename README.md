@@ -59,6 +59,12 @@ Note: For true lossless image, you need to set Color Quality Bias to 0, and set 
 
 ## FAQ
 
+### Viewer is not connecting, or connected but no image?
+
+- Check that both the PC and the console are connected to the same network (Viewer IP and 3DS IP should have the same subnet).
+- Check that 3DS IP in the viewer is the same as the one in your 3DS' NTR-HR X+Y menu in Remote Play section.
+- Check that firewall is allowing both UDP and TCP, and in case of UDP, both incoming and outgoing, on ports 8000 and 8001.
+
 ### How do I get audio with the stream?
 
 - Audio capture is **NOT** supported. A workaround is use a 3.5 mm audio aux cable to connect from your 3DS's audio jack to your PC's line-in for capture.
