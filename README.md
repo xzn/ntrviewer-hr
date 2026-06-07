@@ -89,6 +89,10 @@ Note: For true lossless image, you need to set Color Quality Bias to 0, and set 
 
 ## Additional info
 
+### Security concerns
+
+- For security do not run this program while connected to a public network. The viewer can crash when errant data are sent to it.
+
 ### Input redirection
 
 - Can be enabled in Luma3DS/Rosalina's menu. See https://wiki.hacks.guide/wiki/3DS:Input_redirection
