@@ -59,6 +59,10 @@ Note: For true lossless image, you need to set Color Quality Bias to 0, and set 
 
 ## FAQ
 
+### Viewer freezes/hangs/stops responding after streaming has started (on Windows)?
+
+- Try starting the viewer with `ntrviewer.exe --no-csc`. Sorry for the inconvenience. This disables my apparently buggy use of composition swapchain.
+
 ### Viewer is not connecting, or connected but no image?
 
 - Check that both the PC and the console are connected to the same network (Viewer IP and 3DS IP should have the same subnet).
@@ -67,21 +71,21 @@ Note: For true lossless image, you need to set Color Quality Bias to 0, and set 
 
 ### How do I get audio with the stream?
 
-- Audio capture is **NOT** supported. A workaround is use a 3.5 mm audio aux cable to connect from your 3DS's audio jack to your PC's line-in for capture.
+- Audio streaming is **NOT** supported. You may use a 3.5 mm audio aux cable to connect your 3DS's audio jack to your PC's line-in for capture.
 
 ### Are only **New 3DS/New 2DS** supported?
 
 - Old (original) 3DS are **NOT** supported. Neither are 2DS.
 
-### Anyway to stream DS games, DSiWare, and GBA games?
+### Stream DS games, DSiWare, and GBA games?
 
-- This will **NOT** be supported, as 3DS' CPU run in a compatibility mode that loses all the normal 3DS computing power.
+- This is **NOT** supported, as 3DS' CPU run in a compatibility mode that loses all the normal 3DS computing power.
 
-### How to fix Pokemon games hanging when loading a save when Remote Play is enabled?
+### Pokemon games hang/stop streaming when loading a save while Remote Play is active?
 
-- Enabling Input Redirection or Debugger in Luma3DS/Rosalina on your 3DS is the recommended method.
+- Enabling Input Redirection or Debugger in Luma3DS/Rosalina on your 3DS is the recommended workaround.
 
-- Alternatively use NFC patch in NTR-HR menu if you are using that. The caveat is that this will disable Reliable Stream.
+- Alternatively use NFC patch in NTR-HR menu. The caveat is that this will disable Reliable Stream.
 
 ## Additional info
 
@@ -98,7 +102,7 @@ Note: For true lossless image, you need to set Color Quality Bias to 0, and set 
 
 ### macOS quarantine bypass
 
-- Run `xattr -r -d com.apple.quarantine NTRViewer-HR-macOS-Universal.zip` on the file downloaded.
+- Run `xattr -r -d com.apple.quarantine NTRViewer-HR-macOS-Universal.zip` on the file downloaded. Apologies for the inconvenience.
 
 ### Asahi Linux port publish
 
