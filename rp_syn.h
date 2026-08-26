@@ -9,6 +9,7 @@
 
 #include <pthread.h>
 
+#include <errno.h>
 #include <stdbool.h>
 
 #define NWM_THREAD_WAIT_NS (100000000)
@@ -93,7 +94,23 @@ extern bool rp_lock_srw;
 	} else if (_res == WAIT_FAILED) { \
 		_ret = GetLastError(); \
 	} else { \
-		ExitThread(0); \
+		/* cancel event: unwind cleanly instead of ExitThread mid-lock */ \
+		_ret = ECANCELED; \
+	} \
+	_ret; \
+})
+#define rp_sem_trywait(n) ({ \
+	int _ret; \
+	DWORD _res = WaitForSingleObject(n, 0); \
+	if (_res == WAIT_OBJECT_0) { \
+		_ret = 0; \
+	} else if (_res == WAIT_TIMEOUT) { \
+		_ret = ETIMEDOUT; \
+	} else { \
+		_ret = GetLastError(); \
+		if (_ret == 0) { \
+			_ret = -1; \
+		} \
 	} \
 	_ret; \
 })
@@ -169,6 +186,23 @@ extern pthread_condattr_t rp_cond_attr;
 	} \
 	_ret; \
 })
+#define rp_sem_trywait(s) ({ \
+	int _ret = pthread_mutex_lock(&(s).mutex); \
+	if (_ret == 0) { \
+		int _cret; \
+		if ((s).n > 0) { \
+			--(s).n; \
+			_cret = 0; \
+		} else { \
+			_cret = ETIMEDOUT; \
+		} \
+		_ret = pthread_mutex_unlock(&(s).mutex); \
+		if (_ret == 0) { \
+			_ret = _cret; \
+		} \
+	} \
+	_ret; \
+})
 #define rp_sem_rel(s) ({ \
 	int _ret = pthread_mutex_lock(&(s).mutex); \
 	int _cret = 0; \
@@ -198,6 +232,16 @@ extern pthread_condattr_t rp_cond_attr;
 	struct timespec _to = clock_monotonic_abs_ns_from_now(to_ns); \
 	int _ret = sem_clockwait(&(n), CLOCK_MONOTONIC, &_to); \
 	if (_ret) { _ret = errno; } \
+	_ret; \
+})
+#define rp_sem_trywait(n) ({ \
+	int _ret = sem_trywait(&(n)); \
+	if (_ret) { \
+		_ret = errno; \
+		if (_ret == EAGAIN) { \
+			_ret = ETIMEDOUT; \
+		} \
+	} \
 	_ret; \
 })
 #define rp_sem_rel(n) sem_post(&(n))

@@ -61,7 +61,7 @@ int rp_syn_close1(struct rp_syn_comp_func_t *syn1) {
 int rp_syn_acq(struct rp_syn_comp_func_t *syn1, unsigned timeout_ns, void **pos, UNUSED rp_e_t e) {
 	int res;
 	if ((res = rp_sem_timedwait(syn1->sem, timeout_ns, e)) != 0) {
-		if (res != ETIMEDOUT)
+		if (res != ETIMEDOUT && res != ECANCELED)
 			fprintf(stderr, "rp_syn_acq wait sem error\n");
 		return res;
 	}
@@ -96,7 +96,7 @@ int rp_syn_rel(struct rp_syn_comp_func_t *syn1, void *pos) {
 int rp_syn_acq1(struct rp_syn_comp_func_t *syn1, unsigned timeout_ns, void **pos, UNUSED rp_e_t e) {
 	int res;
 	if ((res = rp_sem_timedwait(syn1->sem, timeout_ns, e)) != 0) {
-		if (res != ETIMEDOUT)
+		if (res != ETIMEDOUT && res != ECANCELED)
 			fprintf(stderr, "rp_syn_acq1 wait sem error\n");
 		return res;
 	}

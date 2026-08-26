@@ -207,9 +207,7 @@ thread_ret_t tcp_thread_func(void *arg)
     *(t->work_req_state) = CONNECTION_REQ_STATE_NONE; \
     if (t->remote_play) { \
         *(t->remote_play) = 0; \
-        rp_lock_wait(ui_nk_lock); \
-        *(uint32_t *)ntr_ip_octet_incoming = 0; \
-        rp_lock_rel(ui_nk_lock); \
+        __atomic_store_n((uint32_t *)ntr_ip_octet_incoming, 0, __ATOMIC_RELAXED); \
     } \
     err_log("disconnected\n"); \
 } while (0)
@@ -221,10 +219,9 @@ thread_ret_t tcp_thread_func(void *arg)
         uint32_t ip_octet_incoming;
         uint32_t ip_octet;
 
-        rp_lock_wait(ui_nk_lock);
-        ip_octet_incoming = t->remote_play && ntr_auto_reconnect ? *(uint32_t *)ntr_ip_octet_incoming : 0;
-        ip_octet = *(uint32_t *)ntr_ip_octet;
-        rp_lock_rel(ui_nk_lock);
+        ip_octet_incoming = t->remote_play && ntr_auto_reconnect
+            ? __atomic_load_n((uint32_t *)ntr_ip_octet_incoming, __ATOMIC_RELAXED) : 0;
+        ip_octet = __atomic_load_n((uint32_t *)ntr_ip_octet, __ATOMIC_RELAXED);
 
         if (
             *(t->work_state) == CONNECTION_STATE_DISCONNECTED &&
@@ -283,6 +280,12 @@ thread_ret_t tcp_thread_func(void *arg)
                     if (header.data_len)
                     {
                         char *buf = malloc(header.data_len + 1);
+                        if (!buf)
+                        {
+                            err_log("heart beat recv alloc failed: %d\n", (int)header.data_len);
+                            RESET_SOCKET();
+                            continue;
+                        }
                         if ((ret = tcp_recv(sockfd, buf, header.data_len)) < 0)
                         {
                             if (program_running)
@@ -303,6 +306,12 @@ thread_ret_t tcp_thread_func(void *arg)
                 {
                     err_log("unhandled packet type %d: size %d\n", header.cmd, header.data_len);
                     char *buf = malloc(header.data_len);
+                    if (!buf)
+                    {
+                        err_log("tcp recv alloc failed: %d\n", (int)header.data_len);
+                        RESET_SOCKET();
+                        continue;
+                    }
                     if ((ret = tcp_recv(sockfd, buf, header.data_len)) < 0)
                     {
                         if (program_running)

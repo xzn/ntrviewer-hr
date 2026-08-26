@@ -67,6 +67,8 @@ typedef int SOCKET;
 #define socket_errno() errno
 #define WSAEWOULDBLOCK EWOULDBLOCK
 #define WSAETIMEDOUT ETIMEDOUT
+#define WSAECONNRESET ECONNRESET
+#define WSAECONNREFUSED ECONNREFUSED
 #define SOCKET_ERROR (-1)
 #define INVALID_SOCKET (-1)
 #define closesocket close

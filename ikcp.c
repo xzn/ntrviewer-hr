@@ -247,6 +247,33 @@ void ikcp_release(ikcpcb *kcp)
 }
 
 
+static void ikcp_remove_fec(ikcpcb *kcp, IUINT16 fid);
+static int ikcp_remove_original(ikcpcb *kcp, IUINT16 pid);
+
+//---------------------------------------------------------------------
+// reset a kcpcb in place for a new session (keeps the segs/fecs arrays)
+//---------------------------------------------------------------------
+void ikcp_clear(ikcpcb *kcp, IUINT16 cid)
+{
+	for (int i = 0; i < (1 << FID_NBITS); ++i) {
+		ikcp_remove_fec(kcp, (IUINT16)i);
+	}
+	for (int i = 0; i < (1 << PID_NBITS); ++i) {
+		ikcp_remove_original(kcp, (IUINT16)i);
+	}
+
+	kcp->input_cid = kcp->cid = cid & ((1 << CID_NBITS) - 1);
+	kcp->nsnd = 0;
+	kcp->should_reset = false;
+	kcp->session_established = false;
+	kcp->session_just_established = false;
+	kcp->session_data_received = false;
+	kcp->fid = 0;
+	kcp->gid = 0;
+	kcp->input_fid = kcp->recv_fid = kcp->input_pid = kcp->recv_pid = (IUINT16)-1 & ((1 << PID_NBITS) - 1);
+}
+
+
 //---------------------------------------------------------------------
 // set output callback, which will be invoked by kcp
 //---------------------------------------------------------------------
@@ -635,7 +662,11 @@ int ikcp_reset(ikcpcb *kcp, IUINT16 cid)
 #define count_nbits (sizeof(IUINT16) * 8 - PID_NBITS)
 int ikcp_reply(ikcpcb *kcp)
 {
-	char buf[kcp->mtu];
+	// fixed buffer instead of a VLA on the recv thread; mtu is 1448 here
+	char buf[2048];
+	if (kcp->mtu > sizeof(buf)) {
+		return -1;
+	}
 	IUINT16 hdr = ((kcp->fid & ((1 << FID_NBITS) - 1)) << (GID_NBITS + CID_NBITS + 1)) | ((kcp->gid & ((1 << GID_NBITS) - 1)) << (CID_NBITS + 1)) | ((kcp->cid & ((1 << CID_NBITS) - 1)) << 1);
 	char *ptr = buf;
 	int size = 0;

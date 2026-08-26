@@ -57,10 +57,6 @@ static uint32_t recv_end_size[RP_WORK_COUNT];
 static uint32_t recv_delay_between_packets[RP_WORK_COUNT];
 static uint32_t recv_last_packet_time[RP_WORK_COUNT];
 static uint8_t recv_work;
-static bool recv_has_last_frame_id[SCREEN_COUNT];
-static uint8_t recv_last_frame_id[SCREEN_COUNT];
-static uint8_t recv_last_packet_id[SCREEN_COUNT];
-
 #define RP_CORE_COUNT_MAX (3)
 
 #define RP_KCP_WORK_COUNT (2)
@@ -199,7 +195,25 @@ static int queue_decode(int work)
     return 0;
 }
 
-static int acquire_decode()
+// non-blocking: 0 = acquired, 1 = busy, -1 = fatal
+static int acquire_decode_try()
+{
+    int ret = rp_sem_trywait(jpeg_decode_sem);
+    if (ret == 0) {
+        return 0;
+    }
+    if (ret == ETIMEDOUT) {
+        return 1;
+    }
+    if (program_running) {
+        program_running = 0;
+        err_log("jpeg_decode_sem trywait error\n");
+    }
+    return -1;
+}
+
+// Blocking acquire, for frames that must not be dropped.
+static int acquire_decode_block()
 {
     int ret;
     if ((ret = acquire_sem(&jpeg_decode_sem)) != 0) {
@@ -213,7 +227,8 @@ static int acquire_decode()
 
 static int queue_decode_kcp(int w, int queue_w)
 {
-    if (acquire_decode() != 0) {
+    // must block: dropping a KCP frame desyncs delta and races the slot reuse
+    if (acquire_decode_block() != 0) {
         return -1;
     }
 
@@ -1622,6 +1637,10 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
             thread_set_cancel_state(false);
             if (res == 0)
                 break;
+            if (res == ECANCELED) {
+                // cancel event during teardown; exit cleanly
+                return 0;
+            }
             if (res != ETIMEDOUT) {
                 err_log("rp_syn_acq failed\n");
                 program_running = 0;
@@ -1812,6 +1831,8 @@ static int handle_recv(uint8_t *buf, int size)
             if (queue_decode(work) != 0) {
                 return -1;
             }
+            // clear so the non-blocking switch below can't queue this slot twice
+            jpeg_decode_info[work].not_queued = false;
         }
 
         work = (work + 1) % RP_WORK_COUNT;
@@ -1819,8 +1840,18 @@ static int handle_recv(uint8_t *buf, int size)
     }
 
     if (work_next) {
-        if (acquire_decode() != 0) {
+        int aret = acquire_decode_try();
+        if (aret < 0) {
             return -1;
+        }
+        if (aret > 0) {
+            // slots busy: drop the packet instead of stalling; count the frame once
+            static uint8_t dropped_hdr[RP_DATA_HDR_ID_SIZE];
+            if (memcmp(dropped_hdr, hdr, RP_DATA_HDR_ID_SIZE) != 0) {
+                memcpy(dropped_hdr, hdr, RP_DATA_HDR_ID_SIZE);
+                __atomic_add_fetch(&frame_lost_tracker, 1, __ATOMIC_RELAXED);
+            }
+            return 0;
         }
 
         jpeg_decode_info[work] = (struct jpeg_decode_info_t){0};
@@ -1889,9 +1920,12 @@ static int handle_recv(uint8_t *buf, int size)
         }
 
         recv_end[work] = 2;
-        set_jpeg_decode_info(work);
-        if (queue_decode(work) != 0)
-            return -1;
+        // may already be queued (busy decoder); don't queue the same slot twice
+        if (jpeg_decode_info[work].not_queued) {
+            set_jpeg_decode_info(work);
+            if (queue_decode(work) != 0)
+                return -1;
+        }
     }
 
     return 0;
@@ -2178,6 +2212,35 @@ static void socket_action(int ret)
 
     if (kcp_active) {
         if ((ret = ikcp_input(kcp, (const char *)buf, ret)) != 0) {
+            // drop single-datagram anomalies instead of tearing down the session
+            switch (ret) {
+            case 11: {
+                // data before handshake: nudge a re-handshake, don't restart
+                static uint32_t handshake_nudge_time;
+                uint32_t current_time = iclock();
+                if (current_time - handshake_nudge_time >= 100000) {
+                    handshake_nudge_time = current_time;
+                    ikcp_reset(kcp, kcp->cid);
+                    kcp_cid_reset = kcp->cid;
+                }
+                return;
+            }
+            case -10: // datagram too short
+            case -9:  // malformed zero-length packet
+            case -1:  // wrong payload size for a data packet
+            case -3:  // gid out of range
+            {
+                static uint32_t drop_log_time;
+                uint32_t current_time = iclock();
+                if (current_time - drop_log_time >= 2000000) {
+                    drop_log_time = current_time;
+                    err_log("ikcp_input dropped datagram: %d\n", ret);
+                }
+                return;
+            }
+            default:
+                break;
+            }
             kcp_restart = 1;
             if (kcp->input_cid == kcp_cid_reset) {
                 ikcp_reset(kcp, kcp_cid_reset);
@@ -2203,6 +2266,8 @@ static void socket_action(int ret)
                 err_log("kcp session_established\n");
                 kcp->session_established = true;
             }
+            // avoid a reply burst from a stale reply_time after reconnect
+            reply_time = iclock();
         }
     } else if (handle_recv(buf, ret) < 0) {
         return;
@@ -2211,6 +2276,7 @@ static void socket_action(int ret)
 
 static void receive_from_socket()
 {
+    uint32_t last_published_addr = 0;
     while (program_running && !kcp_restart) {
         socklen_t addr_len = sizeof(remote_addr);
 
@@ -2222,28 +2288,52 @@ static void receive_from_socket()
             continue;
         } else if (ret < 0) {
             int err = socket_errno();
+            if (err == WSAECONNRESET || err == WSAECONNREFUSED) {
+                // ICMP port-unreachable from our own sendto; not fatal
+                static uint32_t connreset_log_time;
+                uint32_t current_time = iclock();
+                if (current_time - connreset_log_time >= 2000000) {
+                    connreset_log_time = current_time;
+                    err_log("recvfrom connreset ignored\n");
+                }
+                continue;
+            }
             if (err != WSAETIMEDOUT && err != WSAEWOULDBLOCK) {
                 // err_log("recvfrom failed: %d\n", err);
                 // Sleep(SOCKET_RESET_INTERVAL_MS);
                 ntr_rp_port_changed = 1; // HACK to restart recv
                 return;
             } else if (err == WSAEWOULDBLOCK) {
-                socket_reply();
-                if (!socket_poll(s)) {
-                    if (program_running)
-                        err_log("socket poll failed: %d\n", socket_errno());
-                    return;
+                // keep replying during inbound silence, paced under socket_reply's limits
+                while (program_running && !kcp_restart) {
+                    socket_reply();
+                    if (kcp_restart)
+                        break;
+                    int poll_ms = SOCKET_POLL_INTERVAL_MS;
+                    if (kcp_active && kcp->session_established)
+                        poll_ms = kcp->recv_pid != kcp->input_pid ? 10 : 100;
+                    int pret = socket_poll_ms(s, poll_ms);
+                    if (pret > 0)
+                        break;
+                    if (pret < 0) {
+                        if (program_running)
+                            err_log("socket poll failed: %d\n", socket_errno());
+                        return;
+                    }
                 }
             }
             continue;
         }
 
-        rp_lock_wait(ui_nk_lock);
-        uint32_t addr = ntohl(remote_addr.sin_addr.s_addr);
-        *(uint32_t *)ntr_ip_octet_incoming = __builtin_bswap32(addr);
-        if (!*(uint32_t *)ntr_ip_octet)
-            *(uint32_t *)ntr_ip_octet = *(uint32_t *)ntr_ip_octet_incoming;
-        rp_lock_rel(ui_nk_lock);
+        // publish sender IP lock-free (the GUI holds ui_nk_lock for long spans)
+        uint32_t addr_octets = __builtin_bswap32(ntohl(remote_addr.sin_addr.s_addr));
+        if (addr_octets != last_published_addr) {
+            last_published_addr = addr_octets;
+            __atomic_store_n((uint32_t *)ntr_ip_octet_incoming, addr_octets, __ATOMIC_RELAXED);
+            uint32_t expected = 0;
+            __atomic_compare_exchange_n((uint32_t *)ntr_ip_octet, &expected, addr_octets, false,
+                __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+        }
 
         remote_received = 1;
 
@@ -2254,21 +2344,18 @@ static void receive_from_socket()
 static void receive_from_socket_loop(void)
 {
     while (program_running && !ntr_rp_port_changed) {
-        if (kcp)
-            ikcp_release(kcp);
-        kcp = ikcp_create(kcp_cid, 0);
-        if (!kcp) {
-            err_log("ikcp_create failed\n");
-            Sleep(SOCKET_RESET_INTERVAL_MS);
-            continue;
+        if (kcp) {
+            // in-place reset: keep the large segs/fecs arrays across restarts
+            ikcp_clear(kcp, kcp_cid);
+        } else {
+            kcp = ikcp_create(kcp_cid, 0);
+            if (!kcp) {
+                err_log("ikcp_create failed\n");
+                Sleep(SOCKET_RESET_INTERVAL_MS);
+                continue;
+            }
         }
         kcp_init(kcp);
-
-        for (int i = 0; i < SCREEN_COUNT; ++i) {
-            recv_has_last_frame_id[i] = 0;
-            recv_last_frame_id[i] = 0;
-            recv_last_packet_id[i] = 0;
-        }
 
         // err_log("new connection\n");
         // for (int i = 0; i < SCREEN_COUNT; ++i)
@@ -2334,9 +2421,7 @@ static void receive_from_socket_loop(void)
 
         remote_received = 0;
 
-        rp_lock_wait(ui_nk_lock);
-        *(uint32_t *)ntr_ip_octet_incoming = 0;
-        rp_lock_rel(ui_nk_lock);
+        __atomic_store_n((uint32_t *)ntr_ip_octet_incoming, 0, __ATOMIC_RELAXED);
 
 #ifdef _WIN32
         thread_set_cancel(jpeg_decode_thread_e);
@@ -2377,31 +2462,38 @@ thread_ret_t udp_recv_thread_func(void *)
         ntr_rp_port_changed = 0;
         ntr_rp_port = ntr_rp_port_bound;
 
+#ifdef _WIN32
+        // stop ICMP port-unreachable surfacing as WSAECONNRESET on recvfrom
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
+#endif
+        {
+            BOOL connreset = FALSE;
+            DWORD bytes_returned = 0;
+            if (WSAIoctl(s, SIO_UDP_CONNRESET, &connreset, sizeof(connreset), NULL, 0,
+                    &bytes_returned, NULL, NULL) != 0) {
+                err_log("WSAIoctl SIO_UDP_CONNRESET failed: %d\n", socket_errno());
+            }
+        }
+#endif
+
         int buff_size = 6 * 1024 * 1024;
         socklen_t tmp = sizeof(buff_size);
 
         ret = setsockopt(s, SOL_SOCKET, SO_RCVBUF, (char *)(&buff_size), sizeof(buff_size));
-        buff_size = 0;
-        ret = getsockopt(s, SOL_SOCKET, SO_RCVBUF, (char *)(&buff_size), &tmp);
         if (ret) {
             err_log("setsockopt buf size failed\n");
             socket_error_pause();
             goto socket_final;
         }
-
-#ifdef _WIN32
-        DWORD timeout = SOCKET_RESET_INTERVAL_MS;
-#else
-        struct timeval timeout;
-        timeout.tv_sec = SOCKET_RESET_INTERVAL_MS / 1000;
-        timeout.tv_usec = (SOCKET_RESET_INTERVAL_MS % 1000) * 1000;
-#endif
-        ret = setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout));
+        buff_size = 0;
+        ret = getsockopt(s, SOL_SOCKET, SO_RCVBUF, (char *)(&buff_size), &tmp);
         if (ret) {
-            err_log("setsockopt timeout failed\n");
+            err_log("getsockopt buf size failed\n");
             socket_error_pause();
             goto socket_final;
         }
+        err_log("socket recv buffer size: %d\n", buff_size);
 
         if (!socket_set_nonblock(s, 1)) {
             err_log("socket_set_nonblock failed, %d\n", socket_errno());

@@ -33,6 +33,24 @@ UNUSED static bool socket_set_nonblock(SOCKET s, bool nb)
     return true;
 }
 
+// single-shot poll: 1 = readable, 0 = timeout, -1 = error
+UNUSED static int socket_poll_ms(SOCKET s, int timeout_ms)
+{
+    WSAPOLLFD pollfd = {
+        .fd = s,
+        .events = POLLIN,
+        .revents = 0,
+    };
+    int res = WSAPoll(&pollfd, 1, timeout_ms);
+    if (res < 0) {
+        return -1;
+    }
+    if (res > 0 && (pollfd.revents & POLLIN)) {
+        return 1;
+    }
+    return 0;
+}
+
 UNUSED static bool socket_poll(SOCKET s)
 {
     while (program_running && !kcp_restart) {
@@ -57,8 +75,11 @@ UNUSED static bool socket_poll(SOCKET s)
 #define NTR_IP_OCTET_SIZE (4)
 #define NTR_MAC_SIZE (6)
 
+// also accessed as one aliased uint32_t (lock-free __atomic word ops)
 extern atomic_uint_fast8_t ntr_ip_octet[NTR_IP_OCTET_SIZE];
 extern atomic_uint_fast8_t ntr_ip_octet_incoming[NTR_IP_OCTET_SIZE];
+_Static_assert(sizeof(atomic_uint_fast8_t[NTR_IP_OCTET_SIZE]) == sizeof(uint32_t),
+    "ip octet arrays must alias exactly one uint32_t");
 
 extern int ntr_rp_port;
 extern atomic_int ntr_rp_port_bound;

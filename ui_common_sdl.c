@@ -285,7 +285,7 @@ void ui_windows_titles_update(void)
 
         int packet_received = __atomic_exchange_n(&packet_received_tracker, 0, __ATOMIC_RELAXED);
         int packet_should_receive = __atomic_exchange_n(&packet_should_receive_tracker, 0, __ATOMIC_RELAXED);
-        double lossless_rate = packet_rate * packet_received / packet_should_receive;
+        double lossless_rate = packet_should_receive ? packet_rate * packet_received / packet_should_receive : 0.0;
 
         int view_mode = __atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED);
 

@@ -321,6 +321,9 @@ ikcpcb* ikcp_create(IUINT16 cid, void *user);
 // release kcp control object
 void ikcp_release(ikcpcb *kcp);
 
+// reset in place for a new session (cheaper than release + create)
+void ikcp_clear(ikcpcb *kcp, IUINT16 cid);
+
 // set output callback, which will be invoked by kcp
 void ikcp_setoutput(ikcpcb *kcp, int (*output)(const char *buf, int len,
 	ikcpcb *kcp, void *user));
