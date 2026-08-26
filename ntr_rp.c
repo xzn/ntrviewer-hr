@@ -909,16 +909,21 @@ static int set_decode_quality_kcp(bool is_top, int quality, int chroma_ss, int d
     return 0;
 }
 
-static uint8_t *copy_with_escape(uint8_t *out, const uint8_t *in, int size)
+// returns NULL on overflow (in is untrusted network data)
+static uint8_t *copy_with_escape(uint8_t *out, const uint8_t *out_end, const uint8_t *in, int size)
 {
     while (size) {
         if (*in == 0xff) {
+            if (out_end - out < 2)
+                return NULL;
             *out = 0xff;
             ++out;
             *out = 0;
             ++out;
             ++in;
         } else {
+            if (out == out_end)
+                return NULL;
             *out = *in;
             ++out;
             ++in;
@@ -1499,14 +1504,23 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
 
     memcpy(jpeg_buffer_kcp, jpeg_header, jpeg_header_size);
     unsigned char *ptr = jpeg_buffer_kcp + jpeg_header_size;
+    unsigned char *const jpeg_buffer_end = jpeg_buffer_kcp + sizeof(jpeg_buffer_kcp);
     for (int t = 0; t < info->core_count; ++t) {
         struct kcp_recv_t *recv = &recvs[t];
         for (int i = 0; i < recv->count; ++i) {
             if (i == recv->count - 1) {
-                ptr = copy_with_escape(ptr, recv->buf[i], recv->term_size);
+                ptr = copy_with_escape(ptr, jpeg_buffer_end, recv->buf[i], recv->term_size);
             } else {
-                ptr = copy_with_escape(ptr, recv->buf[i], RP_KCP_PACKET_SIZE);
+                ptr = copy_with_escape(ptr, jpeg_buffer_end, recv->buf[i], RP_KCP_PACKET_SIZE);
             }
+            if (!ptr) {
+                err_log("jpeg assembly overflow\n");
+                return -4;
+            }
+        }
+        if (jpeg_buffer_end - ptr < 2) {
+            err_log("jpeg assembly overflow\n");
+            return -4;
         }
         *ptr = 0xff;
         ++ptr;
@@ -2007,6 +2021,11 @@ static int handle_recv_kcp(uint8_t *buf, int size)
 
                 // err_log("t %d rc %d size %d\n", (int)t, (int)v_adjusted, (int)term_size);
 
+                // clamp untrusted term_size to the row size (avoids OOB downstream)
+                if (term_size > RP_KCP_PACKET_SIZE) {
+                    return -11;
+                }
+
                 info->term_sizes[t] = term_size;
                 if (t == core_count - 1) {
                     if (core_count > 1 && v_adjusted > info->v_adjusted) {
@@ -2065,6 +2084,9 @@ static int handle_recv_kcp(uint8_t *buf, int size)
             if (!size)
                 break;
 
+            if (recv->count >= RP_MAX_PACKET_COUNT) {
+                return -12;
+            }
             left_size = left_size <= size ? left_size : size;
             memcpy(recv->buf[recv->count] + info->last_term_size, buf, left_size);
             buf += left_size;
