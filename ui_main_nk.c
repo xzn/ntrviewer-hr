@@ -1082,6 +1082,9 @@ void ui_main_nk(void)
         nk_checkbox_label(ctx, "Stats", &ntr_stats_overlay);
 
         nk_layout_row_dynamic(ctx, 30, 1);
+        nk_checkbox_label(ctx, "Audio (NTR-HR+)", &ntr_rp_config.audio_enable);
+
+        nk_layout_row_dynamic(ctx, 30, 1);
         nk_checkbox_label(ctx, "Auto-Reconnect", &ntr_auto_reconnect);
         if (!ntr_auto_reconnect) {
             ntr_auto_update_params = nk_false;

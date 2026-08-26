@@ -102,6 +102,7 @@ struct ntr_rp_config_t {
     int bandwidth_limit;
     int kcp_mode;
     int lossless_color;
+    nk_bool audio_enable; // NTR-HR+: request game-audio streaming
 };
 
 extern struct ntr_rp_config_t ntr_rp_config;
