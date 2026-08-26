@@ -182,11 +182,14 @@ static bool rp_send_need_update;
 static uint32_t rp_send_last_us;
 static struct ntr_rp_config_t rp_config_last;
 static int rp_port_last;
+static int rp_quality_sent_last = -1;
 
 #include "ui_main_nk.h"
 
 nk_bool ntr_auto_reconnect = nk_true;
 nk_bool ntr_auto_update_params = nk_true;
+nk_bool ntr_auto_quality = nk_false;
+atomic_int ntr_jpeg_quality_auto = NTR_JPEG_QUALITY_MAX;
 
 static bool ntr_rp_config_valid(struct ntr_rp_config_t *config)
 {
@@ -323,9 +326,15 @@ thread_ret_t tcp_thread_func(void *arg)
             ++packet_seq;
 
             const uint32_t rp_send_next_us = iclock();
+            // slider is the ceiling; auto controller can only lower it
+            const int rp_quality_auto = ntr_jpeg_quality_auto;
+            const int rp_quality_send = ntr_auto_quality
+                ? MIN(ntr_rp_config.jpeg_quality, rp_quality_auto)
+                : ntr_rp_config.jpeg_quality;
             const bool rp_send_update =
                 memcmp(&rp_config_last, &ntr_rp_config, sizeof(struct ntr_rp_config_t)) ||
-                rp_port_last != ntr_rp_port_bound;
+                rp_port_last != ntr_rp_port_bound ||
+                rp_quality_send != rp_quality_sent_last;
             rp_send_need_update = rp_send_need_update || rp_send_update;
             const bool rp_send_wait_timeout = (int32_t)(rp_send_next_us - rp_send_last_us) > 1000000;
             if (t->remote_play && (*(t->remote_play) || rp_send_update || rp_send_wait_timeout))
@@ -333,6 +342,7 @@ thread_ret_t tcp_thread_func(void *arg)
                 rp_send_last_us = rp_send_next_us;
                 memcpy(&rp_config_last, &ntr_rp_config, sizeof(struct ntr_rp_config_t));
                 rp_port_last = ntr_rp_port_bound;
+                rp_quality_sent_last = rp_quality_send;
                 if (!rp_port_last || !ntr_rp_config_valid(&rp_config_last))
                     continue;
                 if (!*(t->remote_play) && (!rp_send_wait_timeout || !rp_send_need_update || !ntr_auto_update_params))
@@ -345,7 +355,7 @@ thread_ret_t tcp_thread_func(void *arg)
                 int lossless_mode = rp_config_last.kcp_mode / KCP_MODE_COUNT;
                 uint32_t args[] = {
                     ((uint32_t)rp_config_last.top_screen_priority << 8) | (uint32_t)rp_config_last.screen_priority_factor,
-                    (uint32_t)rp_config_last.jpeg_quality,
+                    (uint32_t)rp_quality_send,
                     (uint32_t)rp_config_last.bandwidth_limit * 128 * 1024,
                     1404036572 /* guarding magic */,
                     (uint32_t)(uint16_t)rp_port_last |

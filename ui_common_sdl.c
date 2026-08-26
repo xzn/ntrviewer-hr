@@ -5,6 +5,7 @@
 #include "ui_renderer_vulkan.h"
 #include "ui_input_redirection.h"
 #include "main.h"
+#include "ntr_common.h"
 #include "ikcp.h"
 #include <math.h>
 
@@ -182,16 +183,59 @@ void ui_window_size_update(int window_top_bot) {
 static uint64_t windows_titles_last_tick;
 #define WINDOW_TITLE_LEN_MAX 512
 
-static double kcp_get_connection_quality(void)
+// consumes the kcp counters; call once per stat interval
+static double kcp_get_connection_quality(bool *had_input)
 {
     int fec_count = __atomic_exchange_n(&kcp_input_fec_count, 0, __ATOMIC_RELAXED);
     int input_count = fec_count ?
         (IUINT32)__atomic_exchange_n(&kcp_input_pid_count, 0, __ATOMIC_RELAXED) * __atomic_exchange_n(&kcp_input_fid_count, 0, __ATOMIC_RELAXED) / fec_count : 0;
     double ret = input_count ? (double)__atomic_exchange_n(&kcp_recv_pid_count, 0, __ATOMIC_RELAXED) / input_count : 0.0;
+    if (had_input)
+        *had_input = input_count > 0;
     return ret * ret * 100;
 }
 
-static void ui_kcp_window_title_update(SDL_Window *win, int tick_diff)
+// AIMD quality controller: drop fast on loss, recover slowly; slider is the ceiling
+static int auto_quality_good_streak;
+static int auto_quality_cooldown;
+static void ntr_auto_quality_tick(double health, bool traffic)
+{
+    if (!ntr_auto_quality) {
+        ntr_jpeg_quality_auto = NTR_JPEG_QUALITY_MAX;
+        auto_quality_good_streak = 0;
+        auto_quality_cooldown = 0;
+        return;
+    }
+    if (!traffic)
+        return;
+    // cooldown after a change: let the stream settle before re-measuring
+    if (auto_quality_cooldown > 0) {
+        --auto_quality_cooldown;
+        auto_quality_good_streak = 0;
+        return;
+    }
+    int quality = ntr_jpeg_quality_auto;
+    int quality_prev = quality;
+    if (health < 90.0) {
+        quality -= 5;
+        auto_quality_good_streak = 0;
+    } else if (health >= 98.0) {
+        if (++auto_quality_good_streak >= 3) {
+            auto_quality_good_streak = 0;
+            quality += 1;
+        }
+    } else {
+        auto_quality_good_streak = 0;
+    }
+    quality = quality < NTR_JPEG_QUALITY_MIN ? NTR_JPEG_QUALITY_MIN
+        : quality > NTR_JPEG_QUALITY_MAX ? NTR_JPEG_QUALITY_MAX : quality;
+    if (quality != quality_prev) {
+        auto_quality_cooldown = 3;
+    }
+    ntr_jpeg_quality_auto = quality;
+}
+
+static void ui_kcp_window_title_update(SDL_Window *win, int tick_diff, double connection_quality)
 {
     char window_title[WINDOW_TITLE_LEN_MAX];
     snprintf(window_title, sizeof(window_title),
@@ -202,14 +246,14 @@ static void ui_kcp_window_title_update(SDL_Window *win, int tick_diff)
              __atomic_exchange_n(&frame_rate_decoded_tracker[SCREEN_TOP], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
              __atomic_exchange_n(&frame_rate_displayed_tracker[SCREEN_BOT], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
              __atomic_exchange_n(&frame_rate_decoded_tracker[SCREEN_BOT], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / (int)tick_diff,
-             kcp_get_connection_quality(),
+             connection_quality,
              is_lossless ?
                 kcp_dq ? "Lossless RS, Delta" : "Lossless RS" :
                 kcp_dq ? "JPEG RS, Delta" : "JPEG RS");
     SDL_SetWindowTitle(win, window_title);
 }
 
-static void ui_kcp_windows_titles_update(int ctx_top_bot, int screen_top_bot, int tick_diff)
+static void ui_kcp_windows_titles_update(int ctx_top_bot, int screen_top_bot, int tick_diff, double connection_quality)
 {
     char window_title[WINDOW_TITLE_LEN_MAX];
     snprintf(window_title, sizeof(window_title),
@@ -222,7 +266,7 @@ static void ui_kcp_windows_titles_update(int ctx_top_bot, int screen_top_bot, in
                  " (FPS %03d/%03d)",
              __atomic_exchange_n(&frame_rate_displayed_tracker[screen_top_bot], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
              __atomic_exchange_n(&frame_rate_decoded_tracker[screen_top_bot], 0, __ATOMIC_RELAXED) * FRAME_STAT_EVERY_X_US / tick_diff,
-             kcp_get_connection_quality(),
+             connection_quality,
              is_lossless ?
                 kcp_dq ? "Lossless RS, Delta" : "Lossless RS" :
                 kcp_dq ? "JPEG RS, Delta" : "JPEG RS");
@@ -245,11 +289,14 @@ void ui_windows_titles_update(void)
 
         int view_mode = __atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED);
 
+        bool kcp_had_input = false;
+        double kcp_quality = kcp_active ? kcp_get_connection_quality(&kcp_had_input) : 0.0;
+
         if (view_mode == VIEW_MODE_TOP_BOT)
         {
             if (kcp_active)
             {
-                ui_kcp_window_title_update(ui_sdl_win[SCREEN_TOP], (int)tick_diff);
+                ui_kcp_window_title_update(ui_sdl_win[SCREEN_TOP], (int)tick_diff, kcp_quality);
             } else {
                 char window_title[WINDOW_TITLE_LEN_MAX];
                 snprintf(
@@ -279,7 +326,7 @@ void ui_windows_titles_update(void)
                 }
                 if (kcp_active)
                 {
-                    ui_kcp_windows_titles_update(ctx_top_bot, screen_top_bot, (int)tick_diff);
+                    ui_kcp_windows_titles_update(ctx_top_bot, screen_top_bot, (int)tick_diff, kcp_quality);
                 } else {
                     char window_title[WINDOW_TITLE_LEN_MAX];
                     snprintf(
@@ -303,6 +350,10 @@ void ui_windows_titles_update(void)
                 }
             }
         }
+
+        ntr_auto_quality_tick(
+            kcp_active ? kcp_quality : packet_rate,
+            kcp_active ? kcp_had_input : (frame_fully_received + frame_lost) > 0);
 
         windows_titles_last_tick = next_tick;
         for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot)

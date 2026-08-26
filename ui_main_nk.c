@@ -144,6 +144,7 @@ static enum NK_FOCUS {
     NK_FOCUS_PRIORITY_FACTOR,
     NK_FOCUS_FMT_PROT,
     NK_FOCUS_QUALITY,
+    NK_FOCUS_AUTO_QUALITY,
     NK_FOCUS_BANDWIDTH_LIMIT,
     NK_FOCUS_DEFAULT,
     NK_FOCUS_CONNECT,
@@ -879,6 +880,18 @@ void ui_main_nk(void)
             do_nav_slider_next(ctx, NK_FOCUS_QUALITY, &ntr_rp_config.jpeg_quality);
             nk_slider_int(ctx, NTR_JPEG_QUALITY_MIN, &ntr_rp_config.jpeg_quality, NTR_JPEG_QUALITY_MAX, 1);
             check_nav_slider_prev(ctx, NK_FOCUS_QUALITY, ntr_rp_config.jpeg_quality);
+
+            nk_layout_row_dynamic(ctx, 30, 2);
+            if (ntr_auto_quality) {
+                snprintf(msg_buf, sizeof(msg_buf), "Auto Quality (now %d)",
+                    MIN(ntr_rp_config.jpeg_quality, (int)ntr_jpeg_quality_auto));
+                nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+            } else {
+                nk_label(ctx, "Auto Quality", NK_TEXT_CENTERED);
+            }
+            do_nav_checkbox_next(ctx, NK_FOCUS_AUTO_QUALITY, &ntr_auto_quality);
+            nk_checkbox_label(ctx, "", &ntr_auto_quality);
+            check_nav_checkbox_prev(ctx, NK_FOCUS_AUTO_QUALITY, ntr_auto_quality);
         }
 
         nk_layout_row_dynamic(ctx, 30, 2);
