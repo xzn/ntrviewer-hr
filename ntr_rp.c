@@ -5,6 +5,7 @@
 #include "ntr_huff.h"
 #include "ntr_jpeg_delta.h"
 #include "ntr_stats_overlay.h"
+#include "ntr_audio.h"
 #include "rp_syn.h"
 #include "ui_common_sdl.h"
 #include "ui_main_nk.h"
@@ -1804,6 +1805,11 @@ static int handle_recv(uint8_t *buf, int size)
     size -= RP_DATA_HDR_SIZE;
 
     // err_log("%d %d %d %d (%d)\n", hdr[0], hdr[1], hdr[2], hdr[3], size);
+
+    if (hdr[2] == RP_AUDIO_HDR_TYPE) {
+        ntr_audio_handle_packet(buf, size, hdr[3]);
+        return 0;
+    }
 
     if ((hdr[2] & ~(RP_HDR_DOWNSAMPLE_MASK | 0x1)) != 2) {
         err_log("recv invalid header\n");

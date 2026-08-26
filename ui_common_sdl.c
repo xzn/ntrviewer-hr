@@ -6,6 +6,7 @@
 #include "ui_input_redirection.h"
 #include "main.h"
 #include "ntr_common.h"
+#include "ntr_audio.h"
 #include "ikcp.h"
 #include <math.h>
 
@@ -62,7 +63,7 @@ int ui_common_sdl_init(void) {
         SDL_SetHint(SDL_HINT_OPENGL_ES_DRIVER, "0");
     }
 
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMEPAD)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) {
         err_log("SDL_Init: %s\n", SDL_GetError());
         return -1;
     }
@@ -88,6 +89,7 @@ int ui_common_sdl_init(void) {
 }
 
 void ui_common_sdl_destroy(void) {
+    ntr_audio_shutdown();
     SDL_Quit();
 }
 
