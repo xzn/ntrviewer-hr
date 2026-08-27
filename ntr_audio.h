@@ -16,6 +16,7 @@
 // call after the recv thread has stopped
 void ntr_audio_shutdown(void);
 
-void ntr_audio_handle_packet(const uint8_t *pcm, int size, uint8_t fmt);
+// payload = consecutive pcm16 frames, oldest first; seq is the newest frame's
+void ntr_audio_handle_packet(const uint8_t *pcm, int size, uint8_t fmt, uint8_t seq);
 
 #endif // NTR_AUDIO_H

@@ -1806,11 +1806,6 @@ static int handle_recv(uint8_t *buf, int size)
 
     // err_log("%d %d %d %d (%d)\n", hdr[0], hdr[1], hdr[2], hdr[3], size);
 
-    if (hdr[2] == RP_AUDIO_HDR_TYPE) {
-        ntr_audio_handle_packet(buf, size, hdr[3]);
-        return 0;
-    }
-
     if ((hdr[2] & ~(RP_HDR_DOWNSAMPLE_MASK | 0x1)) != 2) {
         err_log("recv invalid header\n");
         return 0;
@@ -2200,6 +2195,13 @@ static int test_kcp_magic(int magic)
 
 static void socket_action(int ret)
 {
+    // plain-udp audio: route before the kcp test, ikcp_input would eat it
+    if (buf[2] == RP_AUDIO_HDR_TYPE && ret > RP_DATA_HDR_SIZE &&
+        (ret - RP_DATA_HDR_SIZE) % RP_AUDIO_FRAME_BYTES == 0) {
+        ntr_audio_handle_packet(buf + RP_DATA_HDR_SIZE, ret - RP_DATA_HDR_SIZE, buf[3], buf[0]);
+        return;
+    }
+
     int ntr_is_kcp_test = 0;
     if (ret == (int)sizeof(uint16_t)) {
         ntr_is_kcp_test = 1;
