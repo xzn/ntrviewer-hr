@@ -2098,6 +2098,9 @@ static int handle_recv_kcp(uint8_t *buf, int size)
             //     "left size %d size %d last term %d last term size %d\n",
             //     (int)left_size, (int)size, (int)info->last_term, (int)info->last_term_size);
             if (left_size == 0) {
+                if (recv->count >= RP_MAX_PACKET_COUNT) {
+                    return -12;
+                }
                 ++recv->count;
                 recv->term_size = info->last_term_size;
                 // err_log("%d\n", (int)recv->term_size);
