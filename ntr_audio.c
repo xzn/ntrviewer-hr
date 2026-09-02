@@ -39,10 +39,14 @@ static bool ntr_audio_open(void)
 
 static void ntr_audio_put(const uint8_t *frame)
 {
-    if (SDL_GetAudioStreamQueued(audio_stream) <= RP_AUDIO_FRAME_BYTES * AUDIO_MAX_QUEUED_FRAMES) {
-        if (!SDL_PutAudioStreamData(audio_stream, frame, RP_AUDIO_FRAME_BYTES))
-            err_log("SDL_PutAudioStreamData: %s\n", SDL_GetError());
+    if (SDL_GetAudioStreamQueued(audio_stream) > RP_AUDIO_FRAME_BYTES * AUDIO_MAX_QUEUED_FRAMES) {
+        // latency hit the cap: flush and re-prime instead of holding max lag forever
+        SDL_ClearAudioStream(audio_stream);
+        SDL_PauseAudioStreamDevice(audio_stream);
+        audio_primed = false;
     }
+    if (!SDL_PutAudioStreamData(audio_stream, frame, RP_AUDIO_FRAME_BYTES))
+        err_log("SDL_PutAudioStreamData: %s\n", SDL_GetError());
 }
 
 void ntr_audio_handle_packet(const uint8_t *pcm, int size, uint8_t fmt, uint8_t seq)
