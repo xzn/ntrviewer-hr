@@ -102,6 +102,18 @@ void ntr_audio_handle_packet(const uint8_t *pcm, int size, uint8_t fmt, uint8_t 
     }
 }
 
+void ntr_audio_reset(void)
+{
+    // drop stale jitter state so a reconnect re-primes from scratch
+    audio_have_last = false;
+    audio_last_seq = 0;
+    audio_primed = false;
+    if (audio_stream) {
+        SDL_ClearAudioStream(audio_stream);
+        SDL_PauseAudioStreamDevice(audio_stream);
+    }
+}
+
 void ntr_audio_shutdown(void)
 {
     audio_shutting_down = 1;

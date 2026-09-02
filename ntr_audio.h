@@ -13,6 +13,9 @@
 #define RP_AUDIO_FRAME_SAMPLES (160)
 #define RP_AUDIO_FRAME_BYTES   (RP_AUDIO_FRAME_SAMPLES * RP_AUDIO_CHANNELS * 2) // 640
 
+// drop jitter-buffer state on reconnect, call from the recv thread
+void ntr_audio_reset(void);
+
 // call after the recv thread has stopped
 void ntr_audio_shutdown(void);
 

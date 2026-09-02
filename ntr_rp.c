@@ -2366,6 +2366,7 @@ static void receive_from_socket_loop(void)
                 continue;
             }
         }
+        ntr_audio_reset(); // drop stale audio jitter state on every (re)connect
         kcp_init(kcp);
 
         // err_log("new connection\n");
