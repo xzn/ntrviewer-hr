@@ -73,6 +73,12 @@ void ntr_audio_handle_packet(const uint8_t *pcm, int size, uint8_t fmt, uint8_t 
         }
 
         int diff = (int8_t)(fseq - audio_last_seq); // wrap-safe distance
+        if (diff < -32) {
+            // large forward jump past the +/-127 window: resync after a long stall
+            ntr_audio_put(fdata);
+            audio_last_seq = fseq;
+            continue;
+        }
         if (diff <= 0)
             continue; // duplicate or older
 
