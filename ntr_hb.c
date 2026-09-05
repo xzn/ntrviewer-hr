@@ -189,7 +189,7 @@ static int rp_quality_sent_last = -1;
 nk_bool ntr_auto_reconnect = nk_true;
 nk_bool ntr_auto_update_params = nk_true;
 nk_bool ntr_auto_quality = nk_false;
-atomic_int ntr_jpeg_quality_auto = NTR_JPEG_QUALITY_MAX;
+atomic_int ntr_jpeg_quality_auto = 0;
 
 static bool ntr_rp_config_valid(struct ntr_rp_config_t *config)
 {
@@ -336,7 +336,7 @@ thread_ret_t tcp_thread_func(void *arg)
 
             const uint32_t rp_send_next_us = iclock();
             // slider is the ceiling; auto controller can only lower it
-            const int rp_quality_auto = ntr_jpeg_quality_auto;
+            const int rp_quality_auto = ntr_jpeg_quality_auto ? ntr_jpeg_quality_auto : NTR_JPEG_QUALITY_MAX;
             const int rp_quality_send = ntr_auto_quality
                 ? MIN(ntr_rp_config.jpeg_quality, rp_quality_auto)
                 : ntr_rp_config.jpeg_quality;

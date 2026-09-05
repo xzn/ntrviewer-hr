@@ -143,8 +143,8 @@ static enum NK_FOCUS {
     NK_FOCUS_PRIORITY_SCREEN,
     NK_FOCUS_PRIORITY_FACTOR,
     NK_FOCUS_FMT_PROT,
-    NK_FOCUS_QUALITY,
     NK_FOCUS_AUTO_QUALITY,
+    NK_FOCUS_QUALITY,
     NK_FOCUS_BANDWIDTH_LIMIT,
     NK_FOCUS_DEFAULT,
     NK_FOCUS_CONNECT,
@@ -254,50 +254,68 @@ static nk_bool check_next_property(struct nk_context *ctx, const char *name)
     return win->property.active && win->property.name == hash;
 }
 
-static enum nk_nav_t do_nav_next(enum NK_FOCUS nk_focus)
+static bool check_focus_disabled(enum NK_FOCUS nk_focus)
 {
-    enum nk_nav_t ret = NK_NAV_NONE;
-    if (nk_focus == nk_focus_current)
+    if (nk_focus == NK_FOCUS_AUTO_QUALITY)
+        return ntr_rp_config.kcp_mode >= KCP_MODE_ON_DELTA;
+
+    return false;
+}
+
+static void do_nav_next_cmd(enum nk_nav_t nav_cmd)
+{
+    switch (nav_cmd)
     {
-        switch ((ret = __atomic_load_n(&nk_nav_cmd, __ATOMIC_RELAXED)))
-        {
-        case NK_NAV_PREVIOUS:
-            if (nk_nav_focus != NK_NAV_FOCUS_NONE) {
+    case NK_NAV_PREVIOUS:
+        if (nk_nav_focus != NK_NAV_FOCUS_NONE) {
+            do {
                 if (nk_focus_current <= NK_FOCUS_MIN)
                     nk_focus_current = NK_FOCUS_MAX;
                 else
                     --nk_focus_current;
-            }
-            nk_nav_focus = NK_NAV_FOCUS_NAV;
-            break;
+            } while (check_focus_disabled(nk_focus_current));
+        }
+        nk_nav_focus = NK_NAV_FOCUS_NAV;
+        break;
 
-        case NK_NAV_NEXT:
-            if (nk_nav_focus != NK_NAV_FOCUS_NONE) {
+    case NK_NAV_NEXT:
+        if (nk_nav_focus != NK_NAV_FOCUS_NONE) {
+            do {
                 if (nk_focus_current >= NK_FOCUS_MAX)
                     nk_focus_current = NK_FOCUS_MIN;
                 else
                     ++nk_focus_current;
-            }
-            nk_nav_focus = NK_NAV_FOCUS_NAV;
-            break;
-
-        case NK_NAV_CANCEL:
-            if (nk_nav_focus == NK_NAV_FOCUS_NONE)
-                ui_set_hide_nk_windows(1);
-            else
-                nk_nav_focus = NK_NAV_FOCUS_NONE;
-            break;
-
-        case NK_NAV_CONFIRM:
-            nk_nav_focus = nk_nav_focus == NK_NAV_FOCUS_NONE ? NK_NAV_FOCUS_NAV : NK_NAV_FOCUS_NONE;
-            break;
-
-        default:
-            break;
+            } while (check_focus_disabled(nk_focus_current));
         }
-        __atomic_store_n(&nk_nav_cmd, NK_NAV_NONE, __ATOMIC_RELAXED);
+        nk_nav_focus = NK_NAV_FOCUS_NAV;
+        break;
+
+    case NK_NAV_CANCEL:
+        if (nk_nav_focus == NK_NAV_FOCUS_NONE)
+            ui_set_hide_nk_windows(1);
+        else
+            nk_nav_focus = NK_NAV_FOCUS_NONE;
+        break;
+
+    case NK_NAV_CONFIRM:
+        nk_nav_focus = nk_nav_focus == NK_NAV_FOCUS_NONE ? NK_NAV_FOCUS_NAV : NK_NAV_FOCUS_NONE;
+        break;
+
+    default:
+        break;
     }
-    return ret;
+    __atomic_store_n(&nk_nav_cmd, NK_NAV_NONE, __ATOMIC_RELAXED);
+}
+
+static enum nk_nav_t do_nav_next(enum NK_FOCUS nk_focus) {
+    if (nk_focus == nk_focus_current)
+    {
+        enum nk_nav_t nav_cmd = __atomic_load_n(&nk_nav_cmd, __ATOMIC_RELAXED);
+        do_nav_next_cmd(nav_cmd);
+        return nav_cmd;
+    } else {
+        return NK_NAV_NONE;
+    }
 }
 
 static int *nk_nav_combo_selected;
@@ -389,6 +407,7 @@ static void check_nav_property_prev(struct nk_context *ctx, const char *name, en
 
 static int nk_nav_combo_selected_previous;
 static bool nk_nav_combo_focus;
+static enum nk_nav_t nk_nav_combo_cmd;
 static void do_nav_combobox_next(struct nk_context *ctx, enum NK_FOCUS nk_focus, int *selected, int *pending, int count)
 {
     if (nk_focus_current == nk_focus && nk_nav_focus != NK_NAV_FOCUS_NONE)
@@ -424,10 +443,10 @@ static void do_nav_combobox_next(struct nk_context *ctx, enum NK_FOCUS nk_focus,
         nk_nav_combo_focus = 0;
     }
 
-    enum nk_nav_t cmd = do_nav_next(nk_focus);
+    nk_nav_combo_cmd = do_nav_next(nk_focus);
 
     if (nk_nav_combo_selected) {
-        switch (cmd) {
+        switch (nk_nav_combo_cmd) {
             case NK_NAV_CANCEL:
                 if (*selected != nk_nav_combo_selected_previous) {
                     *selected = nk_nav_combo_selected_previous;
@@ -453,8 +472,21 @@ final:
 static bool nk_nav_combo_applied;
 static void set_nav_combobox_prev(enum NK_FOCUS nk_focus)
 {
-    if (!nk_nav_combo_applied) {
+    if (!nk_nav_combo_applied)
         set_nav_next(NK_NAV_FOCUS_NAV, nk_focus);
+}
+
+static void update_nav_combobox_nav(enum NK_FOCUS nk_focus)
+{
+    nk_nav_focus = NK_NAV_FOCUS_NAV;
+    nk_focus_current = nk_focus;
+    switch (nk_nav_combo_cmd) {
+        case NK_NAV_NEXT:
+        case NK_NAV_PREVIOUS:
+            do_nav_next_cmd(nk_nav_combo_cmd);
+            break;
+        default:
+            break;
     }
 }
 
@@ -864,6 +896,7 @@ void ui_main_nk(void)
         {
             set_nav_combobox_prev(NK_FOCUS_FMT_PROT);
             ntr_rp_config.kcp_mode = selected;
+            update_nav_combobox_nav(NK_FOCUS_FMT_PROT);
         }
 
         if (ntr_rp_config.kcp_mode / KCP_MODE_COUNT) {
@@ -873,25 +906,34 @@ void ui_main_nk(void)
             do_nav_slider_next(ctx, NK_FOCUS_QUALITY, &ntr_rp_config.lossless_color);
             nk_slider_int(ctx, NTR_COLOR_BIAS_MIN, &ntr_rp_config.lossless_color, NTR_COLOR_BIAS_MAX, 1);
             check_nav_slider_prev(ctx, NK_FOCUS_QUALITY, ntr_rp_config.lossless_color);
+
+            ntr_jpeg_quality_auto = 0;
         } else {
+            if (ntr_rp_config.kcp_mode < KCP_MODE_ON_DELTA) {
+                nk_layout_row_dynamic(ctx, 30, 2);
+                if (ntr_auto_quality) {
+                    snprintf(msg_buf, sizeof(msg_buf), "Auto Quality (Now %d)",
+                        ntr_jpeg_quality_auto ?
+                            MIN(ntr_rp_config.jpeg_quality, (int)ntr_jpeg_quality_auto) : ntr_rp_config.jpeg_quality);
+                    nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
+                } else {
+                    nk_label(ctx, "Auto Quality", NK_TEXT_CENTERED);
+
+                    ntr_jpeg_quality_auto = 0;
+                }
+                do_nav_checkbox_next(ctx, NK_FOCUS_AUTO_QUALITY, &ntr_auto_quality);
+                nk_checkbox_label(ctx, "", &ntr_auto_quality);
+                check_nav_checkbox_prev(ctx, NK_FOCUS_AUTO_QUALITY, ntr_auto_quality);
+            } else {
+                ntr_jpeg_quality_auto = 0;
+            }
+
             nk_layout_row_dynamic(ctx, 30, 2);
             snprintf(msg_buf, sizeof(msg_buf), "JPEG Quality %d", ntr_rp_config.jpeg_quality);
             nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
             do_nav_slider_next(ctx, NK_FOCUS_QUALITY, &ntr_rp_config.jpeg_quality);
             nk_slider_int(ctx, NTR_JPEG_QUALITY_MIN, &ntr_rp_config.jpeg_quality, NTR_JPEG_QUALITY_MAX, 1);
             check_nav_slider_prev(ctx, NK_FOCUS_QUALITY, ntr_rp_config.jpeg_quality);
-
-            nk_layout_row_dynamic(ctx, 30, 2);
-            if (ntr_auto_quality) {
-                snprintf(msg_buf, sizeof(msg_buf), "Auto Quality (now %d)",
-                    MIN(ntr_rp_config.jpeg_quality, (int)ntr_jpeg_quality_auto));
-                nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
-            } else {
-                nk_label(ctx, "Auto Quality", NK_TEXT_CENTERED);
-            }
-            do_nav_checkbox_next(ctx, NK_FOCUS_AUTO_QUALITY, &ntr_auto_quality);
-            nk_checkbox_label(ctx, "", &ntr_auto_quality);
-            check_nav_checkbox_prev(ctx, NK_FOCUS_AUTO_QUALITY, ntr_auto_quality);
         }
 
         nk_layout_row_dynamic(ctx, 30, 2);
@@ -1025,7 +1067,7 @@ void ui_main_nk(void)
     if (focus_window)
         nk_window_set_focus(ctx, remote_play_wnd);
 
-    if (nk_begin(ctx, debug_msg_wnd, nk_rect(615, 10, 175, 275),
+    if (nk_begin(ctx, debug_msg_wnd, nk_rect(615, 10, 175, 300),
                  NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE) &&
         show_window)
     {

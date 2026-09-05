@@ -200,15 +200,20 @@ static double kcp_get_connection_quality(bool *had_input)
 // AIMD quality controller: drop fast on loss, recover slowly; slider is the ceiling
 static int auto_quality_good_streak;
 static int auto_quality_cooldown;
+static int jpeg_quality_temp;
 static void ntr_auto_quality_tick(double health, bool traffic)
 {
-    if (!ntr_auto_quality) {
-        ntr_jpeg_quality_auto = NTR_JPEG_QUALITY_MAX;
+    if (!ntr_auto_quality || !ntr_jpeg_quality_auto || jpeg_quality_temp != ntr_rp_config.jpeg_quality) {
+        jpeg_quality_temp = ntr_rp_config.jpeg_quality;
+        ntr_jpeg_quality_auto = jpeg_quality_temp;
         auto_quality_good_streak = 0;
-        auto_quality_cooldown = 0;
+        auto_quality_cooldown = 2;
         return;
     }
     if (!traffic)
+        return;
+    // ignore outlier
+    if (health < 25.0)
         return;
     // cooldown after a change: let the stream settle before re-measuring
     if (auto_quality_cooldown > 0) {
@@ -219,20 +224,22 @@ static void ntr_auto_quality_tick(double health, bool traffic)
     int quality = ntr_jpeg_quality_auto;
     int quality_prev = quality;
     if (health < 90.0) {
-        quality -= 5;
+        quality *= health * 0.009;
         auto_quality_good_streak = 0;
-    } else if (health >= 98.0) {
-        if (++auto_quality_good_streak >= 3) {
+    } else if (health >= 97.5) {
+        if (++auto_quality_good_streak >= 1) {
             auto_quality_good_streak = 0;
-            quality += 1;
+            quality +=
+                jpeg_quality_temp - quality > 25 ? 5 :
+                jpeg_quality_temp - quality > 10 ? 3 : 1;
         }
     } else {
         auto_quality_good_streak = 0;
     }
     quality = quality < NTR_JPEG_QUALITY_MIN ? NTR_JPEG_QUALITY_MIN
-        : quality > NTR_JPEG_QUALITY_MAX ? NTR_JPEG_QUALITY_MAX : quality;
+        : quality > jpeg_quality_temp ? jpeg_quality_temp : quality;
     if (quality != quality_prev) {
-        auto_quality_cooldown = 3;
+        auto_quality_cooldown = 1;
     }
     ntr_jpeg_quality_auto = quality;
 }
