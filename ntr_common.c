@@ -32,6 +32,7 @@ void ntr_config_set_default(void) {
         .bandwidth_limit = 16,
         .kcp_mode = KCP_MODE_ON_DELTA,
         .lossless_color = 1,
+        .audio_enable = ntr_rp_config.audio_enable,
     };
 }
 bool ntr_top_screen_priority_prev;
