@@ -255,6 +255,7 @@ static int queue_decode_kcp(int w, int queue_w)
 
 int packet_received_tracker;
 int packet_should_receive_tracker;
+int packet_received_size_tracker;
 int frame_fully_received_tracker;
 int frame_lost_tracker;
 static uint8_t last_decoded_frame_id[SCREEN_COUNT];
@@ -1718,6 +1719,8 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
 
                 stats_overlay_0(out, top_bot, in_size, is_lossless ? -1 : q, width, height);
                 handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay, sync_ctx);
+
+                __atomic_add_fetch(&packet_received_size_tracker, in_size, __ATOMIC_RELAXED);
             }
         } else {
             if (ptr->in) {
@@ -1760,6 +1763,8 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                     stats_overlay_0(out, top_bot, ptr->in_size, -1, SCREEN_WIDTH, ptr->is_kcp ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1);
                     handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay, sync_ctx);
                     __atomic_add_fetch(&frame_fully_received_tracker, 1, __ATOMIC_RELAXED);
+
+                    __atomic_add_fetch(&packet_received_size_tracker, ptr->in_size, __ATOMIC_RELAXED);
                 } else {
                     __atomic_add_fetch(&frame_lost_tracker, 1, __ATOMIC_RELAXED);
                 }

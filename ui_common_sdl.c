@@ -198,6 +198,52 @@ static double kcp_get_connection_quality(bool *had_input)
 }
 
 // AIMD quality controller: drop fast on loss, recover slowly; slider is the ceiling
+static int auto_quality_good_streak;
+static int auto_quality_cooldown;
+static int jpeg_quality_temp;
+static void ntr_auto_quality_tick(double sat, bool traffic)
+{
+    if (!ntr_auto_quality || !ntr_jpeg_quality_auto || jpeg_quality_temp != ntr_rp_config.jpeg_quality) {
+        jpeg_quality_temp = ntr_rp_config.jpeg_quality;
+        ntr_jpeg_quality_auto = jpeg_quality_temp;
+        auto_quality_good_streak = 0;
+        auto_quality_cooldown = 2;
+        return;
+    }
+    if (!traffic)
+        return;
+
+    if (auto_quality_cooldown > 0) {
+        --auto_quality_cooldown;
+        auto_quality_good_streak = 0;
+        return;
+    }
+    int quality = ntr_jpeg_quality_auto;
+    int quality_prev = quality;
+
+    if (sat >= 0.9) {
+        quality *= 0.8;
+        auto_quality_good_streak = 0;
+    } else if (sat < 0.8) {
+        if (++auto_quality_good_streak >= 1) {
+            auto_quality_good_streak = 0;
+            quality +=
+                jpeg_quality_temp - quality >= 25 ? 5 :
+                jpeg_quality_temp - quality >= 10 ? 3 : 1;
+        }
+    } else {
+        auto_quality_good_streak = 0;
+    }
+
+    quality = quality < NTR_JPEG_QUALITY_MIN ? NTR_JPEG_QUALITY_MIN
+        : quality > jpeg_quality_temp ? jpeg_quality_temp : quality;
+    if (quality != quality_prev) {
+        auto_quality_cooldown = 1;
+    }
+    ntr_jpeg_quality_auto = quality;
+}
+
+// AIMD qos
 static int auto_qos_good_streak;
 static int auto_qos_cooldown;
 static int bandwidth_limit_temp;
@@ -213,8 +259,8 @@ static void ntr_auto_qos_tick(double health, bool traffic)
     if (!traffic)
         return;
     // ignore outlier
-    // if (health < 25.0)
-    //     return;
+    if (health < 12.5)
+        return;
     // cooldown after a change: let the stream settle before re-measuring
     if (auto_qos_cooldown > 0) {
         --auto_qos_cooldown;
@@ -223,15 +269,17 @@ static void ntr_auto_qos_tick(double health, bool traffic)
     }
     int qos = ntr_qos_auto;
     int qos_prev = qos;
-    if (health < 90.0) {
-        qos *= health * 0.009;
+    if (health < 95.0) {
+        qos *= health * 0.0095;
         auto_qos_good_streak = 0;
     } else if (health >= 97.5) {
         if (++auto_qos_good_streak >= 1) {
             auto_qos_good_streak = 0;
             qos +=
                 bandwidth_limit_temp * 1000 - qos >= 12000 ? 1200 :
-                bandwidth_limit_temp * 1000 - qos >= 8000 ? 800 : 400;
+                bandwidth_limit_temp * 1000 - qos >= 8000 ? 800 :
+                bandwidth_limit_temp * 1000 - qos >= 4000 ? 400 :
+                bandwidth_limit_temp * 1000 - qos >= 2000 ? 200 : 100;
         }
     } else {
         auto_qos_good_streak = 0;
@@ -288,6 +336,8 @@ void ui_windows_titles_update(void)
     uint64_t tick_diff = next_tick - windows_titles_last_tick;
     if (tick_diff >= FRAME_STAT_EVERY_X_US)
     {
+        int packet_received_size = __atomic_exchange_n(&packet_received_size_tracker, 0, __ATOMIC_RELAXED);;
+
         int frame_fully_received = __atomic_exchange_n(&frame_fully_received_tracker, 0, __ATOMIC_RELAXED);
         int frame_lost = __atomic_exchange_n(&frame_lost_tracker, 0, __ATOMIC_RELAXED);
         double packet_rate = frame_fully_received ? (double)frame_fully_received / (frame_fully_received + frame_lost) * 100 : 0.0;
@@ -300,6 +350,9 @@ void ui_windows_titles_update(void)
 
         bool kcp_had_input = false;
         double kcp_quality = kcp_active ? kcp_get_connection_quality(&kcp_had_input) : 0.0;
+
+        bool has_traffic = kcp_active ? kcp_had_input : (frame_fully_received + frame_lost) > 0;
+        double traffic_health = kcp_active ? kcp_quality : packet_rate;
 
         if (view_mode == VIEW_MODE_TOP_BOT)
         {
@@ -360,9 +413,11 @@ void ui_windows_titles_update(void)
             }
         }
 
-        ntr_auto_qos_tick(
-            kcp_active ? kcp_quality : packet_rate,
-            kcp_active ? kcp_had_input : (frame_fully_received + frame_lost) > 0);
+        ntr_auto_qos_tick(traffic_health, has_traffic);
+
+        ntr_auto_quality_tick(
+            (double)packet_received_size / traffic_health /
+                (double)(ntr_rp_config.bandwidth_limit * 128 * 1024) * 100.0, has_traffic);
 
         windows_titles_last_tick = next_tick;
         for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot)
