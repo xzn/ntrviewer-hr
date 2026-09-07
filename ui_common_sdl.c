@@ -227,7 +227,7 @@ static void ntr_auto_quality_tick(double sat, bool traffic)
     int quality = ntr_jpeg_quality_auto;
     int quality_prev = quality;
 
-    if (sat >= 0.9) {
+    if (sat >= 0.95) {
         quality *= 0.8;
         auto_quality_good_streak = 0;
     } else if (sat < 0.8) {
@@ -348,7 +348,8 @@ void ui_windows_titles_update(void)
     uint64_t tick_diff = next_tick - windows_titles_last_tick;
     if (tick_diff >= FRAME_STAT_EVERY_X_US)
     {
-        int packet_received_size = __atomic_exchange_n(&packet_received_size_tracker, 0, __ATOMIC_RELAXED);;
+        int packet_received_size = __atomic_exchange_n(&packet_received_size_tracker, 0, __ATOMIC_RELAXED);
+        int packet_received_delay = __atomic_exchange_n(&packet_received_delay_tracker, 0, __ATOMIC_RELAXED);
 
         int frame_fully_received = __atomic_exchange_n(&frame_fully_received_tracker, 0, __ATOMIC_RELAXED);
         int frame_lost = __atomic_exchange_n(&frame_lost_tracker, 0, __ATOMIC_RELAXED);
@@ -428,8 +429,10 @@ void ui_windows_titles_update(void)
         ntr_auto_qos_tick(traffic_health, has_traffic);
 
         ntr_auto_quality_tick(
-            (double)packet_received_size / traffic_health /
-                (double)(ntr_rp_config.bandwidth_limit * 128 * 1024) * 100.0, has_traffic);
+            (double)packet_received_size / (traffic_health / 100.0) /
+                (packet_received_delay
+                    ? 1000000.0 / packet_received_delay * RP_PACKET_DATA_SIZE / RP_PACKET_DELAY_F
+                    : (double)(ntr_rp_config.bandwidth_limit * 128 * 1024)), has_traffic);
 
         windows_titles_last_tick = next_tick;
         for (int top_bot = 0; top_bot < SCREEN_COUNT; ++top_bot)

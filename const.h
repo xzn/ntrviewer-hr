@@ -225,6 +225,12 @@ enum frame_buffer_status_t
 #define NTR_QOS_MIN (4)
 #define NTR_QOS_MAX (20)
 
+#define RP_PACKET_SIZE 1448
+#define RP_DATA_HDR_SIZE (4)
+#define RP_PACKET_DATA_SIZE (RP_PACKET_SIZE - RP_DATA_HDR_SIZE)
+
+#define RP_PACKET_DELAY_F (0.8)
+
 typedef uint8_t byte;
 typedef uint8_t u8;
 typedef uint16_t u16;

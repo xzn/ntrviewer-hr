@@ -39,9 +39,6 @@ static int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
     return sendto(s, buf, len, 0, (struct sockaddr *)&remote_addr, sizeof(remote_addr));
 }
 
-#define RP_PACKET_SIZE 1448
-#define RP_DATA_HDR_SIZE (4)
-#define RP_PACKET_DATA_SIZE (RP_PACKET_SIZE - RP_DATA_HDR_SIZE)
 #define RP_DATA_HDR_ID_SIZE (3)
 
 #define RP_MAX_PACKET_COUNT (240)
@@ -256,6 +253,7 @@ static int queue_decode_kcp(int w, int queue_w)
 int packet_received_tracker;
 int packet_should_receive_tracker;
 int packet_received_size_tracker;
+int packet_received_delay_tracker;
 int frame_fully_received_tracker;
 int frame_lost_tracker;
 static uint8_t last_decoded_frame_id[SCREEN_COUNT];
@@ -2201,8 +2199,24 @@ static int test_kcp_magic(int magic)
     return !((magic & (~0x00001100 & 0x0000ff00)) == 0 && (magic & 0x00f20000) == 0x00020000);
 }
 
+static int packet_received_time = 0;
 static void socket_action(int ret)
 {
+    if (packet_received_time) {
+        int next_time = iclock();
+        int diff_time = next_time - packet_received_time;
+        if (diff_time >= (int)(1000000 / ((double)(ntr_qos_auto ? ntr_qos_auto / 1000 : ntr_rp_config.bandwidth_limit) * 128 * 1024 / RP_PACKET_SIZE * RP_PACKET_DELAY_F))) {
+            int packet_received_delay_track = __atomic_load_n(&packet_received_delay_tracker, __ATOMIC_RELAXED);
+            while ((!packet_received_delay_track || diff_time < packet_received_delay_track) &&
+                !__atomic_compare_exchange_n(&packet_received_delay_tracker, &packet_received_delay_track, diff_time, __ATOMIC_RELAXED, __ATOMIC_RELAXED, __ATOMIC_RELAXED)
+            )
+                ;
+        }
+        packet_received_time = next_time;
+    } else {
+        packet_received_time = iclock();
+    }
+
     // plain-udp audio: route before the kcp test, ikcp_input would eat it
     if (buf[2] == RP_AUDIO_HDR_TYPE && ret > RP_DATA_HDR_SIZE &&
         (ret - RP_DATA_HDR_SIZE) % RP_AUDIO_FRAME_BYTES == 0) {
@@ -2376,6 +2390,7 @@ static void receive_from_socket_loop(void)
         }
         ntr_audio_reset(); // drop stale audio jitter state on every (re)connect
         kcp_init(kcp);
+        packet_received_time = 0;
 
         // err_log("new connection\n");
         // for (int i = 0; i < SCREEN_COUNT; ++i)

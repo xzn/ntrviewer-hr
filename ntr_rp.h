@@ -28,6 +28,7 @@ extern int delay_between_packet_tracker[SCREEN_COUNT];
 extern int packet_received_tracker;
 extern int packet_should_receive_tracker;
 extern int packet_received_size_tracker;
+extern int packet_received_delay_tracker;
 extern int frame_fully_received_tracker;
 extern int frame_lost_tracker;
 extern atomic_bool kcp_active;
