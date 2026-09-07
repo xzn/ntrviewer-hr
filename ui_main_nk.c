@@ -923,7 +923,7 @@ void ui_main_nk(void)
                         snprintf(msg_buf, sizeof(msg_buf), "Auto Quality (%d)",
                             ntr_jpeg_quality_auto ?
                                 MIN(ntr_rp_config.jpeg_quality, (int)ntr_jpeg_quality_auto) : ntr_rp_config.jpeg_quality);
-                        ntr_qos_auto = 0;
+                        ntr_qos_auto = ntr_rp_config.bandwidth_limit * 1000;
                     }
 
                     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
@@ -934,15 +934,15 @@ void ui_main_nk(void)
                         nk_label(ctx, "Auto Quality", NK_TEXT_CENTERED);
                     }
 
-                    ntr_jpeg_quality_auto = 0;
-                    ntr_qos_auto = 0;
+                    ntr_jpeg_quality_auto = ntr_rp_config.jpeg_quality;
+                    ntr_qos_auto = ntr_rp_config.bandwidth_limit * 1000;
                 }
                 do_nav_checkbox_next(ctx, NK_FOCUS_AUTO_QUALITY, &ntr_auto_quality);
                 nk_checkbox_label(ctx, "", &ntr_auto_quality);
                 check_nav_checkbox_prev(ctx, NK_FOCUS_AUTO_QUALITY, ntr_auto_quality);
             } else {
-                ntr_jpeg_quality_auto = 0;
-                ntr_qos_auto = 0;
+                ntr_jpeg_quality_auto = ntr_rp_config.jpeg_quality;
+                ntr_qos_auto = ntr_rp_config.bandwidth_limit * 1000;
             }
 
             nk_layout_row_dynamic(ctx, 30, 2);
