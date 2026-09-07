@@ -183,6 +183,7 @@ static uint32_t rp_send_last_us;
 static struct ntr_rp_config_t rp_config_last;
 static int rp_port_last;
 static int rp_quality_sent_last = -1;
+static int rp_qos_sent_last = -1;
 
 #include "ui_main_nk.h"
 
@@ -190,6 +191,7 @@ nk_bool ntr_auto_reconnect = nk_true;
 nk_bool ntr_auto_update_params = nk_true;
 nk_bool ntr_auto_quality = nk_false;
 atomic_int ntr_jpeg_quality_auto = 0;
+atomic_int ntr_qos_auto = 0;
 
 static bool ntr_rp_config_valid(struct ntr_rp_config_t *config)
 {
@@ -335,15 +337,22 @@ thread_ret_t tcp_thread_func(void *arg)
             ++packet_seq;
 
             const uint32_t rp_send_next_us = iclock();
+
             // slider is the ceiling; auto controller can only lower it
             const int rp_quality_auto = ntr_jpeg_quality_auto ? ntr_jpeg_quality_auto : NTR_JPEG_QUALITY_MAX;
             const int rp_quality_send = ntr_auto_quality
                 ? MIN(ntr_rp_config.jpeg_quality, rp_quality_auto)
                 : ntr_rp_config.jpeg_quality;
+
+            const int rp_qos = ntr_rp_config.bandwidth_limit * 128 * 1024;
+            const int rp_qos_auto = ntr_qos_auto ? ntr_qos_auto * 128 * 1024 / 1000 : rp_qos;
+            const int rp_qos_send = ntr_auto_quality ? MIN(rp_qos, rp_qos_auto) : rp_qos;
+
             const bool rp_send_update =
                 memcmp(&rp_config_last, &ntr_rp_config, sizeof(struct ntr_rp_config_t)) ||
                 rp_port_last != ntr_rp_port_bound ||
-                rp_quality_send != rp_quality_sent_last;
+                rp_quality_send != rp_quality_sent_last ||
+                rp_qos_send != rp_qos_sent_last;
             rp_send_need_update = rp_send_need_update || rp_send_update;
             const bool rp_send_wait_timeout = (int32_t)(rp_send_next_us - rp_send_last_us) > 1000000;
             if (t->remote_play && (*(t->remote_play) || rp_send_update || rp_send_wait_timeout))
@@ -352,6 +361,7 @@ thread_ret_t tcp_thread_func(void *arg)
                 memcpy(&rp_config_last, &ntr_rp_config, sizeof(struct ntr_rp_config_t));
                 rp_port_last = ntr_rp_port_bound;
                 rp_quality_sent_last = rp_quality_send;
+                rp_qos_sent_last = rp_qos_send;
                 if (!rp_port_last || !ntr_rp_config_valid(&rp_config_last))
                     continue;
                 if (!*(t->remote_play) && (!rp_send_wait_timeout || !rp_send_need_update || !ntr_auto_update_params))
@@ -365,7 +375,7 @@ thread_ret_t tcp_thread_func(void *arg)
                 uint32_t args[] = {
                     ((uint32_t)rp_config_last.top_screen_priority << 8) | (uint32_t)rp_config_last.screen_priority_factor,
                     (uint32_t)rp_quality_send,
-                    (uint32_t)rp_config_last.bandwidth_limit * 128 * 1024,
+                    (uint32_t)rp_qos_send,
                     1404036572 /* guarding magic */,
                     (uint32_t)(uint16_t)rp_port_last |
                         (kcp_mode != KCP_MODE_NONE ? (uint32_t)(1 << 30) : (uint32_t)0) |

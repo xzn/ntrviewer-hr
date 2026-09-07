@@ -198,50 +198,50 @@ static double kcp_get_connection_quality(bool *had_input)
 }
 
 // AIMD quality controller: drop fast on loss, recover slowly; slider is the ceiling
-static int auto_quality_good_streak;
-static int auto_quality_cooldown;
-static int jpeg_quality_temp;
-static void ntr_auto_quality_tick(double health, bool traffic)
+static int auto_qos_good_streak;
+static int auto_qos_cooldown;
+static int bandwidth_limit_temp;
+static void ntr_auto_qos_tick(double health, bool traffic)
 {
-    if (!ntr_auto_quality || !ntr_jpeg_quality_auto || jpeg_quality_temp != ntr_rp_config.jpeg_quality) {
-        jpeg_quality_temp = ntr_rp_config.jpeg_quality;
-        ntr_jpeg_quality_auto = jpeg_quality_temp;
-        auto_quality_good_streak = 0;
-        auto_quality_cooldown = 2;
+    if (!ntr_auto_quality || !ntr_qos_auto || bandwidth_limit_temp != ntr_rp_config.bandwidth_limit) {
+        bandwidth_limit_temp = ntr_rp_config.bandwidth_limit;
+        ntr_qos_auto = bandwidth_limit_temp * 1000;
+        auto_qos_good_streak = 0;
+        auto_qos_cooldown = 2;
         return;
     }
     if (!traffic)
         return;
     // ignore outlier
-    if (health < 25.0)
-        return;
+    // if (health < 25.0)
+    //     return;
     // cooldown after a change: let the stream settle before re-measuring
-    if (auto_quality_cooldown > 0) {
-        --auto_quality_cooldown;
-        auto_quality_good_streak = 0;
+    if (auto_qos_cooldown > 0) {
+        --auto_qos_cooldown;
+        auto_qos_good_streak = 0;
         return;
     }
-    int quality = ntr_jpeg_quality_auto;
-    int quality_prev = quality;
+    int qos = ntr_qos_auto;
+    int qos_prev = qos;
     if (health < 90.0) {
-        quality *= health * 0.009;
-        auto_quality_good_streak = 0;
+        qos *= health * 0.009;
+        auto_qos_good_streak = 0;
     } else if (health >= 97.5) {
-        if (++auto_quality_good_streak >= 1) {
-            auto_quality_good_streak = 0;
-            quality +=
-                jpeg_quality_temp - quality > 25 ? 5 :
-                jpeg_quality_temp - quality > 10 ? 3 : 1;
+        if (++auto_qos_good_streak >= 1) {
+            auto_qos_good_streak = 0;
+            qos +=
+                bandwidth_limit_temp * 1000 - qos >= 12000 ? 1200 :
+                bandwidth_limit_temp * 1000 - qos >= 8000 ? 800 : 400;
         }
     } else {
-        auto_quality_good_streak = 0;
+        auto_qos_good_streak = 0;
     }
-    quality = quality < NTR_JPEG_QUALITY_MIN ? NTR_JPEG_QUALITY_MIN
-        : quality > jpeg_quality_temp ? jpeg_quality_temp : quality;
-    if (quality != quality_prev) {
-        auto_quality_cooldown = 1;
+    qos = qos < NTR_QOS_MIN * 1000 ? NTR_QOS_MIN * 1000
+        : qos > bandwidth_limit_temp * 1000 ? bandwidth_limit_temp * 1000 : qos;
+    if (qos != qos_prev) {
+        auto_qos_cooldown = 1;
     }
-    ntr_jpeg_quality_auto = quality;
+    ntr_qos_auto = qos;
 }
 
 static void ui_kcp_window_title_update(SDL_Window *win, int tick_diff, double connection_quality)
@@ -360,7 +360,7 @@ void ui_windows_titles_update(void)
             }
         }
 
-        ntr_auto_quality_tick(
+        ntr_auto_qos_tick(
             kcp_active ? kcp_quality : packet_rate,
             kcp_active ? kcp_had_input : (frame_fully_received + frame_lost) > 0);
 

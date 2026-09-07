@@ -222,6 +222,9 @@ enum frame_buffer_status_t
 #define NTR_COLOR_BIAS_MIN (0)
 #define NTR_COLOR_BIAS_MAX (2)
 
+#define NTR_QOS_MIN (4)
+#define NTR_QOS_MAX (20)
+
 typedef uint8_t byte;
 typedef uint8_t u8;
 typedef uint16_t u16;

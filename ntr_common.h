@@ -146,5 +146,6 @@ extern nk_bool ntr_auto_update_params;
 // adaptive quality: effective quality = min(slider, auto) when enabled
 extern nk_bool ntr_auto_quality;
 extern atomic_int ntr_jpeg_quality_auto;
+extern atomic_int ntr_qos_auto;
 
 #endif
