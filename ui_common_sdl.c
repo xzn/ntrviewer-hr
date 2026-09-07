@@ -201,13 +201,19 @@ static double kcp_get_connection_quality(bool *had_input)
 static int auto_quality_good_streak;
 static int auto_quality_cooldown;
 static int jpeg_quality_temp;
+
+void ntr_auto_quality_reset(void)
+{
+    jpeg_quality_temp = ntr_rp_config.jpeg_quality;
+    ntr_jpeg_quality_auto = jpeg_quality_temp;
+    auto_quality_good_streak = 0;
+    auto_quality_cooldown = 2;
+}
+
 static void ntr_auto_quality_tick(double sat, bool traffic)
 {
     if (!ntr_auto_quality || !ntr_jpeg_quality_auto || jpeg_quality_temp != ntr_rp_config.jpeg_quality) {
-        jpeg_quality_temp = ntr_rp_config.jpeg_quality;
-        ntr_jpeg_quality_auto = jpeg_quality_temp;
-        auto_quality_good_streak = 0;
-        auto_quality_cooldown = 2;
+        ntr_auto_quality_reset();
         return;
     }
     if (!traffic)
@@ -247,13 +253,19 @@ static void ntr_auto_quality_tick(double sat, bool traffic)
 static int auto_qos_good_streak;
 static int auto_qos_cooldown;
 static int bandwidth_limit_temp;
+
+void ntr_auto_qos_reset(void)
+{
+    bandwidth_limit_temp = ntr_rp_config.bandwidth_limit;
+    ntr_qos_auto = bandwidth_limit_temp * 1000;
+    auto_qos_good_streak = 0;
+    auto_qos_cooldown = 2;
+}
+
 static void ntr_auto_qos_tick(double health, bool traffic)
 {
     if (!ntr_auto_quality || !ntr_qos_auto || bandwidth_limit_temp != ntr_rp_config.bandwidth_limit || kcp_active) {
-        bandwidth_limit_temp = ntr_rp_config.bandwidth_limit;
-        ntr_qos_auto = bandwidth_limit_temp * 1000;
-        auto_qos_good_streak = 0;
-        auto_qos_cooldown = 2;
+        ntr_auto_qos_reset();
         return;
     }
     if (!traffic)

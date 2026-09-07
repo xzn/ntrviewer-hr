@@ -897,6 +897,8 @@ void ui_main_nk(void)
             set_nav_combobox_prev(NK_FOCUS_FMT_PROT);
             ntr_rp_config.kcp_mode = selected;
             update_nav_combobox_nav(NK_FOCUS_FMT_PROT);
+
+            ntr_auto_q_reset_all();
         }
 
         if (ntr_rp_config.kcp_mode / KCP_MODE_COUNT) {
@@ -907,8 +909,7 @@ void ui_main_nk(void)
             nk_slider_int(ctx, NTR_COLOR_BIAS_MIN, &ntr_rp_config.lossless_color, NTR_COLOR_BIAS_MAX, 1);
             check_nav_slider_prev(ctx, NK_FOCUS_QUALITY, ntr_rp_config.lossless_color);
 
-            ntr_jpeg_quality_auto = ntr_rp_config.jpeg_quality;
-            ntr_qos_auto = ntr_rp_config.bandwidth_limit * 1000;
+            ntr_auto_q_reset_all();
         } else {
             if (ntr_rp_config.kcp_mode < KCP_MODE_ON_DELTA) {
                 nk_layout_row_dynamic(ctx, 30, 2);
@@ -924,7 +925,7 @@ void ui_main_nk(void)
                         snprintf(msg_buf, sizeof(msg_buf), "Auto Quality (%d)",
                             ntr_jpeg_quality_auto ?
                                 MIN(ntr_rp_config.jpeg_quality, (int)ntr_jpeg_quality_auto) : ntr_rp_config.jpeg_quality);
-                        ntr_qos_auto = ntr_rp_config.bandwidth_limit * 1000;
+                        ntr_auto_qos_reset();
                     }
 
                     nk_label(ctx, msg_buf, NK_TEXT_CENTERED);
@@ -935,15 +936,13 @@ void ui_main_nk(void)
                         nk_label(ctx, "Auto Quality", NK_TEXT_CENTERED);
                     }
 
-                    ntr_jpeg_quality_auto = ntr_rp_config.jpeg_quality;
-                    ntr_qos_auto = ntr_rp_config.bandwidth_limit * 1000;
+                    ntr_auto_q_reset_all();
                 }
                 do_nav_checkbox_next(ctx, NK_FOCUS_AUTO_QUALITY, &ntr_auto_quality);
                 nk_checkbox_label(ctx, "", &ntr_auto_quality);
                 check_nav_checkbox_prev(ctx, NK_FOCUS_AUTO_QUALITY, ntr_auto_quality);
             } else {
-                ntr_jpeg_quality_auto = ntr_rp_config.jpeg_quality;
-                ntr_qos_auto = ntr_rp_config.bandwidth_limit * 1000;
+                ntr_auto_q_reset_all();
             }
 
             nk_layout_row_dynamic(ctx, 30, 2);

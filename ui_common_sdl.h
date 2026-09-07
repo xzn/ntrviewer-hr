@@ -168,4 +168,12 @@ typedef struct {
 } stbi_t;
 void generate_cursor_image(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale);
 
+void ntr_auto_quality_reset(void);
+void ntr_auto_qos_reset(void);
+
+static inline void ntr_auto_q_reset_all(void) {
+    ntr_auto_quality_reset();
+    ntr_auto_qos_reset();
+}
+
 #endif
