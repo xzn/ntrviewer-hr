@@ -2205,7 +2205,7 @@ static void socket_action(int ret)
     if (packet_received_time) {
         int next_time = iclock();
         int diff_time = next_time - packet_received_time;
-        if (diff_time >= (int)(1000000 / ((double)(ntr_qos_auto ? ntr_qos_auto / 1000 : ntr_rp_config.bandwidth_limit) * 128 * 1024 / RP_PACKET_SIZE * RP_PACKET_DELAY_F))) {
+        if (diff_time >= (int)(1000000 / ((ntr_qos_auto ? (double)ntr_qos_auto / 1000 : (double)ntr_rp_config.bandwidth_limit) * 128 * 1024 / RP_PACKET_SIZE * RP_PACKET_DELAY_F))) {
             int packet_received_delay_track = __atomic_load_n(&packet_received_delay_tracker, __ATOMIC_RELAXED);
             while ((!packet_received_delay_track || diff_time < packet_received_delay_track) &&
                 !__atomic_compare_exchange_n(&packet_received_delay_tracker, &packet_received_delay_track, diff_time, __ATOMIC_RELAXED, __ATOMIC_RELAXED, __ATOMIC_RELAXED)
