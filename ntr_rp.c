@@ -2236,12 +2236,13 @@ static void socket_action(int ret)
                 // data before handshake: nudge a re-handshake, don't restart
                 static uint32_t handshake_nudge_time;
                 uint32_t current_time = iclock();
-                if (current_time - handshake_nudge_time >= 100000) {
+                if (current_time - handshake_nudge_time >= 250000) {
                     handshake_nudge_time = current_time;
                     ikcp_reset(kcp, kcp->cid);
                     kcp_cid_reset = kcp->cid;
+                    return;
                 }
-                return;
+                break;
             }
             case -10: // datagram too short
             case -9:  // malformed zero-length packet
