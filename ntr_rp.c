@@ -2207,6 +2207,8 @@ static void socket_action(int ret)
     if (buf[2] == RP_AUDIO_HDR_TYPE && ret > RP_DATA_HDR_SIZE &&
         (ret - RP_DATA_HDR_SIZE) % RP_AUDIO_FRAME_BYTES == 0) {
         ntr_audio_handle_packet(buf + RP_DATA_HDR_SIZE, ret - RP_DATA_HDR_SIZE, buf[3], buf[0]);
+
+        __atomic_add_fetch(&packet_received_size_tracker, ret - RP_DATA_HDR_SIZE, __ATOMIC_RELAXED);
         return;
     }
 
