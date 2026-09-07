@@ -34,6 +34,7 @@ void ntr_config_set_default(void) {
         .lossless_color = 1,
         .audio_enable = ntr_rp_config.audio_enable,
     };
+    ntr_auto_q_reset_all();
 }
 bool ntr_top_screen_priority_prev;
 int ntr_screen_priority_factor_prev;

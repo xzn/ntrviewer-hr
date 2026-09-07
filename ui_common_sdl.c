@@ -212,7 +212,7 @@ void ntr_auto_quality_reset(void)
 
 static void ntr_auto_quality_tick(double sat, bool traffic)
 {
-    if (!ntr_auto_quality || !ntr_jpeg_quality_auto || jpeg_quality_temp != ntr_rp_config.jpeg_quality) {
+    if (!ntr_auto_quality || !ntr_jpeg_quality_auto || jpeg_quality_temp != ntr_rp_config.jpeg_quality || !ntr_auto_quality_cond) {
         ntr_auto_quality_reset();
         return;
     }
@@ -264,7 +264,7 @@ void ntr_auto_qos_reset(void)
 
 static void ntr_auto_qos_tick(double health, bool traffic)
 {
-    if (!ntr_auto_quality || !ntr_qos_auto || bandwidth_limit_temp != ntr_rp_config.bandwidth_limit || kcp_active) {
+    if (!ntr_auto_quality || !ntr_qos_auto || bandwidth_limit_temp != ntr_rp_config.bandwidth_limit || !ntr_auto_qos_cond) {
         ntr_auto_qos_reset();
         return;
     }

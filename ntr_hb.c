@@ -339,8 +339,8 @@ thread_ret_t tcp_thread_func(void *arg)
             const uint32_t rp_send_next_us = iclock();
 
             const bool auto_quality = ntr_auto_quality;
-            const int jpeg_quality_auto = ntr_jpeg_quality_auto;
-            const int qos_auto = ntr_qos_auto;
+            const int jpeg_quality_auto = ntr_auto_quality_cond ? ntr_jpeg_quality_auto : 0;
+            const int qos_auto = ntr_auto_qos_cond ? ntr_qos_auto : 0;
 
             // slider is the ceiling; auto controller can only lower it
             const int rp_quality_auto = jpeg_quality_auto ? jpeg_quality_auto : NTR_JPEG_QUALITY_MAX;

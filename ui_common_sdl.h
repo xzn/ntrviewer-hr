@@ -168,6 +168,9 @@ typedef struct {
 } stbi_t;
 void generate_cursor_image(stbi_t *image, const unsigned char *base, int width, int height, int channels, float scale);
 
+#define ntr_auto_quality_cond (!is_lossless && !(kcp_active && kcp_dq))
+#define ntr_auto_qos_cond (!is_lossless && !kcp_active)
+
 void ntr_auto_quality_reset(void);
 void ntr_auto_qos_reset(void);
 
