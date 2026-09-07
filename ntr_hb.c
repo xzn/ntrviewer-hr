@@ -338,15 +338,19 @@ thread_ret_t tcp_thread_func(void *arg)
 
             const uint32_t rp_send_next_us = iclock();
 
+            const bool auto_quality = ntr_auto_quality;
+            const int jpeg_quality_auto = ntr_jpeg_quality_auto;
+            const int qos_auto = ntr_qos_auto;
+
             // slider is the ceiling; auto controller can only lower it
-            const int rp_quality_auto = ntr_jpeg_quality_auto ? ntr_jpeg_quality_auto : NTR_JPEG_QUALITY_MAX;
-            const int rp_quality_send = ntr_auto_quality
+            const int rp_quality_auto = jpeg_quality_auto ? jpeg_quality_auto : NTR_JPEG_QUALITY_MAX;
+            const int rp_quality_send = auto_quality
                 ? MIN(ntr_rp_config.jpeg_quality, rp_quality_auto)
                 : ntr_rp_config.jpeg_quality;
 
             const int rp_qos = ntr_rp_config.bandwidth_limit * 128 * 1024;
-            const int rp_qos_auto = ntr_qos_auto ? ntr_qos_auto * 128 * 1024 / 1000 : rp_qos;
-            const int rp_qos_send = ntr_auto_quality ? MIN(rp_qos, rp_qos_auto) : rp_qos;
+            const int rp_qos_auto = qos_auto ? (int)((uint64_t)qos_auto * 128 * 1024 / 1000) : rp_qos;
+            const int rp_qos_send = auto_quality ? MIN(rp_qos, rp_qos_auto) : rp_qos;
 
             const bool rp_send_update =
                 memcmp(&rp_config_last, &ntr_rp_config, sizeof(struct ntr_rp_config_t)) ||

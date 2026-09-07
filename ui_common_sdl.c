@@ -249,7 +249,7 @@ static int auto_qos_cooldown;
 static int bandwidth_limit_temp;
 static void ntr_auto_qos_tick(double health, bool traffic)
 {
-    if (!ntr_auto_quality || !ntr_qos_auto || bandwidth_limit_temp != ntr_rp_config.bandwidth_limit) {
+    if (!ntr_auto_quality || !ntr_qos_auto || bandwidth_limit_temp != ntr_rp_config.bandwidth_limit || ntr_rp_config.kcp_mode != KCP_MODE_NONE) {
         bandwidth_limit_temp = ntr_rp_config.bandwidth_limit;
         ntr_qos_auto = bandwidth_limit_temp * 1000;
         auto_qos_good_streak = 0;

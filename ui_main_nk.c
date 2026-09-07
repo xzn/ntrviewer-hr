@@ -942,6 +942,7 @@ void ui_main_nk(void)
                 check_nav_checkbox_prev(ctx, NK_FOCUS_AUTO_QUALITY, ntr_auto_quality);
             } else {
                 ntr_jpeg_quality_auto = 0;
+                ntr_qos_auto = 0;
             }
 
             nk_layout_row_dynamic(ctx, 30, 2);
