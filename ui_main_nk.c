@@ -907,7 +907,8 @@ void ui_main_nk(void)
             nk_slider_int(ctx, NTR_COLOR_BIAS_MIN, &ntr_rp_config.lossless_color, NTR_COLOR_BIAS_MAX, 1);
             check_nav_slider_prev(ctx, NK_FOCUS_QUALITY, ntr_rp_config.lossless_color);
 
-            ntr_jpeg_quality_auto = 0;
+            ntr_jpeg_quality_auto = ntr_rp_config.jpeg_quality;
+            ntr_qos_auto = ntr_rp_config.bandwidth_limit * 1000;
         } else {
             if (ntr_rp_config.kcp_mode < KCP_MODE_ON_DELTA) {
                 nk_layout_row_dynamic(ctx, 30, 2);
