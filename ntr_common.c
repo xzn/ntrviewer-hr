@@ -236,7 +236,7 @@ void ntr_try_auto_select_adapter(void) {
         *(uint32_t *)ntr_ip_octet = incoming;
 
     ntr_selected_adapter = 0;
-    uint32_t count = 0;
+    uint32_t count = 0xfe << 24;
     for (int i = NTR_ADAPTER_PRE_COUNT; i < ntr_adapter_count - NTR_ADAPTER_POST_COUNT; ++i) {
         uint32_t bits = ntr_get_identical_bits_prefix(*(uint32_t *)ntr_ip_octet, *(uint32_t *)ntr_adapter_octet_list[i]);
         if (bits > count) {
