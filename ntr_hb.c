@@ -388,7 +388,7 @@ thread_ret_t tcp_thread_func(void *arg)
                             (uint32_t)(1 << 29) |
                                 (uint32_t)(((NTR_COLOR_BIAS_MAX - rp_config_last.lossless_color) & ((1 << 2) - 1)) << 27) :
                             (uint32_t)0),
-                    (uint32_t)(rp_config_last.audio_enable ? 1 : 0)};
+                    (uint32_t)(rp_config_last.audio_enable ? 2 : 0)}; // 2: in-band kcp audio if available; 1: audio enable
 
                 ret = tcp_send_packet_header(
                     sockfd, packet_seq, 0, 901,

@@ -31,6 +31,7 @@ atomic_bool kcp_active;
 atomic_bool kcp_dq;
 atomic_bool kcp_restart;
 atomic_bool is_lossless;
+static bool kcp_v2;
 
 static int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
 {
@@ -109,6 +110,7 @@ static void kcp_init(ikcpcb *kcp)
     kcp_dq = 0;
     kcp_restart = 0;
     is_lossless = 0;
+    kcp_v2 = 0;
 
     memset(kcp_recv, 0, sizeof(kcp_recv));
     memset(kcp_recv_info, 0, sizeof(kcp_recv_info));
@@ -1949,8 +1951,68 @@ static int lossless_get_v_total(UNUSED int chroma_ss, UNUSED int downsample, boo
     return h_total / h;
 }
 
+#define EX_HDR_BIT (15)
+_Static_assert(RP_KCP_HDR_QUALITY_NBITS + RP_KCP_HDR_T_NBITS + 1 + RP_KCP_HDR_CHROMASS_NBITS + 1 + RP_KCP_HDR_DOWNSAMPLE_NBITS <= EX_HDR_BIT);
+#define HDR_T(hdr) (hdr >> (PID_NBITS + CID_NBITS + RP_KCP_HDR_W_NBITS)) & ((1 << RP_KCP_HDR_T_NBITS) - 1)
+
+#define EXHDR_V2_BIT (14)
+
+static int audio_recv_kcp(uint8_t *buf, int size)
+{
+    if (!kcp_v2)
+        return -1;
+
+    if (size < (int)sizeof(u16)) {
+        return -3;
+    }
+    u16 hdr = *(u16 *)buf;
+    buf += sizeof(u16);
+    size -= sizeof(u16);
+
+    u16 t = HDR_T(hdr);
+    if (t < RP_CORE_COUNT_MAX)
+        return -2;
+
+    if (size < (int)sizeof(u16)) {
+        return -3;
+    }
+    hdr = *(u16 *)buf;
+    buf += sizeof(u16);
+    size -= sizeof(u16);
+
+    bool ex_hdr = (hdr >> EX_HDR_BIT) & 1;
+    if (!ex_hdr)
+        return -4;
+
+    const u16 RP_KCP_EXHDR_AUDIO_SHIFT = 15;
+
+    if (size < (int)sizeof(u16)) {
+        return -3;
+    }
+    hdr = *(u16 *)buf;
+    buf += sizeof(u16);
+    size -= sizeof(u16);
+
+    bool term_v2 = (hdr >> EXHDR_V2_BIT) & 1;
+    if (!term_v2)
+        return -4;
+
+    bool audio = (hdr >> RP_KCP_EXHDR_AUDIO_SHIFT) & 1;
+    if (!audio)
+        return -4;
+
+    int nframes = size / RP_AUDIO_FRAME_BYTES;
+    static int audio_last_seq = 0;
+    ntr_audio_handle_packet(buf, nframes * RP_AUDIO_FRAME_BYTES, RP_AUDIO_FMT_PCM16, audio_last_seq += nframes);
+
+    return 0;
+}
+
 static int handle_recv_kcp(uint8_t *buf, int size)
 {
+    if (audio_recv_kcp(buf, size) >= 0)
+        return 0;
+
     if (size < (int)sizeof(u16)) {
         return -1;
     }
@@ -1961,7 +2023,7 @@ static int handle_recv_kcp(uint8_t *buf, int size)
     u16 w = (hdr >> (PID_NBITS + CID_NBITS)) & ((1 << RP_KCP_HDR_W_NBITS) - 1);
     u16 queue_w = kcp_recv_w[w];
 
-    u16 t = (hdr >> (PID_NBITS + CID_NBITS + RP_KCP_HDR_W_NBITS)) & ((1 << RP_KCP_HDR_T_NBITS) - 1);
+    u16 t = HDR_T(hdr);
 
     if (t < RP_CORE_COUNT_MAX) {
         if (kcp_recv_info[w][queue_w].term_count != 0) {
@@ -2004,11 +2066,10 @@ static int handle_recv_kcp(uint8_t *buf, int size)
 
             // err_log("w %d quality %d cores %d top %d\n", (int)w, (int)jpeg_quality, (int)core_count, (int)is_top);
 
-            const u16 EX_HDR_BIT = 15;
-            _Static_assert(RP_KCP_HDR_QUALITY_NBITS + RP_KCP_HDR_T_NBITS + 1 + RP_KCP_HDR_CHROMASS_NBITS + 1 + RP_KCP_HDR_DOWNSAMPLE_NBITS <= EX_HDR_BIT);
             bool ex_hdr = (hdr >> EX_HDR_BIT) & 1;
 
             bool even_odd = false;
+            bool term_v2 = false;
             if (ex_hdr) {
                 if (size < (int)sizeof(u16)) {
                     return -3;
@@ -2018,6 +2079,13 @@ static int handle_recv_kcp(uint8_t *buf, int size)
                 size -= sizeof(u16);
 
                 even_odd = hdr & ((1 << RP_KCP_EXHDR_EVEN_ODD_NBITS) - 1);
+                term_v2 = (hdr >> EXHDR_V2_BIT) & 1;
+            }
+            if (term_v2)
+                kcp_v2 = true;
+            if (kcp_v2 && !term_v2) {
+                err_log("kcp v2 inconsistency\n");
+                return -1;
             }
 
             if (core_count == 0) {
@@ -2092,6 +2160,28 @@ static int handle_recv_kcp(uint8_t *buf, int size)
                     }
                 }
             }
+        } else if (kcp_v2) {
+            if (size < (int)sizeof(u16)) {
+                return -3;
+            }
+            hdr = *(u16 *)buf;
+            buf += sizeof(u16);
+            size -= sizeof(u16);
+
+            bool ex_hdr = (hdr >> EX_HDR_BIT) & 1;
+            if (!ex_hdr)
+                return -4;
+
+            if (size < (int)sizeof(u16)) {
+                return -3;
+            }
+            hdr = *(u16 *)buf;
+            buf += sizeof(u16);
+            size -= sizeof(u16);
+
+            bool term_v2 = (hdr >> EXHDR_V2_BIT) & 1;
+            if (!term_v2)
+                return -4;
         }
 
         while (1) {
