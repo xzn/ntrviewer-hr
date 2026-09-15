@@ -42,7 +42,7 @@ endif
 EMBED_JPEG_TURBO := 1
 
 ifeq ($(OS),Windows_NT)
-LDLIBS := -Llib -static -lmingw32 -lSDL3 -lm
+LDLIBS := -Llib -static -lmingw32 -lSDL3 -liconv -lm
 TARGET := ntrviewer.exe
 NASM := -DWIN64 -fwin64 -D__x86_64__
 else

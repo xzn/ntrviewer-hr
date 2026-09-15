@@ -22,7 +22,7 @@ extern bool nk_gui_next;
 extern bool nk_input_current;
 extern bool ui_sdl_text_input_needed;
 
-extern int opt_flag_d3d, opt_flag_ogl, opt_flag_gles, opt_flag_angle, opt_flag_no_csc, opt_flag_sdl_hw, opt_flag_sdl_sw;
+extern int opt_flag_d3d, opt_flag_ogl, opt_flag_gles, opt_flag_angle, opt_flag_csc, opt_flag_sdl_hw, opt_flag_sdl_sw;
 
 #include "nuklear/nuklear.h"
 extern struct nk_color nk_window_bgcolor;

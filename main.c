@@ -101,7 +101,7 @@ bool renderer_evt_sync;
 #include <getopt.h>
 
 int opt_flag_d3d, opt_flag_ogl, opt_flag_gles, opt_flag_angle, opt_flag_metal, opt_flag_vulkan;
-int opt_flag_no_csc, opt_flag_sdl_hw, opt_flag_sdl_sw;
+int opt_flag_csc, opt_flag_sdl_hw, opt_flag_sdl_sw;
 
 #define opt_name_d3d "d3d"
 #define opt_name_ogl "ogl"
@@ -111,7 +111,7 @@ int opt_flag_no_csc, opt_flag_sdl_hw, opt_flag_sdl_sw;
 #define opt_name_vulkan "vulkan"
 #define opt_name_sdl_hw "sdl-hw"
 #define opt_name_sdl_sw "sdl-sw"
-#define opt_name_no_csc "no-csc"
+#define opt_name_csc "csc"
 #define opt_name_ogl_dbg "ogl-dbg"
 #define opt_name_vk_dbg "vk-dbg"
 #define opt_name_testing_no_ext_mem "testing-no-ext-mem"
@@ -122,7 +122,7 @@ int opt_flag_no_csc, opt_flag_sdl_hw, opt_flag_sdl_sw;
 
 static struct option long_options[] = {
 #ifdef _WIN32
-    {opt_name_no_csc, no_argument, &opt_flag_no_csc, 1},
+    {opt_name_csc, no_argument, &opt_flag_csc, 1},
     {opt_name_d3d, no_argument, &opt_flag_d3d, 1},
 #endif
     {opt_name_vulkan, no_argument, &opt_flag_vulkan, 1},
@@ -193,7 +193,7 @@ static bool check_osvi_csc(void) {
 
 static void parse_args(int argc, char **argv)
 {
-    opt_flag_no_csc = !check_osvi_csc();
+    int csc = 0;
 
     while (1) {
         int option_index = 0;
@@ -210,24 +210,18 @@ static void parse_args(int argc, char **argv)
                 if (long_options[option_index].flag) {
                     const char *const name = long_options[option_index].name;
                     if (strcmp(name, opt_name_d3d) == 0) {
-                        if (!opt_flag_no_csc) {
-                            add_arg(UI_RENDERER_D3D11_CSC, opt_name_d3d " " mod_name_csc);
-                        }
+                        add_arg(UI_RENDERER_D3D11_CSC, opt_name_d3d " " mod_name_csc);
                         add_arg(UI_RENDERER_D3D11, opt_name_d3d);
                     } else if (strcmp(name, opt_name_ogl) == 0) {
                         if (!opt_flag_angle) {
                             remove_ogl_args();
-                            if (!opt_flag_no_csc) {
-                                add_arg(UI_RENDERER_OGL_CSC, opt_name_ogl " " mod_name_csc);
-                            }
+                            add_arg(UI_RENDERER_OGL_CSC, opt_name_ogl " " mod_name_csc);
                             add_arg(UI_RENDERER_OGL, opt_name_ogl);
                         }
                     } else if (strcmp(name, opt_name_gles) == 0) {
                         if (!opt_flag_angle) {
                             remove_ogl_args();
-                            if (!opt_flag_no_csc) {
-                                add_arg(UI_RENDERER_GLES_CSC, opt_name_gles " " mod_name_csc);
-                            }
+                            add_arg(UI_RENDERER_GLES_CSC, opt_name_gles " " mod_name_csc);
                             add_arg(UI_RENDERER_GLES, opt_name_gles);
                         }
                     } else if (strcmp(name, opt_name_angle) == 0) {
@@ -241,13 +235,17 @@ static void parse_args(int argc, char **argv)
                         add_arg(UI_RENDERER_SDL_HW, opt_name_sdl_hw);
                     } else if (strcmp(name, opt_name_sdl_sw) == 0) {
                         add_arg(UI_RENDERER_SDL_SW, opt_name_sdl_sw);
-                    } else if (strcmp(name, opt_name_no_csc) == 0) {
-                        remove_csc_args();
+                    } else if (strcmp(name, opt_name_csc) == 0) {
+                        csc = 1;
                     }
                 }
                 break;
             }
         }
+    }
+
+    if (!csc) {
+        remove_csc_args();
     }
 
     if (is_renderer_ogl_dbg) {
@@ -271,7 +269,7 @@ static void parse_args(int argc, char **argv)
         ui_renderer = i;
 
         if (is_renderer_csc()) {
-            if (opt_flag_no_csc || !check_osvi_csc()) {
+            if (!csc || !check_osvi_csc()) {
                 continue;
             }
         }
