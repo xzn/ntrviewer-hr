@@ -445,7 +445,7 @@ static int rashader_count;
 static struct rashader_render_t *rashader_render[SCREEN_COUNT][SCREEN_COUNT];
 static int rashader_render_mode[SCREEN_COUNT][SCREEN_COUNT];
 
-static unsigned rashader_delay_init[SCREEN_COUNT][SCREEN_COUNT];
+static int rashader_delay_init[SCREEN_COUNT][SCREEN_COUNT];
 
 #define GL_GetProcAddress (SDL_GL_GetProcAddress)
 
@@ -1237,8 +1237,9 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int is_wid
         if (!IS_RASHADER(upscaling_selected) || need_reset_rashader) {
             rashader_upscaling_update(-1, i, screen_top_bot);
             // HACK like for init, workaround rashader blackscreen when changing image dimensions
-            if (need_reset_rashader)
-                rashader_delay_init[i][screen_top_bot] = 2;
+            int *delay = &rashader_delay_init[i][screen_top_bot];
+            if (need_reset_rashader && !*delay)
+                *delay = -2;
         }
 
         pl_tex in_tex = NULL;
@@ -1361,10 +1362,15 @@ rashader_fail:
     }
 
     if (!do_upscaled) {
-        if (rashader_delay_init[i][screen_top_bot]) {
-            --rashader_delay_init[i][screen_top_bot];
-            if (i == (view_mode == VIEW_MODE_SEPARATE ? SCREEN_BOT : SCREEN_TOP))
-                cursor_scale_prev = 0.0f;
+        int *delay = &rashader_delay_init[i][screen_top_bot];
+        if (*delay) {
+            if (*delay > 0) {
+                --*delay;
+                if (!*delay && i == (view_mode == VIEW_MODE_SEPARATE ? SCREEN_BOT : SCREEN_TOP))
+                    cursor_scale_prev = 0.0f;
+            } else {
+                ++*delay;
+            }
         }
     }
 
