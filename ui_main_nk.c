@@ -427,6 +427,7 @@ static void do_nav_combobox_next(struct nk_context *ctx, enum NK_FOCUS nk_focus,
             {
                 *selected = 0;
             }
+            ctx->input.keyboard.keys[NK_KEY_DOWN].clicked = 0;
         }
         else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_UP))
         {
@@ -435,6 +436,7 @@ static void do_nav_combobox_next(struct nk_context *ctx, enum NK_FOCUS nk_focus,
             {
                 *selected = count - 1;
             }
+            ctx->input.keyboard.keys[NK_KEY_UP].clicked = 0;
         }
 
         nk_nav_combo_selected_pending = *selected;
@@ -592,26 +594,42 @@ static void do_nav_slider_next(struct nk_context *ctx, enum NK_FOCUS nk_focus, i
         if (nk_input_is_key_pressed(&ctx->input, NK_KEY_RIGHT))
         {
             ++*val;
+            ctx->input.keyboard.keys[NK_KEY_RIGHT].clicked = 0;
         }
         else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_LEFT))
         {
             --*val;
+            ctx->input.keyboard.keys[NK_KEY_LEFT].clicked = 0;
+        }
+        else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_DOWN))
+        {
+            *val += 10;
+            ctx->input.keyboard.keys[NK_KEY_DOWN].clicked = 0;
+        }
+        else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_UP))
+        {
+            *val -= 10;
+            ctx->input.keyboard.keys[NK_KEY_UP].clicked = 0;
         }
         else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_DOWN))
         {
             *val += 5;
+            ctx->input.keyboard.keys[NK_KEY_SCROLL_DOWN].clicked = 0;
         }
         else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_UP))
         {
             *val -= 5;
+            ctx->input.keyboard.keys[NK_KEY_SCROLL_UP].clicked = 0;
         }
         else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_START))
         {
             *val = 0;
+            ctx->input.keyboard.keys[NK_KEY_SCROLL_START].clicked = 0;
         }
         else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_END))
         {
             *val = INT_MAX;
+            ctx->input.keyboard.keys[NK_KEY_SCROLL_END].clicked = 0;
         }
     }
 
