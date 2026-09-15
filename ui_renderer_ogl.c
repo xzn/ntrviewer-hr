@@ -1142,19 +1142,20 @@ static void gl_blur_tex_draw(GLuint blur_tex, int ctx_top_bot,
     glDisable(GL_SCISSOR_TEST);
 }
 
-void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared)
+void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int is_wide, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared)
 {
     int i = ctx_top_bot;
+    int display_width = is_wide ? width / 2 : width;
 
     int ctx_left;
     int ctx_top;
     int ctx_width;
     int ctx_height;
     if (win_shared)
-        draw_screen_get_dims_win_shared(screen_top_bot, i, width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
+        draw_screen_get_dims_win_shared(screen_top_bot, i, display_width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
     else
         // HACK dims are symmetrical, negate screen_top_bot to flip top and bot for OpenGL
-        draw_screen_get_dims_lite(!screen_top_bot, i, view_mode, width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
+        draw_screen_get_dims_lite(!screen_top_bot, i, view_mode, display_width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
     ctx_left *= ui_win_scale[i];
     ctx_top *= ui_win_scale[i];
     ctx_width *= ui_win_scale[i];
@@ -1178,7 +1179,7 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width,
     int blur_ctx_width;
     int blur_ctx_height;
     // HACK same as above for screen_top_bot
-    draw_screen_get_blur_dims_win_shared(win_shared ? screen_top_bot : !screen_top_bot, i, view_mode, win_shared, width, height,
+    draw_screen_get_blur_dims_win_shared(win_shared ? screen_top_bot : !screen_top_bot, i, view_mode, win_shared, display_width, height,
         &blur_left, &blur_top, &blur_width, &blur_height, &blur_ctx_left, &blur_ctx_top, &blur_ctx_width, &blur_ctx_height);
 
     int upscaling_selected = ui_upscaling_selected;

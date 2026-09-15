@@ -364,7 +364,7 @@ static void sdl_data_do_blur1(uint8_t *data, uint8_t (*data_blur)[SCREEN_HEIGHT0
 static int sdl_has_data[SCREEN_COUNT][SCREEN_COUNT];
 static int sdl_has_blur[SCREEN_COUNT][SCREEN_COUNT];
 
-void ui_renderer_sdl_draw(uint8_t *data, uint8_t *data_prev, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode) {
+void ui_renderer_sdl_draw(uint8_t *data, uint8_t *data_prev, int is_wide, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode) {
     int i = ctx_top_bot;
     SDL_Texture *tex_blur;
     SDL_Texture *tex = sdl_texture_update(screen_top_bot, i, height, width, &tex_blur);
@@ -372,11 +372,13 @@ void ui_renderer_sdl_draw(uint8_t *data, uint8_t *data_prev, int width, int heig
         return;
     }
 
+    int display_width = is_wide ? width / 2 : width;
+
     int ctx_left;
     int ctx_top;
     int ctx_width;
     int ctx_height;
-    draw_screen_get_dims_lite(screen_top_bot, i, view_mode, width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
+    draw_screen_get_dims_lite(screen_top_bot, i, view_mode, display_width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
     int need_blur = ui_blur_iter && (ctx_left || ctx_top);
 
     if (!sdl_has_data[screen_top_bot][i]) {

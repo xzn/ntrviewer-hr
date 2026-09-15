@@ -443,21 +443,21 @@ void ui_windows_titles_update(void)
     }
 }
 
-static void draw_screen_dispatch(UNUSED struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, UNUSED bool win_shared) {
+static void draw_screen_dispatch(UNUSED struct rp_buffer_ctx_t *ctx, uint8_t *data, int is_wide, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, UNUSED bool win_shared) {
     if (is_renderer_d3d11()) {
 #ifndef USE_SDL_RENDERER_ONLY
-        ui_renderer_d3d11_draw(ctx, data, width, height, screen_top_bot, ctx_top_bot, view_mode, win_shared);
+        ui_renderer_d3d11_draw(ctx, data, is_wide, width, height, screen_top_bot, ctx_top_bot, view_mode, win_shared);
 #endif
     } else if (is_renderer_sdl_ogl()) {
 #ifndef USE_SDL_RENDERER_ONLY
-        ui_renderer_ogl_draw(ctx, data, width, height, screen_top_bot, ctx_top_bot, view_mode, win_shared);
+        ui_renderer_ogl_draw(ctx, data, is_wide, width, height, screen_top_bot, ctx_top_bot, view_mode, win_shared);
 #endif
     } else if (is_renderer_vulkan()) {
 #ifndef USE_SDL_RENDERER_ONLY
-        ui_renderer_vk_draw(data, ctx->data_prev, width, height, screen_top_bot, ctx_top_bot, view_mode);
+        ui_renderer_vk_draw(data, ctx->data_prev, is_wide, width, height, screen_top_bot, ctx_top_bot, view_mode);
 #endif
     } else if (is_renderer_sdl_renderer()) {
-        ui_renderer_sdl_draw(data, ctx->data_prev, width, height, screen_top_bot, ctx_top_bot, view_mode);
+        ui_renderer_sdl_draw(data, ctx->data_prev, is_wide, width, height, screen_top_bot, ctx_top_bot, view_mode);
     }
     // TODO
 }
@@ -496,12 +496,12 @@ int draw_screen(struct rp_buffer_ctx_t *ctx, int width, int height, int screen_t
     if (status >= FBS_UPDATED)
     {
         __atomic_add_fetch(&frame_rate_displayed_tracker[screen_top_bot], 1, __ATOMIC_RELAXED);
-        draw_screen_dispatch(ctx, data, width, height, screen_top_bot, ctx_top_bot, view_mode, win_shared);
+        draw_screen_dispatch(ctx, data, dims->is_wide, width, height, screen_top_bot, ctx_top_bot, view_mode, win_shared);
         return 1;
     }
     else
     {
-        draw_screen_dispatch(ctx, NULL, width, height, screen_top_bot, ctx_top_bot, view_mode, win_shared);
+        draw_screen_dispatch(ctx, NULL, dims->is_wide, width, height, screen_top_bot, ctx_top_bot, view_mode, win_shared);
         return -1;
     }
 }

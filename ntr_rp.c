@@ -42,7 +42,7 @@ static int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
 
 #define RP_DATA_HDR_ID_SIZE (3)
 
-#define RP_MAX_PACKET_COUNT (240)
+#define RP_MAX_PACKET_COUNT (480)
 
 #define RP_WORK_COUNT (3)
 static uint8_t recv_is_lossless[RP_WORK_COUNT];
@@ -50,7 +50,7 @@ static uint8_t recv_buf[RP_WORK_COUNT][RP_PACKET_SIZE * RP_MAX_PACKET_COUNT];
 static uint8_t recv_track[RP_WORK_COUNT][RP_MAX_PACKET_COUNT];
 static uint8_t recv_hdr[RP_WORK_COUNT][RP_DATA_HDR_ID_SIZE];
 static uint8_t recv_end[RP_WORK_COUNT];
-static uint8_t recv_end_packet[RP_WORK_COUNT];
+static uint16_t recv_end_packet[RP_WORK_COUNT];
 static uint8_t recv_end_incomp[RP_WORK_COUNT];
 static uint32_t recv_end_size[RP_WORK_COUNT];
 static uint32_t recv_delay_between_packets[RP_WORK_COUNT];
@@ -76,7 +76,7 @@ static u8 kcp_recv_w[RP_KCP_WORK_COUNT];
 #define RP_KCP_PACKET_SIZE (RP_PACKET_SIZE - sizeof(IUINT16) - sizeof(u16))
 static struct kcp_recv_t {
     u8 buf[RP_MAX_PACKET_COUNT][RP_KCP_PACKET_SIZE];
-    u8 count;      // packet count including term
+    u16 count;     // packet count including term
     u16 term_size; // term packet size
 } kcp_recv[RP_KCP_WORK_COUNT][RP_WORK_COUNT][RP_CORE_COUNT_MAX];
 
@@ -91,6 +91,8 @@ static struct kcp_recv_info_t {
     u8 chroma_ss;
     u8 downsample;
     u8 even_odd;
+    u8 full_width;
+    u8 both_eyes;
     u8 core_count;
     u8 v_adjusted;
     u8 v_last_adjusted;
@@ -170,6 +172,8 @@ struct jpeg_decode_info_t {
             uint8_t frame_id;
             uint8_t downsample;
             uint8_t even_odd;
+            bool full_width;
+            bool both_eyes;
             bool is_lossless;
             uint8_t *in_track;
         };
@@ -333,9 +337,9 @@ static void color_bias_2(uint16_t in, uint8_t *r, uint8_t *g, uint8_t *b)
     *b = ((in & 0xf) << 4) + (1 << 3);
 }
 
-static JSAMPLE screens_decoded_channels[SCREEN_COUNT][SCREEN_WIDTH * SCREEN_HEIGHT0 * RGB_CHANNELS_N];
-static JSAMPLE screens_upsampled_channels[SCREEN_COUNT][SCREEN_WIDTH * SCREEN_HEIGHT0 * RGB_CHANNELS_N];
-static uint8_t screens_out_channels[SCREEN_COUNT][SCREEN_WIDTH * SCREEN_HEIGHT0 * GL_CHANNELS_N];
+static JSAMPLE screens_decoded_channels[SCREEN_COUNT][SCREEN_WIDTH * SCREEN_HEIGHT0_2X * RGB_CHANNELS_N];
+static JSAMPLE screens_upsampled_channels[SCREEN_COUNT][SCREEN_WIDTH * SCREEN_HEIGHT0_2X * RGB_CHANNELS_N];
+static uint8_t screens_out_channels[SCREEN_COUNT][SCREEN_WIDTH * SCREEN_HEIGHT0_2X * GL_CHANNELS_N];
 
 static struct {
     int width, height;
@@ -796,9 +800,9 @@ static int handle_decode_lossless(int top_bot, uint8_t *out_final, uint8_t *in, 
     return 0;
 }
 
-static unsigned char jpeg_header_top_buffer_kcp[SCREEN_HEIGHT0 * SCREEN_WIDTH * RGB_CHANNELS_N * 2 + 2048];
+static unsigned char jpeg_header_top_buffer_kcp[SCREEN_HEIGHT0_2X * SCREEN_WIDTH * RGB_CHANNELS_N * 2 + 2048];
 static unsigned char jpeg_header_bot_buffer_kcp[SCREEN_HEIGHT1 * SCREEN_WIDTH * RGB_CHANNELS_N * 2 + 2048];
-static unsigned char jpeg_header_empty_src_kcp[SCREEN_HEIGHT0 * SCREEN_WIDTH * RGB_CHANNELS_N];
+static unsigned char jpeg_header_empty_src_kcp[SCREEN_HEIGHT0_2X * SCREEN_WIDTH * RGB_CHANNELS_N];
 static u16 jpeg_header_top_quality_kcp;
 static u16 jpeg_header_bot_quality_kcp;
 static u16 jpeg_header_top_chroma_ss_kcp;
@@ -806,14 +810,14 @@ static u16 jpeg_header_bot_chroma_ss_kcp;
 static u16 jpeg_header_top_downsample_kcp;
 static u16 jpeg_header_bot_downsample_kcp;
 
-static int downsample_height(int downsample, int is_top)
+static int downsample_height(int downsample, int is_top, int full_width)
 {
     switch (downsample) {
         case 3:
-            return (is_top ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1) / 2;
+            return (is_top ? full_width ? SCREEN_HEIGHT0_2X : SCREEN_HEIGHT0 : SCREEN_HEIGHT1) / 2;
         case 2:
         default:
-            return is_top ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1;
+            return is_top ? full_width ? SCREEN_HEIGHT0_2X : SCREEN_HEIGHT0 : SCREEN_HEIGHT1;
     }
 }
 
@@ -828,14 +832,14 @@ static int downsample_width(int downsample)
     }
 }
 
-static int downsample_display_height(int downsample, int is_top)
+static int downsample_display_height(int downsample, int is_top, int full_width)
 {
     switch (downsample) {
         case 3:
-            return (is_top ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1) / 2;
+            return (is_top ? full_width ? SCREEN_HEIGHT0_2X : SCREEN_HEIGHT0 : SCREEN_HEIGHT1) / 2;
         case 2:
         default:
-            return is_top ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1;
+            return is_top ? full_width ? SCREEN_HEIGHT0_2X : SCREEN_HEIGHT0 : SCREEN_HEIGHT1;
     }
 }
 
@@ -850,7 +854,7 @@ static int downsample_display_width(int downsample)
     }
 }
 
-static int set_decode_quality_kcp(bool is_top, int quality, int chroma_ss, int downsample, int rc)
+static int set_decode_quality_kcp(bool is_top, bool full_width, int quality, int chroma_ss, int downsample, int rc)
 {
     u16 *hdr_quality = is_top ? &jpeg_header_top_quality_kcp : &jpeg_header_bot_quality_kcp;
     u16 *hdr_chroma_ss = is_top ? &jpeg_header_top_chroma_ss_kcp : &jpeg_header_bot_chroma_ss_kcp;
@@ -891,7 +895,7 @@ static int set_decode_quality_kcp(bool is_top, int quality, int chroma_ss, int d
         }
 
         int width = downsample_width(downsample);
-        int height = downsample_height(downsample, is_top);
+        int height = downsample_height(downsample, is_top, full_width);
 
         size_t size = is_top ? sizeof(jpeg_header_top_buffer_kcp) : sizeof(jpeg_header_bot_buffer_kcp);
         size_t buf_size = tj3JPEGBufSize(width, height, tjsamp);
@@ -950,17 +954,17 @@ static uint8_t *copy_with_escape(uint8_t *out, const uint8_t *out_end, const uin
     return out;
 }
 
-static unsigned char jpeg_buffer_kcp[SCREEN_HEIGHT0 * SCREEN_WIDTH * RGB_CHANNELS_N + 2048];
+static unsigned char jpeg_buffer_kcp[SCREEN_HEIGHT0_2X * SCREEN_WIDTH * RGB_CHANNELS_N + 2048];
 
 static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, struct kcp_recv_info_t *info)
 {
-    // memset(out, 0, SCREEN_WIDTH * SCREEN_HEIGHT0 * GL_CHANNELS_N);
+    // memset(out, 0, SCREEN_WIDTH * SCREEN_HEIGHT0_2X * GL_CHANNELS_N);
 
     int max_h_samp_fact = info->chroma_ss == 2 ? 1 : 2;
     int max_v_samp_fact = info->chroma_ss == 0 ? 2 : 1;
 
     int width = downsample_width(info->downsample);
-    int height = downsample_height(info->downsample, info->is_top);
+    int height = downsample_height(info->downsample, info->is_top, info->full_width);
 
     // int total_size = 0;
     for (int t = 0; t < info->core_count; ++t) {
@@ -1224,7 +1228,7 @@ static int do_decode_lossless_compressed(uint8_t *out, const uint8_t *in, int si
     return 0;
 }
 
-static uint8_t lossless_delta_prev[SCREEN_COUNT][SCREEN_HEIGHT0 * SCREEN_WIDTH * RGB_CHANNELS_N];
+static uint8_t lossless_delta_prev[SCREEN_COUNT][SCREEN_HEIGHT0_2X * SCREEN_WIDTH * RGB_CHANNELS_N];
 static int do_decode_lossless_delta_compressed(uint8_t *out, const uint8_t *in, int size, int offset,
     int is_top, int chroma_ss, int bias, int width, int height, int even_odd)
 {
@@ -1426,11 +1430,11 @@ static int handle_decode_lossless_compressed(uint8_t *out, struct kcp_recv_t *re
     // int max_h_samp_fact = info->chroma_ss == 2 ? 1 : 2;
     // int max_v_samp_fact = info->chroma_ss == 0 ? 2 : 1;
 
-    memset(out, 0, SCREEN_WIDTH * SCREEN_HEIGHT0 * GL_CHANNELS_N);
+    memset(out, 0, SCREEN_WIDTH * SCREEN_HEIGHT0_2X * GL_CHANNELS_N);
 
     int width = downsample_width(info->downsample);
-    int height = downsample_height(info->downsample, info->is_top);
-    int height_0 = downsample_height(0, info->is_top);
+    int height = downsample_height(info->downsample, info->is_top, info->full_width);
+    int height_0 = downsample_height(0, info->is_top, info->full_width);
     int height_f = height_0 / height;
 
     for (int t = 0; t < info->core_count; ++t) {
@@ -1486,7 +1490,7 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
     kcp_dq = 0;
 
     int ret;
-    if ((ret = set_decode_quality_kcp(info->is_top, info->jpeg_quality, info->chroma_ss, info->downsample, info->v_adjusted)) < 0) {
+    if ((ret = set_decode_quality_kcp(info->is_top, info->full_width, info->jpeg_quality, info->chroma_ss, info->downsample, info->v_adjusted)) < 0) {
         return ret * 0x100 - 1;
     }
 
@@ -1549,7 +1553,7 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
         ++ptr;
     }
 
-    if (handle_decode(out, jpeg_buffer_kcp, ptr - jpeg_buffer_kcp, downsample_width(info->downsample), downsample_height(info->downsample, info->is_top)) != 0) {
+    if (handle_decode(out, jpeg_buffer_kcp, ptr - jpeg_buffer_kcp, downsample_width(info->downsample), downsample_height(info->downsample, info->is_top, info->full_width)) != 0) {
         return -3;
     }
 
@@ -1602,7 +1606,7 @@ static void handle_decode_frame_screen(struct rp_buffer_ctx_t *ctx, int top_bot,
 }
 
 #define SCREEN_PROCESS_WORK_COUNT (2)
-uint8_t screen_processing[SCREEN_COUNT][SCREEN_PROCESS_WORK_COUNT][SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N];
+uint8_t screen_processing[SCREEN_COUNT][SCREEN_PROCESS_WORK_COUNT][SCREEN_HEIGHT0_2X * SCREEN_WIDTH * GL_CHANNELS_N];
 
 static void screen_process(uint8_t *curr, uint8_t *prev, uint8_t *out, bool even_odd, int width, int height)
 {
@@ -1661,6 +1665,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
         struct rp_dims *dims = &ctx->dims_decoded[index];
         dims->width = 0;
         dims->height = 0;
+        dims->is_wide = 0;
 
         view_mode_t view_mode = __atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED);
         struct rp_buffer_ctx_t *sync_ctx = view_mode == VIEW_MODE_TOP_BOT && !is_renderer_csc() ? &rp_buffer_ctx[SCREEN_TOP] : NULL;
@@ -1674,6 +1679,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
             int width = 0, height = 0;
             int downsample = 0;
             int even_odd = 0;
+            int is_wide = 0;
             {
                 int w = ptr->kcp_w;
                 int queue_w = ptr->kcp_queue_w;
@@ -1687,9 +1693,10 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                 q = info->jpeg_quality;
 
                 width = downsample_display_width(info->downsample);
-                height = downsample_display_height(info->downsample, info->is_top);
+                height = downsample_display_height(info->downsample, info->is_top, info->full_width);
                 downsample = info->downsample;
                 even_odd = info->even_odd;
+                is_wide = info->full_width && !info->both_eyes;
             }
 
             bool need_processing = downsample == 2;
@@ -1711,6 +1718,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                 // err_log("%d\n", kcp_recv_info[ptr->kcp_w][ptr->kcp_queue_w].term_count);
                 dims->width = width;
                 dims->height = height;
+                dims->is_wide = is_wide;
 
                 if (need_processing) {
                     int prev_index = even_odd ? 1 : 0;
@@ -1725,7 +1733,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
         } else {
             if (ptr->in) {
                 int width = downsample_width(ptr->downsample);
-                int height = downsample_height(ptr->downsample, top_bot == SCREEN_TOP);
+                int height = downsample_height(ptr->downsample, top_bot == SCREEN_TOP, ptr->full_width);
 
                 bool need_processing = ptr->downsample == 2;
                 uint8_t *processing = out;
@@ -1753,14 +1761,15 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                 }
                 if (good) {
                     dims->width = downsample_display_width(ptr->downsample);
-                    dims->height = downsample_display_height(ptr->downsample, top_bot == SCREEN_TOP);
+                    dims->height = downsample_display_height(ptr->downsample, top_bot == SCREEN_TOP, ptr->full_width);
+                    dims->is_wide = ptr->full_width && !ptr->both_eyes;
 
                     if (need_processing) {
                         int prev_index = ptr->even_odd ? 1 : 0;
                         screen_process(processing, screen_processing[top_bot][prev_index], out, ptr->even_odd, dims->width, dims->height);
                     }
 
-                    stats_overlay_0(out, top_bot, ptr->in_size, -1, SCREEN_WIDTH, ptr->is_kcp ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1);
+                    stats_overlay_0(out, top_bot, ptr->in_size, -1, SCREEN_WIDTH, top_bot == 0 ? ptr->full_width ? SCREEN_HEIGHT0_2X : SCREEN_HEIGHT0 : SCREEN_HEIGHT1);
                     handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay, sync_ctx);
                     __atomic_add_fetch(&frame_fully_received_tracker, 1, __ATOMIC_RELAXED);
 
@@ -1784,6 +1793,8 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
 static void set_jpeg_decode_info(int work)
 {
     int top_bot = !recv_hdr[work][1];
+    bool full_width = top_bot == 0 && (recv_hdr[work][1] & (1 << 1));
+    bool both_eyes = full_width && (recv_hdr[work][1] & (1 << 2));
     bool lossless = recv_is_lossless[work];
     is_lossless = lossless;
     jpeg_decode_info[work] = (struct jpeg_decode_info_t){
@@ -1793,6 +1804,8 @@ static void set_jpeg_decode_info(int work)
         .frame_id = recv_hdr[work][0],
         .downsample = (recv_hdr[work][2] & RP_HDR_DOWNSAMPLE_MASK) >> 2,
         .even_odd = recv_hdr[work][0] % 2,
+        .full_width = full_width,
+        .both_eyes = both_eyes,
         .in_size = recv_end_size[work],
         .is_lossless = lossless,
         .in_track = recv_track[work],
@@ -1884,7 +1897,10 @@ static int handle_recv(uint8_t *buf, int size)
 
     recv_is_lossless[work] = recv_hdr[work][2] & 0x1;
 
-    uint8_t packet = hdr[3];
+    uint16_t packet = hdr[3];
+    if (packet + 128 < recv_end_packet[work]) {
+        packet += 256;
+    }
     if (packet >= RP_MAX_PACKET_COUNT) {
         err_log("recv packet number too high\n");
         return 0;
@@ -1937,17 +1953,17 @@ static int handle_recv(uint8_t *buf, int size)
     return 0;
 }
 
-static int jpeg_get_v_total(int chroma_ss, int downsample, bool is_top)
+static int jpeg_get_v_total(int chroma_ss, int downsample, bool is_top, bool full_width)
 {
     int h = JPEG_DCTSIZE * (chroma_ss == 0 ? 2 : 1);
-    int h_total = downsample_height(downsample, is_top);
+    int h_total = downsample_height(downsample, is_top, full_width);
     return h_total / h;
 }
 
-static int lossless_get_v_total(UNUSED int chroma_ss, UNUSED int downsample, bool is_top)
+static int lossless_get_v_total(UNUSED int chroma_ss, UNUSED int downsample, bool is_top, bool full_width)
 {
     int h = LOSSLESS_BLOCK_SIZE;
-    int h_total = downsample_height(0, is_top);
+    int h_total = downsample_height(0, is_top, full_width);
     return h_total / h;
 }
 
@@ -2006,6 +2022,41 @@ static int audio_recv_kcp(uint8_t *buf, int size)
     ntr_audio_handle_packet(buf, nframes * RP_AUDIO_FRAME_BYTES, RP_AUDIO_FMT_PCM16, audio_last_seq += nframes);
 
     return 0;
+}
+
+static bool get_v_adjusted(int core_count, int v_total, u8 *v_adjusted, u8 *v_last_adjusted)
+{
+    for (;;) {
+        if (*v_last_adjusted <= *v_adjusted && *v_adjusted * (core_count - 1) + *v_last_adjusted == v_total)
+            return true;
+        *v_adjusted += (1 << RP_KCP_HDR_RC_NBITS);
+
+        int v_last = v_total - *v_adjusted * (core_count - 1);
+        if (v_last <= 0) {
+            return false;
+        }
+        if (v_last <= *v_adjusted && ((v_last & ((1 << RP_KCP_HDR_RC_NBITS) - 1)) == *v_last_adjusted)) {
+            *v_last_adjusted = v_last;
+            return true;
+        }
+    }
+}
+
+static bool get_v_last_adjusted(int v_total, u8 *v_last_adjusted)
+{
+    for (;;) {
+        if (*v_last_adjusted == v_total)
+            return true;
+        *v_last_adjusted += (1 << RP_KCP_HDR_RC_NBITS);
+
+        if (*v_last_adjusted > v_total) {
+            return false;
+        }
+        if (((v_total & ((1 << RP_KCP_HDR_RC_NBITS) - 1)) == *v_last_adjusted)) {
+            *v_last_adjusted = v_total;
+            return true;
+        }
+    }
 }
 
 static int handle_recv_kcp(uint8_t *buf, int size)
@@ -2069,6 +2120,8 @@ static int handle_recv_kcp(uint8_t *buf, int size)
             bool ex_hdr = (hdr >> EX_HDR_BIT) & 1;
 
             bool even_odd = false;
+            bool full_width = false;
+            bool both_eyes = false;
             bool term_v2 = false;
             if (ex_hdr) {
                 if (size < (int)sizeof(u16)) {
@@ -2079,6 +2132,8 @@ static int handle_recv_kcp(uint8_t *buf, int size)
                 size -= sizeof(u16);
 
                 even_odd = hdr & ((1 << RP_KCP_EXHDR_EVEN_ODD_NBITS) - 1);
+                full_width = (hdr >> 1) & 1;
+                both_eyes = (hdr >> 2) & 1;
                 term_v2 = (hdr >> EXHDR_V2_BIT) & 1;
             }
             if (term_v2)
@@ -2111,6 +2166,8 @@ static int handle_recv_kcp(uint8_t *buf, int size)
             info->is_top = top_bot == SCREEN_TOP;
             info->chroma_ss = chroma_ss;
             info->downsample = downsample;
+            info->full_width = info->is_top && full_width;
+            info->both_eyes = full_width && both_eyes;
             info->even_odd = even_odd;
             info->delta_prog = delta_prog;
 
@@ -2133,24 +2190,25 @@ static int handle_recv_kcp(uint8_t *buf, int size)
                 }
 
                 info->term_sizes[t] = term_size;
+                // HACK bah
+                int v_total = is_lossless ? lossless_get_v_total(info->chroma_ss, info->downsample, info->is_top, info->full_width) : jpeg_get_v_total(info->chroma_ss, info->downsample, info->is_top, info->full_width);
                 if (t == core_count - 1) {
-                    if (core_count > 1 && v_adjusted > info->v_adjusted) {
-                        return -8;
+                    if (core_count > 1) {
+                        info->v_last_adjusted = v_adjusted;
+                        if (!get_v_adjusted(core_count, v_total, &info->v_adjusted, &info->v_last_adjusted))
+                            return -8;
+                    } else {
+                        info->v_adjusted = 0;
+                        info->v_last_adjusted = v_adjusted;
+                        if (!get_v_last_adjusted(v_total, &info->v_last_adjusted))
+                            return -8;
                     }
-                    info->v_last_adjusted = v_adjusted;
                 } else {
-                    // HACK kind of, I didn't count the bits correctly so now I have to do this dumb thing
-                    // to get chroma subsampling working with reliable stream.
-                    int v_total = is_lossless ? lossless_get_v_total(info->chroma_ss, info->downsample, info->is_top) : jpeg_get_v_total(info->chroma_ss, info->downsample, info->is_top);
-                    if (info->core_count == 1) {
+                    if (core_count == 1) {
                         if (v_adjusted == (v_total & ((1 << RP_KCP_HDR_RC_NBITS) - 1))) {
                             v_adjusted = v_total;
                         } else {
                             return -6;
-                        }
-                    } else {
-                        if (v_adjusted < (v_total + info->core_count - 1) / info->core_count) {
-                            v_adjusted += (1 << RP_KCP_HDR_RC_NBITS);
                         }
                     }
                     if (t == 0) {
@@ -2286,7 +2344,7 @@ static void socket_reply(void)
 
 static int test_kcp_magic(int magic)
 {
-    return !((magic & (~0x00001100 & 0x0000ff00)) == 0 && (magic & 0x00f20000) == 0x00020000);
+    return !((magic & (~0x00001700 & 0x0000ff00)) == 0 && (magic & 0x00f20000) == 0x00020000);
 }
 
 static int packet_received_time = 0;

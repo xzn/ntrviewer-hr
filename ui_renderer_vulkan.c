@@ -4526,7 +4526,7 @@ static bool ui_renderer_vk_blur_draw(struct vk_draw_t *draw, int screen_top_bot,
     return true;
 }
 
-void ui_renderer_vk_draw(uint8_t *data, uint8_t *data_prev, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode) {
+void ui_renderer_vk_draw(uint8_t *data, uint8_t *data_prev, int is_wide,int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode) {
     int i = ctx_top_bot;
     struct vulkan_demo *demo = &vk_demo[i];
     struct vk_render_src_t *render = &vk_render[i][screen_top_bot];
@@ -4544,11 +4544,13 @@ void ui_renderer_vk_draw(uint8_t *data, uint8_t *data_prev, int width, int heigh
     if (ret > 0 && !data)
         data = data_prev;
 
+    int display_width = is_wide ? width / 2 : width;
+
     int ctx_left;
     int ctx_top;
     int ctx_width;
     int ctx_height;
-    draw_screen_get_dims_lite(screen_top_bot, i, view_mode, width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
+    draw_screen_get_dims_lite(screen_top_bot, i, view_mode, display_width, height, &ctx_left, &ctx_top, &ctx_width, &ctx_height);
     ctx_left *= ui_win_scale[i];
     ctx_top *= ui_win_scale[i];
     ctx_width *= ui_win_scale[i];
@@ -4562,7 +4564,7 @@ void ui_renderer_vk_draw(uint8_t *data, uint8_t *data_prev, int width, int heigh
     int blur_ctx_top;
     int blur_ctx_width;
     int blur_ctx_height;
-    draw_screen_get_blur_dims_win_shared(screen_top_bot, i, view_mode, 0, width, height,
+    draw_screen_get_blur_dims_win_shared(screen_top_bot, i, view_mode, 0, display_width, height,
         &blur_left, &blur_top, &blur_width, &blur_height, &blur_ctx_left, &blur_ctx_top, &blur_ctx_width, &blur_ctx_height);
 
     struct vk_draw_t *blur_draw = NULL;

@@ -1084,7 +1084,7 @@ void ui_main_nk(void)
     if (focus_window)
         nk_window_set_focus(ctx, remote_play_wnd);
 
-    if (nk_begin(ctx, debug_msg_wnd, nk_rect(615, 10, 175, 300),
+    if (nk_begin(ctx, debug_msg_wnd, nk_rect(615, 10, 175, 325),
                  NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE) &&
         show_window)
     {
@@ -1142,6 +1142,9 @@ void ui_main_nk(void)
 
         nk_layout_row_dynamic(ctx, 30, 1);
         nk_checkbox_label(ctx, "Audio (NTR-HR+)", &ntr_rp_config.audio_enable);
+
+        nk_layout_row_dynamic(ctx, 30, 1);
+        nk_checkbox_label(ctx, "Full Width", &ntr_rp_config.full_width);
 
         nk_layout_row_dynamic(ctx, 30, 1);
         nk_checkbox_label(ctx, "Auto-Reconnect", &ntr_auto_reconnect);

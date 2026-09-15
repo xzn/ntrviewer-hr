@@ -44,7 +44,7 @@ extern atomic_bool is_lossless;
 #endif
 
 struct rp_dims {
-    int width, height;
+    int width, height, is_wide;
 };
 
 struct rp_buffer_ctx_t {
@@ -64,7 +64,7 @@ struct rp_buffer_ctx_t {
     int width_upscaled[SCREEN_COUNT];
     int height_upscaled[SCREEN_COUNT];
 
-    uint8_t screen_decoded[FBI_COUNT][SCREEN_HEIGHT0 * SCREEN_WIDTH * GL_CHANNELS_N];
+    uint8_t screen_decoded[FBI_COUNT][SCREEN_HEIGHT0_2X * SCREEN_WIDTH * GL_CHANNELS_N];
     struct rp_dims dims_decoded[FBI_COUNT];
 
     rp_lock_t status_lock;

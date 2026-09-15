@@ -188,6 +188,7 @@ enum frame_buffer_status_t
 
 #define SCREEN_WIDTH 240
 #define SCREEN_HEIGHT0 400
+#define SCREEN_HEIGHT0_2X 800
 #define SCREEN_HEIGHT1 320
 
 #define WIN_WIDTH_DEFAULT (SCREEN_HEIGHT0 * 2)

@@ -33,6 +33,7 @@ void ntr_config_set_default(void) {
         .kcp_mode = KCP_MODE_ON_DELTA,
         .lossless_color = 1,
         .audio_enable = ntr_rp_config.audio_enable,
+        .full_width = ntr_rp_config.full_width,
     };
     ntr_auto_q_reset_all();
 }

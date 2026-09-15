@@ -1058,15 +1058,17 @@ static void d3d_blur_tex_draw(ID3D11ShaderResourceView *srv, int ctx_top_bot, ID
     ID3D11DeviceContext_RSSetScissorRects(d3d11device_context[i], 0, NULL);
 }
 
-void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared) {
+void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int is_wide, int width, int height, int screen_top_bot, int ctx_top_bot, view_mode_t view_mode, int win_shared) {
     int i = ctx_top_bot;
+
+    int display_width = is_wide ? width / 2 : width;
 
     int ctx_left;
     int ctx_top;
     if (win_shared)
-        draw_screen_get_dims_win_shared(screen_top_bot, i, width, height, &ctx_left, &ctx_top, &ctx_width[screen_top_bot], &ctx_height[screen_top_bot]);
+        draw_screen_get_dims_win_shared(screen_top_bot, i, display_width, height, &ctx_left, &ctx_top, &ctx_width[screen_top_bot], &ctx_height[screen_top_bot]);
     else
-        draw_screen_get_dims_lite(screen_top_bot, i, view_mode, width, height, &ctx_left, &ctx_top, &ctx_width[screen_top_bot], &ctx_height[screen_top_bot]);
+        draw_screen_get_dims_lite(screen_top_bot, i, view_mode, display_width, height, &ctx_left, &ctx_top, &ctx_width[screen_top_bot], &ctx_height[screen_top_bot]);
     ctx_left *= ui_win_scale[i];
     ctx_top *= ui_win_scale[i];
     ctx_width[screen_top_bot] *= ui_win_scale[i];
@@ -1097,7 +1099,7 @@ void ui_renderer_d3d11_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int widt
     int blur_ctx_top;
     int blur_ctx_width;
     int blur_ctx_height;
-    draw_screen_get_blur_dims_win_shared(screen_top_bot, i, view_mode, win_shared, width, height,
+    draw_screen_get_blur_dims_win_shared(screen_top_bot, i, view_mode, win_shared, display_width, height,
         &blur_left, &blur_top, &blur_width, &blur_height, &blur_ctx_left, &blur_ctx_top, &blur_ctx_width, &blur_ctx_height);
 
     ID3D11ShaderResourceView *srv = ctx->d3d_srv[i];
