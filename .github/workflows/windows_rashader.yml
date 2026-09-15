@@ -17,11 +17,11 @@ jobs:
         with:
           repository: SnowflakePowered/librashader
           path: librashader
-          ref: librashader-v0.10.0
+          ref: librashader-v0.12.0
       - name: Compile librashader
         run: |
-          rustup toolchain install nightly-2026-01-08-gnu
-          rustup default nightly-2026-01-08-gnu
+          rustup toolchain install nightly-2026-08-02-gnu
+          rustup default nightly-2026-08-02-gnu
           pushd librashader/librashader-capi
           cargo build --profile optimized --no-default-features --features runtime-opengl,runtime-d3d11,runtime-vulkan
           popd
