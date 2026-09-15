@@ -81,6 +81,7 @@ struct rp_buffer_ctx_t {
     int win_width_prev, win_height_prev;
     int upscaling_selected_prev;
     view_mode_t view_mode_prev;
+    int in_width_prev, in_height_prev;
 
     event_t decode_updated_event;
 };

@@ -445,7 +445,7 @@ static int rashader_count;
 static struct rashader_render_t *rashader_render[SCREEN_COUNT][SCREEN_COUNT];
 static int rashader_render_mode[SCREEN_COUNT][SCREEN_COUNT];
 
-static bool rashader_delay_init[SCREEN_COUNT][SCREEN_COUNT];
+static unsigned rashader_delay_init[SCREEN_COUNT][SCREEN_COUNT];
 
 #define GL_GetProcAddress (SDL_GL_GetProcAddress)
 
@@ -471,7 +471,7 @@ static int ogl_upscaling_init(void) {
             rashader_render_mode[j][i] = -1;
 
             // HACK workaround rashader not working on init (don't know what I'm doing wrong..)
-            rashader_delay_init[j][i] = true;
+            rashader_delay_init[j][i] = 1;
         }
     }
     SDL_GL_MakeCurrent(NULL, NULL);
@@ -1186,6 +1186,8 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int is_wid
     bool upscaled = upscaling_selected != UPSCALING_DEFAULT_NONE;
     bool do_upscaled = false;
 
+    bool need_reset_rashader = ctx->in_width_prev != width || ctx->in_height_prev != height;
+
     bool need_tex_update = ctx->upscaling_selected_prev != upscaling_selected ||
         ctx->width_prev != ctx_width || ctx->height_prev != ctx_height ||
         ctx->win_width_prev != win_width_drawable || ctx->win_height_prev != win_height_drawable ||
@@ -1232,8 +1234,11 @@ void ui_renderer_ogl_draw(struct rp_buffer_ctx_t *ctx, uint8_t *data, int is_wid
             placebo_upscaling_update(-1, i, screen_top_bot);
         }
 
-        if (!IS_RASHADER(upscaling_selected)) {
+        if (!IS_RASHADER(upscaling_selected) || need_reset_rashader) {
             rashader_upscaling_update(-1, i, screen_top_bot);
+            // HACK like for init, workaround rashader blackscreen when changing image dimensions
+            if (need_reset_rashader)
+                rashader_delay_init[i][screen_top_bot] = 2;
         }
 
         pl_tex in_tex = NULL;
@@ -1357,7 +1362,7 @@ rashader_fail:
 
     if (!do_upscaled) {
         if (rashader_delay_init[i][screen_top_bot]) {
-            rashader_delay_init[i][screen_top_bot] = 0;
+            --rashader_delay_init[i][screen_top_bot];
             if (i == (view_mode == VIEW_MODE_SEPARATE ? SCREEN_BOT : SCREEN_TOP))
                 cursor_scale_prev = 0.0f;
         }
@@ -1400,6 +1405,8 @@ rashader_fail:
     ctx->win_height_prev = win_height_drawable;
     ctx->view_mode_prev = view_mode;
     ctx->upscaling_selected_prev = upscaling_selected;
+    ctx->in_width_prev = width;
+    ctx->in_height_prev = height;
 }
 
 #define MAX_VERTEX_MEMORY 512 * 1024
