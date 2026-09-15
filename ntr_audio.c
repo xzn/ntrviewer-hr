@@ -97,11 +97,13 @@ void ntr_audio_handle_packet(const uint8_t *pcm, int size, uint8_t fmt, uint8_t 
     }
 
     // log buffer depth every 200 packets
-    static unsigned ntr_audio_pkt_count;
-    if (ntr_audio_pkt_count == 0 || (ntr_audio_pkt_count % 200) == 0)
-        err_log("audio: pkt#%u frames=%d queued=%d\n",
-                ntr_audio_pkt_count, nframes, SDL_GetAudioStreamQueued(audio_stream));
-    ntr_audio_pkt_count++;
+    if (0) {
+        static unsigned ntr_audio_pkt_count;
+        if (ntr_audio_pkt_count == 0 || (ntr_audio_pkt_count % 200) == 0)
+            err_log("audio: pkt#%u frames=%d queued=%d\n",
+                    ntr_audio_pkt_count, nframes, SDL_GetAudioStreamQueued(audio_stream));
+        ntr_audio_pkt_count++;
+    }
 
     // start playback only once primed
     if (!audio_primed &&
