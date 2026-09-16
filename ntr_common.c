@@ -28,10 +28,10 @@ void ntr_config_set_default(void) {
     ntr_rp_config = (struct ntr_rp_config_t){
         .top_screen_priority = 1,
         .screen_priority_factor = NTR_SCREEN_PRIORITY_FACTOR_DEFAULT,
-        .jpeg_quality = 75,
+        .jpeg_quality = 95,
         .bandwidth_limit = 16,
         .kcp_mode = KCP_MODE_ON_DELTA,
-        .lossless_color = 1,
+        .lossless_color = 2,
         .audio_enable = ntr_rp_config.audio_enable,
         .full_width = ntr_rp_config.full_width,
     };

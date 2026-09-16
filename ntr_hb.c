@@ -189,7 +189,7 @@ static int rp_qos_sent_last = -1;
 
 nk_bool ntr_auto_reconnect = nk_true;
 nk_bool ntr_auto_update_params = nk_true;
-nk_bool ntr_auto_quality = nk_false;
+nk_bool ntr_auto_quality = nk_true;
 atomic_int ntr_jpeg_quality_auto = 0;
 atomic_int ntr_qos_auto = 0;
 
