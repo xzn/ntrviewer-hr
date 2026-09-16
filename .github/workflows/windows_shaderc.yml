@@ -28,12 +28,12 @@ jobs:
           submodules: recursive
       - name: Compile shaderc
         run: |
-          wget -nv https://static.crates.io/crates/glslang-sys/glslang-sys-0.7.0%2B1062752.crate
-          tar -xvf glslang-sys-0.7.0+1062752.crate
+          wget -nv https://static.crates.io/crates/glslang-sys/glslang-sys-0.8.1%2B275822a.crate
+          tar -xvf glslang-sys-0.8.1+275822a.crate
           pushd shaderc
           ./utils/git-sync-deps
           rm -rf third_party/glslang/
-          cp -r ../glslang-sys-0.7.0+1062752/native/glslang third_party/
+          cp -r ../glslang-sys-0.8.1+275822a/native/glslang third_party/
           cmake -GNinja -DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX=../install -DCMAKE_BUILD_TYPE=Release -DSHADERC_SKIP_TESTS=ON -DSHADERC_SKIP_EXAMPLES=ON -DENABLE_GLSLANG_BINARIES=OFF -DENABLE_HLSL=ON -DENABLE_OPT=ON .
           ninja
           ninja install

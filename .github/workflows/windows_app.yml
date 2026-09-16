@@ -44,14 +44,14 @@ jobs:
         with:
           repository: libretro/slang-shaders
           path: slang-shaders
-          ref: 3d62b0e20f5bfa1a244edd70987e565de7e68849
+          ref: 637d7bb446be52c606900bb65a13dcf3c1a3fa10
       - name: Compile NTRViewer-HR
         run: |
           ln -s ../../windows-rashader/include/librashader.h ntrviewer-hr/include/librashader.h
           mkdir ntrviewer-hr/lib
           ln -s ../../windows-rashader/lib/librashader.a ntrviewer-hr/lib/librashader.a
           ln -s ../../windows-shaderc/libshaderc_combined.a ntrviewer-hr/lib/libshaderc_combined.a
-          ln -s "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x64\dxcompiler.lib" ntrviewer-hr/lib/dxcompiler.lib
+          ln -s "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.28000.0\um\x64\dxcompiler.lib" ntrviewer-hr/lib/dxcompiler.lib
           pushd ntrviewer-hr
           make -j$(nproc)
           popd

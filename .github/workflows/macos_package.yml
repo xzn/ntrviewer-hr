@@ -17,7 +17,7 @@ jobs:
         with:
           repository: libretro/slang-shaders
           path: slang-shaders
-          ref: 3d62b0e20f5bfa1a244edd70987e565de7e68849
+          ref: 637d7bb446be52c606900bb65a13dcf3c1a3fa10
       - name: Get artifact
         id: artifact-name
         run: |
