@@ -9,8 +9,11 @@ static bool audio_primed; // playback starts only once the jitter buffer fills
 static bool audio_have_last;
 static uint8_t audio_last_seq;
 
-// frames held before playback starts, cushion for wifi dips (~117 ms)
-#define AUDIO_PRIME_FRAMES (24)
+// frames held before playback starts, cushion for wifi dips (starting at ~117 ms)
+#define AUDIO_PRIME_FRAMES_MIN (24)
+#define AUDIO_PRIME_FRAMES_STEP (8)
+#define AUDIO_PRIME_FRAMES_MAX (48)
+static int audio_prime_frames = AUDIO_PRIME_FRAMES_MIN;
 // queue cap so latency cannot grow unbounded (~391 ms)
 #define AUDIO_MAX_QUEUED_FRAMES (80)
 // max silence frames per gap, larger gaps just resync
@@ -41,15 +44,19 @@ static void ntr_audio_put(const uint8_t *frame)
 {
     // latency hit the cap: flush and re-prime instead of holding max lag forever
     bool max_lat = SDL_GetAudioStreamQueued(audio_stream) > RP_AUDIO_FRAME_BYTES * AUDIO_MAX_QUEUED_FRAMES;
-    if (max_lat)
-        err_log("Max latency hit, re-priming\n");
     bool no_data = SDL_GetAudioStreamAvailable(audio_stream) <= 0;
-    if (no_data)
-        err_log("Audio data empty, re-priming\n");
-    if (max_lat || no_data) {
+    if (0) {
+        if (max_lat)
+            err_log("Max latency hit, re-priming\n");
+        if (no_data)
+            err_log("Audio data empty, re-priming\n");
+    }
+    if ((max_lat || no_data) && audio_primed) {
         SDL_ClearAudioStream(audio_stream);
         SDL_PauseAudioStreamDevice(audio_stream);
         audio_primed = false;
+        if (audio_prime_frames < AUDIO_PRIME_FRAMES_MAX)
+            audio_prime_frames += AUDIO_PRIME_FRAMES_STEP;
     }
     if (!SDL_PutAudioStreamData(audio_stream, frame, RP_AUDIO_FRAME_BYTES))
         err_log("SDL_PutAudioStreamData: %s\n", SDL_GetError());
@@ -113,7 +120,7 @@ void ntr_audio_handle_packet(const uint8_t *pcm, int size, uint8_t fmt, uint8_t 
 
     // start playback only once primed
     if (!audio_primed &&
-        SDL_GetAudioStreamQueued(audio_stream) >= RP_AUDIO_FRAME_BYTES * AUDIO_PRIME_FRAMES) {
+        SDL_GetAudioStreamQueued(audio_stream) >= RP_AUDIO_FRAME_BYTES * audio_prime_frames) {
         if (!SDL_ResumeAudioStreamDevice(audio_stream))
             err_log("SDL_ResumeAudioStreamDevice: %s\n", SDL_GetError());
         audio_primed = true;
@@ -126,6 +133,7 @@ void ntr_audio_reset(void)
     audio_have_last = false;
     audio_last_seq = 0;
     audio_primed = false;
+    audio_prime_frames = AUDIO_PRIME_FRAMES_MIN;
     if (audio_stream) {
         SDL_ClearAudioStream(audio_stream);
         SDL_PauseAudioStreamDevice(audio_stream);
