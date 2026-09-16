@@ -13,7 +13,7 @@ jobs:
         with:
           repository: libsdl-org/SDL
           path: SDL
-          ref: release-3.4.0
+          ref: release-3.4.14
       - name: Compile sdl
         run: |
           cd SDL

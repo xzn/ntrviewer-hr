@@ -15,7 +15,7 @@ jobs:
         with:
           repository: haasn/libplacebo
           path: libplacebo
-          ref: v7.351.0
+          ref: v7.360.1
           submodules: recursive
       - name: Get artifact
         id: artifact-name
