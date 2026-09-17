@@ -188,7 +188,7 @@ TARGET_DEP := $(TARGET_OBJ:.o=.d)
 $(TARGET): $(TARGET_OBJ)
 	$(CXX) $^ -o $@ $(CFLAGS) $(LDLIBS) $(LDFLAGS) -w
 
-CC_JT = $(CC) $< -o $@ -c $(CFLAGS) $(CPPFLAGS) -Ijpeg_turbo -Ijpeg_turbo/src -Ijpeg_turbo/include -Wno-stringop-overflow -Wno-unused-parameter -Wno-sign-compare
+CC_JT = $(CC) $< -o $@ -c -Ijpeg_turbo -Ijpeg_turbo/src -Ijpeg_turbo/include $(CFLAGS) $(CPPFLAGS) -Wno-stringop-overflow -Wno-unused-parameter -Wno-sign-compare
 
 jpeg_turbo/jpeg8/%.o: jpeg_turbo/jpeg8/%.c
 	$(CC_JT) -DBMP_SUPPORTED -DPPM_SUPPORTED
