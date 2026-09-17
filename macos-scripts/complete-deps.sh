@@ -17,7 +17,11 @@ process () {
     if [[ "$SRC" =~ ^/opt/homebrew/opt/.* || "$SRC" =~ ^/usr/local/opt/.* || "$SRC" =~ ^/Users/.* ]]; then
         echo Third-party "$SRC"
         if [ ! -f "$DST" ]; then
-            cp "$SRC" "$DST"
+            if [[ "$SRC" =~ ^.*librashader.* ]]; then
+                cp "../macos-rashader/lib/librashader.dylib" "$DST"
+            else
+                cp "$SRC" "$DST"
+            fi
             chmod 644 "$DST"
             ( pre_process $DST )
             install_name_tool -id "@rpath/$LIB" "$DST"
