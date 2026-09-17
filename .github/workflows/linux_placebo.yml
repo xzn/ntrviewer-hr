@@ -27,7 +27,7 @@ jobs:
       - name: Compile placebo
         run: |
           cd libplacebo
-          PKG_CONFIG_PATH=$(realpath ../linux-shaderc/lib/pkgconfig/) meson ./build/ --prefix=$(realpath ../linux-placebo) --default-library=static -Dlcms=disabled -Dc_args="-I 3rdparty/Vulkan-Headers/include" -Dcpp_args="-I 3rdparty/Vulkan-Headers/include"
+          PKG_CONFIG_PATH=$(realpath ../linux-shaderc/lib/pkgconfig/) meson ./build/ --prefix=$(realpath ../linux-placebo) --default-library=static -Dlcms=disabled
           ninja -C build
           ninja install -C build
           cd ..
