@@ -49,7 +49,7 @@ Assumes optimal Wi-Fi network condition.
 | JPEG Compat | 120 |
 | JPEG (RS) | 120 |
 | JPEG (RS, Delta) | 90 ~ 110 |
-| Uncompressed | 15 |
+| Uncompressed | 7 |
 | Lossless (RS) | 15 |
 | Lossless (RS, Delta) | 15 ~ 30 |
 | JPEG Compat (Old 3DS) | 3 |
