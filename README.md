@@ -71,7 +71,7 @@ Note: For true lossless image, you need to set Color Quality Bias to 0, and set 
 
 ### How do I get audio with the stream?
 
-- Audio streaming is **NOT** supported. You may use a 3.5 mm audio aux cable to connect your 3DS's audio jack to your PC's line-in for capture.
+- Audio streaming can be enabled in Debug window (DSP only; CSND not supported). You may use a 3.5 mm audio aux cable to connect your 3DS's audio jack to your PC's line-in for capture as an alternative.
 
 ### Are only **New 3DS/New 2DS** supported?
 
