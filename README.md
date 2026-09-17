@@ -50,18 +50,14 @@ Assumes optimal Wi-Fi network condition.
 | JPEG (RS) | 120 |
 | JPEG (RS, Delta) | 90 ~ 110 |
 | Uncompressed | 15 |
-| Lossless (RS) | 30 |
-| Lossless (RS, Delta) | 30 ~ 60 |
+| Lossless (RS) | 15 |
+| Lossless (RS, Delta) | 15 ~ 30 |
 | JPEG Compat (Old 3DS) | 3 |
 | Uncompressed (Old 3DS) | 3 |
 
-Note: For true lossless image, you need to set Color Quality Bias to 0, and set Chroma Subsampling to Off in the NTR-HR menu on the console (accessed with X+Y -> Remote Play -> Advanced Options). Frame rate will be very low.
+Note: For true lossless image, make sure Color Quality Bias is 0, and set Chroma Subsampling to Off in the NTR-HR menu on the console (accessed with X+Y -> Remote Play -> Advanced Options). Frame rate will be very low.
 
 ## FAQ
-
-### Viewer freezes/hangs/stops responding after streaming has started (on Windows)?
-
-- Try starting the viewer with `ntrviewer.exe --no-csc`. Sorry for the inconvenience. This disables my apparently buggy use of composition swapchain.
 
 ### Viewer is not connecting, or connected but no image?
 
