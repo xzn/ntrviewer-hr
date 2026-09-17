@@ -18,7 +18,7 @@ process () {
         echo Third-party "$SRC"
         if [ ! -f "$DST" ]; then
             if [[ "$SRC" =~ ^.*librashader.* ]]; then
-                if [[ "$(uname -m)" == "arm64" ]]; then
+                if [[ "$ARCH" == "arm64" ]]; then
                     cp "../macos-rashader/lib/librashader.dylib" "$DST"
                 else
                     cp "../macos-rashader-intel/lib/librashader.dylib" "$DST"
