@@ -252,6 +252,11 @@ static bool create_instance(struct vulkan_demo *demo) {
     const char **enabled_extensions = NULL;
     const char *const *sdl_enabled_extensions;
     bool validation_layers_installed;
+#ifdef __APPLE__
+    uint32_t portability_extension_count = 1;
+#else
+    uint32_t portability_extension_count = 0;
+#endif
 
     validation_layers_installed = check_validation_layer_support();
 
@@ -300,7 +305,7 @@ static bool create_instance(struct vulkan_demo *demo) {
 
     enabled_extension_count = 0;
     enabled_extensions = malloc(
-        (sdl_extension_count + (validation_layers_installed ? 1 : 0)) * sizeof(char *));
+        (sdl_extension_count + (validation_layers_installed ? 1 : 0) + portability_extension_count) * sizeof(char *));
 
     for (i = 0; i < sdl_extension_count; i++) {
         int extension_missing = 1;
@@ -329,6 +334,11 @@ static bool create_instance(struct vulkan_demo *demo) {
         enabled_extensions[enabled_extension_count++] =
             VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
     }
+
+#ifdef __APPLE__
+    enabled_extensions[enabled_extension_count++] =
+        VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+#endif
 
     if (is_renderer_vk_dbg) {
         err_log("Trying to enable the following instance extensions:\n");
