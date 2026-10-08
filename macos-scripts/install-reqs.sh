@@ -15,7 +15,7 @@ else
     MACPORTS_PREFIX=/opt/local
     export PATH="$MACPORTS_PREFIX/bin:$PATH"
     echo "$MACPORTS_PREFIX/bin" >> "$GITHUB_PATH"
-    sudo port install sdl3 libplacebo nasm
+    sudo port install sdl3 libplacebo nasm +vulkan
 fi
 
 wget -nv https://sdk.lunarg.com/sdk/download/$VULKAN_VERSION/mac/vulkansdk-macos-$VULKAN_VERSION.zip

@@ -26,9 +26,9 @@ jobs:
           ln -s ../../macos-rashader-intel/lib/librashader.dylib ntrviewer-hr/lib/librashader.dylib
           pushd ntrviewer-hr
           source ~/VulkanSDK/$VULKAN_VERSION/setup-env.sh
-          export PKG_CONFIG_PATH="/opt/local/lib/pkgconfig:/opt/local/share/pkgconfig"
-          export CPATH="/opt/local/include"
-          export LIBRARY_PATH="/opt/local/lib"
+          export PKG_CONFIG_PATH="/opt/local/lib/pkgconfig:/opt/local/share/pkgconfig:$PKG_CONFIG_PATH"
+          export CPATH="/opt/local/include:$VULKAN_SDK/include:$CPATH"
+          export LIBRARY_PATH="/opt/local/lib:$VULKAN_SDK/lib:$LIBRARY_PATH"
           make -j$(sysctl -n hw.logicalcpu)
           popd
       - name: Package NTRViewer-HR
