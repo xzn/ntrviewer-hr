@@ -3,6 +3,7 @@
 #include "ntr_common.h"
 #include "ntr_hb.h"
 #include "ntr_rp.h"
+#include "ntr_audio.h"
 #include "ui_input_redirection.h"
 
 enum nk_nav_t nk_nav_cmd;
@@ -1159,7 +1160,13 @@ void ui_main_nk(void)
         nk_checkbox_label(ctx, "Stats", &ntr_stats_overlay);
 
         nk_layout_row_dynamic(ctx, 30, 1);
-        nk_checkbox_label(ctx, "Audio (NTR-HR+)", &ntr_rp_config.audio_enable);
+        int audio_danger_ms = ntr_audio_danger_ms;
+        int audio_delay_ms = ntr_audio_delay_ms;
+        if (audio_delay_ms)
+            snprintf(msg_buf, sizeof(msg_buf), "Audio (%d/%d ms)", audio_danger_ms, audio_delay_ms);
+        else
+            snprintf(msg_buf, sizeof(msg_buf), "Audio (NTR-HR+)");
+        nk_checkbox_label(ctx, msg_buf, &ntr_rp_config.audio_enable);
 
         nk_layout_row_dynamic(ctx, 30, 1);
         nk_checkbox_label(ctx, "Full Width", &ntr_rp_config.full_width);

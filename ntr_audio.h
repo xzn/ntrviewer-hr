@@ -8,10 +8,14 @@
 #define RP_AUDIO_HDR_TYPE      (4)
 #define RP_AUDIO_FMT_PCM16     (0)
 
+#define RP_AUDIO_SAMPLE_BYTES  (2)
 #define RP_AUDIO_SAMPLE_RATE   (32728)
 #define RP_AUDIO_CHANNELS      (2)
 #define RP_AUDIO_FRAME_SAMPLES (160)
-#define RP_AUDIO_FRAME_BYTES   (RP_AUDIO_FRAME_SAMPLES * RP_AUDIO_CHANNELS * 2) // 640
+#define RP_AUDIO_FRAME_BYTES   (RP_AUDIO_FRAME_SAMPLES * RP_AUDIO_CHANNELS * RP_AUDIO_SAMPLE_BYTES) // 640
+
+extern int ntr_audio_danger_ms;
+extern int ntr_audio_delay_ms;
 
 // drop jitter-buffer state on reconnect, call from the recv thread
 void ntr_audio_reset(void);
