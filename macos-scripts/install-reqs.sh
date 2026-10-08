@@ -8,6 +8,13 @@ if [[ "$ARCH" == "arm64" ]]; then
     brew update
     brew install sdl3 libplacebo nasm
 else
+    URL="https://github.com/macports/macports-base/releases/download/v2.12.6"
+    MACPORTS_PKG="MacPorts-2.12.6-26-Tahoe.pkg"
+    curl -LO $URL/$MACPORTS_PKG
+    installer -verbose -pkg $MACPORTS_PKG -target /
+    MACPORTS_PREFIX=/opt/local
+    export PATH="$MACPORTS_PREFIX/bin:$PATH"
+    echo "$MACPORTS_PREFIX/bin" >> "$GITHUB_PATH"
     port install sdl3 libplacebo nasm
 fi
 
