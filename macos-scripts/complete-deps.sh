@@ -60,11 +60,7 @@ cp "$BIN_DIR/$BIN" "$BIN"
 rm -rf "$ARCH"
 mkdir -p "$ARCH"
 ( pre_process $BIN )
-if [[ "$ARCH" == "arm64" ]]; then
-    install_name_tool -rpath /opt/homebrew/lib @executable_path/$ARCH "$BIN"
-else
-    install_name_tool -rpath /opt/local/lib @executable_path/$ARCH "$BIN"
-fi
+install_name_tool -rpath /opt/local/lib @executable_path/$ARCH "$BIN"
 codesign -s "-" -f "$BIN"
 
 ICD=MoltenVK_icd.json

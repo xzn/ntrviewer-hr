@@ -20,8 +20,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Compile NTRViewer-HR
         run: |
-          export MACOSX_DEPLOYMENT_TARGET=11.0
-          ntrviewer-hr/macos-scripts/install-reqs.sh
+          source ntrviewer-hr/macos-scripts/install-reqs.sh
           ln -s ../../macos-rashader/include/librashader.h ntrviewer-hr/include/librashader.h
           mkdir ntrviewer-hr/lib
           ln -s ../../macos-rashader/lib/librashader.dylib ntrviewer-hr/lib/librashader.dylib
