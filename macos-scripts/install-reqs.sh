@@ -5,13 +5,8 @@ set -ex
 ARCH=$(uname -m)
 
 URL="https://github.com/macports/macports-base/releases/download/v2.12.6"
-if [[ "$ARCH" == "arm64" ]]; then
-    export MACOSX_DEPLOYMENT_TARGET=11.0
-    MACPORTS_PKG="MacPorts-2.12.6-11-BigSur.pkg"
-else
-    export MACOSX_DEPLOYMENT_TARGET=10.15
-    MACPORTS_PKG="MacPorts-2.12.6-10.15-Catalina.pkg"
-fi
+export MACOSX_DEPLOYMENT_TARGET=15.0
+MACPORTS_PKG="MacPorts-2.12.6-15-Sequoia.pkg"
 curl -LO $URL/$MACPORTS_PKG
 sudo installer -verbose -pkg $MACPORTS_PKG -target /
 MACPORTS_PREFIX=/opt/local
