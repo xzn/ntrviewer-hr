@@ -15,7 +15,7 @@ else
     MACPORTS_PREFIX=/opt/local
     export PATH="$MACPORTS_PREFIX/bin:$PATH"
     echo "$MACPORTS_PREFIX/bin" >> "$GITHUB_PATH"
-    sudo port install sdl3 nasm
+    sudo port install sdl3 shaderc nasm
     sudo port install libplacebo +vulkan
 fi
 
