@@ -63,7 +63,6 @@ mkdir -p "$ARCH"
 if [[ "$ARCH" == "arm64" ]]; then
     install_name_tool -rpath /opt/homebrew/lib @executable_path/$ARCH "$BIN"
 else
-    otool -l "$BIN"
     install_name_tool -rpath /opt/local/lib @executable_path/$ARCH "$BIN"
 fi
 codesign -s "-" -f "$BIN"
