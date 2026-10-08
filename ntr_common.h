@@ -76,8 +76,8 @@ UNUSED static bool socket_poll(SOCKET s)
 #define NTR_MAC_SIZE (6)
 
 // also accessed as one aliased uint32_t (lock-free __atomic word ops)
-extern atomic_uint_fast8_t ntr_ip_octet[NTR_IP_OCTET_SIZE];
-extern atomic_uint_fast8_t ntr_ip_octet_incoming[NTR_IP_OCTET_SIZE];
+extern atomic_uint_fast8_t ntr_ip_octet[NTR_IP_OCTET_SIZE] __attribute__((aligned(4)));
+extern atomic_uint_fast8_t ntr_ip_octet_incoming[NTR_IP_OCTET_SIZE] __attribute__((aligned(4)));
 _Static_assert(sizeof(atomic_uint_fast8_t[NTR_IP_OCTET_SIZE]) == sizeof(uint32_t),
     "ip octet arrays must alias exactly one uint32_t");
 

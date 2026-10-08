@@ -213,8 +213,8 @@ fail:
     return -1;
 }
 
-atomic_uint_fast8_t ntr_ip_octet[NTR_IP_OCTET_SIZE];
-atomic_uint_fast8_t ntr_ip_octet_incoming[NTR_IP_OCTET_SIZE];
+atomic_uint_fast8_t ntr_ip_octet[NTR_IP_OCTET_SIZE] __attribute__((aligned(4)));
+atomic_uint_fast8_t ntr_ip_octet_incoming[NTR_IP_OCTET_SIZE] __attribute__((aligned(4)));
 
 static bool ntr_get_auto_ip_from_ip_octet(uint32_t a) {
     for (int i = 0; i < ntr_auto_ip_count; ++i) {
