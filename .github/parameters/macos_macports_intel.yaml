@@ -1,4 +1,4 @@
 ports:
-  - name: SDL3
-  - name: libplacebo
-  - name: nasm
+  # - name: SDL3
+  # - name: libplacebo
+  # - name: nasm
