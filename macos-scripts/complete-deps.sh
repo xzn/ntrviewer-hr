@@ -14,7 +14,7 @@ process () {
         LIB="${BASH_REMATCH[1]}.dylib"
     fi
     DST="$ARCH/$LIB"
-    if [[ "$SRC" =~ ^/opt/homebrew/opt/.* || "$SRC" =~ ^/usr/local/opt/.* || "$SRC" =~ ^/Users/.* ]]; then
+    if [[ "$SRC" =~ ^@rpath/.* || "$SRC" =~ ^/opt/homebrew/opt/.* || "$SRC" =~ ^/opt/local/lib/.* || "$SRC" =~ ^/usr/local/opt/.* || "$SRC" =~ ^/Users/.* ]]; then
         echo Third-party "$SRC"
         if [ ! -f "$DST" ]; then
             if [[ "$SRC" =~ ^.*librashader.* ]]; then
@@ -23,6 +23,8 @@ process () {
                 else
                     cp "../macos-rashader-intel/lib/librashader.dylib" "$DST"
                 fi
+            elif [[ "$SRC" =~ ^@rpath/.* ]]; then
+                cp "/opt/local/lib/$LIB" "$DST"
             else
                 cp "$SRC" "$DST"
             fi
@@ -61,7 +63,8 @@ mkdir -p "$ARCH"
 if [[ "$ARCH" == "arm64" ]]; then
     install_name_tool -rpath /opt/homebrew/lib @executable_path/$ARCH "$BIN"
 else
-    install_name_tool -rpath /usr/local/lib @executable_path/$ARCH "$BIN"
+    otool -l "$BIN"
+    install_name_tool -rpath /opt/local/lib @executable_path/$ARCH "$BIN"
 fi
 codesign -s "-" -f "$BIN"
 
