@@ -8,13 +8,13 @@ jobs:
   build-macos-app-intel:
     runs-on: macos-15-intel
     steps:
-      - uses: melusina-org/setup-macports@v1
-        id: macports
-        with:
-          parameters: '.github/parameters/macos_macports_intel.yaml'
       - uses: actions/checkout@v5
         with:
           path: ntrviewer-hr
+      - uses: melusina-org/setup-macports@v1
+        id: macports
+        with:
+          parameters: 'ntrviewer-hr/.github/parameters/macos_macports_intel.yaml'
       - name: Get artifact
         id: artifact-name
         run: |
