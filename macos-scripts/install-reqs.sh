@@ -2,8 +2,12 @@
 
 set -ex
 
-brew update
-brew install sdl3 libplacebo nasm
+ARCH=$(uname -m)
+
+if [[ "$ARCH" == "arm64" ]]; then
+    brew update
+    brew install sdl3 libplacebo nasm
+fi
 
 wget -nv https://sdk.lunarg.com/sdk/download/$VULKAN_VERSION/mac/vulkansdk-macos-$VULKAN_VERSION.zip
 unzip vulkansdk-macos-$VULKAN_VERSION.zip
