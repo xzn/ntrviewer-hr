@@ -20,11 +20,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Compile NTRViewer-HR
         run: |
-          ntrviewer-hr/macos-scripts/install-reqs.sh
+          source ntrviewer-hr/macos-scripts/install-reqs.sh
           ln -s ../../macos-rashader-intel/include/librashader.h ntrviewer-hr/include/librashader.h
           mkdir ntrviewer-hr/lib
           ln -s ../../macos-rashader-intel/lib/librashader.dylib ntrviewer-hr/lib/librashader.dylib
           pushd ntrviewer-hr
+          source ~/VulkanSDK/$VULKAN_VERSION/setup-env.sh
           export PKG_CONFIG_PATH="/opt/local/lib/pkgconfig:/opt/local/share/pkgconfig"
           export CPATH="/opt/local/include"
           export LIBRARY_PATH="/opt/local/lib"
