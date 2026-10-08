@@ -10,19 +10,19 @@ jobs:
     steps:
       - uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           path-type: minimal
           update: true
           install: |
             zip
             make
             vim
-            mingw-w64-x86_64-sdl3
-            mingw-w64-x86_64-libplacebo
-            mingw-w64-x86_64-vulkan-headers
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-nasm
-            mingw-w64-x86_64-github-cli
+            mingw-w64-ucrt-x86_64-sdl3
+            mingw-w64-ucrt-x86_64-libplacebo
+            mingw-w64-ucrt-x86_64-vulkan-headers
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-nasm
+            mingw-w64-ucrt-x86_64-github-cli
       - uses: actions/checkout@v5
         with:
           path: ntrviewer-hr
