@@ -9,7 +9,7 @@
     <key>CFBundleIdentifier</key>
     <string>com.example.xzn.NTRViewer-HR</string>
     <key>CFBundleVersion</key>
-    <string>0.3.5.2</string>
+    <string>0.3.8.1</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Discover and connect to 3DS devices for remote play and input redirection.</string>
 </dict>
