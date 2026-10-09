@@ -116,8 +116,15 @@ static void ntr_audio_put(const uint8_t *frame)
 
     if (audio_primed && !audio_soft_reprime &&
         (
-            (audio_primed_elapsed >= AUDIO_PRIME_ELAPSE_SOTHRES && frames_queued >= AUDIO_PRIME_FRAMES_MIN + MIN(AUDIO_PRIME_FRAMES_STEP, audio_soft_danger_frames)) ||
-            (audio_primed_elapsed < AUDIO_PRIME_ELAPSE_LOTHRES && frames_queued >= audio_prime_frames + MAX(AUDIO_PRIME_FRAMES_STEP, audio_soft_delay_frames - audio_soft_danger_frames))
+            (
+                audio_primed_elapsed >= AUDIO_PRIME_ELAPSE_SOTHRES &&
+                frames_queued >= AUDIO_PRIME_FRAMES_MIN + MIN(AUDIO_PRIME_FRAMES_STEP, audio_soft_danger_frames) &&
+                audio_soft_danger_frames / 2 >= audio_soft_delay_frames - audio_soft_danger_frames
+            ) ||
+            (
+                audio_primed_elapsed < AUDIO_PRIME_ELAPSE_LOTHRES &&
+                frames_queued >= audio_prime_frames + MAX(AUDIO_PRIME_FRAMES_STEP, audio_soft_delay_frames - audio_soft_danger_frames)
+            )
         )
     ) {
         audio_soft_skip = MIN(MAX(1, audio_soft_danger_frames / 2), frames_queued - AUDIO_PRIME_FRAMES_MIN);
