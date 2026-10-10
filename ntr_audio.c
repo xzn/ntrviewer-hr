@@ -2,7 +2,7 @@
 #include "ntr_audio.h"
 #include <math.h>
 
-#define AUDIO_DBG (1)
+#define AUDIO_DBG (0)
 
 int ntr_audio_danger_ms;
 int ntr_audio_delay_ms;
