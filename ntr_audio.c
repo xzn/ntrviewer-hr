@@ -38,7 +38,6 @@ static bool audio_state_primed;
 static int64_t audio_primed_time;
 
 #define AUDIO_PRIME_COUNT_MIN (16)
-#define AUDIO_PRIME_COUNT_MIN (16)
 #define AUDIO_PRIME_COUNT_STEP (8)
 #define AUDIO_PRIME_COUNT_MAX (64)
 static int audio_prime_count = AUDIO_PRIME_COUNT_MIN;
