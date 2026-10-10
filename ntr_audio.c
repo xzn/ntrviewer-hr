@@ -188,12 +188,10 @@ static int ntr_audio_get_frames_avail(void)
 
 static void audio_stream_skip_audio_frames(int n)
 {
-    ntr_audio_fade_out(0);
     for (int i = 0; i < n; ++i) {
         struct audio_frame_t *frame = ntr_audio_next_frame();
         ntr_audio_reset_frame(frame);
     }
-    ntr_audio_fade_in(0);
 }
 
 static void ntr_audio_handle_prime(SDL_AudioStream *stream, int frames_needed);
@@ -236,9 +234,14 @@ static void ntr_audio_handle_play(SDL_AudioStream *stream, int frames_needed)
         if (AUDIO_DBG)
             err_log("Audio prime frames (soft) decreased: %d\n", audio_prime_count);
 
-        audio_stream_skip_audio_frames(audio_skip);
+        ntr_audio_fade_out(NTR_AUDIO_FADE_FRAMES_COUNT);
+        audio_stream_put_audio_frames(stream, NTR_AUDIO_FADE_FRAMES_COUNT);
+        frames_needed -= NTR_AUDIO_FADE_FRAMES_COUNT;
 
-        return ntr_audio_handle_play(stream, frames_needed);
+        audio_stream_skip_audio_frames(audio_skip);
+        audio_state_primed = false;
+
+        return ntr_audio_handle_prime(stream, frames_needed);
     }
 
     if (frames_remain < NTR_AUDIO_REPRIME_THRES) {
@@ -292,7 +295,7 @@ static void ntr_audio_handle_prime(SDL_AudioStream *stream, int frames_needed)
     ntr_audio_peek_frame(0)->reprime = false;
     int frames_avail = ntr_audio_get_frames_avail();
 
-    if (frames_avail < prime_count) {
+    if (frames_avail < prime_count && !ntr_audio_peek_frame(frames_avail)->reprime) {
         audio_stream_put_silence_frames(stream, frames_needed);
         frames_needed = 0;
     } else {
