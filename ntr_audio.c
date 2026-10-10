@@ -2,8 +2,12 @@
 #include "ntr_audio.h"
 #include <math.h>
 
+#define AUDIO_DBG (1)
+
 int ntr_audio_danger_ms;
 int ntr_audio_delay_ms;
+static int audio_danger_ms;
+static int audio_delay_ms;
 
 // sdl device stream, opened lazily on the first audio frame
 static SDL_AudioStream *audio_stream;
@@ -218,6 +222,7 @@ static void ntr_audio_handle_prime(SDL_AudioStream *stream, int frames_needed)
     int prime_count = audio_prime_count;
     prime_count = MAX(prime_count, NTR_AUDIO_REPRIME_THRES);
 
+    ntr_audio_peek_frame(0)->reprime = false;
     int frames_avail = ntr_audio_get_frames_avail();
 
     if (frames_avail < prime_count) {
@@ -232,6 +237,8 @@ static void ntr_audio_handle_prime(SDL_AudioStream *stream, int frames_needed)
     }
 }
 
+#define AUDIO_QUEUED ((audio_frames_head - audio_frames_tail + AUDIO_FRAMES_MAX_COUNT) % AUDIO_FRAMES_MAX_COUNT)
+
 static void SDLCALL ntr_sdl_audio_stream_cb(UNUSED void *userdata, SDL_AudioStream *stream, int additional_amount, UNUSED int total_amount)
 {
     if (!additional_amount)
@@ -243,11 +250,25 @@ static void SDLCALL ntr_sdl_audio_stream_cb(UNUSED void *userdata, SDL_AudioStre
     int frames_needed = (additional_amount + RP_AUDIO_FRAME_BYTES - 1) / RP_AUDIO_FRAME_BYTES;
 
     rp_lock_wait(audio_frames_lock);
+
+    int audio_queued = AUDIO_QUEUED;
+
     if (audio_state_primed)
         ntr_audio_handle_play(stream, frames_needed);
     else
         ntr_audio_handle_prime(stream, frames_needed);
     rp_lock_rel(audio_frames_lock);
+
+    int audio_queued_ms = audio_queued
+        * RP_AUDIO_FRAME_SAMPLES * 1000 / RP_AUDIO_SAMPLE_RATE;
+
+    if (audio_queued_ms && (!audio_danger_ms || audio_queued_ms < audio_danger_ms)) {
+        audio_danger_ms = audio_queued_ms;
+    }
+
+    if (audio_queued_ms > audio_delay_ms) {
+        audio_delay_ms = audio_queued_ms;
+    }
 }
 
 static bool ntr_audio_open(void)
@@ -353,7 +374,23 @@ void ntr_audio_handle_packet(const uint8_t *pcm, int size, uint8_t fmt, uint8_t 
         }
     }
 
+    int audio_queued = AUDIO_QUEUED;
+
     rp_lock_rel(audio_frames_lock);
+
+    // log buffer depth every 256 packets
+    static unsigned ntr_audio_pkt_count;
+    if (!(ntr_audio_pkt_count % 256)) {
+        if (AUDIO_DBG)
+            err_log("audio: pkt#%u frames=%d queued=%d\n",
+                ntr_audio_pkt_count, nframes, audio_queued);
+
+        ntr_audio_danger_ms = audio_danger_ms;
+        audio_danger_ms = 0;
+        ntr_audio_delay_ms = audio_delay_ms;
+        audio_delay_ms = 0;
+    }
+    ntr_audio_pkt_count++;
 }
 
 void ntr_audio_reset(void)
@@ -369,6 +406,9 @@ void ntr_audio_reset(void)
 
     for (int i = 0; i < AUDIO_FRAMES_MAX_COUNT; ++i)
         ntr_audio_reset_frame(&audio_frames[i]);
+
+    audio_danger_ms = ntr_audio_danger_ms = 0;
+    audio_delay_ms = ntr_audio_delay_ms = 0;
 }
 
 void ntr_audio_shutdown(void)

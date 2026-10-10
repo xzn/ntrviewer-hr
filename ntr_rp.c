@@ -2387,7 +2387,10 @@ static void socket_action(int ret)
     }
     // err_log("recvfrom: %d\n", ret);
     if (ntr_is_kcp_test) {
-        kcp_active = 1;
+        if (!kcp_active) {
+            kcp_active = 1;
+            ntr_audio_reset();
+        }
     }
 
     if (kcp_active) {
