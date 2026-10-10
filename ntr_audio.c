@@ -31,9 +31,17 @@ static struct audio_frame_t {
 } audio_frames[AUDIO_FRAMES_MAX_COUNT];
 static int audio_frames_head, audio_frames_tail;
 static bool audio_state_primed;
+static int64_t audio_primed_time;
 
 #define AUDIO_PRIME_COUNT_MIN (16)
+#define AUDIO_PRIME_COUNT_MIN (16)
+#define AUDIO_PRIME_COUNT_STEP (8)
+#define AUDIO_PRIME_COUNT_MAX (64)
 static int audio_prime_count = AUDIO_PRIME_COUNT_MIN;
+
+#define AUDIO_PRIME_ELAPSE_LOTHRES (4)
+#define AUDIO_PRIME_ELAPSE_HITHRES (16)
+#define AUDIO_PRIME_ELAPSE_SOTHRES (8)
 
 static void audio_frame_fade(uint8_t *frame, double a, double b)
 {
@@ -192,6 +200,21 @@ static void ntr_audio_handle_play(SDL_AudioStream *stream, int frames_needed)
         ntr_audio_fade_out(frames_avail);
 
         audio_state_primed = false;
+
+        int64_t audio_primed_elapsed = iclock64() - audio_primed_time;
+        audio_primed_elapsed /= 1000000; // us to s
+
+        if (AUDIO_DBG)
+            err_log("Audio prime elapsed: %d\n", (int)audio_primed_elapsed);
+        if (audio_primed_elapsed < AUDIO_PRIME_ELAPSE_LOTHRES && audio_prime_count < AUDIO_PRIME_COUNT_MAX) {
+            audio_prime_count += AUDIO_PRIME_COUNT_STEP;
+            if (AUDIO_DBG)
+                err_log("Audio prime frames increased: %d\n", audio_prime_count);
+        } else if (audio_primed_elapsed >= AUDIO_PRIME_ELAPSE_HITHRES && audio_prime_count > AUDIO_PRIME_COUNT_MIN) {
+            audio_prime_count -= AUDIO_PRIME_COUNT_STEP;
+            if (AUDIO_DBG)
+                err_log("Audio prime frames decreased: %d\n", audio_prime_count);
+        }
     }
 
     for (int i = 1; i < NTR_AUDIO_REPRIME_THRES + frames_process; ++i) {
@@ -232,6 +255,7 @@ static void ntr_audio_handle_prime(SDL_AudioStream *stream, int frames_needed)
         ntr_audio_fade_in(0);
 
         audio_state_primed = true;
+        audio_primed_time = iclock64();
 
         ntr_audio_handle_play(stream, frames_needed);
     }
