@@ -37,9 +37,9 @@ static int audio_frames_head, audio_frames_tail;
 static bool audio_state_primed;
 static int64_t audio_primed_time;
 
-#define AUDIO_PRIME_COUNT_MIN (16)
+#define AUDIO_PRIME_COUNT_MIN (8)
 #define AUDIO_PRIME_COUNT_STEP (8)
-#define AUDIO_PRIME_COUNT_MAX (64)
+#define AUDIO_PRIME_COUNT_MAX (32)
 static int audio_prime_count = AUDIO_PRIME_COUNT_MIN;
 
 #define AUDIO_PRIME_ELAPSE_LOTHRES (4)
@@ -239,9 +239,9 @@ static void ntr_audio_handle_play(SDL_AudioStream *stream, int frames_needed)
         frames_needed -= NTR_AUDIO_FADE_FRAMES_COUNT;
 
         audio_stream_skip_audio_frames(audio_skip);
-        audio_state_primed = false;
+        ntr_audio_fade_in(0);
 
-        return ntr_audio_handle_prime(stream, frames_needed);
+        return ntr_audio_handle_play(stream, frames_needed);
     }
 
     if (frames_remain < NTR_AUDIO_REPRIME_THRES) {
