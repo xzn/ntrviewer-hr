@@ -8,6 +8,10 @@ int ntr_audio_danger_ms;
 int ntr_audio_delay_ms;
 static int audio_danger_ms;
 static int audio_delay_ms;
+static int audio_danger_frames;
+static int audio_soft_danger_frames;
+static int audio_delay_frames;
+static int audio_soft_delay_frames;
 
 // sdl device stream, opened lazily on the first audio frame
 static SDL_AudioStream *audio_stream;
@@ -183,6 +187,16 @@ static int ntr_audio_get_frames_avail(void)
     return frames_avail;
 }
 
+static void audio_stream_skip_audio_frames(int n)
+{
+    ntr_audio_fade_out(0);
+    for (int i = 0; i < n; ++i) {
+        struct audio_frame_t *frame = ntr_audio_next_frame();
+        ntr_audio_reset_frame(frame);
+    }
+    ntr_audio_fade_in(0);
+}
+
 static void ntr_audio_handle_prime(SDL_AudioStream *stream, int frames_needed);
 static void ntr_audio_handle_play(SDL_AudioStream *stream, int frames_needed)
 {
@@ -194,15 +208,46 @@ static void ntr_audio_handle_play(SDL_AudioStream *stream, int frames_needed)
 
     int frames_remain = frames_avail - frames_process;
 
+    int64_t audio_primed_elapsed = iclock64() - audio_primed_time;
+    audio_primed_elapsed /= 1000000; // us to s
+
+    if (
+        (
+            audio_primed_elapsed >= AUDIO_PRIME_ELAPSE_SOTHRES &&
+            frames_avail >= AUDIO_PRIME_COUNT_MIN + MIN(AUDIO_PRIME_COUNT_STEP, audio_soft_danger_frames) &&
+            audio_soft_danger_frames / 2 >= audio_soft_delay_frames - audio_soft_danger_frames
+        ) ||
+        (
+            audio_primed_elapsed < AUDIO_PRIME_ELAPSE_LOTHRES &&
+            frames_avail >= audio_prime_count + MAX(AUDIO_PRIME_COUNT_STEP, audio_soft_delay_frames - audio_soft_danger_frames)
+        )
+    ) {
+        int audio_skip = MIN(MAX(1, audio_soft_danger_frames / 2), frames_avail - AUDIO_PRIME_COUNT_MIN);
+        if (AUDIO_DBG)
+            err_log("Audio frames skip: %d\n", audio_skip);
+
+        if (
+            frames_avail - audio_skip <= audio_prime_count - AUDIO_PRIME_COUNT_STEP &&
+            audio_prime_count > AUDIO_PRIME_COUNT_MIN
+        )
+            audio_prime_count -= AUDIO_PRIME_COUNT_STEP;
+
+        audio_primed_time = iclock64();
+
+        if (AUDIO_DBG)
+            err_log("Audio prime frames (soft) decreased: %d\n", audio_prime_count);
+
+        audio_stream_skip_audio_frames(audio_skip);
+
+        return ntr_audio_handle_play(stream, frames_needed);
+    }
+
     if (frames_remain < NTR_AUDIO_REPRIME_THRES) {
         ntr_audio_peek_frame(frames_avail)->reprime = true;
         frames_process = frames_avail - NTR_AUDIO_REPRIME_THRES;
         ntr_audio_fade_out(frames_avail);
 
         audio_state_primed = false;
-
-        int64_t audio_primed_elapsed = iclock64() - audio_primed_time;
-        audio_primed_elapsed /= 1000000; // us to s
 
         if (AUDIO_DBG)
             err_log("Audio prime elapsed: %d\n", (int)audio_primed_elapsed);
@@ -288,10 +333,12 @@ static void SDLCALL ntr_sdl_audio_stream_cb(UNUSED void *userdata, SDL_AudioStre
 
     if (audio_queued_ms && (!audio_danger_ms || audio_queued_ms < audio_danger_ms)) {
         audio_danger_ms = audio_queued_ms;
+        audio_danger_frames = audio_queued;
     }
 
     if (audio_queued_ms > audio_delay_ms) {
         audio_delay_ms = audio_queued_ms;
+        audio_delay_frames = audio_queued;
     }
 }
 
@@ -413,6 +460,11 @@ void ntr_audio_handle_packet(const uint8_t *pcm, int size, uint8_t fmt, uint8_t 
         audio_danger_ms = 0;
         ntr_audio_delay_ms = audio_delay_ms;
         audio_delay_ms = 0;
+
+        audio_soft_danger_frames = (audio_soft_danger_frames + audio_danger_frames) / 2;
+        audio_danger_frames = 0;
+        audio_soft_delay_frames = (audio_soft_delay_frames + audio_delay_frames) / 2;
+        audio_delay_frames = 0;
     }
     ntr_audio_pkt_count++;
 }
