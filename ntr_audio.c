@@ -1,53 +1,231 @@
 #include "main.h"
 #include "ntr_audio.h"
+#include <math.h>
 
 int ntr_audio_danger_ms;
 int ntr_audio_delay_ms;
-static int audio_danger_ms;
-static int audio_delay_ms;
-
-static int audio_danger_frames;
-static int audio_soft_danger_frames;
-static int audio_delay_frames;
-static int audio_soft_delay_frames;
 
 // sdl device stream, opened lazily on the first audio frame
 static SDL_AudioStream *audio_stream;
-static volatile int audio_shutting_down;
-static bool audio_primed; // playback starts only once the jitter buffer fills
-static int64_t audio_primed_time;
-static int audio_soft_reprime;
-#define AUDIO_PRIME_FRAMES_SOFT_STEP (2)
-#define AUDIO_PRIME_FRAMES_SOFT_STEP_FULL (AUDIO_PRIME_FRAMES_SOFT_STEP * 2)
-static int audio_soft_skip;
-#define AUDIO_PRIME_FRAMES_SOFT_STEP_SKIP (AUDIO_PRIME_FRAMES_SOFT_STEP + audio_soft_skip)
-#define AUDIO_PRIME_ELAPSE_LOTHRES (4)
-#define AUDIO_PRIME_ELAPSE_HITHRES (16)
-#define AUDIO_PRIME_ELAPSE_SOTHRES (8)
 
-static bool audio_have_last;
-static uint8_t audio_last_seq;
+#define AUDIO_FRAMES_MAX_COUNT (256)
 
-static const uint8_t silence[RP_AUDIO_FRAME_BYTES] = {0};
+enum audio_frame_processed_t {
+    AUDIO_FRAME_PROCESSED_FADE_IN = (1 << 0),
+    AUDIO_FRAME_PROCESSED_FADE_OUT = (1 << 1),
+};
 
-// frames held before playback starts, cushion for wifi dips (up to ~313 ms)
-#define AUDIO_PRIME_FRAMES_MIN (16)
-#define AUDIO_PRIME_FRAMES_STEP (8)
-#define AUDIO_PRIME_FRAMES_MAX (64)
-static int audio_prime_frames = AUDIO_PRIME_FRAMES_MIN;
-// queue cap so latency cannot grow unbounded (~939 ms)
-#define AUDIO_MAX_QUEUED_FRAMES (192)
-// max silence frames per gap, larger gaps just resync
-#define AUDIO_MAX_GAP_FILL (8)
+static struct audio_frame_t {
+    bool avail;
+    bool silence;
+    bool reprime;
+    enum audio_frame_processed_t processed;
+    uint8_t frame[RP_AUDIO_FRAME_BYTES];
+} audio_frames[AUDIO_FRAMES_MAX_COUNT];
+static int audio_frames_head, audio_frames_tail;
+static bool audio_state_primed;
 
-#define AUDIO_PRIME_DEBUG_INFO (0)
+#define AUDIO_PRIME_COUNT_MIN (16)
+static int audio_prime_count = AUDIO_PRIME_COUNT_MIN;
+
+static void audio_frame_fade(uint8_t *frame, double a, double b)
+{
+    int16_t *samples = (int16_t *)frame;
+    _Static_assert(sizeof(*samples) == RP_AUDIO_SAMPLE_BYTES);
+    for (int s_i = 0; s_i < RP_AUDIO_FRAME_SAMPLES; ++s_i) {
+        double fact = (b - a) * ((double)s_i / (RP_AUDIO_FRAME_SAMPLES - 1)) + a;
+        for (int c_i = 0; c_i < RP_AUDIO_CHANNELS; ++c_i) {
+            double s = *samples * fact;
+            *samples = trunc(s);
+            samples++;
+        }
+    }
+}
+
+static void audio_frame_fade_in_step(uint8_t *frame, int i, int n)
+{
+    double a = (double)i / n;
+    double b = a + 1.0 / n;
+    audio_frame_fade(frame, a, b);
+}
+
+static void audio_frame_fade_out_step(uint8_t *frame, int i, int n)
+{
+    double start = (double)(n - i) / n;
+    double end = start - 1.0 / n;
+    audio_frame_fade(frame, start, end);
+}
+
+static struct audio_frame_t *ntr_audio_peek_frame(int i)
+{
+    return &audio_frames[(audio_frames_tail + i + AUDIO_FRAMES_MAX_COUNT) % AUDIO_FRAMES_MAX_COUNT];
+}
+
+static void ntr_audio_advance_frame_tail(int i)
+{
+    audio_frames_tail = (audio_frames_tail + i + AUDIO_FRAMES_MAX_COUNT) % AUDIO_FRAMES_MAX_COUNT;
+}
+
+static struct audio_frame_t *ntr_audio_next_frame(void)
+{
+    struct audio_frame_t *frame = ntr_audio_peek_frame(0);
+    ntr_audio_advance_frame_tail(1);
+    return frame;
+}
+
+static void audio_stream_put_frame(SDL_AudioStream *stream, uint8_t* frame)
+{
+    SDL_PutAudioStreamData(stream, frame, RP_AUDIO_FRAME_BYTES);
+}
+
+static void audio_stream_put_silence_frames(SDL_AudioStream *stream, int n)
+{
+    static const uint8_t silence[RP_AUDIO_FRAME_BYTES] = { 0 };
+    for (int i = 0; i < n; ++i)
+        SDL_PutAudioStreamData(stream, silence, RP_AUDIO_FRAME_BYTES);
+}
+
+static void audio_stream_put_audio_frames(SDL_AudioStream *stream, int n)
+{
+    for (int i = 0; i < n; ++i) {
+        struct audio_frame_t *frame = ntr_audio_next_frame();
+        if (frame->silence)
+            audio_stream_put_silence_frames(stream, 1);
+        else
+            audio_stream_put_frame(stream, frame->frame);
+
+        frame->avail = false;
+    }
+}
+
+#define NTR_AUDIO_FADE_FRAMES_COUNT (2)
+
+#define NTR_AUDIO_REPRIME_THRES (NTR_AUDIO_FADE_FRAMES_COUNT)
+
+static bool ntr_audio_frame_cont(struct audio_frame_t *frame)
+{
+    return frame->avail && !frame->reprime;
+}
+
+static bool ntr_audio_frame_data_cont(struct audio_frame_t *frame)
+{
+    return ntr_audio_frame_cont(frame) && frame->silence;
+}
+
+static void ntr_audio_fade_in(int i)
+{
+    for (int f = 0; f < NTR_AUDIO_FADE_FRAMES_COUNT; ++f) {
+        struct audio_frame_t *frame = ntr_audio_peek_frame(i + f);
+        if (ntr_audio_frame_data_cont(frame))
+            break;
+        if (!(frame->processed & AUDIO_FRAME_PROCESSED_FADE_IN)) {
+            audio_frame_fade_in_step(frame->frame, f, NTR_AUDIO_FADE_FRAMES_COUNT);
+            frame->processed |= AUDIO_FRAME_PROCESSED_FADE_IN;
+        }
+    }
+}
+
+static void ntr_audio_fade_out(int i)
+{
+    for (int f = -1; f >= -NTR_AUDIO_FADE_FRAMES_COUNT; --f) {
+        struct audio_frame_t *frame = ntr_audio_peek_frame(i + f);
+        if (ntr_audio_frame_data_cont(frame))
+            break;
+        if (!(frame->processed & AUDIO_FRAME_PROCESSED_FADE_OUT)) {
+            audio_frame_fade_out_step(frame->frame, NTR_AUDIO_FADE_FRAMES_COUNT + f, NTR_AUDIO_FADE_FRAMES_COUNT);
+            frame->processed |= AUDIO_FRAME_PROCESSED_FADE_OUT;
+        }
+    }
+}
+
+static int ntr_audio_get_frames_avail(void)
+{
+    int frames_avail = 0;
+    for (int i = 0; i < AUDIO_FRAMES_MAX_COUNT; ++i) {
+        struct audio_frame_t *frame = ntr_audio_peek_frame(i);
+        if (ntr_audio_frame_cont(frame))
+            frames_avail = i + 1;
+        else
+            break;
+    }
+    return frames_avail;
+}
+
+static void ntr_audio_handle_prime(SDL_AudioStream *stream, int frames_needed);
+static void ntr_audio_handle_play(SDL_AudioStream *stream, int frames_needed)
+{
+    int frames_avail = ntr_audio_get_frames_avail();
+
+    // frames_avail >= NTR_AUDIO_REPRIME_THRES
+
+    int frames_process = MIN(frames_needed, frames_avail);
+
+    int frames_remain = frames_avail - frames_process;
+
+    if (frames_remain < NTR_AUDIO_REPRIME_THRES) {
+        ntr_audio_peek_frame(frames_avail)->reprime = true;
+        frames_process = frames_avail - NTR_AUDIO_REPRIME_THRES;
+        ntr_audio_fade_out(frames_avail);
+
+        audio_state_primed = false;
+    }
+
+    for (int i = 1; i < NTR_AUDIO_REPRIME_THRES + frames_process; ++i) {
+        struct audio_frame_t *frame_prev = ntr_audio_peek_frame(i - 1);
+        struct audio_frame_t *frame = ntr_audio_peek_frame(i);
+
+        if (frame_prev->silence && !frame->silence)
+            ntr_audio_fade_in(i);
+        if (!frame_prev->silence && frame->silence)
+            ntr_audio_fade_out(i);
+    }
+
+    audio_stream_put_audio_frames(stream, frames_process);
+    frames_needed -= frames_process;
+
+    if (!audio_state_primed) {
+        audio_stream_put_audio_frames(stream, NTR_AUDIO_REPRIME_THRES);
+        frames_needed -= NTR_AUDIO_REPRIME_THRES;
+
+        ntr_audio_handle_prime(stream, frames_needed);
+    }
+}
+static void ntr_audio_handle_prime(SDL_AudioStream *stream, int frames_needed)
+{
+    int prime_count = audio_prime_count;
+    prime_count = MAX(prime_count, NTR_AUDIO_REPRIME_THRES);
+
+    int frames_avail = ntr_audio_get_frames_avail();
+
+    if (frames_avail < prime_count) {
+        audio_stream_put_silence_frames(stream, frames_needed);
+        frames_needed = 0;
+    } else {
+        ntr_audio_fade_in(0);
+
+        audio_state_primed = true;
+
+        ntr_audio_handle_play(stream, frames_needed);
+    }
+}
+
+static void SDLCALL ntr_sdl_audio_stream_cb(void *userdata, SDL_AudioStream *stream, int additional_amount, int total_amount)
+{
+    if (!additional_amount)
+        return;
+
+    int frames_needed = (additional_amount + RP_AUDIO_FRAME_BYTES - 1) / RP_AUDIO_FRAME_BYTES;
+
+    if (audio_state_primed)
+        ntr_audio_handle_play(stream, frames_needed);
+    else
+        ntr_audio_handle_prime(stream, frames_needed);
+}
 
 static bool ntr_audio_open(void)
 {
     if (audio_stream)
         return true;
-    if (audio_shutting_down)
-        return false;
 
     SDL_AudioSpec spec;
     spec.format = SDL_AUDIO_S16LE;
@@ -59,135 +237,19 @@ static bool ntr_audio_open(void)
         err_log("SDL_OpenAudioDeviceStream: %s\n", SDL_GetError());
         return false;
     }
-    // resume happens once primed
+
+    if (!SDL_SetAudioStreamGetCallback(audio_stream, ntr_sdl_audio_stream_cb, NULL)) {
+        err_log("SDL_SetAudioStreamGetCallback: %s\n", SDL_GetError());
+        SDL_DestroyAudioStream(audio_stream);
+        audio_stream = NULL;
+        return false;
+    }
+
     return true;
-}
-
-static void frame_audio_fade(uint8_t *frame, double start, double end)
-{
-    int16_t *samples = (int16_t *)frame;
-    for (int s_i = 0; s_i < RP_AUDIO_FRAME_SAMPLES; ++s_i) {
-        double fact = (end - start) * ((double)s_i / (RP_AUDIO_FRAME_SAMPLES - 1)) + start;
-        for (int c_i = 0; c_i < RP_AUDIO_CHANNELS; ++c_i) {
-            *samples++ *= fact;
-        }
-    }
-}
-
-static void ntr_audio_put(const uint8_t *frame)
-{
-    int64_t audio_primed_elapsed = iclock64() - audio_primed_time;
-    audio_primed_elapsed /= 1000000; // us to s
-
-    // latency hit the cap: flush and re-prime instead of holding max lag forever
-    int audio_queued = SDL_GetAudioStreamQueued(audio_stream);
-    if (audio_queued < 0)
-        audio_queued = 0;
-    int frames_queued = audio_queued / RP_AUDIO_FRAME_BYTES;
-    bool max_lat = frames_queued > AUDIO_MAX_QUEUED_FRAMES;
-    bool no_data = !frames_queued && SDL_GetAudioStreamAvailable(audio_stream) <= 0;
-    if (AUDIO_PRIME_DEBUG_INFO) {
-        if (max_lat)
-            err_log("Max latency hit, re-priming\n");
-        if (no_data)
-            err_log("Audio data empty, re-priming\n");
-    }
-    if ((max_lat || no_data) && audio_primed) {
-        SDL_ClearAudioStream(audio_stream);
-        SDL_PauseAudioStreamDevice(audio_stream);
-        audio_primed = false;
-
-        if (AUDIO_PRIME_DEBUG_INFO)
-            err_log("Audio prime elapsed: %d\n", (int)audio_primed_elapsed);
-        if (audio_primed_elapsed < AUDIO_PRIME_ELAPSE_LOTHRES && audio_prime_frames < AUDIO_PRIME_FRAMES_MAX) {
-            audio_prime_frames += AUDIO_PRIME_FRAMES_STEP;
-            if (AUDIO_PRIME_DEBUG_INFO)
-                err_log("Audio prime frames increased: %d\n", audio_prime_frames);
-        } else if (audio_primed_elapsed >= AUDIO_PRIME_ELAPSE_HITHRES && audio_prime_frames > AUDIO_PRIME_FRAMES_MIN) {
-            audio_prime_frames -= AUDIO_PRIME_FRAMES_STEP;
-            if (AUDIO_PRIME_DEBUG_INFO)
-                err_log("Audio prime frames decreased: %d\n", audio_prime_frames);
-        }
-
-        audio_soft_skip = 0;
-        audio_soft_reprime = AUDIO_PRIME_FRAMES_SOFT_STEP;
-        audio_primed_time = iclock64();
-    }
-
-    if (audio_primed && !audio_soft_reprime &&
-        (
-            (
-                audio_primed_elapsed >= AUDIO_PRIME_ELAPSE_SOTHRES &&
-                frames_queued >= AUDIO_PRIME_FRAMES_MIN + MIN(AUDIO_PRIME_FRAMES_STEP, audio_soft_danger_frames) &&
-                audio_soft_danger_frames / 2 >= audio_soft_delay_frames - audio_soft_danger_frames
-            ) ||
-            (
-                audio_primed_elapsed < AUDIO_PRIME_ELAPSE_LOTHRES &&
-                frames_queued >= audio_prime_frames + MAX(AUDIO_PRIME_FRAMES_STEP, audio_soft_delay_frames - audio_soft_danger_frames)
-            )
-        )
-    ) {
-        audio_soft_skip = MIN(MAX(1, audio_soft_danger_frames / 2), frames_queued - AUDIO_PRIME_FRAMES_MIN);
-        if (AUDIO_PRIME_DEBUG_INFO)
-            err_log("Audio frames soft skip: %d\n", audio_soft_skip);
-        audio_soft_reprime = audio_soft_skip + AUDIO_PRIME_FRAMES_SOFT_STEP_FULL;
-
-        if (
-            frames_queued - audio_soft_skip <= audio_prime_frames - AUDIO_PRIME_FRAMES_STEP &&
-            audio_prime_frames > AUDIO_PRIME_FRAMES_MIN
-        )
-            audio_prime_frames -= AUDIO_PRIME_FRAMES_STEP;
-
-        audio_primed_time = iclock64();
-
-        if (AUDIO_PRIME_DEBUG_INFO)
-            err_log("Audio prime frames (soft) decreased: %d\n", audio_prime_frames);
-    }
-
-    if (audio_soft_reprime) {
-        if (audio_soft_reprime > AUDIO_PRIME_FRAMES_SOFT_STEP_SKIP) {
-            uint8_t fade[RP_AUDIO_FRAME_BYTES];
-            memcpy(fade, frame, RP_AUDIO_FRAME_BYTES);
-            double start = ((double)audio_soft_reprime - AUDIO_PRIME_FRAMES_SOFT_STEP_SKIP) / AUDIO_PRIME_FRAMES_SOFT_STEP;
-            double end = start - 1.0 / AUDIO_PRIME_FRAMES_SOFT_STEP;
-            frame_audio_fade(fade, start, end);
-
-            if (!SDL_PutAudioStreamData(audio_stream, fade, RP_AUDIO_FRAME_BYTES))
-                err_log("SDL_PutAudioStreamData: %s\n", SDL_GetError());
-        } else if (audio_soft_reprime <= AUDIO_PRIME_FRAMES_SOFT_STEP) {
-            uint8_t fade[RP_AUDIO_FRAME_BYTES];
-            memcpy(fade, frame, RP_AUDIO_FRAME_BYTES);
-            double start = ((double)AUDIO_PRIME_FRAMES_SOFT_STEP - audio_soft_reprime) / AUDIO_PRIME_FRAMES_SOFT_STEP;
-            double end = start + 1.0 / AUDIO_PRIME_FRAMES_SOFT_STEP;
-            frame_audio_fade(fade, start, end);
-
-            if (!SDL_PutAudioStreamData(audio_stream, fade, RP_AUDIO_FRAME_BYTES))
-                err_log("SDL_PutAudioStreamData: %s\n", SDL_GetError());
-        }
-        --audio_soft_reprime;
-    } else {
-        if (!SDL_PutAudioStreamData(audio_stream, frame, RP_AUDIO_FRAME_BYTES))
-            err_log("SDL_PutAudioStreamData: %s\n", SDL_GetError());
-
-        int curr_audio_delay_ms = audio_queued
-            * RP_AUDIO_FRAME_SAMPLES / RP_AUDIO_FRAME_BYTES * 1000 / RP_AUDIO_SAMPLE_RATE;
-
-        if (!audio_danger_ms || curr_audio_delay_ms < audio_danger_ms) {
-            audio_danger_ms = curr_audio_delay_ms;
-            audio_danger_frames = frames_queued;
-        }
-
-        if (curr_audio_delay_ms > audio_delay_ms) {
-            audio_delay_ms = curr_audio_delay_ms;
-            audio_delay_frames = frames_queued;
-        }
-    }
 }
 
 void ntr_audio_handle_packet(const uint8_t *pcm, int size, uint8_t fmt, uint8_t seq)
 {
-    if (audio_shutting_down)
-        return;
     if (fmt != RP_AUDIO_FMT_PCM16)
         return; // unknown format
     int nframes = size / RP_AUDIO_FRAME_BYTES;
@@ -196,96 +258,16 @@ void ntr_audio_handle_packet(const uint8_t *pcm, int size, uint8_t fmt, uint8_t 
 
     if (!ntr_audio_open())
         return;
-
-    // frames are oldest first, seq is the newest frame's
-    for (int i = 0; i < nframes; i++) {
-        uint8_t fseq = (uint8_t)(seq - (uint8_t)(nframes - 1) + (uint8_t)i);
-        const uint8_t *fdata = pcm + (size_t)i * RP_AUDIO_FRAME_BYTES;
-
-        if (!audio_have_last) {
-            ntr_audio_put(fdata);
-            audio_last_seq = fseq;
-            audio_have_last = true;
-            continue;
-        }
-
-        int diff = (int8_t)(fseq - audio_last_seq); // wrap-safe distance
-        if (diff < -32) {
-            // large forward jump past the +/-127 window: resync after a long stall
-            ntr_audio_put(fdata);
-            audio_last_seq = fseq;
-            continue;
-        }
-        if (diff <= 0)
-            continue; // duplicate or older
-
-        if (diff > 1) {
-            int missing = diff - 1;
-            if (missing <= AUDIO_MAX_GAP_FILL)
-                for (int k = 0; k < missing; k++)
-                    ntr_audio_put(silence);
-        }
-        ntr_audio_put(fdata);
-        audio_last_seq = fseq;
-    }
-
-    // log buffer depth every 256 packets
-    static unsigned ntr_audio_pkt_count;
-    if (!(ntr_audio_pkt_count % 256)) {
-        if (AUDIO_PRIME_DEBUG_INFO)
-            err_log("audio: pkt#%u frames=%d queued=%d\n",
-                ntr_audio_pkt_count, nframes, SDL_GetAudioStreamQueued(audio_stream));
-
-        audio_soft_danger_frames = (audio_soft_danger_frames + audio_danger_frames) / 2;
-        audio_danger_frames = 0;
-        audio_soft_delay_frames = (audio_soft_delay_frames + audio_delay_frames) / 2;
-        audio_delay_frames = 0;
-        ntr_audio_danger_ms = audio_danger_ms;
-        audio_danger_ms = 0;
-        ntr_audio_delay_ms = audio_delay_ms;
-        audio_delay_ms = 0;
-    }
-    ntr_audio_pkt_count++;
-
-    // start playback only once primed
-    if (!audio_primed &&
-        SDL_GetAudioStreamQueued(audio_stream) >= RP_AUDIO_FRAME_BYTES * audio_prime_frames) {
-        if (!SDL_ResumeAudioStreamDevice(audio_stream))
-            err_log("SDL_ResumeAudioStreamDevice: %s\n", SDL_GetError());
-        audio_primed = true;
-        audio_primed_time = iclock64();
-    }
 }
 
 void ntr_audio_reset(void)
 {
-    audio_danger_ms = ntr_audio_danger_ms = 0;
-    audio_delay_ms = ntr_audio_delay_ms = 0;
-    audio_soft_skip = 0;
-    audio_soft_reprime = AUDIO_PRIME_FRAMES_SOFT_STEP;
-    // drop stale jitter state so a reconnect re-primes from scratch
-    audio_have_last = false;
-    audio_last_seq = 0;
-    audio_primed = false;
-    audio_prime_frames = AUDIO_PRIME_FRAMES_MIN;
-    if (audio_stream) {
-        SDL_ClearAudioStream(audio_stream);
-        SDL_PauseAudioStreamDevice(audio_stream);
-    }
 }
 
 void ntr_audio_shutdown(void)
 {
-    audio_shutting_down = 1;
     if (audio_stream) {
         SDL_DestroyAudioStream(audio_stream);
         audio_stream = NULL;
     }
-    audio_primed = false;
-    audio_have_last = false;
-    audio_shutting_down = 0;
-    audio_danger_ms = ntr_audio_danger_ms = 0;
-    audio_delay_ms = ntr_audio_delay_ms = 0;
-    audio_soft_skip = 0;
-    audio_soft_reprime = 0;
 }
