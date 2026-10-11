@@ -2002,6 +2002,11 @@ static int audio_recv_kcp(uint8_t *buf, int size)
 
     const u16 RP_KCP_EXHDR_AUDIO_SHIFT = 15;
 
+    const u16 RP_KCP_EXHDR_AUDIO_COUNT_MASK = 3;
+    const u16 RP_KCP_EXHDR_AUDIO_COUNT_SHIFT = 12;
+
+    const u16 RP_KCP_EXHDR_AUDIO_REPRIME_SHIFT = 11;
+
     if (size < (int)sizeof(u16)) {
         return -3;
     }
@@ -2017,9 +2022,15 @@ static int audio_recv_kcp(uint8_t *buf, int size)
     if (!audio)
         return -4;
 
-    int nframes = size / RP_AUDIO_FRAME_BYTES;
+    int nframes = (hdr >> RP_KCP_EXHDR_AUDIO_COUNT_SHIFT) & RP_KCP_EXHDR_AUDIO_COUNT_MASK;
+
+    if (!nframes)
+        nframes = size / RP_AUDIO_FRAME_BYTES;
+
+    bool reprime = (hdr >> RP_KCP_EXHDR_AUDIO_REPRIME_SHIFT) & 1;
+
     static int audio_last_seq = 0;
-    ntr_audio_handle_packet(buf, nframes * RP_AUDIO_FRAME_BYTES, RP_AUDIO_FMT_PCM16, audio_last_seq += nframes);
+    ntr_audio_handle_packet(buf, nframes * RP_AUDIO_FRAME_BYTES, RP_AUDIO_FMT_PCM16, audio_last_seq += (reprime ? UINT8_MAX / 2 : nframes));
 
     return 0;
 }
