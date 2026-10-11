@@ -2358,6 +2358,28 @@ static int test_kcp_magic(int magic)
     return !((magic & (~0x00001700 & 0x0000ff00)) == 0 && (magic & 0x00f20000) == 0x00020000);
 }
 
+static void audio_handle_packet(const uint8_t *pcm, int size, uint8_t fmt, uint8_t seq)
+{
+    int nframes = size / RP_AUDIO_FRAME_BYTES;
+    if (nframes > 1) {
+        int nprev = nframes - 1;
+        const uint8_t *frame_prev = pcm + RP_AUDIO_FRAME_BYTES * (nprev - 1);
+        bool prev_empty = true;
+
+        for (int i = 0; i < RP_AUDIO_FRAME_BYTES; ++i)
+            if (frame_prev[i]) {
+                prev_empty = false;
+                break;
+            }
+
+        if (prev_empty) {
+            pcm += RP_AUDIO_FRAME_BYTES * nprev;
+            size = RP_AUDIO_FRAME_BYTES;
+        }
+    }
+    ntr_audio_handle_packet(pcm, size, fmt, seq);
+}
+
 static int packet_received_time = 0;
 static void socket_action(int ret)
 {
@@ -2379,7 +2401,7 @@ static void socket_action(int ret)
     // plain-udp audio: route before the kcp test, ikcp_input would eat it
     if (buf[2] == RP_AUDIO_HDR_TYPE && ret > RP_DATA_HDR_SIZE &&
         (ret - RP_DATA_HDR_SIZE) % RP_AUDIO_FRAME_BYTES == 0) {
-        ntr_audio_handle_packet(buf + RP_DATA_HDR_SIZE, ret - RP_DATA_HDR_SIZE, buf[3], buf[0]);
+        audio_handle_packet(buf + RP_DATA_HDR_SIZE, ret - RP_DATA_HDR_SIZE, buf[3], buf[0]);
 
         __atomic_add_fetch(&packet_received_size_tracker, ret - RP_DATA_HDR_SIZE, __ATOMIC_RELAXED);
         return;
