@@ -445,6 +445,8 @@ static struct audio_frame_t *ntr_audio_push(const uint8_t *fdata)
     return frame;
 }
 
+#define SEQ_GAP_SAFE (32)
+
 static bool audio_have_last;
 static uint8_t audio_last_seq;
 void ntr_audio_handle_packet(const uint8_t *pcm, int size, uint8_t fmt, uint8_t seq)
@@ -473,7 +475,7 @@ void ntr_audio_handle_packet(const uint8_t *pcm, int size, uint8_t fmt, uint8_t 
         }
 
         int diff = (int8_t)(fseq - (audio_last_seq + 1)); // wrap-safe distance
-        if (diff < -32 || diff >= 32) {
+        if (diff < -SEQ_GAP_SAFE || diff >= SEQ_GAP_SAFE) {
             // large forward jump past the +/-127 window: resync after a long stall
             struct audio_frame_t *frame = ntr_audio_push(fdata);
             frame->reprime = true;
