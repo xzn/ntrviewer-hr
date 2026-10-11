@@ -2024,6 +2024,7 @@ static int audio_recv_kcp(uint8_t *buf, int size)
 
     int nframes = (hdr >> RP_KCP_EXHDR_AUDIO_COUNT_SHIFT) & RP_KCP_EXHDR_AUDIO_COUNT_MASK;
 
+    // backward-compat before RP_KCP_EXHDR_AUDIO_COUNT
     if (!nframes)
         nframes = size / RP_AUDIO_FRAME_BYTES;
 
