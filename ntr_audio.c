@@ -420,6 +420,13 @@ static struct audio_frame_t *ntr_audio_put(const uint8_t *fdata, int i)
     }
 
     struct audio_frame_t *frame = ntr_audio_put_frame(i);
+
+    for (int h = i + 1; h <= 0; ++h) {
+        struct audio_frame_t *frame_prev = ntr_audio_put_frame(h);
+        if (!ntr_audio_frame_cont(frame_prev))
+            return frame;
+    }
+
     if (!frame->avail || (frame->silence && !frame->processed)) {
         frame->avail = true;
         frame->silence = false;
