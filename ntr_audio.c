@@ -291,25 +291,27 @@ static void ntr_audio_handle_play(SDL_AudioStream *stream, int frames_needed)
         if (AUDIO_DBG)
             err_log("Audio frames skip: %d\n", audio_skip);
 
-        while (
-            frames_avail - audio_skip <= audio_prime_count - AUDIO_PRIME_COUNT_STEP &&
-            audio_prime_count > AUDIO_PRIME_COUNT_MIN
-        )
-            audio_prime_count -= AUDIO_PRIME_COUNT_STEP;
+        if (frames_avail - NTR_AUDIO_FADE_FRAMES_COUNT - audio_skip >= NTR_AUDIO_REPRIME_THRES) {
+            while (
+                frames_avail - audio_skip <= audio_prime_count - AUDIO_PRIME_COUNT_STEP &&
+                audio_prime_count > AUDIO_PRIME_COUNT_MIN
+            )
+                audio_prime_count -= AUDIO_PRIME_COUNT_STEP;
 
-        audio_primed_time = iclock64();
+            audio_primed_time = iclock64();
 
-        if (AUDIO_DBG)
-            err_log("Audio prime frames (soft) decreased: %d\n", audio_prime_count);
+            if (AUDIO_DBG)
+                err_log("Audio prime frames (soft) decreased: %d\n", audio_prime_count);
 
-        ntr_audio_fade_out(NTR_AUDIO_FADE_FRAMES_COUNT);
-        ntr_audio_fade_in(audio_skip);
-        audio_stream_mix_audio_frames(stream, NTR_AUDIO_FADE_FRAMES_COUNT, audio_skip);
-        frames_needed -= NTR_AUDIO_FADE_FRAMES_COUNT;
+            ntr_audio_fade_out(NTR_AUDIO_FADE_FRAMES_COUNT);
+            ntr_audio_fade_in(audio_skip);
+            audio_stream_mix_audio_frames(stream, NTR_AUDIO_FADE_FRAMES_COUNT, audio_skip);
+            frames_needed -= NTR_AUDIO_FADE_FRAMES_COUNT;
 
-        audio_stream_skip_audio_frames(audio_skip);
+            audio_stream_skip_audio_frames(audio_skip);
 
-        return ntr_audio_handle_play(stream, frames_needed);
+            return ntr_audio_handle_play(stream, frames_needed);
+        }
     }
 
     audio_stream_put_audio_frames(stream, frames_process);
