@@ -245,7 +245,7 @@ static void ntr_audio_handle_play(SDL_AudioStream *stream, int frames_needed)
 
     if (frames_remain < NTR_AUDIO_REPRIME_THRES) {
         ntr_audio_peek_frame(frames_avail)->reprime = true;
-        frames_process = frames_avail - NTR_AUDIO_REPRIME_THRES;
+        frames_process = frames_avail;
         ntr_audio_fade_out(frames_avail);
 
         audio_state_primed = false;
@@ -263,7 +263,7 @@ static void ntr_audio_handle_play(SDL_AudioStream *stream, int frames_needed)
         }
     }
 
-    for (int i = 1; i < NTR_AUDIO_REPRIME_THRES + frames_process; ++i) {
+    for (int i = 1; i < frames_process; ++i) {
         struct audio_frame_t *frame_prev = ntr_audio_peek_frame(i - 1);
         struct audio_frame_t *frame = ntr_audio_peek_frame(i);
 
@@ -316,9 +316,6 @@ static void ntr_audio_handle_play(SDL_AudioStream *stream, int frames_needed)
     frames_needed -= frames_process;
 
     if (!audio_state_primed) {
-        audio_stream_put_audio_frames(stream, NTR_AUDIO_REPRIME_THRES);
-        frames_needed -= NTR_AUDIO_REPRIME_THRES;
-
         ntr_audio_handle_prime(stream, frames_needed);
     }
 }
