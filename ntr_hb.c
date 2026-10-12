@@ -207,10 +207,8 @@ thread_ret_t tcp_thread_func(void *arg)
     sockfd = INVALID_SOCKET; \
     *(t->work_state) = CONNECTION_STATE_DISCONNECTED; \
     *(t->work_req_state) = CONNECTION_REQ_STATE_NONE; \
-    if (t->remote_play) { \
+    if (t->remote_play) \
         *(t->remote_play) = 0; \
-        __atomic_store_n((uint32_t *)ntr_ip_octet_incoming, 0, __ATOMIC_RELAXED); \
-    } \
     err_log("disconnected\n"); \
 } while (0)
 

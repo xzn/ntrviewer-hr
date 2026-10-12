@@ -2545,12 +2545,12 @@ static void receive_from_socket()
 
         // publish sender IP lock-free (the GUI holds ui_nk_lock for long spans)
         uint32_t addr_octets = __builtin_bswap32(ntohl(remote_addr.sin_addr.s_addr));
-        if (addr_octets != last_published_addr) {
+        __atomic_store_n((uint32_t *)ntr_ip_octet_incoming, addr_octets, __ATOMIC_RELAXED);
+        if (last_published_addr != addr_octets || !__atomic_load_n((uint32_t *)ntr_ip_octet, __ATOMIC_RELAXED)) {
             last_published_addr = addr_octets;
-            __atomic_store_n((uint32_t *)ntr_ip_octet_incoming, addr_octets, __ATOMIC_RELAXED);
-            uint32_t expected = 0;
-            __atomic_compare_exchange_n((uint32_t *)ntr_ip_octet, &expected, addr_octets, false,
-                __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+            __atomic_store_n((uint32_t *)ntr_ip_octet, addr_octets, __ATOMIC_RELAXED);
+            ntr_try_auto_select_incoming_ip();
+            ntr_try_auto_select_adapter();
         }
 
         remote_received = 1;

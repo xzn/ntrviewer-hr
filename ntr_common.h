@@ -139,6 +139,7 @@ enum {
 void ntr_try_auto_select_adapter(void);
 void ntr_detect_3ds_ip(void);
 void ntr_get_adapter_list(void);
+void ntr_try_auto_select_incoming_ip(void);
 
 extern nk_bool ntr_stats_overlay;
 extern nk_bool ntr_auto_reconnect;

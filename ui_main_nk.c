@@ -799,7 +799,6 @@ void ui_main_nk(void)
                 if (ntr_auto_ip_list)
                     strcpy(ntr_auto_ip_list[0], "Manual");
                 ntr_selected_ip = 0;
-                *(uint32_t *)ntr_ip_octet_incoming = 0;
                 ntr_get_adapter_list();
                 if (menu_work_state == CONNECTION_STATE_CONNECTED)
                 {
@@ -820,6 +819,7 @@ void ui_main_nk(void)
             }
             ntr_detect_3ds_ip();
 #ifndef __APPLE__
+            ntr_try_auto_select_incoming_ip();
             ntr_get_adapter_list();
 #endif
         }

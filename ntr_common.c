@@ -232,14 +232,10 @@ static uint32_t ntr_get_identical_bits_prefix(uint32_t a, uint32_t b) {
 }
 
 void ntr_try_auto_select_adapter(void) {
-    uint32_t incoming = *(uint32_t *)ntr_ip_octet_incoming;
-    if (incoming && ntr_get_auto_ip_from_ip_octet(incoming))
-        *(uint32_t *)ntr_ip_octet = incoming;
-
     ntr_selected_adapter = 0;
     uint32_t count = 0xfe << 24;
     for (int i = NTR_ADAPTER_PRE_COUNT; i < ntr_adapter_count - NTR_ADAPTER_POST_COUNT; ++i) {
-        uint32_t bits = ntr_get_identical_bits_prefix(*(uint32_t *)ntr_ip_octet, *(uint32_t *)ntr_adapter_octet_list[i]);
+        uint32_t bits = ntr_get_identical_bits_prefix(__atomic_load_n((uint32_t *)ntr_ip_octet, __ATOMIC_RELAXED), *(uint32_t *)ntr_adapter_octet_list[i]);
         if (bits > count) {
             count = bits;
             ntr_selected_adapter = i;
@@ -248,6 +244,12 @@ void ntr_try_auto_select_adapter(void) {
 
     ntr_rp_port_changed = 1;
     kcp_restart = 1;
+}
+
+void ntr_try_auto_select_incoming_ip(void) {
+    uint32_t incoming = __atomic_load_n((uint32_t *)ntr_ip_octet_incoming, __ATOMIC_RELAXED);
+    if (incoming && ntr_get_auto_ip_from_ip_octet(incoming))
+        __atomic_store_n((uint32_t *)ntr_ip_octet, incoming, __ATOMIC_RELAXED);
 }
 
 #define NTR_AUTO_IP_PRE_COUNT (1)
@@ -341,7 +343,7 @@ void ntr_detect_3ds_ip(void) {
     free(map_index);
 
     ntr_selected_ip = detected_ip_count ? NTR_AUTO_IP_PRE_COUNT : 0;
-    memcpy(ntr_ip_octet, ntr_auto_ip_octet_list[ntr_selected_ip], NTR_IP_OCTET_SIZE);
+    __atomic_store_n((uint32_t *)ntr_ip_octet, *(uint32_t *)ntr_auto_ip_octet_list[ntr_selected_ip], __ATOMIC_RELAXED);
 
     return;
 
@@ -515,7 +517,7 @@ static void get_ntr_detect_3ds_ip(void) {
     free(map_index);
 
     ntr_selected_ip = detected_ip_count ? NTR_AUTO_IP_PRE_COUNT : 0;
-    memcpy(ntr_ip_octet, ntr_auto_ip_octet_list[ntr_selected_ip], NTR_IP_OCTET_SIZE);
+    __atomic_store_n((uint32_t *)ntr_ip_octet, *(uint32_t *)ntr_auto_ip_octet_list[ntr_selected_ip], __ATOMIC_RELAXED);
 }
 
 #ifdef __APPLE__
@@ -626,6 +628,7 @@ fail_fork:
 fail:
     rp_lock_wait(ui_nk_lock);
     get_ntr_detect_3ds_ip();
+    ntr_try_auto_select_incoming_ip();
     ntr_get_adapter_list();
     rp_lock_rel(ui_nk_lock);
 
