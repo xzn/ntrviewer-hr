@@ -425,8 +425,8 @@ static int sdl_get_bottom_screen_mouse_coord(view_mode_t vm, Uint32 wid, Sint32 
     }
 
     *point = (SDL_Point){
-        .x = TOUCH_SCREEN_COORD_RANGE * (x - ctx_left) * SCREEN_HEIGHT1 / ctx_width + SCREEN_HEIGHT1 / 2,
-        .y = TOUCH_SCREEN_COORD_RANGE * (y - ctx_top) * SCREEN_WIDTH / ctx_height + SCREEN_WIDTH / 2,
+        .x = TOUCH_SCREEN_COORD_RANGE * (int64_t)(x - ctx_left) * SCREEN_HEIGHT1 / ctx_width + SCREEN_HEIGHT1 / 2,
+        .y = TOUCH_SCREEN_COORD_RANGE * (int64_t)(y - ctx_top) * SCREEN_WIDTH / ctx_height + SCREEN_WIDTH / 2,
     };
     return 0;
 }
