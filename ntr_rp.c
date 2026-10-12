@@ -2492,9 +2492,9 @@ static void socket_action(int ret)
     }
 }
 
+static uint32_t last_published_addr;
 static void receive_from_socket()
 {
-    uint32_t last_published_addr = 0;
     while (program_running && !kcp_restart) {
         socklen_t addr_len = sizeof(remote_addr);
 
@@ -2713,7 +2713,7 @@ thread_ret_t udp_recv_thread_func(void *)
             socket_error_pause();
             goto socket_final;
         }
-        err_log("socket recv buffer size: %d\n", buff_size);
+        // err_log("socket recv buffer size: %d\n", buff_size);
 
         if (!socket_set_nonblock(s, 1)) {
             err_log("socket_set_nonblock failed, %d\n", socket_errno());
