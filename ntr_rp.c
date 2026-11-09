@@ -2342,13 +2342,13 @@ static void socket_reply(void)
             bool reply = false;
             uint32_t current_time = iclock();
             if (kcp->recv_pid == kcp->input_pid) {
-                // Send ack every 1/8 second or 125 ms; do not spam as that slows thing down considerably
-                if (current_time - reply_time >= 125000) {
+                // Send ack every 1/25 second or 40 ms; do not spam as that slows thing down considerably
+                if (current_time - reply_time >= 40000) {
                     reply = true;
                 }
             } else {
-                // Likewise nack every 1/80 second or 12.5 ms
-                if (current_time - reply_time >= 12500) {
+                // Likewise nack every 1/100 second or 10 ms
+                if (current_time - reply_time >= 10000) {
                     reply = true;
                 }
             }
