@@ -815,7 +815,7 @@ void generate_cursor_image(stbi_t *image, const unsigned char *base, int width, 
 
 static void change_working_directory_to_exe_path(void) {
 #ifdef _WIN32
-    DWORD path_len = MAX_PATH;
+    DWORD path_len = MAX_PATH + 1;
     LPWSTR path = NULL;
     while (1) {
         path = malloc(path_len * sizeof(*path));
@@ -827,10 +827,14 @@ static void change_working_directory_to_exe_path(void) {
         if (ret < path_len) {
             path_len = ret;
             break;
+        } else if (ret == path_len) {
+            path_len = ret - 1;
+            break;
         }
         free(path);
         path_len *= 2;
     }
+    path[path_len] = 0;
     // err_log("current exe path: %ls\n", path);
     LPWSTR path_end = wcsrchr(path, L'\\');
     if (path_end) {
@@ -865,13 +869,13 @@ static void change_working_directory_to_exe_path(void) {
     size_t path_len = PATH_MAX;
     char *path = NULL;
     while (1) {
-        path = malloc(path_len * sizeof(*path));
+        path = malloc((path_len + 1) * sizeof(*path));
         ssize_t ret = readlink("/proc/self/exe", path, path_len);
         if (ret < 0) {
             err_log("get path len for current exe path failed: %d\n", errno);
             return;
         }
-        if ((size_t)ret < path_len) {
+        if ((size_t)ret <= path_len) {
             path_len = ret;
             break;
         }
