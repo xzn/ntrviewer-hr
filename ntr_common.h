@@ -51,12 +51,13 @@ UNUSED static int socket_poll_ms(SOCKET s, int timeout_ms)
     return 0;
 }
 
-UNUSED static bool socket_poll(SOCKET s)
+UNUSED static bool socket_poll(SOCKET s, short events)
 {
+    int waited_ms = 0;
     while (program_running && !kcp_restart) {
         WSAPOLLFD pollfd = {
             .fd = s,
-            .events = POLLIN,
+            .events = events,
             .revents = 0,
         };
         int res = WSAPoll(&pollfd, 1, SOCKET_POLL_INTERVAL_MS);
@@ -64,9 +65,16 @@ UNUSED static bool socket_poll(SOCKET s)
             return false;
         }
         else if (res > 0) {
-            if (pollfd.revents & POLLIN) {
+            if (pollfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+                return false;
+            }
+            if (pollfd.revents & events) {
                 return true;
             }
+        }
+        waited_ms += SOCKET_POLL_INTERVAL_MS;
+        if (waited_ms >= 1000) {
+            return false;
         }
     }
     return false;

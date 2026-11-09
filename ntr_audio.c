@@ -380,6 +380,9 @@ static void SDLCALL ntr_sdl_audio_stream_cb(UNUSED void *userdata, SDL_AudioStre
     }
 }
 
+#define AUDIO_OPEN_RETRY_MS (5000)
+static uint32_t audio_open_failed_at;
+
 static bool ntr_audio_open(void)
 {
     if (audio_shutting_down)
@@ -387,6 +390,10 @@ static bool ntr_audio_open(void)
 
     if (audio_stream)
         return true;
+
+    uint32_t now = (uint32_t)SDL_GetTicks();
+    if (audio_open_failed_at && now - audio_open_failed_at < AUDIO_OPEN_RETRY_MS)
+        return false;
 
     SDL_AudioSpec spec;
     spec.format = SDL_AUDIO_S16LE;
@@ -396,6 +403,7 @@ static bool ntr_audio_open(void)
     audio_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
     if (!audio_stream) {
         err_log("SDL_OpenAudioDeviceStream: %s\n", SDL_GetError());
+        audio_open_failed_at = now ? now : 1;
         return false;
     }
 
@@ -410,6 +418,7 @@ static bool ntr_audio_open(void)
 
     SDL_ResumeAudioStreamDevice(audio_stream);
 
+    audio_open_failed_at = 0;
     return true;
 }
 

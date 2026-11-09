@@ -35,6 +35,7 @@ extern atomic_bool kcp_active;
 extern atomic_bool kcp_dq;
 extern atomic_bool kcp_restart;
 extern atomic_bool is_lossless;
+extern atomic_uint rp_last_packet_us;
 
 #include "ui_common_sdl.h"
 #include "rp_syn.h"

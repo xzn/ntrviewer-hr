@@ -5,6 +5,13 @@
 #include <stdlib.h>
 
 #define HEART_BEAT_EVERY_MS 250
+#define HEART_BEAT_TIMEOUT_MS 1000
+
+#define RP_RESEND_FIRST_MS 1000
+#define RP_RESEND_MAX_MS 60000
+
+#define RECONNECT_FIRST_MS 1000
+#define RECONNECT_MAX_MS 15000
 
 #define TCP_MAGIC 0x12345678
 #define TCP_ARGS_COUNT 16
@@ -74,26 +81,34 @@ static SOCKET tcp_connect(int port, uint32_t addr)
         return INVALID_SOCKET;
     }
 
-    fd_set fdset;
+    fd_set wset, eset;
     struct timeval tv;
-    FD_ZERO(&fdset);
-    FD_SET(sockfd, &fdset);
+    FD_ZERO(&wset);
+    FD_SET(sockfd, &wset);
+    FD_ZERO(&eset);
+    FD_SET(sockfd, &eset);
     tv.tv_sec = 2;
     tv.tv_usec = 0;
 
-    if (select(sockfd + 1, NULL, &fdset, NULL, &tv) == 1)
+    if (select(sockfd + 1, NULL, &wset, &eset, &tv) == 1)
     {
-        int so_error;
+        int so_error = 0;
         socklen_t len = sizeof(so_error);
 
         getsockopt(sockfd, SOL_SOCKET, SO_ERROR, (char *)&so_error, &len);
 
-        if (so_error == 0)
+        if (so_error == 0 && FD_ISSET(sockfd, &wset))
         {
             err_log("connected\n");
             return sockfd;
         }
-        err_log("connection failed: %d\n", so_error);
+
+        if (so_error == WSAECONNREFUSED)
+            err_log("connection refused on port %d\n", port);
+        else
+            err_log("connection failed: %d\n", so_error);
+        closesocket(sockfd);
+        return INVALID_SOCKET;
     }
 
     closesocket(sockfd);
@@ -109,11 +124,11 @@ static int tcp_send(SOCKET sockfd, char *buf, int size)
     while (program_running && tmpsize) {
         if ((ret = send(sockfd, &buf[pos], tmpsize, 0)) < 0) {
             if (socket_errno() == WSAEWOULDBLOCK) {
-                if (socket_poll(sockfd)) {
+                if (socket_poll(sockfd, POLLOUT)) {
                     continue;
                 } else {
                     if (program_running)
-                        err_log("socket poll failed: %d\n", socket_errno());
+                        err_log("socket send wait failed: %d\n", socket_errno());
                     return -1;
                 }
             }
@@ -136,11 +151,11 @@ static int tcp_recv(SOCKET sockfd, char *buf, int size)
             if (ret < 0) {
                 if (socket_errno() == WSAEWOULDBLOCK) {
                     if (pos) {
-                        if (socket_poll(sockfd)) {
+                        if (socket_poll(sockfd, POLLIN)) {
                             continue;
                         } else {
                             if (program_running)
-                                err_log("socket poll failed: %d\n", socket_errno());
+                                err_log("socket recv wait failed: %d\n", socket_errno());
                             return -1;
                         }
                     } else {
@@ -210,45 +225,85 @@ thread_ret_t tcp_thread_func(void *arg)
     if (t->remote_play) \
         *(t->remote_play) = 0; \
     err_log("disconnected\n"); \
+    if (t->remote_play && rp_sent && ntr_auto_reconnect) { \
+        retry_pending = true; \
+        retry_delay_ms = RECONNECT_FIRST_MS; \
+        retry_at_us = iclock() + RECONNECT_FIRST_MS * 1000; \
+    } \
+    rp_sent = false; \
 } while (0)
 
     SOCKET sockfd = INVALID_SOCKET;
     int packet_seq = 0;
+
+    bool rp_sent = false;
+    bool auto_connect_ok = true;
+    bool retry_pending = false;
+    int retry_delay_ms = 0;
+    uint32_t retry_at_us = 0;
+
+    uint32_t last_reply_us = 0;
+    int resend_delay_ms = RP_RESEND_FIRST_MS;
+    uint32_t resend_at_us = 0;
+    uint32_t rp_sent_us = 0;
+
     while (program_running)
     {
         uint32_t ip_octet_incoming;
         uint32_t ip_octet;
 
-        ip_octet_incoming = t->remote_play && ntr_auto_reconnect
+        ip_octet_incoming = t->remote_play && ntr_auto_reconnect && auto_connect_ok
             ? __atomic_load_n((uint32_t *)ntr_ip_octet_incoming, __ATOMIC_RELAXED) : 0;
         ip_octet = __atomic_load_n((uint32_t *)ntr_ip_octet, __ATOMIC_RELAXED);
+
+        const bool user_connect = *(t->work_req_state) == CONNECTION_REQ_STATE_CONNECTING;
+        const bool retry_due = retry_pending && ntr_auto_reconnect && ip_octet &&
+            (int32_t)(iclock() - retry_at_us) >= 0;
 
         if (
             *(t->work_state) == CONNECTION_STATE_DISCONNECTED &&
             (
-                *(t->work_req_state) == CONNECTION_REQ_STATE_CONNECTING ||
-                (ip_octet_incoming && ip_octet_incoming == ip_octet)
+                user_connect ||
+                (ip_octet_incoming && ip_octet_incoming == ip_octet) ||
+                retry_due
             )
         )
         {
             *(t->work_req_state) = CONNECTION_REQ_STATE_NONE;
+            if (user_connect) {
+                auto_connect_ok = true;
+                retry_pending = false;
+            }
             sockfd = tcp_connect(t->port, ip_octet);
             if (!socket_valid(sockfd))
             {
                 if (t->remote_play)
-                {
                     *(t->remote_play) = 0;
+                if (retry_pending) {
+                    retry_delay_ms = MIN(retry_delay_ms * 2, RECONNECT_MAX_MS);
+                    retry_at_us = iclock() + (uint32_t)retry_delay_ms * 1000;
                 }
                 continue;
             }
 
+            if (retry_pending && t->remote_play)
+                *(t->remote_play) = 1;
+            retry_pending = false;
+
             packet_seq = 0;
+
+            last_reply_us = iclock();
+            resend_delay_ms = RP_RESEND_FIRST_MS;
+            resend_at_us = 0;
+
             *(t->work_state) = CONNECTION_STATE_CONNECTED;
         }
         else if (*(t->work_state) == CONNECTION_STATE_CONNECTED)
         {
             if (*(t->work_req_state) == CONNECTION_REQ_STATE_DISCONNECTING) {
                 RESET_SOCKET();
+                retry_pending = false;
+                auto_connect_ok = false;
                 continue;
             }
 
@@ -274,6 +329,9 @@ thread_ret_t tcp_thread_func(void *arg)
                     RESET_SOCKET();
                     continue;
                 }
+
+                last_reply_us = iclock();
+
                 if (header.cmd == 0)
                 {
                     // err_log("heartbeat packet: size %d\n", header.data_len);
@@ -324,6 +382,13 @@ thread_ret_t tcp_thread_func(void *arg)
                 }
             }
 
+            if (t->remote_play && (int32_t)(iclock() - last_reply_us) > HEART_BEAT_TIMEOUT_MS * 1000)
+            {
+                err_log("heart beat reply dead for %d ms\n", HEART_BEAT_TIMEOUT_MS);
+                RESET_SOCKET();
+                continue;
+            }
+
             ret = tcp_send_packet_header(sockfd, packet_seq, 0, 0, 0, 0, 0);
             if (ret < 0)
             {
@@ -333,6 +398,28 @@ thread_ret_t tcp_thread_func(void *arg)
                 continue;
             }
             ++packet_seq;
+
+            if (t->remote_play && rp_sent && ntr_auto_reconnect)
+            {
+                const uint32_t now_us = iclock();
+                const uint32_t last_pkt_us = rp_last_packet_us;
+                // quiet since the later of: last video packet, last stream request
+                uint32_t since_us = now_us - last_pkt_us;
+                if ((int32_t)(last_pkt_us - rp_sent_us) < 0)
+                    since_us = now_us - rp_sent_us;
+                if (resend_at_us && (int32_t)(last_pkt_us - resend_at_us) > 0)
+                {
+                    // video came back after a re-request
+                    resend_delay_ms = RP_RESEND_FIRST_MS;
+                    resend_at_us = 0;
+                }
+                if ((int32_t)since_us > resend_delay_ms * 1000)
+                {
+                    *(t->remote_play) = 1;
+                    resend_at_us = now_us ? now_us : 1;
+                    resend_delay_ms = MIN(resend_delay_ms * 2, RP_RESEND_MAX_MS);
+                }
+            }
 
             const uint32_t rp_send_next_us = iclock();
 
@@ -402,6 +489,8 @@ thread_ret_t tcp_thread_func(void *arg)
                     continue;
                 }
                 ++packet_seq;
+                rp_sent = true;
+                rp_sent_us = iclock();
 
                 rp_lock_wait(ui_nk_lock);
                 switch (ui_view_mode) {

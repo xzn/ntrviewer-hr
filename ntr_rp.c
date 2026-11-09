@@ -31,6 +31,7 @@ atomic_bool kcp_active;
 atomic_bool kcp_dq;
 atomic_bool kcp_restart;
 atomic_bool is_lossless;
+atomic_uint rp_last_packet_us;
 static bool kcp_v2;
 
 static int kcp_udp_output(const char *buf, int len, ikcpcb *, void *)
@@ -102,6 +103,17 @@ static struct kcp_recv_info_t {
     u8 last_term;       // term being saved
     u16 last_term_size; // size saved so far
 } kcp_recv_info[RP_KCP_WORK_COUNT][RP_WORK_COUNT];
+
+static void kcp_recv_clear(struct kcp_recv_t *recvs)
+{
+    for (int t = 0; t < RP_CORE_COUNT_MAX; ++t) {
+        struct kcp_recv_t *recv = &recvs[t];
+        int count = recv->count < RP_MAX_PACKET_COUNT ? recv->count : RP_MAX_PACKET_COUNT;
+        memset(recv->buf, 0, (size_t)count * RP_KCP_PACKET_SIZE);
+        recv->count = 0;
+        recv->term_size = 0;
+    }
+}
 
 static void kcp_init(ikcpcb *kcp)
 {
@@ -270,19 +282,24 @@ static uint8_t last_decoded_frame_id[SCREEN_COUNT];
 #include <turbojpeg.h>
 #endif
 
+static tjhandle decode_tj_instance;
 static int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h)
 {
-    tjhandle tjInstance = NULL;
-    if ((tjInstance = tj3Init(TJINIT_DECOMPRESS)) == NULL) {
-        err_log("create turbo jpeg decompressor failed\n");
-        return -1;
+    if (!decode_tj_instance) {
+        tjhandle tj = tj3Init(TJINIT_DECOMPRESS);
+        if (tj == NULL) {
+            err_log("create turbo jpeg decompressor failed\n");
+            return -1;
+        }
+        if (tj3Set(tj, TJPARAM_STOPONWARNING, 1) != 0) {
+            tj3Destroy(tj);
+            return -1;
+        }
+        decode_tj_instance = tj;
     }
+    tjhandle tjInstance = decode_tj_instance;
 
     int ret = -1;
-
-    if (tj3Set(tjInstance, TJPARAM_STOPONWARNING, 1) != 0) {
-        goto final;
-    }
 
     if (tj3DecompressHeader(tjInstance, in, size) != 0) {
         err_log("jpeg header error\n");
@@ -304,7 +321,6 @@ static int handle_decode(uint8_t *out, uint8_t *in, int size, int w, int h)
     ret = 0;
 
 final:
-    tj3Destroy(tjInstance);
     return ret;
 }
 
@@ -994,7 +1010,7 @@ static int handle_decode_delta_prog(uint8_t *out, struct kcp_recv_t *recvs, stru
     }
     // err_log("size %d\n", total_size);
 
-    memset(recvs, 0, sizeof(struct kcp_recv_t) * RP_CORE_COUNT_MAX);
+    kcp_recv_clear(recvs);
     memset(info, 0, sizeof(struct kcp_recv_info_t));
 
     return 0;
@@ -1468,7 +1484,7 @@ static int handle_decode_lossless_compressed(uint8_t *out, struct kcp_recv_t *re
         }
     }
 
-    memset(recvs, 0, sizeof(struct kcp_recv_t) * RP_CORE_COUNT_MAX);
+    kcp_recv_clear(recvs);
     memset(info, 0, sizeof(struct kcp_recv_info_t));
 
     return 0;
@@ -1557,7 +1573,7 @@ static int handle_decode_kcp(uint8_t *out, int w, int queue_w)
         return -3;
     }
 
-    memset(recvs, 0, sizeof(struct kcp_recv_t) * RP_CORE_COUNT_MAX);
+    kcp_recv_clear(recvs);
     memset(info, 0, sizeof(struct kcp_recv_info_t));
 
     return 0;
@@ -2516,9 +2532,13 @@ static void receive_from_socket()
                 }
                 continue;
             }
+            if (err == WSAEMSGSIZE) {
+                // a datagram bigger than buf: not ours, drop it and carry on
+                continue;
+            }
             if (err != WSAETIMEDOUT && err != WSAEWOULDBLOCK) {
                 // err_log("recvfrom failed: %d\n", err);
-                // Sleep(SOCKET_RESET_INTERVAL_MS);
+                Sleep(SOCKET_RESET_INTERVAL_MS);
                 ntr_rp_port_changed = 1; // HACK to restart recv
                 return;
             } else if (err == WSAEWOULDBLOCK) {
@@ -2554,6 +2574,7 @@ static void receive_from_socket()
         }
 
         remote_received = 1;
+        rp_last_packet_us = iclock();
 
         socket_action(ret);
     }
