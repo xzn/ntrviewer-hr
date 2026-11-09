@@ -21,6 +21,7 @@
 #include "ntr_rp.h"
 #include "ui_main_nk.h"
 #include "ui_input_redirection.h"
+#include "settings.h"
 
 #include <math.h>
 
@@ -103,6 +104,10 @@ bool renderer_evt_sync;
 int opt_flag_d3d, opt_flag_ogl, opt_flag_gles, opt_flag_angle, opt_flag_metal, opt_flag_vulkan;
 int opt_flag_csc, opt_flag_sdl_hw, opt_flag_sdl_sw;
 
+static int opt_flag_connect;
+int opt_flag_portable;
+char *opt_arg_settings;
+
 #define opt_name_d3d "d3d"
 #define opt_name_ogl "ogl"
 #define opt_name_gles "gles"
@@ -117,6 +122,9 @@ int opt_flag_csc, opt_flag_sdl_hw, opt_flag_sdl_sw;
 #define opt_name_testing_no_ext_mem "testing-no-ext-mem"
 #define opt_name_testing_no_shared_sem "testing-no-shared-sem"
 #define opt_name_testing_no_fp16 "testing-no-fp16"
+#define opt_name_connect "connect"
+#define opt_name_settings "settings"
+#define opt_name_portable "portable"
 
 #define mod_name_csc "csc"
 
@@ -137,6 +145,12 @@ static struct option long_options[] = {
 #endif
     {opt_name_sdl_hw, no_argument, &opt_flag_sdl_hw, 1},
     {opt_name_sdl_sw, no_argument, &opt_flag_sdl_sw, 1},
+
+    {opt_name_connect, no_argument, &opt_flag_connect, 1},
+    {opt_name_settings, required_argument, NULL, 0},
+#ifndef __APPLE__
+    {opt_name_portable, no_argument, &opt_flag_portable, 1},
+#endif
     {0, 0, 0, 0}};
 
 static void add_arg(enum ui_renderer_t arg, const char *name) {
@@ -237,6 +251,16 @@ static void parse_args(int argc, char **argv)
                         add_arg(UI_RENDERER_SDL_SW, opt_name_sdl_sw);
                     } else if (strcmp(name, opt_name_csc) == 0) {
                         csc = 1;
+                    }
+                } else if (long_options[option_index].has_arg == required_argument) {
+                    const char *const name = long_options[option_index].name;
+                    if (strcmp(name, opt_name_settings) == 0) {
+                        const size_t opt_arg_len = strlen(optarg);
+                        opt_arg_settings = malloc(opt_arg_len + 1);
+                        if (opt_arg_settings) {
+                            memcpy(opt_arg_settings, optarg, opt_arg_len);
+                            opt_arg_settings[opt_arg_len] = 0;
+                        }
                     }
                 }
                 break;
@@ -754,6 +778,8 @@ skip_evt:
     update_game_controller();
     update_bottom_screen_cursor();
 
+    settings_tick();
+
     view_mode_t view_mode = __atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED);
     if (ui_view_mode_prev != view_mode) {
         ui_view_mode_update(view_mode);
@@ -803,8 +829,12 @@ static void main_ntr(void) {
     rp_buffer_init();
     rp_lock_init(ui_nk_lock);
 
-    ntr_config_set_default();
     ntr_detect_3ds_ip();
+    settings_apply_ip();
+    if (opt_flag_connect) {
+        menu_remote_play = 1;
+        menu_work_req_state = CONNECTION_REQ_STATE_CONNECTING;
+    }
     ntr_get_adapter_list();
     ntr_try_auto_select_adapter();
     ui_update_game_controllers();
@@ -889,6 +919,8 @@ static void main_ntr(void) {
     while (program_running)
         main_loop();
 
+    settings_save();
+
 join_timer:
     SDL_RemoveTimer(timer_id);
     input_redirection_frame = input_redirection_frame_default;
@@ -961,10 +993,17 @@ static void main_windows(void) {
 
     event_init(&update_bottom_screen_evt);
 
+    ntr_config_set_default();
+    settings_load();
+
     for (int i = 0; i < SCREEN_COUNT; ++i) {
         ui_window_size_update(i);
     }
     ui_view_mode_update(ui_view_mode);
+    ui_view_mode_prev = ui_view_mode;
+
+    settings_apply_windows();
+
     SDL_ShowWindow(ui_sdl_win[SCREEN_TOP]);
 
     nk_backend_font_init();

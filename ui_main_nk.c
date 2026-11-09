@@ -5,6 +5,7 @@
 #include "ntr_rp.h"
 #include "ntr_audio.h"
 #include "ui_input_redirection.h"
+#include "settings.h"
 
 enum nk_nav_t nk_nav_cmd;
 rp_lock_t ui_nk_lock;
@@ -1172,13 +1173,25 @@ void ui_main_nk(void)
         nk_checkbox_label(ctx, "Full Width", &ntr_rp_config.full_width);
 
         nk_layout_row_dynamic(ctx, 30, 1);
+        nk_bool auto_reconnect_prev = ntr_auto_reconnect;
         nk_checkbox_label(ctx, "Auto-Reconnect", &ntr_auto_reconnect);
+        if (ntr_auto_reconnect != auto_reconnect_prev) {
+            settings_auto_reconnect = ntr_auto_reconnect;
+            if (!ntr_auto_reconnect)
+                settings_auto_update_params = nk_false;
+        }
         if (!ntr_auto_reconnect) {
             ntr_auto_update_params = nk_false;
         }
 
         nk_layout_row_dynamic(ctx, 30, 1);
+        nk_bool auto_update_params_prev = ntr_auto_update_params;
         nk_checkbox_label(ctx, "Auto-Update Params", &ntr_auto_update_params);
+        if (ntr_auto_update_params != auto_update_params_prev) {
+            settings_auto_update_params = ntr_auto_update_params;
+            if (ntr_auto_update_params)
+                settings_auto_reconnect = nk_true;
+        }
         if (ntr_auto_update_params) {
             ntr_auto_reconnect = nk_true;
         }
