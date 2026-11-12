@@ -1078,6 +1078,7 @@ static struct {
     unsigned c_le_4;
     unsigned c_le_6;
     unsigned c_rest;
+    unsigned m_le_0;
     unsigned m_le_2;
     unsigned m_le_4;
     unsigned m_le_6;
@@ -1100,11 +1101,13 @@ static struct {
         ++lossless_compressed_stats.c_rest; \
  \
     int m = s - 128; \
-    if (m >= -2 && m <= 1) \
+    if (m == 0) \
+        ++lossless_compressed_stats.m_le_0; \
+    else if (m >= -1 && m <= 1) \
         ++lossless_compressed_stats.m_le_2; \
-    else if (m >= -8 && m <= 7) \
+    else if (m >= -7 && m <= 7) \
         ++lossless_compressed_stats.m_le_4; \
-    else if (m >= -32 && m <= 31) \
+    else if (m >= -31 && m <= 31) \
         ++lossless_compressed_stats.m_le_6; \
     else \
         ++lossless_compressed_stats.m_rest; \
@@ -1537,9 +1540,9 @@ static int handle_decode_lossless_compressed(uint8_t *out, struct kcp_recv_t *re
     if (!lossless_compressed_stats_count) {
         if (0) {
 #define P(itm) ((float)lossless_compressed_stats.itm / lossless_compressed_stats.all)
-            err_log("%.2f %.2f %.2f %.2f, %.2f %.2f %.2f %.2f, %.2f\n",
+            err_log("%.2f %.2f %.2f %.2f, %0.2f %.2f %.2f %.2f %.2f, %.2f\n",
                 P(c_le_2), P(c_le_4), P(c_le_6), P(c_rest),
-                P(m_le_2), P(m_le_4), P(m_le_6), P(m_rest),
+                P(m_le_0), P(m_le_2), P(m_le_4), P(m_le_6), P(m_rest),
                 (float)lossless_compressed_stats.c / lossless_compressed_stats.s);
 #undef P
         }
