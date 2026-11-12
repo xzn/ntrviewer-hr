@@ -16,7 +16,14 @@ struct d_derived_tbl_t {
     int lookup[1 << HUFF_LOOKAHEAD];
 };
 
+struct c_derived_tbl_t {
+    unsigned int ehufco[256]; /* code for each symbol */
+    char ehufsi[256];         /* length of code for each symbol */
+    /* If no code has been allocated for a symbol S, ehufsi[S] contains 0 */
+};
+
 void gen_optimal_table(struct huff_tbl_t *htbl, long freq[257]);
+void make_c_derived_tbl(struct huff_tbl_t *htbl, struct c_derived_tbl_t *dtbl);
 int make_d_derived_tbl(struct huff_tbl_t *htbl, struct d_derived_tbl_t *dtbl);
 
 #define SIZEOF_SIZE_T 8

@@ -161,6 +161,55 @@ void gen_optimal_table(struct huff_tbl_t *htbl, long freq[257])
     }
 }
 
+void make_c_derived_tbl(struct huff_tbl_t *htbl, struct c_derived_tbl_t *dtbl)
+{
+    int p, i, l, lastp, si, maxsymbol;
+    char huffsize[257];
+    unsigned int huffcode[257];
+    unsigned int code;
+
+    p = 0;
+    for (l = 1; l <= 16; l++) {
+        i = (int)htbl->bits[l];
+        if (i < 0 || p + i > 256)   /* protect against table overrun */
+            exit(2);
+        while (i--)
+            huffsize[p++] = (char)l;
+    }
+    huffsize[p] = 0;
+    lastp = p;
+
+    code = 0;
+    si = huffsize[0];
+    p = 0;
+    while (huffsize[p]) {
+        while (((int)huffsize[p]) == si) {
+            huffcode[p++] = code;
+            code++;
+        }
+        /* code is now 1 more than the last code used for codelength si; but
+        * it must still fit in si bits, since no code is allowed to be all ones.
+        */
+        if (((int32_t)code) >= (((int32_t)1) << si))
+            exit(2);
+        code <<= 1;
+        si++;
+    }
+
+    memset(dtbl->ehufco, 0, sizeof(dtbl->ehufco));
+    memset(dtbl->ehufsi, 0, sizeof(dtbl->ehufsi));
+
+    maxsymbol = 255;
+
+    for (p = 0; p < lastp; p++) {
+        i = htbl->huffval[p];
+        if (i < 0 || i > maxsymbol || dtbl->ehufsi[i])
+            exit(2);
+        dtbl->ehufco[i] = huffcode[p];
+        dtbl->ehufsi[i] = huffsize[p];
+    }
+}
+
 int make_d_derived_tbl(struct huff_tbl_t *htbl, struct d_derived_tbl_t *dtbl)
 {
     int p, i, l, si, numsymbols;

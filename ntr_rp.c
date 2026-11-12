@@ -1039,6 +1039,7 @@ static int lossless_tbl_name_from_bits(uint8_t bits) {
 }
 
 static struct huff_tbl_t lossless_huff_tbl_ptrs[LOSSLESS_TBL_COUNT];
+static struct c_derived_tbl_t lossless_c_derived_tbls[LOSSLESS_TBL_COUNT];
 static struct d_derived_tbl_t lossless_derived_tbls[LOSSLESS_TBL_COUNT];
 static bool lossless_tbls_inited;
 
@@ -1065,10 +1066,53 @@ static void lossless_tbls_init() {
         freq[128 + end] = 0;
         int name = lossless_tbl_name_from_bits(b);
         gen_optimal_table(&lossless_huff_tbl_ptrs[name], freq);
+        make_c_derived_tbl(&lossless_huff_tbl_ptrs[name], &lossless_c_derived_tbls[name]);
         make_d_derived_tbl(&lossless_huff_tbl_ptrs[name], &lossless_derived_tbls[name]);
     }
 
     lossless_tbls_inited = true;
+}
+
+static struct {
+    unsigned c_le_2;
+    unsigned c_le_4;
+    unsigned c_le_6;
+    unsigned c_rest;
+    unsigned m_le_2;
+    unsigned m_le_4;
+    unsigned m_le_6;
+    unsigned m_rest;
+    unsigned all;
+    unsigned c;
+    unsigned s;
+} lossless_compressed_stats;
+
+#define LOSSLESS_UPDATE_STATS(s, name) \
+{ \
+    char c = lossless_c_derived_tbls[name].ehufsi[s]; \
+    if (c <= 2) \
+        ++lossless_compressed_stats.c_le_2; \
+    else if (c <= 4) \
+        ++lossless_compressed_stats.c_le_4; \
+    else if (c <= 6) \
+        ++lossless_compressed_stats.c_le_6; \
+    else \
+        ++lossless_compressed_stats.c_rest; \
+ \
+    int m = s - 128; \
+    if (m >= -2 && m <= 1) \
+        ++lossless_compressed_stats.m_le_2; \
+    else if (m >= -8 && m <= 7) \
+        ++lossless_compressed_stats.m_le_4; \
+    else if (m >= -32 && m <= 31) \
+        ++lossless_compressed_stats.m_le_6; \
+    else \
+        ++lossless_compressed_stats.m_rest; \
+ \
+    ++lossless_compressed_stats.all; \
+ \
+    lossless_compressed_stats.c += c; \
+    lossless_compressed_stats.s += bits; \
 }
 
 struct bitread_global_state_t {
@@ -1139,6 +1183,7 @@ static int do_decode_lossless_compressed(uint8_t *out, const uint8_t *in, int si
                 for (int bx = 0; bx < w; ++bx) {
                     int s;
                     HUFF_DECODE(s, br_state, (&lossless_derived_tbls[name]), return -1, label0);
+                    LOSSLESS_UPDATE_STATS(s, name);
                     JSAMPLE *out_t = out_comp + y * width + bx;
                     uint8_t pred = 0;
                     if (!y) {
@@ -1323,6 +1368,7 @@ static int do_decode_lossless_delta_compressed(uint8_t *out, const uint8_t *in, 
                         for (int i = 0; i < DELTA_BLOCK_WIDTH_COUNT; ++i, ++bx) {
                             int s;
                             HUFF_DECODE(s, br_state, (&lossless_derived_tbls[name]), return -3, label0);
+                            LOSSLESS_UPDATE_STATS(s, name);
                             uint8_t *prev_bx = prev_by + bx;
                             JSAMPLE *out_t = out_comp + y * width + bx;
 
@@ -1333,6 +1379,7 @@ static int do_decode_lossless_delta_compressed(uint8_t *out, const uint8_t *in, 
                         for (int i = 0; i < DELTA_BLOCK_WIDTH_COUNT; ++i, ++bx) {
                             int s;
                             HUFF_DECODE(s, br_state, (&lossless_derived_tbls[name]), return -1, label1);
+                            LOSSLESS_UPDATE_STATS(s, name);
                             JSAMPLE *out_t = out_comp + y * width + bx;
                             uint8_t pred = 0;
                             if (!y) {
@@ -1482,6 +1529,22 @@ static int handle_decode_lossless_compressed(uint8_t *out, struct kcp_recv_t *re
                 break;
             }
         }
+    }
+
+    static int lossless_compressed_stats_count;
+    ++lossless_compressed_stats_count;
+    lossless_compressed_stats_count %= 16;
+    if (!lossless_compressed_stats_count) {
+        if (0) {
+#define P(itm) ((float)lossless_compressed_stats.itm / lossless_compressed_stats.all)
+            err_log("%.2f %.2f %.2f %.2f, %.2f %.2f %.2f %.2f, %.2f\n",
+                P(c_le_2), P(c_le_4), P(c_le_6), P(c_rest),
+                P(m_le_2), P(m_le_4), P(m_le_6), P(m_rest),
+                (float)lossless_compressed_stats.c / lossless_compressed_stats.s);
+#undef P
+        }
+
+        memset(&lossless_compressed_stats, 0, sizeof(lossless_compressed_stats));
     }
 
     kcp_recv_clear(recvs);
