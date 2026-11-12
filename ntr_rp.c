@@ -401,7 +401,7 @@ JSAMPLE do_curr_next_color_1_2(uint8_t **curr, int comp)
     out -= 128.0f;
     JSAMPLE out_abs = fabsf(out);
     JSAMPLE sign = out >= 0 ? 1.0f : -1.0f;
-    out_abs -= half;
+    out_abs -= half / 2;
     out_abs = MAX(out_abs, 0.0f);
     out = out_abs * sign;
     out += 128.0f;
@@ -1270,7 +1270,7 @@ static int do_decode_lossless_compressed(uint8_t *out, const uint8_t *in, int si
                     }
                     JSAMPLE out_abs = fabsf(out);
                     JSAMPLE sign = out >= 0 ? 1.0 : -1.0;
-                    out_abs -= half;
+                    out_abs -= half / 2;
                     out_abs = MAX(out_abs, 0.0);
                     out = out_abs * sign;
                     out += 128.0;
@@ -1469,7 +1469,7 @@ static int do_decode_lossless_delta_compressed(uint8_t *out, const uint8_t *in, 
                     }
                     JSAMPLE out_abs = fabsf(out);
                     JSAMPLE sign = out >= 0 ? 1.0 : -1.0;
-                    out_abs -= half;
+                    out_abs -= half / 2;
                     out_abs = MAX(out_abs, 0.0);
                     out = out_abs * sign;
                     out += 128.0;
