@@ -1851,7 +1851,7 @@ static thread_ret_t jpeg_decode_thread_func(void *e)
                         screen_process(processing, screen_processing[top_bot][prev_index], out, ptr->even_odd, dims->width, dims->height);
                     }
 
-                    stats_overlay_0(out, top_bot, ptr->in_size, -1, SCREEN_WIDTH, top_bot == 0 ? ptr->full_width ? SCREEN_HEIGHT0_2X : SCREEN_HEIGHT0 : SCREEN_HEIGHT1);
+                    stats_overlay_0(out, top_bot, ptr->in_size, -1, dims->width, dims->height);
                     handle_decode_frame_screen(ctx, top_bot, ptr->in_size, ptr->in_delay, sync_ctx);
                     __atomic_add_fetch(&frame_fully_received_tracker, 1, __ATOMIC_RELAXED);
 

@@ -105,10 +105,10 @@ static unsigned char font[] = {
     0x76, 0xDC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Char 126 (~)
 };
 
-static void ovDrawTranspartBlackRect(u8 *addr, u32 stride, int r, int c, int h, int w, u8 level)
+static void ovDrawTranspartBlackRect(u8 *addr, u32 stride, u32 scrnWidth, int r, int c, int h, int w, u8 level)
 {
     int posC;
-    for (posC = c; posC < c + w; posC++) {
+    for (posC = c; posC < MIN(c + w, (int)scrnWidth); posC++) {
         u8 *sp = (u8 *)(addr + stride * posC + stride / GL_CHANNELS_N * 4 - 4 * (r + h));
         u8 *spEnd = sp + 4 * h;
         while (sp < spEnd)
@@ -192,7 +192,7 @@ static struct ov_color_t {
 };
 
 static void drawOverlayOnScreenMode0(u8 *addr, u32 stride, u32 scrnWidth, const char *buf) {
-    ovDrawTranspartBlackRect(addr, stride, ROW_START, COL_START, CHAR_DISP_HEIGHT + ROW_MARGIN * 2, strlen(buf) * CHAR_DISP_WIDTH + COL_MARGIN * 2, 1);
+    ovDrawTranspartBlackRect(addr, stride, scrnWidth, ROW_START, COL_START, CHAR_DISP_HEIGHT + ROW_MARGIN * 2, strlen(buf) * CHAR_DISP_WIDTH + COL_MARGIN * 2, 1);
     ovDrawString(addr, stride, scrnWidth, ROW_START + ROW_MARGIN, COL_START + COL_MARGIN, text_color_info.r, text_color_info.g, text_color_info.b, buf);
 }
 
