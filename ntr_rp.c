@@ -2039,14 +2039,14 @@ static int jpeg_get_v_total(int chroma_ss, int downsample, bool is_top, bool ful
 {
     int h = JPEG_DCTSIZE * (chroma_ss == 0 ? 2 : 1);
     int h_total = downsample_height(downsample, is_top, full_width);
-    return h_total / h;
+    return DIV_ROUND_UP(h_total, h);
 }
 
 static int lossless_get_v_total(UNUSED int chroma_ss, UNUSED int downsample, bool is_top, bool full_width)
 {
     int h = LOSSLESS_BLOCK_SIZE;
     int h_total = downsample_height(0, is_top, full_width);
-    return h_total / h;
+    return DIV_ROUND_UP(h_total, h);
 }
 
 #define EX_HDR_BIT (15)
@@ -2295,7 +2295,7 @@ static int handle_recv_kcp(uint8_t *buf, int size)
                         info->v_adjusted = 0;
                         info->v_last_adjusted = v_adjusted;
                         if (!get_v_last_adjusted(v_total, &info->v_last_adjusted))
-                            return -8;
+                            return -13;
                     }
                 } else {
                     if (core_count == 1) {
