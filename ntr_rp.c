@@ -1783,7 +1783,7 @@ static void rotate_and_save_to_buffer(int w, int h, const void *data)
     rotate_and_save_to_buffer_2(w, h, data, scrn_buffer, w * RGB_CHANNELS_N);
 }
 
-static uint8_t *locked_ctx_data(struct rp_buffer_ctx_t *ctx, int *w, int *h)
+static uint8_t *locked_ctx_data(struct rp_buffer_ctx_t *ctx, int top_bot, int *w, int *h)
 {
     enum frame_buffer_status_t status = ctx->status;
     if (status == FBS_NOT_AVAIL) {
@@ -1794,7 +1794,7 @@ static uint8_t *locked_ctx_data(struct rp_buffer_ctx_t *ctx, int *w, int *h)
     uint8_t *data = status >= FBS_UPDATED ? ctx->screen_decoded[index_display] : ctx->data_prev;
     struct rp_dims *dims = &ctx->dims_decoded[index_display];
 
-    int width = SCREEN_HEIGHT1;
+    int width = top_bot == SCREEN_TOP ? SCREEN_HEIGHT0 : SCREEN_HEIGHT1;
     int height = SCREEN_WIDTH;
     if (dims->width) {
         height = dims->width;
@@ -1809,13 +1809,13 @@ static uint8_t *locked_ctx_data(struct rp_buffer_ctx_t *ctx, int *w, int *h)
     return data;
 }
 
-void save_screen_ctx(struct rp_buffer_ctx_t *ctx, const char *time_buffer, const char *screen)
+void save_screen_ctx(struct rp_buffer_ctx_t *ctx, int top_bot, const char *time_buffer, const char *screen)
 {
     rp_lock_wait(ctx->status_lock);
 
     int width;
     int height;
-    uint8_t *data = locked_ctx_data(ctx, &width, &height);
+    uint8_t *data = locked_ctx_data(ctx, top_bot, &width, &height);
     if (!data) {
         rp_lock_rel(ctx->status_lock);
         return;
@@ -1837,27 +1837,29 @@ void save_screenshots(void)
     strftime(time_buffer, sizeof(time_buffer), "%Y%m%d-%H%M%S", local_time);
 
     const char *screen_name[SCREEN_COUNT] = { "top", "bot" };
+    memset(scrn_buffer, 0, sizeof(scrn_buffer));
     switch (view_mode) {
         case VIEW_MODE_TOP_BOT: {
             struct rp_buffer_ctx_t *ctx_top = &rp_buffer_ctx[SCREEN_TOP];
             struct rp_buffer_ctx_t *ctx_bot = &rp_buffer_ctx[SCREEN_BOT];
-            int fail = 1;
 
             rp_lock_wait(ctx_top->status_lock);
             rp_lock_wait(ctx_bot->status_lock);
 
             int width_top;
             int height_top;
-            uint8_t *data_top = locked_ctx_data(ctx_top, &width_top, &height_top);
+            uint8_t *data_top = locked_ctx_data(ctx_top, SCREEN_TOP, &width_top, &height_top);
             if (!data_top) {
-                goto end_top_bot;
+                width_top = SCREEN_HEIGHT0;
+                height_top = SCREEN_WIDTH;
             }
 
             int width_bot;
             int height_bot;
-            uint8_t *data_bot = locked_ctx_data(ctx_bot, &width_bot, &height_bot);
+            uint8_t *data_bot = locked_ctx_data(ctx_bot, SCREEN_BOT, &width_bot, &height_bot);
             if (!data_bot) {
-                goto end_top_bot;
+                width_top = SCREEN_HEIGHT1;
+                height_top = SCREEN_WIDTH;
             }
 
             int width = MAX(width_top, width_bot);
@@ -1869,17 +1871,18 @@ void save_screenshots(void)
             if (width_top < width_bot) {
                 buf += (width_bot - width_top) / 2 * RGB_CHANNELS_N;
             }
-            rotate_and_save_to_buffer_2(width_top, height_top, data_top, buf, stride);
+            if (data_top)
+                rotate_and_save_to_buffer_2(width_top, height_top, data_top, buf, stride);
 
             buf = scrn_buffer + height_top * stride;
             if (width_top > width_bot) {
                 buf += (width_top - width_bot) / 2 * RGB_CHANNELS_N;
             }
-            rotate_and_save_to_buffer_2(width_bot, height_bot, data_bot, buf, stride);
+            if (data_bot)
+                rotate_and_save_to_buffer_2(width_bot, height_bot, data_bot, buf, stride);
 
-            fail = 0;
+            int fail = !data_top && !data_bot;
 
-end_top_bot:
             rp_lock_rel(ctx_bot->status_lock);
             rp_lock_rel(ctx_top->status_lock);
 
@@ -1892,18 +1895,18 @@ end_top_bot:
         case VIEW_MODE_SEPARATE: {
             for (int i = 0; i < SCREEN_COUNT; ++i) {
                 struct rp_buffer_ctx_t *ctx = &rp_buffer_ctx[i];
-                save_screen_ctx(ctx, time_buffer, screen_name[i]);
+                save_screen_ctx(ctx, i, time_buffer, screen_name[i]);
             }
             break;
         }
         case VIEW_MODE_TOP: {
             struct rp_buffer_ctx_t *ctx = &rp_buffer_ctx[SCREEN_TOP];
-            save_screen_ctx(ctx, time_buffer, screen_name[SCREEN_TOP]);
+            save_screen_ctx(ctx, SCREEN_TOP, time_buffer, screen_name[SCREEN_TOP]);
             break;
         }
         case VIEW_MODE_BOT: {
             struct rp_buffer_ctx_t *ctx = &rp_buffer_ctx[SCREEN_BOT];
-            save_screen_ctx(ctx, time_buffer, screen_name[SCREEN_BOT]);
+            save_screen_ctx(ctx, SCREEN_BOT, time_buffer, screen_name[SCREEN_BOT]);
             break;
         }
     }
