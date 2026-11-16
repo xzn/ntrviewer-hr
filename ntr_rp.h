@@ -89,6 +89,14 @@ struct rp_buffer_ctx_t {
 extern struct rp_buffer_ctx_t rp_buffer_ctx[SCREEN_COUNT];
 extern event_t decode_updated_event;
 
+enum scrn_ty_t {
+    SCRN_BMP,
+    SCRN_TGA,
+    SCRN_PNG,
+};
+void save_screenshots(void);
+extern enum scrn_ty_t scrn_ty;
+
 #define RP_NUM_JPEG_COMP 3
 typedef float JSAMPLE;
 void ycc_rgb_convert(

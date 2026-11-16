@@ -16,7 +16,6 @@
 #include "nuklear/nuklear.h"
 
 #define SETTINGS_FILE_NAME "ntrviewer_settings.ini"
-extern int opt_flag_portable;
 extern char *opt_arg_settings;
 
 /* What Auto-Reconnect / Auto-Update Params should start as next time. Only

@@ -9,6 +9,7 @@
 #include "rp_syn.h"
 #include "ui_common_sdl.h"
 #include "ui_main_nk.h"
+#include "stb_image_write.h"
 
 
 #include "ikcp.h"
@@ -1684,6 +1685,227 @@ static void handle_decode_frame_screen(struct rp_buffer_ctx_t *ctx, int top_bot,
             cond_mutex_flag_signal(&sync_ctx->decode_updated_event);
         else
             cond_mutex_flag_signal(&ctx->decode_updated_event);
+    }
+}
+
+static bool file_exists(const char *file_name) {
+    FILE *fp = fopen(file_name, "r");
+    if (fp != NULL) {
+        fclose(fp);
+        return true;
+    }
+    return false;
+}
+
+#ifdef _WIN32
+    #include <direct.h>
+    #define MKDIR(path) _mkdir(path)
+#else
+    #include <sys/stat.h>
+    #define MKDIR(path) mkdir(path, 0755)
+#endif
+
+static void save_screenshot(int w, int h, const void *data, const char *time, const char *screen)
+{
+    const char *base = opt_flag_portable ? SDL_GetBasePath() : SDL_GetPrefPath("NTRViewer", "NTRViewer-HR");
+    if (!base)
+        base = "";
+    const char *ty_ext = "";
+    switch (scrn_ty) {
+        case SCRN_BMP:
+            ty_ext = "bmp";
+            break;
+        case SCRN_TGA:
+            ty_ext = "tga";
+            break;
+        case SCRN_PNG:
+            ty_ext = "png";
+            break;
+    };
+    int comp = RGB_CHANNELS_N;
+    int stride = w * comp;
+    static char path[1024];
+    const char *scrn_dir = "screenshots";
+    snprintf(path, sizeof(path), "%s%s", base, scrn_dir);
+    if (MKDIR(path) && errno != EEXIST) {
+        err_log("error creating screenshot folder: \"%s\"\n", path);
+        return;
+    }
+
+    snprintf(path, sizeof(path), "%s%s/%s-%s.%s",
+        base, scrn_dir, time, screen, ty_ext);
+
+    int count = 0;
+    while (file_exists(path)) {
+        ++count;
+        snprintf(path, sizeof(path), "%s%s/%s-%s-%d.%s",
+            base, scrn_dir, time, screen, count, ty_ext);
+    }
+
+    int ret = 0;
+    switch (scrn_ty) {
+        case SCRN_BMP:
+            ret = stbi_write_bmp(path, w, h, comp, data);
+            break;
+        case SCRN_TGA:
+            ret = stbi_write_tga(path, w, h, comp, data);
+            break;
+        case SCRN_PNG:
+            ret = stbi_write_png(path, w, h, comp, data, stride);
+            break;
+    };
+    if (ret) {
+        err_log("screenshot saved: \"%s\"\n", path);
+    } else {
+        err_log("failed to save screenshot: \"%s\"\n", path);
+    }
+}
+
+enum scrn_ty_t scrn_ty;
+static char scrn_buffer[SCREEN_HEIGHT0_2X * SCREEN_WIDTH * 2 * RGB_CHANNELS_N];
+
+static void rotate_and_save_to_buffer_2(int w, int h, const void *data, char *buf, int stride)
+{
+    const char *in = data;
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const char *pix = in + (x * h + (h - y - 1)) * GL_CHANNELS_N;
+            char *o = buf + y * stride + x * RGB_CHANNELS_N;
+            o[0] = pix[0];
+            o[1] = pix[1];
+            o[2] = pix[2];
+        }
+    }
+}
+
+static void rotate_and_save_to_buffer(int w, int h, const void *data)
+{
+    rotate_and_save_to_buffer_2(w, h, data, scrn_buffer, w * RGB_CHANNELS_N);
+}
+
+static uint8_t *locked_ctx_data(struct rp_buffer_ctx_t *ctx, int *w, int *h)
+{
+    enum frame_buffer_status_t status = ctx->status;
+    if (status == FBS_NOT_AVAIL) {
+        return NULL;
+    }
+    int index_display = ctx->index_display;
+
+    uint8_t *data = status >= FBS_UPDATED ? ctx->screen_decoded[index_display] : ctx->data_prev;
+    struct rp_dims *dims = &ctx->dims_decoded[index_display];
+
+    int width = SCREEN_HEIGHT1;
+    int height = SCREEN_WIDTH;
+    if (dims->width) {
+        height = dims->width;
+    }
+    if (dims->height) {
+        width = dims->height;
+    }
+
+    *w = width;
+    *h = height;
+
+    return data;
+}
+
+void save_screen_ctx(struct rp_buffer_ctx_t *ctx, const char *time_buffer, const char *screen)
+{
+    rp_lock_wait(ctx->status_lock);
+
+    int width;
+    int height;
+    uint8_t *data = locked_ctx_data(ctx, &width, &height);
+    if (!data) {
+        rp_lock_rel(ctx->status_lock);
+        return;
+    }
+
+    rotate_and_save_to_buffer(width, height, data);
+    rp_lock_rel(ctx->status_lock);
+
+    save_screenshot(width, height, scrn_buffer, time_buffer, screen);
+}
+
+void save_screenshots(void)
+{
+    view_mode_t view_mode = __atomic_load_n(&ui_view_mode, __ATOMIC_RELAXED);
+
+    time_t time_now = time(NULL);
+    struct tm *local_time = localtime(&time_now);
+    char time_buffer[80];
+    strftime(time_buffer, sizeof(time_buffer), "%Y%m%d-%H%M%S", local_time);
+
+    const char *screen_name[SCREEN_COUNT] = { "top", "bot" };
+    switch (view_mode) {
+        case VIEW_MODE_TOP_BOT: {
+            struct rp_buffer_ctx_t *ctx_top = &rp_buffer_ctx[SCREEN_TOP];
+            struct rp_buffer_ctx_t *ctx_bot = &rp_buffer_ctx[SCREEN_BOT];
+            int fail = 1;
+
+            rp_lock_wait(ctx_top->status_lock);
+            rp_lock_wait(ctx_bot->status_lock);
+
+            int width_top;
+            int height_top;
+            uint8_t *data_top = locked_ctx_data(ctx_top, &width_top, &height_top);
+            if (!data_top) {
+                goto end_top_bot;
+            }
+
+            int width_bot;
+            int height_bot;
+            uint8_t *data_bot = locked_ctx_data(ctx_bot, &width_bot, &height_bot);
+            if (!data_bot) {
+                goto end_top_bot;
+            }
+
+            int width = MAX(width_top, width_bot);
+            int height = height_top + height_bot;
+
+            int stride = width * RGB_CHANNELS_N;
+
+            char *buf = scrn_buffer;
+            if (width_top < width_bot) {
+                buf += (width_bot - width_top) / 2 * RGB_CHANNELS_N;
+            }
+            rotate_and_save_to_buffer_2(width_top, height_top, data_top, buf, stride);
+
+            buf = scrn_buffer + height_top * stride;
+            if (width_top > width_bot) {
+                buf += (width_top - width_bot) / 2 * RGB_CHANNELS_N;
+            }
+            rotate_and_save_to_buffer_2(width_bot, height_bot, data_bot, buf, stride);
+
+            fail = 0;
+
+end_top_bot:
+            rp_lock_rel(ctx_bot->status_lock);
+            rp_lock_rel(ctx_top->status_lock);
+
+            if (!fail) {
+                save_screenshot(width, height, scrn_buffer, time_buffer, "top_bot");
+            }
+            break;
+        }
+
+        case VIEW_MODE_SEPARATE: {
+            for (int i = 0; i < SCREEN_COUNT; ++i) {
+                struct rp_buffer_ctx_t *ctx = &rp_buffer_ctx[i];
+                save_screen_ctx(ctx, time_buffer, screen_name[i]);
+            }
+            break;
+        }
+        case VIEW_MODE_TOP: {
+            struct rp_buffer_ctx_t *ctx = &rp_buffer_ctx[SCREEN_TOP];
+            save_screen_ctx(ctx, time_buffer, screen_name[SCREEN_TOP]);
+            break;
+        }
+        case VIEW_MODE_BOT: {
+            struct rp_buffer_ctx_t *ctx = &rp_buffer_ctx[SCREEN_BOT];
+            save_screen_ctx(ctx, time_buffer, screen_name[SCREEN_BOT]);
+            break;
+        }
     }
 }
 

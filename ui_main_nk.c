@@ -1104,7 +1104,7 @@ void ui_main_nk(void)
     if (focus_window)
         nk_window_set_focus(ctx, remote_play_wnd);
 
-    if (nk_begin(ctx, debug_msg_wnd, nk_rect(615, 10, 175, 325),
+    if (nk_begin(ctx, debug_msg_wnd, nk_rect(615, 10, 175, 355),
                  NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE) &&
         show_window)
     {
@@ -1194,6 +1194,25 @@ void ui_main_nk(void)
         }
         if (ntr_auto_update_params) {
             ntr_auto_reconnect = nk_true;
+        }
+
+        struct nk_vec2 combo_size = {75, 125};
+        nk_layout_row_dynamic(ctx, 30, 2);
+        if (nk_button_label(ctx, "Scrn"))
+        {
+            save_screenshots();
+        }
+        int selected = (int)scrn_ty;
+        const char *scrn_ty_options[] = {
+            "BMP",
+            "TGA",
+            "PNG",
+        };
+        int combo_count = sizeof(scrn_ty_options) / sizeof(*scrn_ty_options);
+        nk_combobox(ctx, scrn_ty_options, combo_count, &selected, 30, combo_size);
+        if (selected != (int)scrn_ty)
+        {
+            scrn_ty = (enum scrn_ty_t)selected;
         }
     }
     nk_end(ctx);

@@ -33,6 +33,7 @@ struct settings_t {
     int auto_quality;
     int audio;
     int full_width;
+    int scrn_ty;
     int auto_reconnect;
     int auto_update_params;
     int stats;
@@ -69,6 +70,7 @@ static const struct settings_int_key_t int_keys[] = {
     SK("auto_quality", auto_quality, 0, 1),
     SK("audio", audio, 0, 1),
     SK("full_width", full_width, 0, 1),
+    SK("scrn_ty", scrn_ty, SCRN_BMP, SCRN_PNG),
     SK("auto_reconnect", auto_reconnect, 0, 1),
     SK("auto_update_params", auto_update_params, 0, 1),
     SK("stats", stats, 0, 1),
@@ -129,6 +131,7 @@ static void capture(struct settings_t *s) {
     s->auto_quality = ntr_auto_quality ? 1 : 0;
     s->audio = ntr_rp_config.audio_enable ? 1 : 0;
     s->full_width = ntr_rp_config.full_width ? 1 : 0;
+    s->scrn_ty = scrn_ty;
     s->auto_reconnect = settings_auto_reconnect ? 1 : 0;
     s->auto_update_params = settings_auto_update_params ? 1 : 0;
     s->stats = ntr_stats_overlay ? 1 : 0;
@@ -297,6 +300,7 @@ void settings_load(void) {
     ntr_rp_config.lossless_color = s.lossless_color;
     ntr_rp_config.audio_enable = s.audio;
     ntr_rp_config.full_width = s.full_width;
+    scrn_ty = s.scrn_ty;
     ntr_auto_quality = s.auto_quality;
     if (s.auto_update_params)
         s.auto_reconnect = 1; /* the Debug window keeps these two in step */
