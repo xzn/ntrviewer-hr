@@ -1707,9 +1707,7 @@ static bool file_exists(const char *file_name) {
 
 static void save_screenshot(int w, int h, const void *data, const char *time, const char *screen)
 {
-    const char *base = opt_flag_portable ? SDL_GetBasePath() : SDL_GetPrefPath("NTRViewer", "NTRViewer-HR");
-    if (!base)
-        base = "";
+    const char *base = settings_base_path();
     const char *ty_ext = "";
     switch (scrn_ty) {
         case SCRN_BMP:

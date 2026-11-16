@@ -94,11 +94,21 @@ static const struct settings_int_key_t int_keys[] = {
 #define INT_KEY_WIN_COUNT (4)
 #define INT_KEY_WIN_FIRST (INT_KEY_COUNT - INT_KEY_WIN_COUNT * SCREEN_COUNT)
 
+const char *settings_base_path(void)
+{
+    static const char *base_path;
+    if (!base_path)
+        base_path = opt_flag_portable ? SDL_GetBasePath() : SDL_GetPrefPath("NTRViewer", "NTRViewer-HR");
+    if (!base_path)
+        base_path = "";
+    return base_path;
+}
+
 static char *settings_path(const char *suffix) {
     static char path[1024];
-    const char *base = opt_flag_portable ? SDL_GetBasePath() : SDL_GetPrefPath("NTRViewer", "NTRViewer-HR");
+    const char *base = settings_base_path();
     snprintf(path, sizeof(path), "%s%s%s",
-        base ? base : "",
+        base,
         opt_arg_settings ? opt_arg_settings : SETTINGS_FILE_NAME,
         suffix);
     return path;
